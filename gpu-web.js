@@ -17,6 +17,12 @@ export class WebGraphicsHost {
     this.frames = 0;
     this.lastReport = performance.now();
     this.lastFrame = 0;
+    this.renderScale = 1.0;
+    this.minRenderScale = 0.5;
+    this.maxRenderScale = 1.0;
+    this.autoScale = true;
+    this.targetFps = 30;
+    this.stableSeconds = 0;
   }
 
   async init() {
@@ -101,12 +107,18 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f };
 
   resize() {
     const rect=this.canvas.getBoundingClientRect();
-    const dpr=Math.min(devicePixelRatio||1,1.5);
+    const dpr=Math.min(devicePixelRatio||1,1.5) * this.renderScale;
     const w=Math.max(1,Math.floor(rect.width*dpr)),h=Math.max(1,Math.floor(rect.height*dpr));
     if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h}
   }
 
   frame = (now) => {
+    const interval = 1000 / Math.max(1, this.targetFps);
+    if (this.lastFrame && now - this.lastFrame < interval * 0.92) {
+      this.raf=requestAnimationFrame(this.frame);
+      return;
+    }
+    this.lastFrame = now;
     this.resize();
     const time=now*0.001, aspect=this.canvas.width/Math.max(1,this.canvas.height);
     if(this.backend==='webgpu'){
@@ -120,10 +132,33 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f };
     }
     this.frames++;
     const elapsed=now-this.lastReport;
-    if(elapsed>=1000){this.onStats?.({fps:this.frames*1000/elapsed,backend:this.backend});this.frames=0;this.lastReport=now}
+    if(elapsed>=1000){
+      const fps=this.frames*1000/elapsed;
+      if(this.autoScale){
+        if(fps < this.targetFps*0.88 && this.renderScale > this.minRenderScale){
+          this.renderScale=Math.max(this.minRenderScale,Math.round((this.renderScale-0.10)*100)/100);
+          this.stableSeconds=0;
+        }else if(fps >= this.targetFps*0.97){
+          this.stableSeconds++;
+          if(this.stableSeconds>=4 && this.renderScale < this.maxRenderScale){
+            this.renderScale=Math.min(this.maxRenderScale,Math.round((this.renderScale+0.05)*100)/100);
+            this.stableSeconds=0;
+          }
+        }else{this.stableSeconds=0}
+      }
+      this.onStats?.({fps,backend:this.backend,renderScale:this.renderScale,targetFps:this.targetFps});this.frames=0;this.lastReport=now
+    }
     this.raf=requestAnimationFrame(this.frame);
   };
 
-  start(){cancelAnimationFrame(this.raf);this.raf=requestAnimationFrame(this.frame)}
+  setPerformance({targetFps=30,autoScale=true,minScale=0.5,maxScale=1,scale=this.renderScale}={}){
+    this.targetFps=Math.max(15,Math.min(60,Number(targetFps)||30));
+    this.autoScale=!!autoScale;
+    this.minRenderScale=Math.max(0.35,Math.min(1,Number(minScale)||0.5));
+    this.maxRenderScale=Math.max(this.minRenderScale,Math.min(1,Number(maxScale)||1));
+    this.renderScale=Math.max(this.minRenderScale,Math.min(this.maxRenderScale,Number(scale)||this.maxRenderScale));
+    this.stableSeconds=0;
+  }
+  start(){cancelAnimationFrame(this.raf);this.lastFrame=0;this.raf=requestAnimationFrame(this.frame)}
   stop(){cancelAnimationFrame(this.raf)}
 }

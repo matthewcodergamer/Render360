@@ -1,30 +1,28 @@
-# Upload V29 to GitHub
+# Upload Render360 V30 to GitHub
 
-Your GitHub Pages setting can stay exactly as it is:
+Your Pages setting does **not** need to change:
 
 - Source: **Deploy from a branch**
 - Branch: **main**
 - Folder: **/(root)**
 
-Upload/replace the V29 files at the repository root. In particular, make sure these root files are present:
+Extract this ZIP and upload/replace its **contents at the repository root**. Do not upload the ZIP as a single file.
 
-- `index.html`
-- `app.css`
-- `app.js`
-- `wasm-core.js`
-- `runtime-host.js`
-- `three-host.js`
-- `gpu-web.js`
-- `render360_xenia_core.wasm`
-- `manifest.webmanifest`
-- `.nojekyll`
+Make sure these V30 additions are present:
 
-Also upload the `worker/` folder. `worker/runtime-worker.js` is what keeps the native WASM runtime ticking away from the UI thread.
+- `src/xenia_port/stfs_layout.h`
+- updated `src/render360_xenia_core.cpp`
+- updated `render360_xenia_core.wasm`
+- updated `wasm-core.js`
+- `scripts/test_mount_node.mjs`
+- `docs/V30_RELEASE_NOTES.md`
+- `docs/WEB_IOS_SHARED_CORE.md`
+- `upstream/README.md`
 
-Keep `src/`, `scripts/`, `docs/`, and `.github/` too — they are the source/build/test side of the project.
+Keep `.github/workflows/` too so GitHub can rebuild/smoke-test the WASM core and periodically check the Xenia contract.
 
-After the commit finishes, GitHub Pages will republish the same project URL:
+After Pages republishes, open:
 
-`https://matthewcodergamer.github.io/Render360/`
+`https://matthewcodergamer.github.io/Render360/?v=30`
 
-If the page still says V28 after upload, reload once with a cache-busting query such as `?v=29`. The V29 HTML already uses versioned CSS/JS URLs.
+The `?v=30` is only a cache buster for Safari; the normal site remains `/Render360/`.

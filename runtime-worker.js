@@ -1,4 +1,4 @@
-import { Render360Core } from '../wasm-core.js';
+import { Render360Core } from '../wasm-core.js?v=30';
 
 const wasmUrl = new URL('../render360_xenia_core.wasm', import.meta.url).href;
 const core = new Render360Core(wasmUrl);
@@ -32,6 +32,9 @@ function tick() {
       work: core.exports.r360_runtime_work_lo() >>> 0,
       checksum: core.exports.r360_runtime_checksum() >>> 0,
       inputMask: core.exports.r360_runtime_input_mask() >>> 0,
+      sessionKind: core.exports.r360_runtime_session_kind() >>> 0,
+      sessionStage: core.exports.r360_runtime_session_stage() >>> 0,
+      titleId: core.exports.r360_runtime_title_id() >>> 0,
       running,
     });
     reportStart = now;
@@ -44,6 +47,7 @@ self.onmessage = (event) => {
   const msg = event.data || {};
   if (!core.exports) return;
   if (msg.type === 'input') core.exports.r360_runtime_set_input(msg.mask >>> 0);
+  if (msg.type === 'session') core.exports.r360_runtime_set_session(msg.kind >>> 0, msg.stage >>> 0, msg.titleId >>> 0);
   if (msg.type === 'pause') running = false;
   if (msg.type === 'resume') { running = true; lastTick = performance.now(); }
   if (msg.type === 'reset') core.exports.r360_runtime_reset();

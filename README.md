@@ -1,67 +1,117 @@
-# Render360 Xenia-Web V29
+# Render360 Xenia-Web V30
 
-Render360 is an experimental browser port architecture for Xenia. V29 focuses on making the browser runtime genuinely live while keeping unsupported Xbox 360 functionality explicit.
+Render360 is an experimental browser port architecture for Xenia. V30 keeps the live C++/WebAssembly worker from V29 and moves the first real Xbox package-mount milestone into native WASM: a pull-driven STFS reader for LIVE/PIRS/CON containers.
 
-## V29 runtime architecture
+## Project rule
+
+**Xenia owns Xbox 360 behavior. Render360 owns browser/iOS host behavior.**
+
+The browser should not grow another JavaScript Xbox emulator. V30's JavaScript only supplies browser capabilities such as `File.slice()`, UI, input and the host graphics surface. STFS layout, block mapping, hash-chain selection and directory parsing live in C++/WASM and are kept aligned with Xenia's `stfs_xbox.h` / `stfs_container_device.cc` behavior.
+
+## V30 architecture
 
 ```text
-GitHub Pages (serves files)
-        |
-        +--> UI thread
-        |      +--> WebGPU animated shader pipeline
-        |      +--> Three.js / WebGL diagnostic renderer
-        |      +--> touch/controller UI
-        |
-        +--> Web Worker
-               +--> C++ wasm32 core
-               +--> continuous r360_runtime_tick
-               +--> native input state
-               +--> runtime counters/telemetry
+GitHub Pages
+   |
+   +-- UI thread
+   |    +-- File API byte-range adapter
+   |    +-- touch/controller UI
+   |    +-- direct WebGPU host
+   |    +-- Three.js diagnostic (idle only)
+   |
+   +-- render360_xenia_core.wasm
+   |    +-- strict XEX inspector
+   |    +-- native STFS mount state machine
+   |    |    +-- XContent / volume descriptor
+   |    |    +-- block + hash address mapping
+   |    |    +-- L0/L1/L2 active-index traversal
+   |    |    +-- 0x40-byte directory parser
+   |    |    +-- root default.xex lookup
+   |    |    `-- first default.xex data-block probe
+   |    `-- versioned ABI
+   |
+   `-- Web Worker
+        `-- continuous native runtime/input/session telemetry
 ```
 
-The worker continues while the page is active. iOS/Safari may reduce or suspend JavaScript/worker activity when the tab is backgrounded or the device is locked; GitHub Pages does not provide a permanently running server process.
+## What V30 genuinely does
 
-## Current native features
+- recognizes XEX1, XEX2, LIVE, PIRS, CON and PowerPC ELF
+- begins a native STFS mount by giving WASM only the package size
+- lets the C++ state machine request exact file ranges by 64-bit offset + size
+- validates XContent/STFS header and volume descriptor fields
+- maps STFS data blocks with Xenia's block-to-offset algorithm
+- resolves read-only and resilient STFS hash backing-table selection through L0/L1/L2 active-index metadata
+- follows the file-table block chain
+- parses native 0x40-byte `StfsDirectoryEntry` records
+- preserves Xenia's flat directory-parent index model
+- locates root `default.xex` when present
+- requests the first data block of that real embedded entry and proves XEX1/XEX2 magic
+- keeps the V29 native worker/runtime/input bridge alive
+- keeps direct WebGPU + WebGL2 fallback and a diagnostic Three.js layer that turns off while content is loaded
 
-- XEX1 / XEX2 / STFS LIVE / PIRS / CON / PowerPC ELF recognition
-- Xenia-aligned XEX base/optional/security metadata inspection
-- versioned C++/WASM ABI
-- continuous native worker runtime heartbeat
-- native controller input bitmask
-- strict scalar XAM bridge for verified transitional values
-- animated WebGPU graphics pipeline, WebGL2 fallback, and Three.js/WebGL diagnostic layer
+## Strict boundary
 
-## Not yet implemented
+V30 **does not boot a retail game**. Finding `default.xex` is not execution. V30 does not yet:
 
-- STFS VFS mount/default.xex extraction in the native core
-- Xenia XEX decryption/decompression and PE image mapping
-- full kernel/XAM implementation
-- PowerPC/Xenia HIR browser execution backend
-- Xenos command processor to WebGPU
-- Xenos shader translation to WGSL
-- textures, EDRAM, resolves, audio and real commercial-game execution
+- extract the complete `default.xex` STFS block chain
+- expose mounted files through a full Xenia VFS object
+- decrypt/decompress the XEX image
+- validate/map its PE image and imports
+- execute PowerPC code
+- run kernel/XAM
+- execute Xenos command streams or shaders
+- render an Xbox game frame
 
-## Build the WASM core
+Those are later milestones. The immediate V31 target is **full `default.xex` extraction through the mounted STFS/VFS path**.
+
+## Xenia source workflow
+
+The ZIP intentionally does not vendor the entire Xenia repository. Fetch the current upstream source when developing or in Actions:
+
+```bash
+bash ./scripts/fetch-xenia.sh
+python3 ./scripts/xenia_contract_check.py
+```
+
+This creates `upstream/xenia/` locally and verifies that the XEX/STFS portability contracts Render360 currently uses still match upstream Xenia.
+
+## Build and test
 
 ```bash
 bash ./scripts/build-core.sh
 node ./scripts/smoke_test_node.js
 ```
 
-## Run locally
+The smoke test constructs a two-directory-block synthetic LIVE/STFS package and drives the same native pull-I/O state machine used by the browser. It asserts that the hash chain is followed, two entries are enumerated, root `default.xex` is found, and its first data block is classified as XEX2.
+
+The browser bridge test can also be run while serving the project on port 8765:
 
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 8765
+node ./scripts/test_mount_node.mjs
 ```
-
-Then open `http://localhost:8000/`.
 
 ## GitHub Pages
 
-This repository is root-ready for **Settings -> Pages -> Deploy from a branch -> main -> /(root)**.
+The ZIP is root-ready for the existing configuration:
 
-The browser downloads the static files from GitHub Pages, then the Web Worker, WASM and graphics loops run on the user's device.
+**Settings → Pages → Deploy from a branch → `main` → `/(root)`**
+
+After uploading, a cache-busting test URL is:
+
+`https://matthewcodergamer.github.io/Render360/?v=30`
+
+## Performance direction
+
+Do not use the diagnostic Three.js scene as the Xbox renderer. The intended game path remains:
+
+```text
+Xenia/Xenos command processor -> Render360 WebGPU backend -> WebGPU canvas
+```
+
+The portable C++ core is being kept separate so a future iOS target can reuse Xbox logic while replacing WASM/WebGPU with native ARM64/Metal where appropriate.
 
 ## Licensing
 
-Xenia-derived work must preserve Xenia's BSD 3-Clause license and any applicable third-party licenses. Three.js is loaded as a diagnostic dependency from its public CDN distribution and is licensed under MIT.
+Xenia-derived layout/algorithm work preserves Xenia's BSD 3-Clause notice. See `LICENSE_XENIA.txt`. Future imported third-party components must preserve their own licenses as well.

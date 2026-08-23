@@ -14,7 +14,7 @@ export class RuntimeHost {
   async init() {
     return new Promise((resolve, reject) => {
       try {
-        this.worker = new Worker(new URL('./worker/runtime-worker.js', import.meta.url), {type:'module', name:'Render360Runtime'});
+        this.worker = new Worker(new URL('./worker/runtime-worker.js?v=30', import.meta.url), {type:'module', name:'Render360Runtime'});
       } catch (error) {
         reject(error); return;
       }
@@ -46,5 +46,6 @@ export class RuntimeHost {
   }
   pause(){this.worker?.postMessage({type:'pause'})}
   resume(){this.worker?.postMessage({type:'resume'})}
+  setSession({kind=0,stage=0,titleId=0}={}){this.worker?.postMessage({type:'session',kind:kind>>>0,stage:stage>>>0,titleId:titleId>>>0})}
   reset(){this.worker?.postMessage({type:'reset'})}
 }

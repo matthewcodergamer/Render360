@@ -1,35 +1,21 @@
-# Xenia upstream port map — V29
+# V30 upstream Xenia port map
 
-## Source-of-truth files
+Render360 currently keeps a small freestanding wasm32 compatibility subset instead of vendoring the full Xenia tree. `scripts/fetch-xenia.sh` brings current upstream into `upstream/xenia/`, and `scripts/xenia_contract_check.py` detects drift in the pieces V30 mirrors.
 
-- `src/xenia/kernel/util/xex2_info.h`
-  - XEX structures, optional-header keys, compression/encryption enums.
-  - V29's native inspector is intentionally kept structurally aligned to this file.
-- `src/xenia/cpu/xex_module.cc` / `.h`
-  - XEX1/XEX2 load flow, security info, image preparation, optional-header handling, PE validation, imports.
-- `src/xenia/cpu/lzx.*`
-  - Normal-compression path used by XEX loading.
-- `src/xenia/cpu/ppc/`
-  - Xenon PowerPC frontend/HIR path.
-- `src/xenia/cpu/backend/`
-  - Host execution backend interface; x64 backend is not browser-usable directly.
-- `src/xenia/gpu/command_processor.cc`
-  - Shared Xenos command/ring processing.
-- `src/xenia/gpu/shader*`
-  - Xenos shader representation/translation.
-- `src/xenia/gpu/xenos.h` and register/texture utilities
-  - Guest GPU semantics.
+| Render360 V30 area | Xenia source of truth | V30 status |
+|---|---|---|
+| XEX header / optional-header keys | `src/xenia/kernel/util/xex2_info.h` | portability subset in `src/xenia_port/xex2_layout.h` |
+| XEX module boundary | `src/xenia/cpu/xex_module.h/.cc` | structure inspection only; full module/image load future |
+| XContent package / STFS structs | `src/xenia/vfs/devices/stfs_xbox.h` | on-disk constants in `src/xenia_port/stfs_layout.h` |
+| STFS device mount | `src/xenia/vfs/devices/stfs_container_device.cc` | native pull-driven mount state machine |
+| STFS block mapping | `BlockToOffsetSTFS` | ported for wasm32 |
+| STFS hash-table selection | `BlockToHashBlockNumberSTFS`, `GetBlockHash` | L0/L1/L2 active-index logic ported |
+| STFS directory enumeration | `ReadSTFS` | native 0x40 entry parser + flat parent indices |
+| Browser file I/O | host-specific Render360 adapter | `File.slice()` fulfills native range requests |
+| Xenia VFS `Device` / `Entry` objects | `src/xenia/vfs/` | V31 target |
+| PowerPC | `src/xenia/cpu/` | not yet ported |
+| Kernel/XAM | `src/xenia/kernel/` | not yet ported |
+| Xenos command processing | `src/xenia/gpu/command_processor.cc` | future shared subsystem |
+| Web host GPU | Render360-specific | direct WebGPU diagnostic today; emulator backend future |
 
-## Browser-owned code
-
-Keep this small:
-- UI and file picker
-- WebAssembly loader/ABI bridge
-- WebGPU device and presentation backend
-- gamepad/touch mapping
-- browser audio
-- IndexedDB/OPFS persistence
-
-## V29 boundary
-
-V29 has not copied `XexModule::Load` and does not claim XEX execution. It ports only the stable XEX layout knowledge necessary to validate/inspect headers in the native core. The GitHub `Xenia upstream contract check` workflow detects obvious drift in the tracked keys/structures before later native port work builds on them.
+The goal is to progressively reduce the compatibility subset as more actual upstream Xenia source can compile for the web target.

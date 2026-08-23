@@ -7,9 +7,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
-  <title>Render360 Xenia-Web V29</title>
+  <title>Render360 Xenia-Web V30</title>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="app.css?v=29">
+  <link rel="stylesheet" href="app.css?v=30">
 </head>
 <body>
 <div id="app">
@@ -20,7 +20,7 @@
   <header class="topbar glass">
     <div class="brand">
       <span class="orb"></span>
-      <div><strong>Render360</strong><span>Xenia-Web · V29</span></div>
+      <div><strong>Render360</strong><span>Xenia-Web · V30</span></div>
     </div>
     <div class="top-actions">
       <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
@@ -33,9 +33,9 @@
       <div class="hero-mark"><span></span></div>
       <p class="eyebrow">XENIA → WEBASSEMBLY → WEBGPU</p>
       <h1>The browser port, not another fake emulator.</h1>
-      <p class="hero-copy">V29 keeps the native core alive continuously in a Web Worker while WebGPU and a Three.js/WebGL diagnostic renderer animate independently on the display thread.</p>
+      <p class="hero-copy">V30 adds a pull-driven native STFS mount: the C++/WASM core requests exact LIVE/PIRS/CON byte ranges, follows file-table/hash chains, enumerates entries and locates the real default.xex while the worker and direct WebGPU host stay live.</p>
       <div class="status-grid six">
-        <div class="status-card"><span>Build</span><b id="buildStatus">V29</b></div>
+        <div class="status-card"><span>Build</span><b id="buildStatus">V30</b></div>
         <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
         <div class="status-card"><span>Worker</span><b id="workerStatus">Starting…</b></div>
         <div class="status-card"><span>WebGPU</span><b id="gpuStatus">Detecting…</b></div>
@@ -44,7 +44,7 @@
       </div>
       <label class="primary-button" for="gameInput">Choose Xbox 360 file</label>
       <input id="gameInput" type="file" hidden>
-      <p class="support-note">The site is now live rather than idle: native WASM ticks in a worker, the graphics surface renders continuously, and Three.js/WebGL runs as a visible diagnostic layer. Xbox execution remains strict until the real Xenia subsystems are ported.</p>
+      <p class="support-note">V30 keeps the runtime live and moves STFS structure handling into C++/WASM. JavaScript is only the browser File I/O adapter. Three.js remains diagnostic-only and is disabled while content is loaded so it does not steal GPU time.</p>
     </section>
 
     <section id="gameState" class="game-card glass hidden">
@@ -55,7 +55,26 @@
       <div class="game-meta">
         <div><span>Type</span><b id="gameType">—</b></div>
         <div><span>Size</span><b id="gameSize">—</b></div>
-        <div><span>Core</span><b id="gameCore">WASM V29</b></div>
+        <div><span>Core</span><b id="gameCore">WASM V30</b></div>
+      </div>
+
+      <div id="stfsDetails" class="xex-panel hidden">
+        <div class="xex-panel-title"><span></span><b>Xenia-aligned STFS mount</b></div>
+        <div class="xex-grid">
+          <div><span>Package name</span><b id="stfsDisplayName">—</b></div>
+          <div><span>Mount status</span><b id="stfsMountStatus">—</b></div>
+          <div><span>Title ID</span><b id="stfsTitleId">—</b></div>
+          <div><span>Media ID</span><b id="stfsMediaId">—</b></div>
+          <div><span>Header size</span><b id="stfsHeaderSize">—</b></div>
+          <div><span>File table</span><b id="stfsFileTable">—</b></div>
+          <div><span>Data blocks</span><b id="stfsBlocks">—</b></div>
+          <div><span>Format</span><b id="stfsFormat">—</b></div>
+          <div><span>Entries seen</span><b id="stfsEntries">—</b></div>
+          <div><span>Browser reads</span><b id="stfsRequests">—</b></div>
+          <div><span>default.xex</span><b id="stfsDefaultXex">—</b></div>
+          <div><span>First block</span><b id="stfsDefaultKind">—</b></div>
+        </div>
+        <div id="stfsFileList" class="stfs-file-list"></div>
       </div>
 
       <div id="xexDetails" class="xex-panel hidden">
@@ -81,7 +100,7 @@
     </section>
   </main>
 
-  <div id="liveTelemetry" class="live-telemetry glass"><span class="tele-dot"></span><b>WASM WORKER STARTING</b><span>GPU —</span><span>THREE —</span></div>
+  <div id="liveTelemetry" class="live-telemetry glass"><span class="tele-dot"></span><b>WASM WORKER STARTING</b><span>GPU —</span><span>SCALE —</span></div>
 
   <div class="controller-layer">
     <div class="left-cluster"><button class="glass control trigger" data-key="LT">LT</button><div class="stick glass"><span>Move</span></div></div>
@@ -95,18 +114,19 @@
   </section>
 
   <section id="statusSheet" class="sheet glass hidden">
-    <div class="sheet-head"><div><b>Port Status</b><span>V29</span></div><button id="closeStatus" type="button">Done</button></div>
+    <div class="sheet-head"><div><b>Port Status</b><span>V30</span></div><button id="closeStatus" type="button">Done</button></div>
     <div class="port-list">
       <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core, versioned ABI and shared file staging buffer.</p></div></div>
       <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native r360_runtime_tick executes continuously off the UI thread and receives controller input state.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
-      <div class="port-row done"><span></span><div><b>Xenia-aligned XEX structure</b><p>V29 retains the V28 XEX inspector and validates the XEX base header and reads optional execution/file-format/security metadata in native WASM.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Live graphics surfaces</b><p>Animated WebGPU shader pipeline plus a Three.js/WebGL diagnostic renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Three <b id="threeFps">—</b></span></div></div></div>
-      <div class="port-row active"><span></span><div><b>Full Xenia XEX loader</b><p>Next: port decryption/decompression, PE mapping and import setup from upstream Xenia instead of duplicating them in JavaScript.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Xenia-aligned STFS / VFS milestone</b><p>A pull-driven C++/WASM mount state machine validates XContent/STFS metadata, maps hash/data blocks, parses directory entries and follows file-table chains. The browser only supplies requested byte ranges.</p></div></div>
+      <div class="port-row done"><span></span><div><b>XEX structure inspection</b><p>When V30 finds default.xex inside STFS, the native mount requests its first data block and verifies whether the embedded executable begins with XEX1/XEX2. Full extraction is deliberately V31.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Performance foundation</b><p>Direct WebGPU render loop targets 30 FPS with dynamic internal resolution. Three.js is diagnostic-only and turns off while content is loaded.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
+      <div class="port-row active"><span></span><div><b>Full default.xex extraction / VFS</b><p>Next: follow the executable's own STFS block chain, expose it as a mounted VFS file, then feed those bytes into Xenia's XEX image preparation path. V30 does not fake this boundary.</p></div></div>
       <div class="port-row"><span></span><div><b>Kernel + CPU backend</b><p>Needs Xenia kernel/XAM plus a browser-compatible PowerPC execution backend.</p></div></div>
       <div class="port-row"><span></span><div><b>Xenos → WebGPU</b><p>Shared command processing, shaders, textures, EDRAM and resolves remain future native milestones.</p></div></div>
     </div>
   </section>
 </div>
-<script type="module" src="app.js?v=29"></script>
+<script type="module" src="app.js?v=30"></script>
 </body>
 </html>

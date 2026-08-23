@@ -1,0 +1,23 @@
+import {Render360Core} from '../wasm-core.js';
+const put32be=(m,o,v)=>{m[o]=(v>>>24)&255;m[o+1]=(v>>>16)&255;m[o+2]=(v>>>8)&255;m[o+3]=v&255};
+const put16be=(m,o,v)=>{m[o]=(v>>>8)&255;m[o+1]=v&255};
+const put16le=(m,o,v)=>{m[o]=v&255;m[o+1]=(v>>>8)&255};
+const put24le=(m,o,v)=>{m[o]=v&255;m[o+1]=(v>>>8)&255;m[o+2]=(v>>>16)&255};
+const ascii=(m,o,s)=>m.set(new TextEncoder().encode(s),o);
+const utf16be=(m,o,s)=>{for(let i=0;i<s.length;i++){const v=s.charCodeAt(i);m[o+i*2]=(v>>>8)&255;m[o+i*2+1]=v&255}};
+const bytes=new Uint8Array(0xF000);
+ascii(bytes,0,'LIVE');put32be(bytes,0x340,0x971A);put32be(bytes,0x344,0x000D0000);put32be(bytes,0x348,2);put32be(bytes,0x354,0xAABBCCDD);put32be(bytes,0x360,0x584108CE);
+const d=0x379;bytes[d]=0x24;bytes[d+2]=1;put16le(bytes,d+3,2);put24le(bytes,d+5,0);put32be(bytes,d+0x1C,4);put32be(bytes,0x3A9,0);utf16be(bytes,0x411,'Bridge Test');
+// table block0 -> block2
+put32be(bytes,0xA000+0x14,2);
+let e=0xB000;ascii(bytes,e,'hello.bin');bytes[e+40]=0x40+9;put24le(bytes,e+41,1);put24le(bytes,e+44,1);put24le(bytes,e+47,1);put16be(bytes,e+50,0xFFFF);put32be(bytes,e+52,4);
+e=0xD000;ascii(bytes,e,'default.xex');bytes[e+40]=0x40+11;put24le(bytes,e+41,1);put24le(bytes,e+44,1);put24le(bytes,e+47,3);put16be(bytes,e+50,0xFFFF);put32be(bytes,e+52,0x1000);ascii(bytes,0xE000,'XEX2');
+const file=new File([bytes],'synthetic-live',{type:'application/octet-stream'});
+const core=await new Render360Core('http://127.0.0.1:8765/render360_xenia_core.wasm').init();
+const mount=await core.mountStfs(file);
+if(!mount.mounted)throw new Error(`not mounted: ${mount.stfs.statusName}`);
+if(mount.entries.length!==2)throw new Error(`entries ${mount.entries.length}`);
+if(!mount.defaultXex||mount.defaultXex.name!=='default.xex')throw new Error('default.xex not found');
+if(mount.defaultXexKind!==2)throw new Error('embedded XEX2 probe failed');
+if(mount.requestCount!==5)throw new Error(`unexpected request count ${mount.requestCount}`);
+console.log('PASS browser bridge native mount',{requests:mount.requestCount,entries:mount.entries.length,title:mount.stfs.titleId.toString(16),kind:mount.defaultXexKind});

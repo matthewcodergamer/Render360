@@ -62,5 +62,7 @@ export class ThreeDiagnosticHost {
     }
     this.raf = requestAnimationFrame(this.frame);
   };
+  start(){if(!this.renderer||this.running)return;this.running=true;this.lastFrame=0;this.lastReport=performance.now();this.frames=0;this.raf=requestAnimationFrame(this.frame)}
+  setEnabled(enabled){if(enabled)this.start();else this.stop();this.canvas.style.display=enabled?'block':'none'}
   stop(){this.running=false;cancelAnimationFrame(this.raf)}
 }

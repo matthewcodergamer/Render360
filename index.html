@@ -7,72 +7,71 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
-  <title>Render360 Xenia-Web V30</title>
+  <title>Render360 Xenia-Web V32</title>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="app.css?v=30">
+  <link rel="stylesheet" href="app.css?v=32">
 </head>
 <body>
 <div id="app">
   <canvas id="gpuCanvas" aria-label="Render360 WebGPU graphics surface"></canvas>
-  <canvas id="threeCanvas" aria-label="Render360 Three.js diagnostic surface"></canvas>
+  <canvas id="threeCanvas" aria-label="Render360 playable 3D surface"></canvas>
   <div class="ambient"></div>
+  <div id="lookZone" class="look-zone hidden" aria-label="Drag to look around"><span>DRAG TO LOOK</span></div>
 
   <header class="topbar glass">
-    <div class="brand">
-      <span class="orb"></span>
-      <div><strong>Render360</strong><span>Xenia-Web · V30</span></div>
-    </div>
+    <div class="brand"><span class="orb"></span><div><strong>Render360</strong><span>Xenia-Web · V32</span></div></div>
     <div class="top-actions">
+      <button id="arenaButton" class="icon-button" type="button" aria-label="Play test arena">PLAY</button>
       <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
       <button id="settingsButton" class="icon-button" type="button" aria-label="Project status">•••</button>
     </div>
   </header>
 
-  <main class="stage">
+  <div id="arenaHud" class="arena-hud glass hidden">
+    <div><b>TEST ARENA</b><span id="arenaScore">0 / 6 ORBS</span></div>
+    <div class="arena-help">LEFT STICK MOVE · DRAG SCREEN LOOK · A JUMP · RT SPRINT · X RESET</div>
+    <button id="leaveArena" type="button">MENU</button>
+  </div>
+
+  <main id="stage" class="stage">
     <section id="emptyState" class="hero glass">
       <div class="hero-mark"><span></span></div>
-      <p class="eyebrow">XENIA → WEBASSEMBLY → WEBGPU</p>
-      <h1>The browser port, not another fake emulator.</h1>
-      <p class="hero-copy">V30 adds a pull-driven native STFS mount: the C++/WASM core requests exact LIVE/PIRS/CON byte ranges, follows file-table/hash chains, enumerates entries and locates the real default.xex while the worker and direct WebGPU host stay live.</p>
+      <p class="eyebrow">WASM RUNTIME · WEBGPU · THREE.JS INPUT TEST</p>
+      <h1>Render360 is alive.</h1>
+      <p class="hero-copy">V32 moves the real Xbox path forward: STFS packages now stream the complete default.xex block chain, inspect the extracted XEX, and expose the exact first-frame gate. Touch input is live across the native WASM boundary.</p>
       <div class="status-grid six">
-        <div class="status-card"><span>Build</span><b id="buildStatus">V30</b></div>
+        <div class="status-card"><span>Build</span><b id="buildStatus">V32</b></div>
         <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
         <div class="status-card"><span>Worker</span><b id="workerStatus">Starting…</b></div>
         <div class="status-card"><span>WebGPU</span><b id="gpuStatus">Detecting…</b></div>
         <div class="status-card"><span>Three.js</span><b id="threeStatus">Loading…</b></div>
         <div class="status-card"><span>ABI</span><b id="abiStatus">—</b></div>
       </div>
-      <label class="primary-button" for="gameInput">Choose Xbox 360 file</label>
-      <input id="gameInput" type="file" hidden>
-      <p class="support-note">V30 keeps the runtime live and moves STFS structure handling into C++/WASM. JavaScript is only the browser File I/O adapter. Three.js remains diagnostic-only and is disabled while content is loaded so it does not steal GPU time.</p>
+      <div class="hero-actions">
+        <label class="primary-button play-button" for="gameInput">Load Xbox 360 game</label>
+        <button id="playNowButton" class="primary-button secondary-button" type="button">Controller test arena</button>
+      </div>
+      <input id="gameInput" type="file" accept=".xex,.live,.pirs,.con,.iso,application/octet-stream" hidden>
+      <p class="support-note"><b>Braid / XBLA:</b> use the LIVE/PIRS/CON package directly. V32 mounts the package and streams the complete default.xex without converting it to ISO. ISO/XDVDFS is a separate input path.</p>
     </section>
 
     <section id="gameState" class="game-card glass hidden">
       <div class="game-heading">
-        <div><p class="eyebrow">NATIVE CONTAINER INSPECTION</p><h2 id="gameName">Game</h2></div>
-        <button id="ejectButton" class="small-button" type="button">Eject</button>
+        <div><p class="eyebrow">XBOX CONTENT PIPELINE</p><h2 id="gameName">Game</h2></div>
+        <div class="game-heading-buttons"><button id="hideGameButton" class="small-button" type="button">Arena</button><button id="ejectButton" class="small-button" type="button">Eject</button></div>
       </div>
-      <div class="game-meta">
-        <div><span>Type</span><b id="gameType">—</b></div>
-        <div><span>Size</span><b id="gameSize">—</b></div>
-        <div><span>Core</span><b id="gameCore">WASM V30</b></div>
-      </div>
+      <div class="game-meta"><div><span>Type</span><b id="gameType">—</b></div><div><span>Size</span><b id="gameSize">—</b></div><div><span>Core</span><b id="gameCore">WASM V32</b></div></div>
 
       <div id="stfsDetails" class="xex-panel hidden">
         <div class="xex-panel-title"><span></span><b>Xenia-aligned STFS mount</b></div>
         <div class="xex-grid">
-          <div><span>Package name</span><b id="stfsDisplayName">—</b></div>
-          <div><span>Mount status</span><b id="stfsMountStatus">—</b></div>
-          <div><span>Title ID</span><b id="stfsTitleId">—</b></div>
-          <div><span>Media ID</span><b id="stfsMediaId">—</b></div>
-          <div><span>Header size</span><b id="stfsHeaderSize">—</b></div>
-          <div><span>File table</span><b id="stfsFileTable">—</b></div>
-          <div><span>Data blocks</span><b id="stfsBlocks">—</b></div>
-          <div><span>Format</span><b id="stfsFormat">—</b></div>
-          <div><span>Entries seen</span><b id="stfsEntries">—</b></div>
-          <div><span>Browser reads</span><b id="stfsRequests">—</b></div>
-          <div><span>default.xex</span><b id="stfsDefaultXex">—</b></div>
-          <div><span>First block</span><b id="stfsDefaultKind">—</b></div>
+          <div><span>Package name</span><b id="stfsDisplayName">—</b></div><div><span>Mount status</span><b id="stfsMountStatus">—</b></div>
+          <div><span>Title ID</span><b id="stfsTitleId">—</b></div><div><span>Media ID</span><b id="stfsMediaId">—</b></div>
+          <div><span>Header size</span><b id="stfsHeaderSize">—</b></div><div><span>File table</span><b id="stfsFileTable">—</b></div>
+          <div><span>Data blocks</span><b id="stfsBlocks">—</b></div><div><span>Format</span><b id="stfsFormat">—</b></div>
+          <div><span>Entries seen</span><b id="stfsEntries">—</b></div><div><span>Browser reads</span><b id="stfsRequests">—</b></div>
+          <div><span>default.xex</span><b id="stfsDefaultXex">—</b></div><div><span>XEX type</span><b id="stfsDefaultKind">—</b></div>
+          <div><span>Full extraction</span><b id="stfsExtractStatus">—</b></div><div><span>Capture</span><b id="stfsExtractCapture">—</b></div>
         </div>
         <div id="stfsFileList" class="stfs-file-list"></div>
       </div>
@@ -80,53 +79,63 @@
       <div id="xexDetails" class="xex-panel hidden">
         <div class="xex-panel-title"><span></span><b>Xenia-aligned XEX metadata</b></div>
         <div class="xex-grid">
-          <div><span>Title ID</span><b id="xexTitleId">—</b></div>
-          <div><span>Entry</span><b id="xexEntry">—</b></div>
-          <div><span>Image base</span><b id="xexImageBase">—</b></div>
-          <div><span>Header size</span><b id="xexHeaderSize">—</b></div>
-          <div><span>Security offset</span><b id="xexSecurity">—</b></div>
-          <div><span>Optional headers</span><b id="xexOptCount">—</b></div>
-          <div><span>Compression</span><b id="xexCompression">—</b></div>
-          <div><span>Encryption</span><b id="xexEncryption">—</b></div>
-          <div><span>Image size</span><b id="xexImageSize">—</b></div>
-          <div><span>Load address</span><b id="xexLoadAddress">—</b></div>
+          <div><span>Title ID</span><b id="xexTitleId">—</b></div><div><span>Entry</span><b id="xexEntry">—</b></div>
+          <div><span>Image base</span><b id="xexImageBase">—</b></div><div><span>Header size</span><b id="xexHeaderSize">—</b></div>
+          <div><span>Security offset</span><b id="xexSecurity">—</b></div><div><span>Optional headers</span><b id="xexOptCount">—</b></div>
+          <div><span>Compression</span><b id="xexCompression">—</b></div><div><span>Encryption</span><b id="xexEncryption">—</b></div>
+          <div><span>Image size</span><b id="xexImageSize">—</b></div><div><span>Load address</span><b id="xexLoadAddress">—</b></div>
         </div>
       </div>
 
-      <div class="boundary">
-        <span class="pulse"></span>
-        <div><b id="boundaryTitle">Container recognized</b><p id="boundaryText">Waiting for the next Xenia subsystem to be ported.</p></div>
+      <div id="firstFrameGate" class="frame-gate hidden">
+        <div class="frame-gate-title"><span></span><b>First real Xbox frame</b><em id="frameGateState">PREPARING</em></div>
+        <div class="frame-gate-grid">
+          <div class="ready"><span>1</span><b>STFS mount</b><em>READY</em></div>
+          <div id="gateExtract"><span>2</span><b>default.xex stream</b><em>WAIT</em></div>
+          <div id="gateXex"><span>3</span><b>XEX image loader</b><em>WAIT</em></div>
+          <div id="gateCpu"><span>4</span><b>PPC → WASM backend</b><em>BLOCKED</em></div>
+          <div id="gateKernel"><span>5</span><b>Kernel / XAM</b><em>BLOCKED</em></div>
+          <div id="gateGpu"><span>6</span><b>Xenos → WebGPU</b><em>BLOCKED</em></div>
+        </div>
       </div>
+      <div class="boundary"><span class="pulse"></span><div><b id="boundaryTitle">Container recognized</b><p id="boundaryText">Waiting for the next Xenia subsystem to be ported.</p></div></div>
     </section>
   </main>
 
+  <button id="gameChip" class="game-chip glass hidden" type="button"><span class="tele-dot"></span><b id="gameChipName">Xbox content</b><span>INSPECT</span></button>
   <div id="liveTelemetry" class="live-telemetry glass"><span class="tele-dot"></span><b>WASM WORKER STARTING</b><span>GPU —</span><span>SCALE —</span></div>
 
   <div class="controller-layer">
-    <div class="left-cluster"><button class="glass control trigger" data-key="LT">LT</button><div class="stick glass"><span>Move</span></div></div>
+    <div class="top-controller-row">
+      <button id="pauseRuntimeButton" class="glass host-control pause-control" type="button">Pause</button>
+      <div class="top-controller-center"><button class="glass control top-control" data-key="BACK">Back</button><button class="glass control top-control" data-key="START">Start</button></div>
+      <div class="top-controller-right"><button class="glass control top-control" data-key="LB">LB</button><button class="glass control top-control" data-key="RB">RB</button></div>
+    </div>
+    <div class="left-cluster">
+      <button class="glass control trigger" data-key="LT">LT</button>
+      <div class="stick glass" id="moveStick" role="slider" aria-label="Movement stick"><div id="moveKnob" class="stick-knob"></div></div>
+    </div>
+    <div id="lookStick" class="look-stick glass" role="slider" aria-label="Look stick"><div id="lookKnob" class="look-stick-knob">LOOK</div></div>
     <div class="right-cluster"><button class="glass control trigger" data-key="RT">RT</button><div class="face-grid"><button class="glass control face y" data-key="Y">Y</button><button class="glass control face x" data-key="X">X</button><button class="glass control face b" data-key="B">B</button><button class="glass control face a" data-key="A">A</button></div></div>
   </div>
 
   <div id="scrim" class="scrim hidden"></div>
   <section id="consoleSheet" class="sheet glass hidden" aria-label="Render360 console">
-    <div class="sheet-head"><div><b>Render360 Console</b><span id="logCount">0</span></div><div class="sheet-actions"><button id="copyLogs" type="button">Copy</button><button id="clearLogs" type="button">Clear</button><button id="closeConsole" type="button">Done</button></div></div>
-    <div id="consoleBody" class="console-body"></div>
+    <div class="sheet-head"><div><b>Render360 Console</b><span id="logCount">0</span></div><div class="sheet-actions"><button id="copyLogs" type="button">Copy</button><button id="clearLogs" type="button">Clear</button><button id="closeConsole" type="button">Done</button></div></div><div id="consoleBody" class="console-body"></div>
   </section>
 
   <section id="statusSheet" class="sheet glass hidden">
-    <div class="sheet-head"><div><b>Port Status</b><span>V30</span></div><button id="closeStatus" type="button">Done</button></div>
+    <div class="sheet-head"><div><b>Port Status</b><span>V32</span></div><button id="closeStatus" type="button">Done</button></div>
     <div class="port-list">
-      <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core, versioned ABI and shared file staging buffer.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native r360_runtime_tick executes continuously off the UI thread and receives controller input state.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
-      <div class="port-row done"><span></span><div><b>Xenia-aligned STFS / VFS milestone</b><p>A pull-driven C++/WASM mount state machine validates XContent/STFS metadata, maps hash/data blocks, parses directory entries and follows file-table chains. The browser only supplies requested byte ranges.</p></div></div>
-      <div class="port-row done"><span></span><div><b>XEX structure inspection</b><p>When V30 finds default.xex inside STFS, the native mount requests its first data block and verifies whether the embedded executable begins with XEX1/XEX2. Full extraction is deliberately V31.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Performance foundation</b><p>Direct WebGPU render loop targets 30 FPS with dynamic internal resolution. Three.js is diagnostic-only and turns off while content is loaded.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
-      <div class="port-row active"><span></span><div><b>Full default.xex extraction / VFS</b><p>Next: follow the executable's own STFS block chain, expose it as a mounted VFS file, then feed those bytes into Xenia's XEX image preparation path. V30 does not fake this boundary.</p></div></div>
-      <div class="port-row"><span></span><div><b>Kernel + CPU backend</b><p>Needs Xenia kernel/XAM plus a browser-compatible PowerPC execution backend.</p></div></div>
-      <div class="port-row"><span></span><div><b>Xenos → WebGPU</b><p>Shared command processing, shaders, textures, EDRAM and resolves remain future native milestones.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Playable browser input test</b><p>Real analog joystick, drag-look camera, keyboard/gamepad polling, jump/sprint/reset and a lightweight Three.js arena are active now.</p></div></div>
+      <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core plus native digital and analog input bridge.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native runtime ticks continuously off the UI thread.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
+      <div class="port-row done"><span></span><div><b>STFS / XEX extraction</b><p>LIVE/PIRS/CON mount, native directory traversal, root default.xex lookup, contiguous/hash-chain streaming, and full XEX capture are active.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Performance foundation</b><p>WebGPU underlay plus dynamic resolution. The test arena is a host-side input/render test, not the Xbox renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
+      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>V32 removes the package/extraction blocker. The next hard gate is the Xenia CPU/kernel/GPU port: a browser-safe PPC backend plus Xenos → WebGPU.</p></div></div>
     </div>
   </section>
 </div>
-<script type="module" src="app.js?v=30"></script>
+<script type="module" src="app.js?v=32"></script>
 </body>
 </html>

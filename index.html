@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#030406">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Render360">
+  <title>Render360 Xenia-Web V28</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="gpuCanvas" aria-label="Render360 graphics surface"></canvas>
+  <div class="ambient"></div>
+
+  <header class="topbar glass">
+    <div class="brand">
+      <span class="orb"></span>
+      <div><strong>Render360</strong><span>Xenia-Web · V28</span></div>
+    </div>
+    <div class="top-actions">
+      <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
+      <button id="settingsButton" class="icon-button" type="button" aria-label="Project status">•••</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section id="emptyState" class="hero glass">
+      <div class="hero-mark"><span></span></div>
+      <p class="eyebrow">XENIA → WEBASSEMBLY → WEBGPU</p>
+      <h1>The browser port, not another fake emulator.</h1>
+      <p class="hero-copy">V28 keeps the interface thin and moves Xbox format work into the C++ WebAssembly core. The current native milestone is strict Xenia-aligned XEX inspection.</p>
+      <div class="status-grid four">
+        <div class="status-card"><span>Build</span><b id="buildStatus">V28</b></div>
+        <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
+        <div class="status-card"><span>Graphics</span><b id="gpuStatus">Detecting…</b></div>
+        <div class="status-card"><span>ABI</span><b id="abiStatus">—</b></div>
+      </div>
+      <label class="primary-button" for="gameInput">Choose Xbox 360 file</label>
+      <input id="gameInput" type="file" hidden>
+      <p class="support-note">XEX/STFS/ELF recognition and XEX header parsing happen in WASM. Unsupported execution remains visible as a boundary instead of being reported as success.</p>
+    </section>
+
+    <section id="gameState" class="game-card glass hidden">
+      <div class="game-heading">
+        <div><p class="eyebrow">NATIVE CONTAINER INSPECTION</p><h2 id="gameName">Game</h2></div>
+        <button id="ejectButton" class="small-button" type="button">Eject</button>
+      </div>
+      <div class="game-meta">
+        <div><span>Type</span><b id="gameType">—</b></div>
+        <div><span>Size</span><b id="gameSize">—</b></div>
+        <div><span>Core</span><b id="gameCore">WASM V28</b></div>
+      </div>
+
+      <div id="xexDetails" class="xex-panel hidden">
+        <div class="xex-panel-title"><span></span><b>Xenia-aligned XEX metadata</b></div>
+        <div class="xex-grid">
+          <div><span>Title ID</span><b id="xexTitleId">—</b></div>
+          <div><span>Entry</span><b id="xexEntry">—</b></div>
+          <div><span>Image base</span><b id="xexImageBase">—</b></div>
+          <div><span>Header size</span><b id="xexHeaderSize">—</b></div>
+          <div><span>Security offset</span><b id="xexSecurity">—</b></div>
+          <div><span>Optional headers</span><b id="xexOptCount">—</b></div>
+          <div><span>Compression</span><b id="xexCompression">—</b></div>
+          <div><span>Encryption</span><b id="xexEncryption">—</b></div>
+          <div><span>Image size</span><b id="xexImageSize">—</b></div>
+          <div><span>Load address</span><b id="xexLoadAddress">—</b></div>
+        </div>
+      </div>
+
+      <div class="boundary">
+        <span class="pulse"></span>
+        <div><b id="boundaryTitle">Container recognized</b><p id="boundaryText">Waiting for the next Xenia subsystem to be ported.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="controller-layer" aria-hidden="true">
+    <div class="left-cluster"><button class="glass control trigger" data-key="LT">LT</button><div class="stick glass"><span>Move</span></div></div>
+    <div class="right-cluster"><button class="glass control trigger" data-key="RT">RT</button><div class="face-grid"><button class="glass control face y" data-key="Y">Y</button><button class="glass control face x" data-key="X">X</button><button class="glass control face b" data-key="B">B</button><button class="glass control face a" data-key="A">A</button></div></div>
+  </div>
+
+  <div id="scrim" class="scrim hidden"></div>
+  <section id="consoleSheet" class="sheet glass hidden" aria-label="Render360 console">
+    <div class="sheet-head"><div><b>Render360 Console</b><span id="logCount">0</span></div><div class="sheet-actions"><button id="copyLogs" type="button">Copy</button><button id="clearLogs" type="button">Clear</button><button id="closeConsole" type="button">Done</button></div></div>
+    <div id="consoleBody" class="console-body"></div>
+  </section>
+
+  <section id="statusSheet" class="sheet glass hidden">
+    <div class="sheet-head"><div><b>Port Status</b><span>V28</span></div><button id="closeStatus" type="button">Done</button></div>
+    <div class="port-list">
+      <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core, versioned ABI and shared file staging buffer.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Xenia-aligned XEX structure</b><p>V28 validates the XEX base header and reads optional execution/file-format/security metadata in native WASM.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Web graphics surface</b><p>WebGPU first with a WebGL2 diagnostic fallback.</p></div></div>
+      <div class="port-row active"><span></span><div><b>Full Xenia XEX loader</b><p>Next: port decryption/decompression, PE mapping and import setup from upstream Xenia instead of duplicating them in JavaScript.</p></div></div>
+      <div class="port-row"><span></span><div><b>Kernel + CPU backend</b><p>Needs Xenia kernel/XAM plus a browser-compatible PowerPC execution backend.</p></div></div>
+      <div class="port-row"><span></span><div><b>Xenos → WebGPU</b><p>Shared command processing, shaders, textures, EDRAM and resolves remain future native milestones.</p></div></div>
+    </div>
+  </section>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

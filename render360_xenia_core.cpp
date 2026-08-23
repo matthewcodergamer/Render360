@@ -1,16 +1,16 @@
 /*
- * Render360 Xenia-Web V28 bootstrap core.
+ * Render360 Xenia-Web V29 runtime bootstrap core.
  *
- * Freestanding C++ -> wasm32. V28 moves beyond magic-only probing and adds a
+ * Freestanding C++ -> wasm32. V29 keeps the strict XEX inspector and adds a continuous browser-runtime heartbeat so Web Workers can execute the native core while the UI/render thread remains responsive. It retains a
  * strict XEX header inspector aligned to Xenia's public XEX layout definitions.
- * It does NOT claim to decrypt/decompress/execute the XEX yet.
+ * It still does NOT claim to decrypt/decompress/execute the XEX yet.
  */
 #include <stdint.h>
 #include <stddef.h>
 #include "xenia_port/xex2_layout.h"
 
-#define R360_BUILD_VERSION 28u
-#define R360_ABI_VERSION 0x00030000u
+#define R360_BUILD_VERSION 29u
+#define R360_ABI_VERSION 0x00030001u
 #define R360_IO_CAPACITY (8u * 1024u * 1024u)
 #define R360_UNKNOWN_U32 0xFFFFFFFFu
 
@@ -18,6 +18,15 @@ namespace {
 using r360::xenia_port::XexInspection;
 static uint8_t io_buffer[R360_IO_CAPACITY];
 static XexInspection xex_info;
+
+struct RuntimeState {
+  uint64_t ticks = 0;
+  uint64_t host_time_us = 0;
+  uint64_t work_units = 0;
+  uint32_t input_mask = 0;
+  uint32_t checksum = 0x360u;
+};
+static RuntimeState runtime_state;
 
 static bool starts_with(const uint8_t* p, uint32_t n, const char* s,
                         uint32_t s_len) {
@@ -139,7 +148,7 @@ static uint32_t inspect_xex(uint32_t length) {
   }
 
   // XEX2 security info offsets below are from Xenia's xex2_security_info.
-  // XEX1 has a different security-info layout, so V28 deliberately doesn't
+  // XEX1 has a different security-info layout, so V29 deliberately doesn't
   // reinterpret it as XEX2.
   if (kind == 2u && xex_info.security_offset != 0u) {
     const uint32_t s = xex_info.security_offset;
@@ -232,9 +241,49 @@ uint32_t r360_xam_scalar_value(uint32_t ordinal) {
  * 5 XEX file-format/security metadata extraction
  */
 __attribute__((visibility("default")))
+void r360_runtime_reset() { runtime_state = RuntimeState{}; }
+
+__attribute__((visibility("default")))
+void r360_runtime_set_input(uint32_t mask) { runtime_state.input_mask = mask; }
+
+__attribute__((visibility("default")))
+void r360_runtime_tick(uint32_t dt_us) {
+  if (dt_us > 100000u) dt_us = 100000u;
+  runtime_state.ticks += 1u;
+  runtime_state.host_time_us += dt_us;
+
+  // Small deterministic native workload so the worker is genuinely executing
+  // WASM every tick. This is runtime plumbing, not Xbox CPU emulation.
+  uint32_t x = runtime_state.checksum ^ runtime_state.input_mask ^ dt_us;
+  for (uint32_t i = 0; i < 256u; ++i) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    x += 0x9E3779B9u + i;
+  }
+  runtime_state.checksum = x;
+  runtime_state.work_units += 256u;
+}
+
+__attribute__((visibility("default")))
+uint32_t r360_runtime_ticks_lo() { return static_cast<uint32_t>(runtime_state.ticks); }
+
+__attribute__((visibility("default")))
+uint32_t r360_runtime_time_ms() { return static_cast<uint32_t>(runtime_state.host_time_us / 1000u); }
+
+__attribute__((visibility("default")))
+uint32_t r360_runtime_work_lo() { return static_cast<uint32_t>(runtime_state.work_units); }
+
+__attribute__((visibility("default")))
+uint32_t r360_runtime_checksum() { return runtime_state.checksum; }
+
+__attribute__((visibility("default")))
+uint32_t r360_runtime_input_mask() { return runtime_state.input_mask; }
+
+__attribute__((visibility("default")))
 uint32_t r360_feature_bits() {
   return (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) |
-         (1u << 5);
+         (1u << 5) | (1u << 6);
 }
 
 }

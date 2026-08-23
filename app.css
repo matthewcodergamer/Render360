@@ -48,3 +48,18 @@ button{border:0}.hidden{display:none!important}
 .control,.stick,.icon-button,.small-button,.sheet button{background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.022)),rgba(14,17,22,.22);-webkit-backdrop-filter:blur(24px) saturate(165%);backdrop-filter:blur(24px) saturate(165%)}
 @media(max-width:560px){.status-grid.four{grid-template-columns:repeat(2,1fr)}.xex-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:360px){.xex-grid{grid-template-columns:1fr}}
+
+/* =========================================================
+   V29 — live runtime surfaces
+   ========================================================= */
+#gpuCanvas{z-index:0}
+#threeCanvas{position:absolute;z-index:1;inset:0;width:100%;height:100%;display:block;pointer-events:none;opacity:.72;mix-blend-mode:screen}
+.ambient{z-index:2}
+.stage{z-index:8}.controller-layer{z-index:10}.topbar{z-index:20}
+.status-grid.six{grid-template-columns:repeat(3,1fr)}
+.live-telemetry{position:absolute;z-index:16;left:50%;bottom:max(15px,calc(var(--safe-bottom) + 10px));transform:translateX(-50%);height:30px;display:flex;align-items:center;gap:8px;padding:0 11px;border-radius:999px;white-space:nowrap;font:700 7.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8f98a5;pointer-events:none;background:rgba(9,12,16,.38)}
+.live-telemetry b{color:#cfd5dc;font-weight:760}.tele-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 13px rgba(109,224,161,.48);animation:runtimePulse 1.15s ease-in-out infinite}
+@keyframes runtimePulse{0%,100%{opacity:.45;transform:scale(.82)}50%{opacity:1;transform:scale(1.12)}}
+.runtime-mini{display:flex;gap:10px;flex-wrap:wrap;margin-top:7px;font:700 7.5px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:#697281}.runtime-mini b{color:#aeb6c2}
+@media(orientation:portrait){.live-telemetry{bottom:max(150px,calc(var(--safe-bottom) + 145px));max-width:86vw;overflow:hidden}.status-grid.six{grid-template-columns:repeat(2,1fr)}#threeCanvas{opacity:.58}}
+@media(max-width:390px){.live-telemetry{font-size:6.8px;gap:6px}.live-telemetry span:last-child{display:none}}

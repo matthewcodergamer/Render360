@@ -1,10 +1,10 @@
-# Xenia upstream port map — V28
+# Xenia upstream port map — V29
 
 ## Source-of-truth files
 
 - `src/xenia/kernel/util/xex2_info.h`
   - XEX structures, optional-header keys, compression/encryption enums.
-  - V28's native inspector is intentionally kept structurally aligned to this file.
+  - V29's native inspector is intentionally kept structurally aligned to this file.
 - `src/xenia/cpu/xex_module.cc` / `.h`
   - XEX1/XEX2 load flow, security info, image preparation, optional-header handling, PE validation, imports.
 - `src/xenia/cpu/lzx.*`
@@ -30,6 +30,6 @@ Keep this small:
 - browser audio
 - IndexedDB/OPFS persistence
 
-## V28 boundary
+## V29 boundary
 
-V28 has not copied `XexModule::Load` and does not claim XEX execution. It ports only the stable XEX layout knowledge necessary to validate/inspect headers in the native core. The GitHub `Xenia upstream contract check` workflow detects obvious drift in the tracked keys/structures before later native port work builds on them.
+V29 has not copied `XexModule::Load` and does not claim XEX execution. It ports only the stable XEX layout knowledge necessary to validate/inspect headers in the native core. The GitHub `Xenia upstream contract check` workflow detects obvious drift in the tracked keys/structures before later native port work builds on them.

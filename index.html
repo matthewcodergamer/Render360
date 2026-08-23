@@ -7,19 +7,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
-  <title>Render360 Xenia-Web V28</title>
+  <title>Render360 Xenia-Web V29</title>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="app.css?v=29">
 </head>
 <body>
 <div id="app">
-  <canvas id="gpuCanvas" aria-label="Render360 graphics surface"></canvas>
+  <canvas id="gpuCanvas" aria-label="Render360 WebGPU graphics surface"></canvas>
+  <canvas id="threeCanvas" aria-label="Render360 Three.js diagnostic surface"></canvas>
   <div class="ambient"></div>
 
   <header class="topbar glass">
     <div class="brand">
       <span class="orb"></span>
-      <div><strong>Render360</strong><span>Xenia-Web · V28</span></div>
+      <div><strong>Render360</strong><span>Xenia-Web · V29</span></div>
     </div>
     <div class="top-actions">
       <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
@@ -32,16 +33,18 @@
       <div class="hero-mark"><span></span></div>
       <p class="eyebrow">XENIA → WEBASSEMBLY → WEBGPU</p>
       <h1>The browser port, not another fake emulator.</h1>
-      <p class="hero-copy">V28 keeps the interface thin and moves Xbox format work into the C++ WebAssembly core. The current native milestone is strict Xenia-aligned XEX inspection.</p>
-      <div class="status-grid four">
-        <div class="status-card"><span>Build</span><b id="buildStatus">V28</b></div>
+      <p class="hero-copy">V29 keeps the native core alive continuously in a Web Worker while WebGPU and a Three.js/WebGL diagnostic renderer animate independently on the display thread.</p>
+      <div class="status-grid six">
+        <div class="status-card"><span>Build</span><b id="buildStatus">V29</b></div>
         <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
-        <div class="status-card"><span>Graphics</span><b id="gpuStatus">Detecting…</b></div>
+        <div class="status-card"><span>Worker</span><b id="workerStatus">Starting…</b></div>
+        <div class="status-card"><span>WebGPU</span><b id="gpuStatus">Detecting…</b></div>
+        <div class="status-card"><span>Three.js</span><b id="threeStatus">Loading…</b></div>
         <div class="status-card"><span>ABI</span><b id="abiStatus">—</b></div>
       </div>
       <label class="primary-button" for="gameInput">Choose Xbox 360 file</label>
       <input id="gameInput" type="file" hidden>
-      <p class="support-note">XEX/STFS/ELF recognition and XEX header parsing happen in WASM. Unsupported execution remains visible as a boundary instead of being reported as success.</p>
+      <p class="support-note">The site is now live rather than idle: native WASM ticks in a worker, the graphics surface renders continuously, and Three.js/WebGL runs as a visible diagnostic layer. Xbox execution remains strict until the real Xenia subsystems are ported.</p>
     </section>
 
     <section id="gameState" class="game-card glass hidden">
@@ -52,7 +55,7 @@
       <div class="game-meta">
         <div><span>Type</span><b id="gameType">—</b></div>
         <div><span>Size</span><b id="gameSize">—</b></div>
-        <div><span>Core</span><b id="gameCore">WASM V28</b></div>
+        <div><span>Core</span><b id="gameCore">WASM V29</b></div>
       </div>
 
       <div id="xexDetails" class="xex-panel hidden">
@@ -78,7 +81,9 @@
     </section>
   </main>
 
-  <div class="controller-layer" aria-hidden="true">
+  <div id="liveTelemetry" class="live-telemetry glass"><span class="tele-dot"></span><b>WASM WORKER STARTING</b><span>GPU —</span><span>THREE —</span></div>
+
+  <div class="controller-layer">
     <div class="left-cluster"><button class="glass control trigger" data-key="LT">LT</button><div class="stick glass"><span>Move</span></div></div>
     <div class="right-cluster"><button class="glass control trigger" data-key="RT">RT</button><div class="face-grid"><button class="glass control face y" data-key="Y">Y</button><button class="glass control face x" data-key="X">X</button><button class="glass control face b" data-key="B">B</button><button class="glass control face a" data-key="A">A</button></div></div>
   </div>
@@ -90,17 +95,18 @@
   </section>
 
   <section id="statusSheet" class="sheet glass hidden">
-    <div class="sheet-head"><div><b>Port Status</b><span>V28</span></div><button id="closeStatus" type="button">Done</button></div>
+    <div class="sheet-head"><div><b>Port Status</b><span>V29</span></div><button id="closeStatus" type="button">Done</button></div>
     <div class="port-list">
       <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core, versioned ABI and shared file staging buffer.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Xenia-aligned XEX structure</b><p>V28 validates the XEX base header and reads optional execution/file-format/security metadata in native WASM.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Web graphics surface</b><p>WebGPU first with a WebGL2 diagnostic fallback.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native r360_runtime_tick executes continuously off the UI thread and receives controller input state.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
+      <div class="port-row done"><span></span><div><b>Xenia-aligned XEX structure</b><p>V29 retains the V28 XEX inspector and validates the XEX base header and reads optional execution/file-format/security metadata in native WASM.</p></div></div>
+      <div class="port-row done"><span></span><div><b>Live graphics surfaces</b><p>Animated WebGPU shader pipeline plus a Three.js/WebGL diagnostic renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Three <b id="threeFps">—</b></span></div></div></div>
       <div class="port-row active"><span></span><div><b>Full Xenia XEX loader</b><p>Next: port decryption/decompression, PE mapping and import setup from upstream Xenia instead of duplicating them in JavaScript.</p></div></div>
       <div class="port-row"><span></span><div><b>Kernel + CPU backend</b><p>Needs Xenia kernel/XAM plus a browser-compatible PowerPC execution backend.</p></div></div>
       <div class="port-row"><span></span><div><b>Xenos → WebGPU</b><p>Shared command processing, shaders, textures, EDRAM and resolves remain future native milestones.</p></div></div>
     </div>
   </section>
 </div>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=29"></script>
 </body>
 </html>

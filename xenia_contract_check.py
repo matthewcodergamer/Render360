@@ -27,4 +27,4 @@ if failed:
     print('Xenia contract drift detected:')
     for item in failed: print(' -',item)
     sys.exit(1)
-print('PASS: V28 XEX portability contract still matches upstream Xenia definitions')
+print('PASS: V29 XEX portability contract still matches upstream Xenia definitions')

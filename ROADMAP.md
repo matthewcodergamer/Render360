@@ -1,18 +1,21 @@
-# Render360 Xenia-Web V28 roadmap
+# Render360 Xenia-Web V29 roadmap
 
 ## Project rule
 When Xenia already contains Xbox 360 behavior, do not recreate that behavior in front-end JavaScript. Keep browser JavaScript focused on host APIs and UI. Move reusable native semantics into WebAssembly and write browser-specific adapters only where desktop host APIs cannot be used.
 
-## V28 — current milestone
+## V29 — current milestone: live browser runtime
 - Root-deployable GitHub Pages application.
-- C++ wasm32 core ABI 3.0.
-- Xenia-aligned XEX base/header/optional-header inspection.
-- Execution-info and file-format metadata extraction.
-- Selected XEX2 security metadata extraction.
-- WebGPU surface bootstrap.
+- C++ wasm32 core ABI 3.1.
+- Dedicated Web Worker continuously executing native `r360_runtime_tick`.
+- Controller input bitmask wired to the native worker.
+- Live worker Hz/tick/work telemetry.
+- Real animated WebGPU WGSL pipeline.
+- Animated WebGL2 fallback.
+- Three.js/WebGL diagnostic scene.
+- Xenia-aligned XEX base/header/optional-header inspection retained from V28.
 - Upstream Xenia contract drift workflow.
 
-## V29 target — XEX image preparation
+## V30 target — XEX image preparation
 Port the real Xenia-native image preparation path in pieces:
 - session-key handling / crypto dependency plan
 - uncompressed XEX path
@@ -22,7 +25,7 @@ Port the real Xenia-native image preparation path in pieces:
 
 Do not implement fake "successful load" behavior when one of these paths is unavailable.
 
-## V30 target — imports / VFS
+## V31 target — imports / VFS
 - XEX import libraries
 - export resolution
 - STFS/VFS path required for XBLA packages

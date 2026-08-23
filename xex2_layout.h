@@ -6,7 +6,7 @@
  * Released under the BSD license - see LICENSE_XENIA.txt in the project root.*
  ******************************************************************************
  *
- * Render360 V28 portability subset.
+ * Render360 V29 portability subset (introduced in V28).
  *
  * This file intentionally contains only the XEX constants/layout information
  * needed by the browser-side inspection milestone. The layout and key values

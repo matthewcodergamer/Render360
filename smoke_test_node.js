@@ -7,8 +7,8 @@ function put16be(mem,off,v){mem[off]=(v>>>8)&255;mem[off+1]=v&255}
 (async()=>{
   const wasm=fs.readFileSync(path.join(__dirname,'../render360_xenia_core.wasm'));
   const {instance}=await WebAssembly.instantiate(wasm,{}), e=instance.exports;
-  if(e.r360_build_version()!==28)throw new Error('build version mismatch');
-  if(e.r360_abi_version()!==0x00030000)throw new Error('ABI mismatch');
+  if(e.r360_build_version()!==29)throw new Error('build version mismatch');
+  if(e.r360_abi_version()!==0x00030001)throw new Error('ABI mismatch');
   const ptr=e.r360_io_ptr()>>>0, mem=new Uint8Array(e.memory.buffer);
 
   for(const [magic,want] of [['XEX2',2],['LIVE',10],['PIRS',11]]){
@@ -49,6 +49,14 @@ function put16be(mem,off,v){mem[off]=(v>>>8)&255;mem[off+1]=v&255}
     ['page descriptors',e.r360_xex_page_descriptor_count()>>>0,12],
   ];
   for(const [name,got,want] of checks){if(got!==want)throw new Error(`${name}: 0x${got.toString(16)} != 0x${want.toString(16)}`)}
+
+  e.r360_runtime_reset();
+  e.r360_runtime_set_input(0x11);
+  for(let i=0;i<120;i++)e.r360_runtime_tick(16667);
+  if((e.r360_runtime_ticks_lo()>>>0)!==120)throw new Error('runtime tick loop failed');
+  if((e.r360_runtime_input_mask()>>>0)!==0x11)throw new Error('runtime input bridge failed');
+  if((e.r360_runtime_work_lo()>>>0)!==(120*256))throw new Error('runtime work counter failed');
+
   if(e.r360_xam_scalar_value(0x3CB)!==6)throw new Error('XGetAVPack mismatch');
   if((e.r360_xam_scalar_value(0x123)>>>0)!==0xFFFFFFFF)throw new Error('unknown XAM must remain strict');
   console.log('PASS', {build:e.r360_build_version(),abi:e.r360_abi_version().toString(16),features:e.r360_feature_bits().toString(16),title:(e.r360_xex_title_id()>>>0).toString(16)});

@@ -1,0 +1,10 @@
+{
+  "name": "Render360 Xenia-Web",
+  "short_name": "Render360",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#030406",
+  "theme_color": "#030406",
+  "description": "Render360 Xenia-Web V28 — Xbox 360 emulator portability project."
+}

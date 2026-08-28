@@ -23,8 +23,6 @@ The active development line is **V33 CPU bootstrap**. V33 is bringing upstream X
 
 **Xenia owns Xbox 360 behavior. Render360 owns browser/iOS host behavior.**
 
-That means Render360 should reuse Xenia for:
-
 ```text
 PowerPC / VMX128 decode and semantics
         -> PPCFrontend
@@ -44,9 +42,9 @@ No fake framebuffer, fake boot success, fake guest FPS, fake shader translation,
 
 The bootstrap is intentionally separate from `render360_xenia_core.wasm`, so CPU-port experiments cannot break the working V32 STFS/XEX runtime.
 
-### Latest completed expanded compile result
+### Compile milestone: 15 / 15 PASS
 
-GitHub Actions has now compiled **11 of 15** entries in the expanded wasm32 CPU matrix. Ten of those are real upstream Xenia CPU/HIR/PPC translation units; the eleventh is Render360's ABI telemetry probe.
+GitHub Actions now compiles **all 14 selected real upstream Xenia CPU/HIR/PPC translation units plus the Render360 PPCContext ABI probe under Emscripten/wasm32**.
 
 ```text
 PASS  src/xenia/cpu/hir/opcodes.cc
@@ -56,48 +54,36 @@ PASS  src/xenia/cpu/hir/value.cc
 PASS  src/xenia/cpu/compiler/compiler_pass.cc
 PASS  src/xenia/cpu/ppc/ppc_context.cc
 PASS  src/xenia/cpu/ppc/ppc_emit_alu.cc
+PASS  src/xenia/cpu/ppc/ppc_emit_control.cc
 PASS  src/xenia/cpu/ppc/ppc_emit_memory.cc
 PASS  src/xenia/cpu/ppc/ppc_emit_fpu.cc
 PASS  src/xenia/cpu/ppc/ppc_emit_altivec.cc
+PASS  src/xenia/cpu/ppc/ppc_hir_builder.cc
+PASS  src/xenia/cpu/ppc/ppc_translator.cc
+PASS  src/xenia/cpu/ppc/ppc_frontend.cc
 PASS  render360/ppc_context_abi_probe.cpp
-
-BLOCK src/xenia/cpu/ppc/ppc_emit_control.cc
-BLOCK src/xenia/cpu/ppc/ppc_hir_builder.cc
-BLOCK src/xenia/cpu/ppc/ppc_translator.cc
-BLOCK src/xenia/cpu/ppc/ppc_frontend.cc
 ```
 
-This is a major change from the earlier 5/9 baseline: `PPCContext` is no longer blocked, four real Xenia instruction-emitter categories now compile for wasm32, and LLVM's header boundary has been cleared.
+This completes the compile-only CPU surface that V33 originally targeted. It does **not** yet mean a guest PPC block is translated or executed; linking and constructing the required Xenia runtime dependencies comes next.
 
 ### PPCContext wasm32 ABI
 
 WebAssembly's 32-bit host pointers make Xenia's packed `PPCContext` 16 bytes short of its existing 64-byte padding invariant. V33 solves this with a generated browser-only overlay that adds **16 bytes of tail padding after Xenia's final existing context data member**.
 
-This intentionally does not move Xenia's existing GPR, FPR, VMX, LR, CTR, CR or runtime-context fields. `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` independently compiles against the adapted header and exposes size/offset telemetry for the future linked bootstrap WASM.
+This does not move Xenia's existing GPR, FPR, VMX, LR, CTR, CR or runtime-context fields. `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` independently compiles against the adapted header and exposes size/offset telemetry for the future linked bootstrap WASM.
 
 ### Bootstrap infrastructure
 
 - `src/xenia_web_shims/xenia/base/platform.h` — Emscripten/wasm32 host platform definitions.
 - `src/xenia_web_shims/xenia/base/atomic.h` — browser-compatible atomic primitives.
-- `prepare-xenia-web-overlay.py` — generates the tail-only `PPCContext` ABI adaptation from fetched upstream source.
+- `prepare-xenia-web-overlay.py` — generates the tail-only `PPCContext` ABI adaptation.
 - `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` — context size and key field-offset telemetry.
 - `fetch-xenia.sh` — shallow Xenia fetch plus the CPU-side dependencies currently needed (`fmt`, `utfcpp`, `capstone`, `cpptoml`, `cxxopts`, `date`).
 - `build-xenia-ppc-bootstrap.sh` — real Emscripten compile matrix with dependency classification and LLVM include discovery.
-- `.github/workflows/xenia-wasm32-bootstrap.yml` — automated audits, Emscripten compilation and uploaded per-source logs.
+- `link-xenia-ppc-bootstrap.sh` — strict first link probe for the separate `xenia_ppc_bootstrap.wasm`; unresolved symbols are intentionally **not** suppressed.
+- `.github/workflows/xenia-wasm32-bootstrap.yml` — automated audits, compile matrix, strict link probe and uploaded reports/logs.
 
-The expanded matrix includes Xenia's real PPC instruction semantics:
-
-```text
-ppc_emit_alu.cc
-ppc_emit_control.cc
-ppc_emit_memory.cc
-ppc_emit_fpu.cc
-ppc_emit_altivec.cc
-```
-
-ALU, memory, FPU and Altivec/VMX already compile. The control emitter and frontend stack are being pushed through their remaining host/utility boundaries. RTTI is enabled because Xenia's `cpptoml` dependency legitimately uses `dynamic_cast`; `third_party/date` is now fetched for Xenia's chrono/threading headers.
-
-The GitHub Actions compile report is the source of truth. A layer is not marked ready merely because an adapter exists.
+The link probe is intentionally honest: if the selected real Xenia objects still reference additional Xenia subsystems, it reports `status=BLOCKED` and preserves the unresolved-symbol list. It will only produce `xenia_ppc_bootstrap.wasm` when those dependencies are actually satisfied.
 
 ## CPU milestone ladder
 
@@ -108,13 +94,11 @@ portable HIR/compiler subset on wasm32      ✓
         ↓
 PPCContext browser ABI validated            ✓
         ↓
-ALU / memory / FPU / VMX emitters           ✓
+all five PPC emit categories compile        ✓
         ↓
-control emitter + PPCHIRBuilder             IN DEVELOPMENT
+PPCHIRBuilder / PPCTranslator / Frontend    ✓ compile
         ↓
-PPCTranslator + PPCFrontend                 IN DEVELOPMENT
-        ↓
-link separate xenia_ppc_bootstrap.wasm
+strict xenia_ppc_bootstrap.wasm link        IN DEVELOPMENT
         ↓
 feed known real PPC bytes
         ↓
@@ -134,8 +118,6 @@ map and enter real default.xex
 ## Braid / XBLA input
 
 Use the original LIVE/PIRS/CON content package you own. Do **not** rename it to `.iso` merely to make Render360 accept it.
-
-Current title path:
 
 ```text
 Braid LIVE/STFS package
@@ -172,15 +154,11 @@ V33 Xenia CPU bootstrap:
 bash ./fetch-xenia.sh
 python3 ./xenia_contract_check.py
 python3 ./xenia_web_bootstrap_check.py
-```
-
-Then run the Emscripten matrix from an Emscripten environment:
-
-```bash
 bash ./build-xenia-ppc-bootstrap.sh
+bash ./link-xenia-ppc-bootstrap.sh
 ```
 
-CI performs this automatically on relevant `main` changes and uploads `build/xenia-ppc-bootstrap/report.tsv` plus per-source compiler logs.
+CI performs this automatically on relevant `main` changes and uploads the compile matrix, strict link report and per-source/linker logs.
 
 Expected production native core remains:
 

@@ -57,6 +57,7 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_table_gen.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_lookup_gen.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_disasm_gen.cc.o"
+  "$OUT/src_xenia_cpu_ppc_ppc_opcode_disasm.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_info.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_alu.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_control.cc.o"

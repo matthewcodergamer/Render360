@@ -19,8 +19,7 @@ EXPORTS=(
   r360_xex_region r360_xex_allowed_media_types r360_xex_page_descriptor_count
   r360_xex_encryption_type r360_xex_compression_type
   r360_xex_import_libraries_offset r360_xex_execution_info_offset
-  r360_xex_file_format_info_offset
-  r360_xam_scalar_value
+  r360_xex_file_format_info_offset r360_xam_scalar_value
   r360_runtime_reset r360_runtime_set_input r360_runtime_set_session
   r360_runtime_tick r360_runtime_ticks_lo r360_runtime_time_ms
   r360_runtime_work_lo r360_runtime_checksum r360_runtime_input_mask
@@ -63,17 +62,19 @@ EXPORTS=(
   r360_xex_decode_encryption_type r360_xex_decode_compression_type
   r360_xex_decode_page_size r360_xex_decode_page_descriptor_count
   r360_xex_decode_mapped_span r360_xex_decode_page_type
-  r360_xex_decode_page_count r360_xex_decode_page_address
-  r360_xex_decode_page_bytes
+  r360_xex_decode_page_count r360_xex_decode_page_address r360_xex_decode_page_bytes
   r360_xex_prepare_reset r360_xex_prepare_none_begin r360_xex_prepare_none_accept
   r360_xex_prepare_basic_begin r360_xex_prepare_basic_accept_data
   r360_xex_prepare_basic_consume_zero r360_xex_prepare_basic_data_remaining
   r360_xex_prepare_basic_zero_remaining
+  r360_xex_prepare_normal_frame_begin r360_xex_prepare_normal_frame_accept
   r360_xex_prepare_status r360_xex_prepare_source_offset
   r360_xex_prepare_source_bytes r360_xex_prepare_output_bytes
   r360_xex_prepare_bytes_done r360_xex_prepare_output_done
   r360_xex_prepare_encryption_type r360_xex_prepare_compression_type
   r360_xex_prepare_basic_block_count r360_xex_prepare_basic_block_index
+  r360_xex_prepare_normal_window_size r360_xex_prepare_normal_block_size
+  r360_xex_prepare_normal_block_seen r360_xex_prepare_normal_blocks_done
   r360_xex_prepare_last_output_kind r360_xex_prepare_last_output_bytes
   r360_feature_bits
 )
@@ -84,9 +85,7 @@ ARGS=(
   -Wl,--no-entry -Wl,--export-memory
   -Wl,--initial-memory=16777216 -Wl,--max-memory=16777216
 )
-for symbol in "${EXPORTS[@]}"; do
-  ARGS+=("-Wl,--export=$symbol")
-done
+for symbol in "${EXPORTS[@]}"; do ARGS+=("-Wl,--export=$symbol"); done
 
 "$CXX" "${ARGS[@]}" -o "$OUT" \
   "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS"

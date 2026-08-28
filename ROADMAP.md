@@ -15,9 +15,10 @@ Run 254  eight CPU/browser foundations
 Run 261  V36 strict XEX guest mapper
 Run 265  full pull-driven default.xex STFS extraction
 Run 276  XEX2 metadata decode + decoded mapper integration
+Run 282  streaming NONE-encryption/NONE-compression image preparation
 ```
 
-Run 276 is Actions run ID `33219831630` on implementation commit `c9fe8dec88e47b2ded17a0ede461bcf3d44acbe7` and completed successfully.
+Run 282 is Actions run ID `33220362844` on implementation commit `271e169bfe528c3b1b4f2c410e8803481594b6b0` and completed successfully, including the complete Xenia/WasmBackend/mapper regression matrix.
 
 ## Closed V36 bring-up chain
 
@@ -34,65 +35,89 @@ V36 STRICT XEX GUEST MAPPER                 100% ✓
 FULL default.xex STFS EXTRACTION            100% ✓
 XEX2 IMAGE METADATA DECODE                  100% ✓
 XEX DECODED-METADATA → MAPPER INTEGRATION  100% ✓
+XEX PREPARE NONE/NONE SUB-CONTRACT          100% ✓
 ```
 
 These are defined CI contracts, not claims of universal title compatibility.
 
 ## Run 276 boundary
 
-The decoder under `src/xenia_web_bootstrap/xex_image_decoder.{h,cpp}` validates XEX2 header/optional-header/security/file-format metadata, Xenia page descriptors, image ranges, entry ranges and supported format classification. The integration critic then obtains section addresses/types/sizes and the entry PC from decoder output and feeds them to the real `XexGuestMapper`.
+The decoder under `src/xenia_web_bootstrap/xex_image_decoder.{h,cpp}` validates XEX2 header/optional-header/security/file-format metadata, Xenia page descriptors, image ranges, entry ranges and supported format classification. The integration critic obtains section addresses/types/sizes and the entry PC from decoder output and feeds them to the real `XexGuestMapper`.
 
-It deliberately tests a second relocated XEX base so hard-coded synthetic mapper addresses cannot satisfy the gate.
+It deliberately tests a second relocated XEX base so hard-coded synthetic mapper addresses cannot satisfy the gate. `XEX_IMAGE_DECODE=PASS` closes metadata decode only.
 
-`XEX_IMAGE_DECODE=PASS` means **metadata decode is closed**. It does not mean encryption/decompression or final executable-image preparation is complete.
+## Run 282 — first real image-preparation slice
 
-## Active Gate D0 — XEX image preparation
+The new `src/xenia_web_bootstrap/xex_image_preparer.{h,cpp}` path implements Xenia's uncompressed source contract without requiring another complete title image in the WASM staging buffer.
 
-The next implementation must turn the extracted XEX payload into executable image bytes using Xenia semantics:
+Xenia's `ReadImageUncompressed` uses the payload beginning at `xex_header()->header_size`, with executable byte count `xex_length - header_size`. Render360 now exposes that as a bounded streaming plan:
+
+```text
+bounded XEX header staged
+       ↓
+decode/validate metadata
+       ↓
+require encryption = NONE
+require compression = NONE
+       ↓
+source_offset = header_size
+source_bytes  = full_xex_size - header_size
+       ↓
+consume source in bounded chunks
+       ↓
+NONE/NONE bytes remain identity data
+       ↓
+exact bytes_done accounting
+```
+
+Run 282 proves:
+
+```text
+XEX_PREPARE_STREAMING_IDENTITY=PASS
+XEX_PREPARE_EXACT_BYTE_ACCOUNTING=PASS
+XEX_PREPARE_FILE_BOUNDS_FAIL_CLOSED=PASS
+XEX_PREPARE_ENCRYPTION_FAIL_CLOSED=PASS
+XEX_PREPARE_COMPRESSION_FAIL_CLOSED=PASS
+XEX_PREPARE_CHUNK_OVERFLOW_FAIL_CLOSED=PASS
+XEX_IMAGE_PREPARE_NONE=PASS
+```
+
+This closes only the `NONE encryption + NONE compression` preparation sub-contract. It does **not** promote the full preparation layer to 100%.
+
+## Active Gate D0 — remaining XEX image preparation
 
 ```text
 exact extracted default.xex                   ✓
-        ↓
 XEX2 metadata                                 ✓
-        ↓
-file-format classification                    ✓
-        ↓
-IMAGE PREPARATION                             ← ACTIVE
-        ├── NONE encryption + NONE compression
-        ├── BASIC compression
-        ├── NORMAL compression / LZX
-        ├── NORMAL encryption / XEX session key
-        └── DELTA remains fail closed until patch support
-        ↓
-prepared image bytes
-        ↓
-decoder-derived page layout                   ✓
-        ↓
-XexGuestMapper / SparseGuestMemory            ✓
+decoded metadata → mapper                     ✓
+NONE encryption + NONE compression            ✓
+BASIC compression                             ← ACTIVE NEXT
+NORMAL compression / LZX                      pending
+NORMAL encryption / XEX session key           pending
+DELTA patch path                              fail closed / pending
 ```
 
-### Required image-preparation critic
+### Full image-preparation closure requirements
 
 ```text
-NONE/NONE image preparation                 PASS
-prepared byte count == declared image size  PASS
-zero-fill semantics                         PASS
-source/header bounds                        PASS
-output guest-image bounds                   PASS
-BASIC block accounting                      PASS
-NORMAL/LZX stream validation                PASS when implemented
-NORMAL encryption block alignment           PASS when implemented
-unsupported DELTA patch image               FAIL CLOSED
-truncated/corrupt payload                    FAIL CLOSED
-32-bit arithmetic overflow                  FAIL CLOSED
-XEX_IMAGE_PREPARE                            PASS
+NONE/NONE streaming preparation               PASS ✓
+source/header bounds                          PASS ✓
+exact streaming byte accounting               PASS ✓
+wrong-format routing                          FAIL CLOSED ✓
+BASIC block accounting / zero-fill            NEXT
+NORMAL/LZX stream validation                  pending
+NORMAL encryption block/session-key rules     pending
+DELTA without patch implementation            FAIL CLOSED
+truncated/corrupt payload                     FAIL CLOSED
+32-bit arithmetic overflow                    FAIL CLOSED
+XEX_IMAGE_PREPARE                             pending
 ```
 
-Implement this incrementally. The first promotion may close the unencrypted/uncompressed preparation sub-contract while BASIC/NORMAL remain explicitly pending; do not label the full image-preparation layer 100% until its declared gate covers the formats being claimed.
+BASIC should follow Xenia's block model exactly: each record contributes `data_size` bytes followed by `zero_size` bytes, with strict source/output bounds. NORMAL must use Xenia-compatible LZX framing; encryption must use the real XEX session-key/AES-CBC behavior.
 
 ## Gate D1 — prepared image → real guest mappings
 
-After image preparation, stream prepared bytes into the already-closed mapper using decoded addresses and permissions. Avoid an unnecessary package-sized JavaScript or WASM duplicate.
+After full image preparation, stream prepared bytes into the already-closed mapper using decoded addresses and permissions. Avoid an unnecessary package-sized JavaScript or WASM duplicate.
 
 ```text
 prepared image bytes
@@ -120,7 +145,7 @@ first genuine title instructions
 FAIL CLOSED on first missing runtime dependency
 ```
 
-Do not add broad success stubs to move farther. The first real failure selects the next subsystem.
+Do not add broad success stubs. The first real failure selects the next subsystem.
 
 ## After the first real failure
 
@@ -164,7 +189,9 @@ V36 strict XEX mapper                        ✓ LOCKED
 full default.xex STFS extraction             ✓ LOCKED
 XEX2 metadata decode                         ✓ LOCKED
 decoded metadata → mapper                    ✓ LOCKED
-XEX image prepare/decrypt/decompress          ← ACTIVE
+NONE/NONE streaming image preparation        ✓ LOCKED
+BASIC XEX preparation                        ← ACTIVE NEXT
+NORMAL/LZX + encryption
 prepared real image mapped
 real XEX entry PC executed
 first genuine kernel/runtime failure
@@ -181,7 +208,7 @@ Portal-class bring-up
 
 ## Repository organization
 
-Active title bring-up remains under `src/xenia_web_bootstrap/` until a genuine kernel or GPU subsystem boundary is reached. Working root-level tests are moved only when their scripts and CI references can migrate atomically. See `docs/PROJECT_LAYOUT.md`.
+Active title bring-up remains under `src/xenia_web_bootstrap/` until a genuine kernel or GPU subsystem boundary is reached. Working root-level tests are moved only when scripts and CI references can migrate atomically. See `docs/PROJECT_LAYOUT.md`.
 
 ## Status rule
 

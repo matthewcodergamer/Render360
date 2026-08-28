@@ -203,9 +203,6 @@ bool StoreUnaryValue(Value* destination, const Value* source,
   RuntimeValue src;
   if (!ResolveRuntimeValue(source, values, &src)) return false;
 
-  // Xenia HIR CAST is a pure same-width type reinterpretation (Value::Cast
-  // changes only the type). This is the exact operation emitted by lfd/stfd
-  // between INT64 guest-memory bits and FLOAT64 FPR values.
   if (opcode == xe::cpu::hir::OPCODE_CAST) {
     const size_t source_size = xe::cpu::hir::GetTypeSize(source->type);
     const size_t destination_size = xe::cpu::hir::GetTypeSize(destination->type);
@@ -214,6 +211,20 @@ bool StoreUnaryValue(Value* destination, const Value* source,
     result.type = destination->type;
     result.value = {};
     std::memcpy(&result.value, &src.value, source_size);
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (opcode == xe::cpu::hir::OPCODE_BYTE_SWAP &&
+      destination->type == xe::cpu::hir::VEC128_TYPE &&
+      source->type == xe::cpu::hir::VEC128_TYPE) {
+    RuntimeValue result;
+    result.type = xe::cpu::hir::VEC128_TYPE;
+    result.value = {};
+    for (size_t i = 0; i < 4; ++i) {
+      result.value.v128.u32[i] = static_cast<uint32_t>(ByteSwapUnsigned(
+          src.value.v128.u32[i], xe::cpu::hir::INT32_TYPE));
+    }
     out_values[destination] = result;
     return true;
   }
@@ -277,9 +288,6 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
     return false;
   }
 
-  // First measured floating arithmetic tier: Xenia emits the same ADD opcode
-  // for FLOAT64 fadd as for integer add, with typed HIR Values selecting the
-  // semantics. Keep this type-strict and fail unimplemented float opcodes.
   if (IsFloatType(destination->type) && destination->type == lhs->type &&
       destination->type == rhs->type) {
     RuntimeValue result;
@@ -394,6 +402,37 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
       break;
     default:
       return false;
+  }
+  out_values[destination] = result;
+  return true;
+}
+
+bool StoreVectorAdd(Value* destination, const Value* lhs, const Value* rhs,
+                    const RuntimeValues& values, RuntimeValues& out_values,
+                    uint32_t flags) {
+  if (!destination || !lhs || !rhs ||
+      destination->type != xe::cpu::hir::VEC128_TYPE ||
+      lhs->type != xe::cpu::hir::VEC128_TYPE ||
+      rhs->type != xe::cpu::hir::VEC128_TYPE) {
+    return false;
+  }
+  RuntimeValue a, b;
+  if (!ResolveRuntimeValue(lhs, values, &a) ||
+      !ResolveRuntimeValue(rhs, values, &b)) {
+    return false;
+  }
+  const auto part_type = static_cast<TypeName>(flags & 0xFFu);
+  const uint32_t arithmetic_flags = flags >> 8;
+  if (part_type != xe::cpu::hir::INT8_TYPE ||
+      arithmetic_flags != xe::cpu::hir::ARITHMETIC_UNSIGNED) {
+    return false;
+  }
+  RuntimeValue result;
+  result.type = xe::cpu::hir::VEC128_TYPE;
+  result.value = {};
+  for (size_t i = 0; i < 16; ++i) {
+    result.value.v128.u8[i] =
+        static_cast<uint8_t>(a.value.v128.u8[i] + b.value.v128.u8[i]);
   }
   out_values[destination] = result;
   return true;
@@ -548,6 +587,12 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         case xe::cpu::hir::OPCODE_IS_FALSE:
           supported = StoreUnaryValue(instr->dest, instr->src1.value, values,
                                       values, instr->opcode->num);
+          break;
+
+        case xe::cpu::hir::OPCODE_VECTOR_ADD:
+          supported = StoreVectorAdd(instr->dest, instr->src1.value,
+                                     instr->src2.value, values, values,
+                                     instr->flags);
           break;
 
         case xe::cpu::hir::OPCODE_ADD:

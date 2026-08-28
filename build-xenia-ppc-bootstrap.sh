@@ -78,22 +78,32 @@ failed=0
 : > "$OUT/report.tsv"
 printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
 
-for rel in "${SOURCES[@]}"; do
-  src="$XENIA/$rel"
-  obj="$OUT/$(echo "$rel" | tr '/' '_').o"
-  log="$obj.log"
-  printf '[WASM32] %-48s ' "$rel"
+compile_one() {
+  local label="$1"
+  local src="$2"
+  local obj="$OUT/$(echo "$label" | tr '/' '_').o"
+  local log="$obj.log"
+  printf '[WASM32] %-48s ' "$label"
   if "$CXX" "${COMMON[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
     echo PASS
-    printf '%s\tPASS\tPORTABLE\n' "$rel" >> "$OUT/report.tsv"
+    printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"
     passed=$((passed + 1))
   else
+    local category
     category="$(classify_failure "$log")"
     echo "BLOCKED ($category)"
-    printf '%s\tBLOCKED\t%s\n' "$rel" "$category" >> "$OUT/report.tsv"
+    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
     failed=$((failed + 1))
   fi
+}
+
+for rel in "${SOURCES[@]}"; do
+  compile_one "$rel" "$XENIA/$rel"
 done
+
+compile_one \
+  "render360/ppc_context_abi_probe.cpp" \
+  "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"
 
 echo
 echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"

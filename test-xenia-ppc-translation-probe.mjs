@@ -36,6 +36,7 @@ console.log(`wasm_exports=${exportedNames.join(',')}`);
 const pick = (name) => instance.exports[name] ?? instance.exports[`_${name}`];
 const required = [
   'r360_ppc_probe_reset',
+  'r360_ppc_probe_set_initial_gpr',
   'r360_ppc_probe_input_buffer',
   'r360_ppc_probe_input_capacity',
   'r360_ppc_probe_load',
@@ -63,60 +64,94 @@ if (!(instance.exports.memory instanceof WebAssembly.Memory)) {
   process.exit(5);
 }
 
-// Real Xbox 360 PowerPC instructions, stored big-endian as the guest sees them:
-//   0x38600001  addi r3, r0, 1   (li r3, 1)
-//   0x4E800020  blr
-const ppc = Uint8Array.from([0x38, 0x60, 0x00, 0x01, 0x4E, 0x80, 0x00, 0x20]);
-
-pick('r360_ppc_probe_reset')();
 const inputPtr = pick('r360_ppc_probe_input_buffer')() >>> 0;
 const capacity = pick('r360_ppc_probe_input_capacity')() >>> 0;
-if (capacity < ppc.length) {
-  console.error(`Probe input capacity too small: ${capacity}`);
-  process.exit(6);
-}
-new Uint8Array(instance.exports.memory.buffer, inputPtr, ppc.length).set(ppc);
 
-const loaded = pick('r360_ppc_probe_load')(inputPtr, ppc.length) >>> 0;
-if (loaded !== ppc.length) {
-  console.error(`Probe load failed: loaded=${loaded} status=0x${(pick('r360_ppc_probe_status')() >>> 0).toString(16)}`);
-  process.exit(7);
-}
+const wordBytes = (...words) => Uint8Array.from(words.flatMap((word) => [
+  (word >>> 24) & 0xFF,
+  (word >>> 16) & 0xFF,
+  (word >>> 8) & 0xFF,
+  word & 0xFF,
+]));
 
-const translatedCount = pick('r360_ppc_probe_translate')() >>> 0;
-const status = pick('r360_ppc_probe_status')() >>> 0;
-const guestBase = pick('r360_ppc_probe_guest_base')() >>> 0;
-const loadedSize = pick('r360_ppc_probe_loaded_size')() >>> 0;
-const assembled = pick('r360_ppc_probe_assembled_functions')() >>> 0;
-const blocks = pick('r360_ppc_probe_hir_block_count')() >>> 0;
-const hir = pick('r360_ppc_probe_hir_instruction_count')() >>> 0;
-const lastGuest = pick('r360_ppc_probe_last_guest_address')() >>> 0;
-const correctnessStatus = pick('r360_ppc_probe_correctness_status')() >>> 0;
-const correctnessInstructions = pick('r360_ppc_probe_correctness_instructions')() >>> 0;
-const correctnessR3 = BigInt.asUintN(64, pick('r360_ppc_probe_correctness_r3')());
+const tests = [
+  {
+    name: 'li-r3-1',
+    ppc: wordBytes(0x38600001, 0x4E800020), // li r3,1 ; blr
+    initialGprs: [],
+    expectedR3: 1n,
+  },
+  {
+    name: 'runtime-addi-r4-plus-5',
+    ppc: wordBytes(0x38640005, 0x4E800020), // addi r3,r4,5 ; blr
+    initialGprs: [[4, 7n]],
+    expectedR3: 12n,
+  },
+  {
+    name: 'runtime-ori-r4-f0',
+    ppc: wordBytes(0x608300F0, 0x4E800020), // ori r3,r4,0x00f0 ; blr
+    initialGprs: [[4, 0x0F00n]],
+    expectedR3: 0x0FF0n,
+  },
+];
 
-console.log(`status=${status}`);
-console.log(`guest_base=0x${guestBase.toString(16).padStart(8, '0')}`);
-console.log(`loaded_bytes=${loadedSize}`);
-console.log(`assembled_functions=${assembled}`);
-console.log(`hir_blocks=${blocks}`);
-console.log(`hir_instructions=${hir}`);
-console.log(`translate_return=${translatedCount}`);
-console.log(`last_guest_address=0x${lastGuest.toString(16).padStart(8, '0')}`);
-console.log(`correctness_status=${correctnessStatus}`);
-console.log(`correctness_instructions=${correctnessInstructions}`);
-console.log(`correctness_r3=${correctnessR3}`);
-
-if (status !== 3 || loadedSize !== ppc.length || assembled === 0 || blocks === 0 ||
-    hir === 0 || translatedCount === 0 || lastGuest !== guestBase) {
-  console.error('FAIL: real PPC bytes did not complete the Xenia PPC -> HIR probe contract.');
-  process.exit(8);
+function fail(message, code) {
+  console.error(message);
+  process.exit(code);
 }
 
-if (correctnessStatus !== 3 || correctnessInstructions === 0 || correctnessR3 !== 1n) {
-  console.error('FAIL: finalized Xenia HIR did not execute the first PPCContext correctness contract (r3 == 1).');
-  process.exit(9);
+for (const test of tests) {
+  if (capacity < test.ppc.length) {
+    fail(`Probe input capacity too small for ${test.name}: ${capacity}`, 6);
+  }
+
+  pick('r360_ppc_probe_reset')();
+  for (const [index, value] of test.initialGprs) {
+    const accepted = pick('r360_ppc_probe_set_initial_gpr')(index, value) >>> 0;
+    if (accepted !== 1) fail(`Failed to seed GPR r${index} for ${test.name}`, 7);
+  }
+
+  new Uint8Array(instance.exports.memory.buffer, inputPtr, test.ppc.length).set(test.ppc);
+  const loaded = pick('r360_ppc_probe_load')(inputPtr, test.ppc.length) >>> 0;
+  if (loaded !== test.ppc.length) {
+    fail(`Probe load failed for ${test.name}: loaded=${loaded} status=0x${(pick('r360_ppc_probe_status')() >>> 0).toString(16)}`, 8);
+  }
+
+  const translatedCount = pick('r360_ppc_probe_translate')() >>> 0;
+  const status = pick('r360_ppc_probe_status')() >>> 0;
+  const guestBase = pick('r360_ppc_probe_guest_base')() >>> 0;
+  const loadedSize = pick('r360_ppc_probe_loaded_size')() >>> 0;
+  const assembled = pick('r360_ppc_probe_assembled_functions')() >>> 0;
+  const blocks = pick('r360_ppc_probe_hir_block_count')() >>> 0;
+  const hir = pick('r360_ppc_probe_hir_instruction_count')() >>> 0;
+  const lastGuest = pick('r360_ppc_probe_last_guest_address')() >>> 0;
+  const correctnessStatus = pick('r360_ppc_probe_correctness_status')() >>> 0;
+  const correctnessInstructions = pick('r360_ppc_probe_correctness_instructions')() >>> 0;
+  const correctnessR3 = BigInt.asUintN(64, pick('r360_ppc_probe_correctness_r3')());
+
+  console.log(`case=${test.name}`);
+  console.log(`status=${status}`);
+  console.log(`guest_base=0x${guestBase.toString(16).padStart(8, '0')}`);
+  console.log(`loaded_bytes=${loadedSize}`);
+  console.log(`assembled_functions=${assembled}`);
+  console.log(`hir_blocks=${blocks}`);
+  console.log(`hir_instructions=${hir}`);
+  console.log(`translate_return=${translatedCount}`);
+  console.log(`last_guest_address=0x${lastGuest.toString(16).padStart(8, '0')}`);
+  console.log(`correctness_status=${correctnessStatus}`);
+  console.log(`correctness_instructions=${correctnessInstructions}`);
+  console.log(`correctness_r3=${correctnessR3}`);
+
+  if (status !== 3 || loadedSize !== test.ppc.length || assembled === 0 || blocks === 0 ||
+      hir === 0 || translatedCount === 0 || lastGuest !== guestBase) {
+    fail(`FAIL ${test.name}: real PPC bytes did not complete Xenia PPC -> finalized HIR.`, 9);
+  }
+  if (correctnessStatus !== 3 || correctnessInstructions === 0 ||
+      correctnessR3 !== test.expectedR3) {
+    fail(`FAIL ${test.name}: finalized Xenia HIR produced r3=${correctnessR3}, expected ${test.expectedR3}.`, 10);
+  }
+
+  console.log(`PASS: ${test.name} -> r3=${correctnessR3}`);
 }
 
-console.log('PASS: real PPC bytes reached finalized Xenia HIR.');
-console.log('PASS: finalized Xenia HIR executed against PPCContext and produced r3 == 1.');
+console.log(`PASS: ${tests.length} real PPC correctness programs translated and executed through finalized Xenia HIR.`);

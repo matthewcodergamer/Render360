@@ -16,14 +16,14 @@ struct ProbeTelemetry {
   uint32_t hir_blocks = 0;
   uint32_t hir_instructions = 0;
   uint32_t last_guest_address = 0;
+  uint32_t correctness_status = 0;
+  uint32_t correctness_instructions = 0;
+  uint64_t correctness_r3 = 0;
 };
 
 void ResetProbeTelemetry();
 const ProbeTelemetry& GetProbeTelemetry();
 
-// Translation-only GuestFunction. It intentionally owns no executable host
-// code and refuses CallImpl. This object exists only so Xenia's real frontend,
-// scanner, HIR builder and compiler can describe a guest function.
 class ProbeGuestFunction final : public xe::cpu::GuestFunction {
  public:
   ProbeGuestFunction(xe::cpu::Module* module, uint32_t address);
@@ -37,9 +37,8 @@ class ProbeGuestFunction final : public xe::cpu::GuestFunction {
                 uint32_t return_address) override;
 };
 
-// Final HIR sink for the translation probe. It never emits machine code. It
-// counts the actual finalized Xenia HIR supplied by PPCTranslator and records
-// the guest address for browser/CI telemetry.
+// Finalized Xenia HIR sink. Besides translation telemetry, Phase 4 runs the
+// small correctness executor over this exact HIR stream against PPCContext.
 class ProbeAssembler final : public xe::cpu::backend::Assembler {
  public:
   explicit ProbeAssembler(xe::cpu::backend::Backend* backend);
@@ -51,9 +50,6 @@ class ProbeAssembler final : public xe::cpu::backend::Assembler {
                 std::unique_ptr<xe::cpu::FunctionDebugInfo> debug_info) override;
 };
 
-// Browser translation backend. This is not an execution backend or JIT. Its
-// purpose is to satisfy Xenia's backend seam while the real frontend produces
-// and optimizes HIR. A later correctness backend will execute HIR explicitly.
 class ProbeBackend final : public xe::cpu::backend::Backend {
  public:
   ProbeBackend();
@@ -75,6 +71,9 @@ uint32_t r360_ppc_probe_assembled_functions();
 uint32_t r360_ppc_probe_hir_block_count();
 uint32_t r360_ppc_probe_hir_instruction_count();
 uint32_t r360_ppc_probe_last_guest_address();
+uint32_t r360_ppc_probe_correctness_status();
+uint32_t r360_ppc_probe_correctness_instructions();
+uint64_t r360_ppc_probe_correctness_r3();
 }
 
 #endif  // RENDER360_XENIA_WEB_BOOTSTRAP_PROBE_BACKEND_H_

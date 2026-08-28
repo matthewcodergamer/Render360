@@ -51,7 +51,8 @@ EXPORTS=(
   _r360_ppc_context_offset_reserved_val
   _r360_ppc_probe_assembled_functions _r360_ppc_probe_hir_block_count
   _r360_ppc_probe_hir_instruction_count _r360_ppc_probe_last_guest_address
-  _r360_ppc_probe_reset _r360_ppc_probe_load _r360_ppc_probe_translate
+  _r360_ppc_probe_reset _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity
+  _r360_ppc_probe_load _r360_ppc_probe_translate
   _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
 )
 

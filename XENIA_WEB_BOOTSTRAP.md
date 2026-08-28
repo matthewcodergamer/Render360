@@ -7,21 +7,26 @@ Bring the real upstream Xenia PowerPC/FPU/VMX frontend, instruction semantics, H
 Milestone language remains strict:
 
 - **PPC TRANSLATION FOUNDATION COMPLETE**: the defined portable Xenia translation graph, current compiler-pass set, scanner/emitter surface and strict wasm32 link are regression-gated.
+- **SCALAR PPC CORRECTNESS FOUNDATION COMPLETE**: the defined non-FPU/non-VMX scalar arithmetic/control/memory correctness surface is regression-gated through finalized Xenia HIR.
+- **GUEST CONTROL FOUNDATION COMPLETE**: direct, nested, CTR-indirect and stack-frame-shaped guest calls/returns are regression-gated through Xenia scanner/frontend with shared PPCContext.
 - **PPC EXECUTING**: finalized Xenia HIR executes and produces verified PowerPC architectural-state or guest-memory changes.
 - **PLAYABLE**: genuine title execution, kernel, graphics, input and audio work sufficiently for gameplay.
 
-## Current authoritative green result — run 153
+## Current authoritative green result — run 160
 
-GitHub Actions run **153** (`33145524618`) completed successfully at commit `1d59e3618f4cf624a97c2d1b8fb84c01ccd44ad1`.
+GitHub Actions run **160** (`33148488674`) completed successfully at commit `25de4a6c415df817eeb6eb8534f5555573a34eb1`.
 
 ```text
-V32 package/XEX rebuild       PASS
-PACKAGE_XEX_FOUNDATION        PASS
-PPC_TRANSLATION_FOUNDATION    PASS
-wasm32 compile matrix         64 passed / 0 blocked
-strict full-export link       LINKED
-rooted exports                25
-real PPC correctness cases    18 / 18 PASS
+V32 package/XEX rebuild              PASS
+PACKAGE_XEX_FOUNDATION               PASS
+PPC_TRANSLATION_FOUNDATION           PASS
+GUEST_CONTROL_FOUNDATION             PASS
+SCALAR_PPC_CORRECTNESS_FOUNDATION    PASS
+wasm32 compile matrix                64 passed / 0 blocked
+strict full-export link              LINKED
+rooted exports                       25
+real PPC correctness suite           19 / 19 PASS
+stack-frame closure gate             PASS
 ```
 
 The live CPU path remains:
@@ -39,11 +44,11 @@ real big-endian Xbox PPC/FPU/VMX bytes
   -> asserted architectural and guest-memory state
 ```
 
-## Translation foundation — COMPLETE
+## Translation foundation — COMPLETE / 100%
 
-`xenia_translation_foundation_check.py` is now the explicit completion gate for this layer. It locks the current source manifest and fails if upstream drift introduces an untracked compiler pass or removes a required translation component.
+`xenia_translation_foundation_check.py` is the completion gate for this layer. It locks the current source manifest and fails if upstream drift introduces an untracked compiler pass or removes a required translation component.
 
-Measured run-153 manifest:
+Run 160 keeps this manifest green:
 
 ```text
 upstream translation units       36
@@ -53,30 +58,13 @@ runtime category markers         10
 full wasm32 build graph          64 / 64 PASS
 ```
 
-The locked translation scope includes:
+The locked scope includes PPCFrontend, PPCTranslator, PPCScanner, PPC context/opcode support, all five PPC emitter families, HIR, the compiler framework, every current upstream compiler-pass implementation, browser host seams, the probe/correctness backend and strict undefined-symbol linking.
 
-- `PPCFrontend`;
-- `PPCTranslator`;
-- `PPCScanner`;
-- PPC context and opcode table/lookup/disassembly support;
-- `ppc_emit_alu.cc`;
-- `ppc_emit_control.cc`;
-- `ppc_emit_memory.cc`;
-- `ppc_emit_fpu.cc`;
-- `ppc_emit_altivec.cc`;
-- HIR opcodes, blocks, instructions, values and builder;
-- compiler/compiler-pass framework;
-- all current upstream compiler-pass `.cc` implementations, including data-flow analysis and value reduction;
-- browser logging/thread-host seams;
-- correctness backend, probe backend and translation driver;
-- strict `ERROR_ON_UNDEFINED_SYMBOLS=1` link behavior;
-- representative real PPC/FPU/VMX end-to-end runtime categories.
+This is **translation foundation = 100%**, not arbitrary retail PPC compatibility = 100%.
 
-This is why the **Xenia PPC translation foundation is now 100% complete for its defined portable browser scope**. This does not mean arbitrary PPC execution compatibility is complete; that is Phase 4 and remains active.
+## Package/XEX foundation — COMPLETE / 100%
 
-## Package/XEX foundation — COMPLETE
-
-The same workflow now rebuilds Core V32 from source and runs `test-package-xex-foundation.mjs` before the CPU bootstrap.
+The workflow rebuilds Core V32 from source and runs `test-package-xex-foundation.mjs` before the CPU bootstrap.
 
 The package gate verifies:
 
@@ -91,7 +79,7 @@ byte-for-byte executable reconstruction
 XEX structural metadata inspection
 ```
 
-Measured run 153:
+Measured gate retained in run 160:
 
 ```text
 core_version        32
@@ -102,35 +90,71 @@ default_xex_blocks  2
 xex_entry           0x82001234
 ```
 
-The synthetic `default.xex` deliberately spans two fragmented blocks, forcing the native extraction state machine to follow the STFS hash chain rather than passing only a first-block probe. The reconstructed executable is compared byte-for-byte and then fed into the XEX inspector.
+Retail encryption/compression compatibility and executable mapping remain later compatibility/runtime layers rather than unfinished package-foundation work.
 
-This closes the **current STFS/Xbox-package/XEX loader foundation**. Retail-specific encryption/compression compatibility and actual executable mapping are later layers, not unfinished foundation work.
+## Scalar PPC correctness foundation — COMPLETE / 100%
 
-## What is now verified in execution
-
-### Integer / control / memory
+The defined scalar correctness scope is now locked through genuine PPC bytes and finalized Xenia HIR for:
 
 ```text
-li r3,1 ; blr                                      -> r3 = 1
-seed r4=7; addi r3,r4,5 ; blr                     -> r3 = 12
-seed r4=0x0F00; ori r3,r4,0xF0 ; blr              -> r3 = 0x0FF0
-cmpwi/beq, r4=0                                   -> taken, r3 = 2
-cmpwi/beq, r4=5                                   -> fallthrough, r3 = 1
-lwz r3,0(r4), guest=0x89ABCDEF                   -> r3 = 0x89ABCDEF
-stw r5,0(r4); lwz r3,0(r4)                        -> r3/guest = 0x12345678
-mtlr r4; mflr r3                                  -> r3 = 0x80000040
-mtctr r4; mfctr r3                                -> r3 = 9
-cmpwi r4,0; mfcr r3                               -> r3 = 0x20000000
-mtctr r4; addi loop; bdnz loop, r4=3              -> r3 = 3
-direct bl/callee/blr                              -> r3 = 7
-two-level nested bl                               -> r3 = 7
+integer arithmetic / bitwise
+signed and unsigned comparisons
+conditional multi-block branches
+CTR-controlled backward loops
+guest scalar load/store
+Xbox endian conversion
+CR / LR / CTR state
+return boundaries
 ```
 
-Direct and nested calls are not hardcoded. Xenia emits call/LR behavior, the real Xenia scanner discovers callee extents, and each callee is independently translated through Xenia before finalized HIR executes against the shared active `PPCContext`.
+Unsupported HIR still fails closed. This does not claim every PowerPC opcode has been compatibility-tested; FPU and VMX are deliberately tracked as separate execution layers.
 
-### FLOAT64 arithmetic
+## Guest function/control foundation — COMPLETE / 100%
 
-The current FPU tier verifies:
+The general runtime suite now proves:
+
+```text
+direct bl / callee / blr                     PASS
+two-level nested bl chain                     PASS
+CTR / bctrl runtime-indirect call             PASS
+LR save/update/restore                        PASS
+caller resume after callee                    PASS
+```
+
+The new dedicated closure gate additionally executes a stack-frame-shaped guest flow:
+
+```text
+mflr  r5
+addi  r1,r1,-32
+stw   r5,16(r1)
+bl    callee
+addi  r3,r3,2
+lwz   r5,16(r1)
+addi  r1,r1,32
+stw   r1,0(r8)
+mtlr  r5
+blr
+callee: li r3,5
+        blr
+```
+
+Run 160 measured:
+
+```text
+GUEST_CONTROL_FOUNDATION=PASS
+SCALAR_PPC_CORRECTNESS_FOUNDATION=PASS
+assembled_functions=2
+result_r3=7
+restored_sp=0x800001c0
+top-level finalized HIR executed=39
+nested callee finalized HIR executed=6
+```
+
+Xenia `PPCScanner` independently discovers the callee at guest `0x80000028`, Xenia translates it separately, and the nested finalized HIR executes against the same live `PPCContext`. No second PPC decoder or hardcoded callee behavior is introduced.
+
+## Current FPU execution tier
+
+The current FPU tier verifies exact guest-memory results for:
 
 ```text
 1.0 + 2.0 = 3.0
@@ -138,17 +162,13 @@ The current FPU tier verifies:
 1.5 * 2.0 = 3.0
 ```
 
-Each uses genuine `lfd -> arithmetic -> stfd` PPC and verifies the exact result bits:
+Each uses genuine `lfd -> arithmetic -> stfd` PPC and verifies `0x4008000000000000` for IEEE-754 double 3.0.
 
-```text
-0x4008000000000000 = IEEE-754 double 3.0
-```
+ADD, SUB and MUL are verified. DIV, compare/conversion and deeper FPSCR/rounding behavior remain open.
 
-ADD, SUB and MUL are verified. DIV, compare/conversion and deeper FPSCR behavior remain open.
+## Current VMX execution tier
 
-### First VMX VEC128 execution tier
-
-Run 153 keeps the first VMX execution gate green:
+The first vector path remains green:
 
 ```text
 lvx      v1,0,r4
@@ -159,11 +179,9 @@ lwz      r3,0(r7)
 blr
 ```
 
-Xenia emits 29 finalized HIR instructions. The executor supports exactly the measured VEC128 byte-swap and unsigned INT8 `VECTOR_ADD` form. Sixteen `0x01` bytes plus sixteen `0x02` bytes produce sixteen `0x03` bytes in guest memory.
+Xenia emits 29 finalized HIR instructions. The correctness executor currently implements the measured Xenia VEC128 byte-swap convention and unsigned INT8 `VECTOR_ADD`; sixteen `0x01` bytes plus sixteen `0x02` bytes produce sixteen `0x03` bytes.
 
-Unsupported HIR remains fail-closed.
-
-## Phase ladder after foundation completion
+## Phase ladder after run 160
 
 ```text
 Phase 1   upstream source / contract audit                    COMPLETE
@@ -171,20 +189,17 @@ Phase 2   PPC/HIR/frontend wasm32 compile                     COMPLETE
 Phase 2A  PPCContext wasm32 ABI                               COMPLETE
 Phase 2B  translation ProbeBackend                            COMPLETE
 Phase 2C  Xenia Memory / Processor probe closure              COMPLETE FOR PROBE
-Phase 2D  complete current compiler-pass source manifest      COMPLETE (run 153)
+Phase 2D  complete current compiler-pass source manifest      COMPLETE
 Phase 3   strict full-export link                             COMPLETE
 Phase 3A  real PPC -> finalized Xenia HIR                     COMPLETE
 Phase 3B  PPC TRANSLATION FOUNDATION                         COMPLETE / 100%
 Phase 3C  STFS / package / XEX loader foundation              COMPLETE / 100%
-Phase 4   finalized-HIR correctness execution                 ACTIVE / VERIFIED
-Phase 4A  integer arithmetic / compare / branch               COMPLETE FIRST SUBSET
-Phase 4B  guest load/store + endian semantics                 COMPLETE FIRST SUBSET
-Phase 4C  CR/LR/CTR + backward loops                          COMPLETE FIRST SUBSET
-Phase 4D  direct + nested guest calls                         COMPLETE FIRST SUBSET
-Phase 4E  FLOAT64 load/store + ADD/SUB/MUL                    COMPLETE FIRST SUBSET
-Phase 4F  VMX VEC128 load/byte-add/store                      COMPLETE FIRST SUBSET
-Phase 4G  FP DIV + compare/convert/FPSCR                      ACTIVE NEXT
-Phase 4H  broader VMX / VMX128 correctness                    NEXT
+Phase 4A  scalar PPC correctness foundation                   COMPLETE / 100%
+Phase 4B  guest call/control foundation                       COMPLETE / 100%
+Phase 4C  FLOAT64 load/store + ADD/SUB/MUL                    COMPLETE FIRST SUBSET
+Phase 4D  FP DIV + compare/convert/FPSCR                      ACTIVE NEXT
+Phase 4E  VMX VEC128 load/byte-add/store                      COMPLETE FIRST SUBSET
+Phase 4F  broader VMX / VMX128 correctness                    NEXT
 Phase 5   hot-block WasmBackend + function cache              FUTURE
 Phase 5A  executable-page versioning/invalidation             FUTURE
 Phase 6   sparse/page-backed Xbox guest memory                FUTURE
@@ -196,30 +211,34 @@ Phase 10  WebAudio + first genuine guest framebuffer          FUTURE
 
 ## Next implementation boundary
 
-Do not keep reopening the two complete foundations unless their regression gates fail. The next implementation sequence is:
+Do not reopen the four completed foundations unless their regression gates fail. The next implementation sequence is:
 
-1. add genuine PPC `fdiv` and typed FLOAT32/FLOAT64 HIR `DIV` execution;
-2. add floating compare/conversion cases and verify CR/FPSCR effects;
-3. broaden VMX to halfword/word add/sub, vector logic, shifts and comparisons;
-4. add measured VMX128-specific cases representative of Xbox 360 code;
+1. genuine PPC `fdiv` plus typed FLOAT32/FLOAT64 HIR `DIV` execution;
+2. floating compare/conversion and measured CR/FPSCR/rounding effects;
+3. VMX halfword/word add/sub, vector logic, shifts and comparisons;
+4. measured VMX128-specific cases representative of Xbox 360 code;
 5. start `WasmBackend`: finalized Xenia HIR -> generated WebAssembly;
-6. add function/block caching and executable-page invalidation;
+6. add function/block caching and executable-page versioning/invalidation;
 7. replace the bounded correctness window with sparse/page-backed Xbox virtual/physical memory;
 8. map complete captured `default.xex` sections at guest addresses;
 9. establish initial CPU state and enter the real XEX entry point;
-10. bring up KernelState/xboxkrnl/XAM from the services real execution requests;
-11. then move into the shared Xenos browser GPU layer, WebGPU/WGSL/EDRAM, WebGL2 fallback and WebAudio.
+10. bring up KernelState/xboxkrnl/XAM from services real execution requests;
+11. move into shared Xenos browser semantics, WebGPU/WGSL/EDRAM, WebGL2 fallback and WebAudio.
 
-The major transition is now straightforward to describe:
+The transition is now:
 
 ```text
-complete STFS/XEX package source
+100% package/XEX foundation
         +
-complete PPC translation foundation
+100% PPC translation foundation
         +
-expanding correctness execution
+100% scalar PPC correctness foundation
+        +
+100% guest control foundation
         ↓
-full guest memory
+finish FPU + broaden VMX
+        ↓
+hot WasmBackend + full guest memory
         ↓
 map actual default.xex
         ↓
@@ -260,6 +279,7 @@ python3 ./xenia_translation_foundation_check.py
 bash ./build-xenia-ppc-bootstrap.sh
 bash ./link-xenia-ppc-bootstrap.sh
 node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
 
 ## Do not port into the browser CPU bootstrap

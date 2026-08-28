@@ -15,6 +15,7 @@ python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
+python3 "$ROOT/prepare-wasm-backend-cfg-overlay.py"
 
 COMMON=(
   -std=c++20 -O0 -g0
@@ -135,9 +136,10 @@ compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_cor
 # V35 hot-backend work consumes the same compiler-finalized Xenia HIR and emits
 # child WebAssembly modules. Scalar dataflow and CFG/control flow are separate
 # translation units and separate runtime gates so unsupported behavior remains
-# fail-closed instead of being hidden inside one broad backend claim.
+# fail-closed instead of being hidden inside one broad backend claim. The CFG
+# overlay preserves finalized-HIR in-block conditional fallthrough exactly.
 compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
-compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"
+compile_one "render360/wasm_backend_cfg_probe.cpp" "$OVERLAY/render360/wasm_backend_cfg_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

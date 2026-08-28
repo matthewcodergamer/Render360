@@ -1,0 +1,189 @@
+/* =========================================================
+   V33 UI — collision-safe responsive shell
+   Keeps the V32 liquid-glass visual language while giving
+   every absolute UI region a shared layout contract.
+   ========================================================= */
+
+:root{
+  --r360-edge: max(12px, var(--safe-left));
+  --r360-topbar-top: calc(10px + var(--safe-top));
+  --r360-topbar-h: 58px;
+  --r360-top-controls-top: calc(var(--safe-top) + 78px);
+  --r360-content-top: calc(var(--safe-top) + 136px);
+  --r360-content-bottom: calc(var(--safe-bottom) + 178px);
+  --r360-controller-bottom: max(14px, var(--safe-bottom));
+  --r360-controller-scale: 1;
+}
+
+/* The centered content is the only region allowed to scroll vertically. */
+.stage{
+  place-items:center;
+  padding:
+    var(--r360-content-top)
+    max(12px, calc(var(--safe-right) + 12px))
+    var(--r360-content-bottom)
+    max(12px, calc(var(--safe-left) + 12px));
+}
+
+.hero,.game-card{
+  width:min(560px,100%);
+  max-height:calc(100dvh - var(--r360-content-top) - var(--r360-content-bottom));
+  overflow:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
+.hero::-webkit-scrollbar,.game-card::-webkit-scrollbar{display:none}
+
+/* Prevent large text/content from widening cards or pushing neighbors. */
+.hero,.game-card,.game-heading,.game-heading>div,.status-card,.game-meta>div,
+.xex-grid>div,.frame-gate-grid>div,.port-row>div{min-width:0}
+.game-heading h2,.support-note,.hero-copy,.boundary p,.port-row p{overflow-wrap:anywhere}
+
+/* Phone layouts should stay compact instead of becoming six tall rows. */
+@media(max-width:520px){
+  .status-grid.six{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .status-grid.six .status-card{display:block;text-align:left}
+  .status-grid.six .status-card span{margin-bottom:4px}
+  .hero,.game-card{padding:22px 18px;border-radius:24px}
+  .hero h1{font-size:clamp(24px,7vw,28px)}
+  .hero-copy{font-size:11px}
+  .game-heading{gap:10px}
+  .game-heading h2{font-size:23px}
+  .game-heading-buttons{flex:0 0 auto}
+}
+
+@media(max-width:360px){
+  .status-grid.six{grid-template-columns:1fr 1fr}
+  .top-actions{gap:4px}
+  .icon-button{min-width:36px;padding:0 8px}
+  .brand{gap:7px}.brand strong{font-size:13px}.brand span:not(.orb){font-size:8px}
+  .hero-actions{gap:7px}
+}
+
+/* Top controls no longer share the same vertical band as the arena HUD. */
+.top-controller-row{
+  top:var(--r360-top-controls-top);
+  left:max(14px,var(--safe-left));
+  right:max(14px,var(--safe-right));
+}
+
+.arena-hud{
+  top:calc(var(--safe-top) + 132px);
+  width:min(520px,calc(100vw - max(28px,calc(var(--safe-left) + var(--safe-right) + 24px))));
+}
+
+.game-chip{
+  top:calc(var(--safe-top) + 190px);
+  max-width:calc(100vw - var(--safe-left) - var(--safe-right) - 28px);
+  overflow:hidden;
+}
+.game-chip b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+
+/* Telemetry owns the center-bottom lane; controls stay to the sides. */
+.live-telemetry{
+  bottom:max(12px,calc(var(--safe-bottom) + 8px));
+  max-width:min(520px,calc(100vw - var(--safe-left) - var(--safe-right) - 28px));
+  overflow:hidden;
+}
+.live-telemetry span,.live-telemetry b{overflow:hidden;text-overflow:ellipsis}
+
+.left-cluster,.right-cluster{
+  bottom:var(--r360-controller-bottom);
+}
+.look-stick{
+  bottom:var(--r360-controller-bottom);
+}
+
+/* Landscape phone: preserve the current control design but reserve its space. */
+@media(orientation:landscape) and (max-height:500px){
+  :root{
+    --r360-topbar-h:52px;
+    --r360-top-controls-top:calc(var(--safe-top) + 66px);
+    --r360-content-top:calc(var(--safe-top) + 118px);
+    --r360-content-bottom:calc(var(--safe-bottom) + 132px);
+  }
+  .topbar{height:52px;top:calc(6px + var(--safe-top));border-radius:17px}
+  .hero,.game-card{max-width:min(620px,72vw);padding:18px 18px;border-radius:21px}
+  .hero-mark{width:54px;height:54px;margin-bottom:10px;border-radius:18px}
+  .hero-mark span{width:23px;height:23px}
+  .hero h1{font-size:24px;margin-bottom:7px}
+  .hero-copy{font-size:10px;line-height:1.4}
+  .status-grid{margin:12px 0 11px;gap:6px}
+  .status-card{padding:8px 7px}
+  .support-note{font-size:8px;margin-top:8px}
+  .arena-hud{top:calc(var(--safe-top) + 116px);min-height:42px}
+  .game-chip{top:calc(var(--safe-top) + 164px)}
+  .live-telemetry{height:27px;font-size:7px}
+}
+
+/* Portrait iPhone/iPod layouts: controls scale as one system, not independently. */
+@media(orientation:portrait){
+  :root{
+    --r360-top-controls-top:calc(var(--safe-top) + 72px);
+    --r360-content-top:calc(var(--safe-top) + 124px);
+    --r360-content-bottom:calc(var(--safe-bottom) + 164px);
+  }
+  .top-controller-row{
+    transform:none;
+    left:max(9px,var(--safe-left));
+    right:max(9px,var(--safe-right));
+    gap:5px;
+  }
+  .top-controller-center{gap:5px}
+  .top-controller-right{gap:5px}
+  .top-control,.host-control{height:35px;min-width:58px;padding:0 10px;font-size:8px;border-radius:12px}
+  .pause-control{min-width:66px}
+  .top-controller-right .top-control{min-width:48px}
+
+  .arena-hud{top:calc(var(--safe-top) + 116px);width:calc(100vw - var(--safe-left) - var(--safe-right) - 22px)}
+  .game-chip{top:calc(var(--safe-top) + 170px)}
+
+  .left-cluster,.right-cluster{transform:scale(.76)}
+  .left-cluster{left:max(8px,var(--safe-left));transform-origin:left bottom}
+  .right-cluster{right:max(8px,var(--safe-right));transform-origin:right bottom}
+
+  .look-stick{
+    right:50%;
+    bottom:max(38px,calc(var(--safe-bottom) + 28px));
+    transform:translateX(50%) scale(.68);
+    transform-origin:center bottom;
+  }
+  .look-stick.active{transform:translateX(50%) scale(.68)}
+
+  .look-zone{top:calc(var(--safe-top) + 112px);bottom:calc(var(--safe-bottom) + 150px);width:58%}
+  .live-telemetry{bottom:max(8px,calc(var(--safe-bottom) + 4px));height:27px;font-size:6.8px;gap:6px}
+}
+
+/* Very narrow portrait screens: prevent left/right controller clusters from meeting. */
+@media(orientation:portrait) and (max-width:390px){
+  :root{--r360-content-bottom:calc(var(--safe-bottom) + 150px)}
+  .left-cluster,.right-cluster{transform:scale(.68)}
+  .look-stick{transform:translateX(50%) scale(.60)}
+  .look-stick.active{transform:translateX(50%) scale(.60)}
+  .top-control,.host-control{min-width:52px;padding:0 8px;font-size:7.5px}
+  .pause-control{min-width:58px}.top-controller-right .top-control{min-width:43px}
+}
+
+/* Short devices get compact content rather than content hidden beneath controls. */
+@media(max-height:650px) and (orientation:portrait){
+  :root{
+    --r360-content-top:calc(var(--safe-top) + 116px);
+    --r360-content-bottom:calc(var(--safe-bottom) + 142px);
+  }
+  .hero,.game-card{padding:17px 15px}
+  .hero-mark{display:none}
+  .status-grid{margin:12px 0 10px}
+  .primary-button{height:43px}
+  .support-note{font-size:8px}
+}
+
+/* Sheets must never extend under the top safe area and remain usable with keyboard/UI chrome. */
+.sheet{
+  max-height:min(68dvh,620px,calc(100dvh - var(--safe-top) - var(--safe-bottom) - 28px));
+}
+
+/* Dynamic viewport units fix iOS browser chrome resizing without changing the visual design. */
+@supports(height:100dvh){
+  html,body,#app{height:100dvh}
+}

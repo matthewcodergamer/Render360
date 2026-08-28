@@ -22,7 +22,21 @@ bool ResolveNestedGuestCall(xe::cpu::Function* function) {
       !function->is_guest()) {
     return false;
   }
-  return g_probe_backend->processor()->DemandFunction(function);
+
+  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
+  if (!guest_function->has_end_address()) {
+    return false;
+  }
+
+  // The correctness backend deliberately has no executable host code cache, so
+  // don't route nested execution through Processor::DemandFunction's native
+  // runtime/cache state. The target has already been declared/scanned by Xenia
+  // when the CALL symbol was emitted. Define it directly through the real PPC
+  // frontend so it still takes the normal Xenia scanner -> translator -> HIR ->
+  // compiler -> ProbeAssembler path, where the nested finalized HIR executes
+  // against the same active PPCContext as the caller.
+  return g_probe_backend->processor()->frontend()->DefineFunction(
+      guest_function, 0);
 }
 }  // namespace
 

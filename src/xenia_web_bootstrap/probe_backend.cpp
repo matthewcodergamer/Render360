@@ -22,8 +22,7 @@ bool ResolveNestedGuestCall(xe::cpu::Function* function) {
       !function->is_guest()) {
     return false;
   }
-  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
-  return g_probe_backend->processor()->frontend()->DefineFunction(guest_function, 0);
+  return g_probe_backend->processor()->DemandFunction(function);
 }
 }  // namespace
 
@@ -98,10 +97,6 @@ bool ProbeAssembler::Assemble(
                correctness.reached_return_boundary ? 1u : 0u);
 
   if (function && debug_info) function->set_debug_info(std::move(debug_info));
-
-  // A nested CALL must fail back into the caller executor if the callee's
-  // finalized HIR is unsupported or never reaches its return boundary. The
-  // top-level probe retains the existing telemetry-based failure contract.
   if (nested_execution) {
     return correctness.supported && correctness.reached_return_boundary;
   }

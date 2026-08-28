@@ -81,7 +81,7 @@ const ctrLoopProgram = wordBytes(
   0x4E800020,
 );
 
-// Save caller LR in r5, call a local leaf function, add 2 to its result,
+// Save caller LR in r5, call a leaf function, add 2 to its result,
 // restore caller LR, then return. Callee returns r3=5, so final r3 must be 7.
 const directCallProgram = wordBytes(
   0x7CA802A6, // mflr r5
@@ -91,6 +91,30 @@ const directCallProgram = wordBytes(
   0x4E800020, // blr (outer return)
   0x38600005, // callee: li r3,5
   0x4E800020, // blr (return to caller +8)
+);
+
+// Two independently Xenia-scanned nested callees. Caller saves LR in r5 and
+// calls A. A saves its LR in r6 and calls B. B returns 4, A adds 2 and restores
+// LR, caller adds 1 and restores its LR. Final r3 must be 7.
+const nestedCallProgram = wordBytes(
+  0x7CA802A6, // +0x00 caller: mflr r5
+  0x4800001D, // +0x04 bl +0x1c -> function A @ +0x20
+  0x38630001, // +0x08 addi r3,r3,1
+  0x7CA803A6, // +0x0c mtlr r5
+  0x4E800020, // +0x10 blr
+  0x00000000, // +0x14 padding
+  0x00000000, // +0x18 padding
+  0x00000000, // +0x1c padding
+  0x7CC802A6, // +0x20 function A: mflr r6
+  0x4800001D, // +0x24 bl +0x1c -> function B @ +0x40
+  0x38630002, // +0x28 addi r3,r3,2
+  0x7CC803A6, // +0x2c mtlr r6
+  0x4E800020, // +0x30 blr
+  0x00000000, // +0x34 padding
+  0x00000000, // +0x38 padding
+  0x00000000, // +0x3c padding
+  0x38600004, // +0x40 function B: li r3,4
+  0x4E800020, // +0x44 blr
 );
 
 const tests = [
@@ -145,6 +169,13 @@ const tests = [
   {
     name: 'direct-bl-callee-blr-caller',
     ppc: directCallProgram,
+    initialGprs: [],
+    memorySeeds: [],
+    expectedR3: 7n,
+  },
+  {
+    name: 'nested-bl-two-level-call-return',
+    ppc: nestedCallProgram,
     initialGprs: [],
     memorySeeds: [],
     expectedR3: 7n,
@@ -219,3 +250,4 @@ for (const test of tests) {
 console.log(`PASS: ${tests.length} real PPC correctness programs translated and executed through finalized Xenia HIR.`);
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
 console.log('PASS: LR/CTR/CR state and a real CTR-controlled bdnz loop are verified through Xenia PPCContext semantics.');
+console.log('PASS: direct and two-level nested bl/callee/blr guest call chains use independently Xenia-scanned and translated callees.');

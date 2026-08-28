@@ -22,14 +22,22 @@ constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
 
 bool ResolveNestedGuestCall(xe::cpu::Function* function) {
   if (!g_probe_backend || !g_probe_backend->processor() || !function) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: backend/processor/function missing\n");
     return false;
   }
 
   auto* frontend = g_probe_backend->processor()->frontend();
-  if (!frontend) return false;
+  if (!frontend) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n");
+    return false;
+  }
 
   const uint32_t address = function->address();
-  if (address < kProbeGuestBase || address > kProbeGuestEnd) return false;
+  std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X\n", address);
+  if (address < kProbeGuestBase || address > kProbeGuestEnd) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target outside probe window\n");
+    return false;
+  }
 
   // The standalone correctness driver intentionally isn't backed by a normal
   // title Module yet. Xenia still gives us the resolved CALL symbol/address,
@@ -39,16 +47,26 @@ bool ResolveNestedGuestCall(xe::cpu::Function* function) {
   // authority for function extent, translation, HIR generation and compiler
   // passes.
   ProbeGuestFunction nested_function(function->module(), address);
-  nested_function.set_end_address(kProbeGuestEnd);
 
+  // Do not invent an end address for the callee. PPCScanner is the Xenia code
+  // that discovers the function extent from the actual guest control flow
+  // (normally the first terminal blr/bctr that isn't jumped over).
   xe::cpu::ppc::PPCScanner scanner(frontend);
-  if (!scanner.Scan(&nested_function, nullptr)) return false;
+  if (!scanner.Scan(&nested_function, nullptr)) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE scan failed target=0x%08X\n", address);
+    return false;
+  }
+  std::fprintf(stderr, "R360_CALL_RESOLVE scanned target=0x%08X end=0x%08X\n",
+               address, nested_function.end_address());
 
   // ProbeAssembler sees that correctness execution is already active and runs
   // the nested finalized HIR against the same PPCContext as the caller. A
   // nested blr therefore returns from this DefineFunction call, after which the
   // caller's finalized HIR resumes at the instruction following CALL.
-  return frontend->DefineFunction(&nested_function, 0);
+  const bool translated = frontend->DefineFunction(&nested_function, 0);
+  std::fprintf(stderr, "R360_CALL_RESOLVE translated target=0x%08X result=%u\n",
+               address, translated ? 1u : 0u);
+  return translated;
 }
 }  // namespace
 

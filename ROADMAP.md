@@ -1,188 +1,151 @@
-# Render360 Xenia-Web roadmap
+# Render360 Xenia-Web Roadmap — V34
 
 ## Project rule
+
 **Port Xenia; do not imitate Xenia.**
 
-Xenia remains the source of truth for Xbox 360 behavior. Render360 owns the browser host: WebAssembly build/runtime integration, browser file access, workers, WebGPU, WebAudio, touch/gamepad input, persistent browser storage, PWA behavior and diagnostics.
+Xenia remains the source of truth for Xbox 360 behavior. Render360 owns the browser host: WebAssembly integration, browser storage/I/O, workers, WebGPU, WebGL2 fallback, WebAudio, touch/gamepad input, PWA behavior and diagnostics.
 
-Keep as much Xbox-specific implementation as practical in C/C++ compiled to WebAssembly. JavaScript/TypeScript should be the browser platform layer, not a second emulator core.
-
-## Current verified boundary — Core V32
-
-### Working now
-- Real freestanding C++ → wasm32 core and versioned ABI.
-- Continuous Web Worker runtime with browser/native input bridge.
-- Strict XEX1 / XEX2 / LIVE / PIRS / CON recognition.
-- Native pull-driven STFS mount: WASM requests byte ranges and browser `File.slice()` services them.
-- Xenia-aligned STFS header, volume descriptor, block mapping and hash-chain traversal.
-- Native STFS directory parsing and root `default.xex` discovery.
-- Complete `default.xex` streaming/capture without loading the entire package into WASM memory.
-- XEX structural/header inspection and first-frame gate diagnostics.
-- Direct WebGPU host initialization and dynamic-resolution infrastructure.
-- Three.js test arena only for input/host diagnostics; it is explicitly not the Xbox renderer.
-- Mobile touch controls, gamepad polling, worker telemetry and diagnostic UI.
-
-### Not working yet
-- No retail Xbox 360 PPC instruction execution.
-- No Xenia PPC frontend/HIR compiled into the browser build yet.
-- No mapped/decompressed/decrypted retail XEX image execution path yet.
-- No Xenia KernelState/xboxkrnl/XAM startup yet.
-- No guest thread scheduler running retail code yet.
-- No Xenos ringbuffer command processor connected to a WebGPU backend yet.
-- No Xenos shader → WGSL translator yet.
-- No EDRAM/render-target/resolve implementation yet.
-- No real guest framebuffer/present yet.
-
-Therefore `PLAYABLE` must not be reported for retail titles yet.
-
-## UI V33 — responsive shell
-- Preserve the existing liquid-glass visual design.
-- Shared safe-area layout contract for topbar, host controls, arena HUD, content and bottom controller zones.
-- No independent absolute-position collisions between arena HUD/top controls/game chip.
-- Scrollable central cards inside the safe playable viewport.
-- Two-column phone status grid instead of six vertically stacked cards.
-- Dynamic viewport (`dvh`) handling for iOS browser chrome.
-- Collision-safe scaling of left/right/look controls on narrow portrait screens.
-- Sheets constrained to safe viewport height.
-
-UI versioning is intentionally separate from emulator-core versioning.
-
-## Next core milestone — Xenia portable bootstrap
-
-Before implementing another game-specific workaround, prove that selected upstream Xenia portable/common layers build under Emscripten/wasm32.
-
-Initial compile target:
+## Version map
 
 ```text
-Xenia base/common pieces
-XEX structures/parser
-memory structures
-PPC frontend
-HIR
-portable compiler passes
-VFS structures
-kernel structures needed for module loading
-Xenos definitions / generic decoding structures
+Project development line   V34
+Stable deployed core       V32
+Responsive UI shell        V33
 ```
 
-Disable/replace for the web target:
+The stable V32 browser core and V33 UI are not being renamed just because CPU research advanced. V34 identifies the active emulator-development milestone.
+
+## Current verified V34 boundary
+
+Authoritative CPU gate: **GitHub Actions run 168 (`33149796414`)**.
 
 ```text
-x64 backend/emitter/code cache
-Win32/Linux/macOS windowing
-D3D12 backend
-Vulkan backend
-native HID backends
-native audio output
-host-specific filesystem APIs
-native executable-memory assumptions
-host exception machinery that cannot map to the browser
+PACKAGE_XEX_FOUNDATION                    PASS
+PPC_TRANSLATION_FOUNDATION                PASS
+SCALAR_PPC_CORRECTNESS_FOUNDATION         PASS
+GUEST_CONTROL_FOUNDATION                  PASS
+FPU_FOUNDATION                            PASS
+wasm32 compile matrix                     64 / 64 PASS
+strict full-export link                   LINKED
+rooted exports                            25
+real PPC/FPU/VMX correctness suite        24 / 24 PASS
 ```
 
-Success condition: a browser-built `xenia_core.wasm` initializes the selected portable subsystems and reports their real status without booting a game.
+## Foundations closed at 100%
 
-## CPU path — reuse Xenia PPC frontend + HIR
+### STFS / Xbox package / XEX
 
-Preferred architecture:
+Complete for the defined browser-loader baseline: package recognition, STFS traversal/hash-chain behavior, root `default.xex` discovery, fragmented extraction, complete byte reconstruction and structural XEX metadata inspection.
+
+### Xenia PPC translation
+
+Complete for the defined portable translation baseline: frontend, translator, scanner, PPC emitter families, HIR, compiler/pass framework, browser host seams and strict wasm32 linking.
+
+### Scalar PPC correctness
+
+Complete for the defined scalar baseline: arithmetic, comparisons, branches, CTR loops, scalar guest memory, endian conversion, CR/LR/CTR and return boundaries.
+
+### Guest function/control
+
+Complete for the defined control baseline: direct calls, nested calls, CTR/bctrl indirect calls, LR save/restore, stack-frame-shaped flow, guest-memory LR spill/reload and caller resume.
+
+### FPU
+
+Complete for the defined FPU baseline: FPR state/load/store, FLOAT64 add/sub/mul/div, floating compare, common conversions, round-to-zero, f64/f32 rounding and the current upstream-Xenia FPSCR update/readback path.
+
+## Active next foundation — VMX / VMX128
+
+Current proven vector behavior:
 
 ```text
-Xbox 360 PPC/VMX128
-        ↓
-Xenia PPC frontend / translator
-        ↓
-Xenia HIR
-        ↓
-portable optimization/compiler passes
-        ↓
-Browser execution backend
+VEC128 guest load                          ✓
+Xenia-compatible byte ordering             ✓
+unsigned INT8 vector add / vaddubm         ✓
+VEC128 guest store                         ✓
 ```
 
-Do **not** rebuild `PPCDecoder.js`, `PPCInterpreter.js`, a separate JS IR, or duplicate Xbox instruction semantics unless a specific upstream component proves impossible to port.
+Closure work:
 
-### Phase CPU-A — correctness backend
-Provide a wasm32-safe correctness path first. This may be an interpreter/emulated-opcode backend driven from Xenia HIR.
+1. INT16 modulo add;
+2. INT32 modulo add;
+3. vector subtraction;
+4. AND / OR / XOR;
+5. integer vector comparisons;
+6. common vector shifts;
+7. representative Xbox 360 VMX128 forms;
+8. dedicated `VMX_FOUNDATION=PASS` regression gate.
 
-Run Xenia PPC tests and synthetic guest blocks before retail games.
+## Next architecture — hot WasmBackend
 
-Track:
-- guest PC
-- guest instructions executed
-- exceptions
-- HIR blocks emitted
-- interpreted/emulated operations
-- unsupported opcodes
-
-### Phase CPU-B — hot-code WebAssembly backend
-After correctness, add a `WasmBackend` or equivalent hot-block path.
-
-Conceptual split:
+After VMX baseline closure, stop expanding the correctness executor indefinitely.
 
 ```text
-Xenia HIR
-   ↓
-WasmBackend
-   ↓
-WebAssembly module/function generation
-   ↓
-Safari/JavaScriptCore WASM engine
-   ↓
-ARM64 iPhone CPU
+finalized Xenia HIR
+  -> Render360 WasmBackend
+  -> generated WebAssembly guest function
+  -> browser WASM engine
 ```
 
-Cache by guest address + code hash/mode and invalidate when guest code pages are modified.
+Required follow-up:
 
-The current Xenia x64 backend must not be treated as browser-portable code.
+- translated-function/block cache;
+- guest address + code-version cache key;
+- executable-page versioning;
+- invalidation when guest executable memory changes;
+- correctness fallback for unsupported hot-path operations.
 
-## XEX image preparation
-Implement the executable path before claiming guest execution:
+## Full Xbox guest memory
 
-1. full XEX optional-header/security parsing
-2. unencrypted/uncompressed image path first
-3. PE image validation
-4. guest section mapping and permissions
-5. TLS/import/export metadata
-6. supported compression paths
-7. supported encryption/session-key paths where legally and technically appropriate
-8. strict stop on unsupported required paths
+Replace the current bounded correctness window with a sparse/page-backed 32-bit guest address model.
 
-Unknown or unsupported requirements must remain visible in diagnostics.
+Required behavior:
 
-## Kernel/XAM — reuse heavily
-Port Xenia kernel HLE rather than recreating Xbox APIs in JavaScript.
+- virtual and physical mappings;
+- page permissions;
+- aliases;
+- MMIO routing;
+- executable-page tracking;
+- dirty/version tracking;
+- browser-safe allocation rather than desktop 4+ GB host alias mappings.
+
+## Real XEX mapping and entry execution
+
+The package foundation already extracts a complete `default.xex`. The next title-bring-up stage is:
+
+1. prepare/decrypt/decompress supported XEX images;
+2. map sections at their Xbox addresses;
+3. apply permissions;
+4. initialize TLS/import/export/module metadata;
+5. initialize architectural CPU state;
+6. execute the real entry point;
+7. fail visibly at the first genuine missing runtime dependency.
+
+This is the next major visible emulator milestone.
+
+## Kernel / xboxkrnl / XAM
+
+Reuse Xenia kernel HLE rather than recreating Xbox APIs in JavaScript.
 
 Target:
-- `KernelState`
-- export resolver
-- xboxkrnl
-- XAM
-- kernel objects
-- memory APIs
-- files
-- threads/events/semaphores/timers
-- input-facing exports
 
-Browser-specific work belongs underneath the Xbox-facing APIs.
-
-Example:
-
-```text
-Guest NtOpenFile
-   ↓
-Xenia xboxkrnl HLE
-   ↓
-Xenia VFS
-   ↓
-Render360 browser random-access source
-   ↓
-Blob / OPFS / retained file source
-```
+- `KernelState`;
+- export resolver;
+- xboxkrnl;
+- XAM;
+- kernel objects;
+- memory APIs;
+- threads/events/semaphores/timers;
+- VFS/file APIs;
+- input-facing exports.
 
 No broad unknown-export `return success` stubs.
 
-## Browser VFS / large-game I/O
-Never load a multi-gigabyte disc image with `File.arrayBuffer()`.
+## Browser I/O / VFS
 
-Provide a random-access abstraction:
+Never load a multi-gigabyte image with one `File.arrayBuffer()`.
+
+Use random-access sources:
 
 ```text
 size()
@@ -190,144 +153,76 @@ read(offset, length)
 close()
 ```
 
-Backends:
-- Blob/File `slice()`
-- OPFS
-- IndexedDB chunk/cache layer where useful
-- HTTP Range only for explicitly remote/user-authorized sources
+Backends: Blob/File slices, OPFS, IndexedDB cache/chunks where useful, and explicit HTTP Range sources when authorized.
 
-Feed this beneath Xenia VFS/disc/STFS machinery.
+## GPU architecture
 
-Track bytes read, cache hits, read latency and outstanding I/O.
-
-## Host threading
-Guest Xbox threads and browser workers are different concepts.
-
-Guest scheduler models Xbox thread state and synchronization.
-Host workers are execution resources for CPU/GPU/I/O/audio work.
-
-Where cross-origin isolation is available, use SharedArrayBuffer/WebAssembly shared memory. Keep a single-thread diagnostic path.
-
-## GPU — add WebGPU as a Xenia backend
-Do not rewrite Xenos in JavaScript and do not route the emulator through Three.js.
-
-Preferred architecture:
+**WebGPU is primary. WebGL2 is fallback.**
 
 ```text
 Xenos ringbuffer
-   ↓
-Xenia generic command processing / register state
-   ↓
-Xenia shader + texture interpretation
-   ↓
-WebGPU backend
+  -> Xenia command/register/shader/resource semantics
+  -> shared Render360 browser GPU layer
+     -> WebGPU + WGSL + EDRAM   primary
+     -> WebGL2 + GLSL ES        fallback where feasible
 ```
 
-Target components:
-- WebGPUGraphicsSystem
-- WebGPUCommandProcessor/backend integration
-- WebGPUSharedMemory
-- WebGPUTextureCache
-- WebGPUPipelineCache
-- WebGPURenderTargetCache
-- WGSL shader translator
+Do not route guest rendering through Three.js. The existing Three.js arena remains a host/input diagnostic only.
 
-## Shader path
-Reuse Xenia's Xenos decoding/analysis and implement the final browser emission stage:
+### WebGPU targets
 
-```text
-Xenos microcode
-   ↓
-Xenia shader analysis / IR
-   ↓
-WGSL emission
-   ↓
-WebGPU shader module
-```
-
-Do not rediscover what Xenos instructions mean if upstream already encodes that knowledge.
-
-Cache by guest microcode hash and retain translation diagnostics.
-
-## EDRAM / render targets
-Reuse Xenia's semantics and algorithms, replace host API details.
-
-Two browser paths may be needed:
-- FAST: normal WebGPU render attachments when behavior maps safely.
-- ACCURATE: storage-buffer/storage-texture + compute/fragment emulation for Xenos behavior WebGPU cannot directly express.
-
-A real first frame requires guest render-target/resolve behavior, not a host-side substitute.
+- Xenos command processor integration;
+- shared memory/resource tracking;
+- texture cache;
+- pipeline cache;
+- render-target cache;
+- WGSL shader translator;
+- EDRAM/resolve behavior;
+- presentation from guest-generated framebuffer state.
 
 ## Audio
-Port Xbox-facing audio behavior in native/WASM code where practical and use AudioWorklet/WebAudio only as the host sink.
 
-Maintain a ring buffer and expose underrun/buffer-depth telemetry.
+Port Xbox/Xenia audio behavior incrementally to WebAudio/AudioWorklet with a ring buffer and guest/host timing kept separate.
 
-## Storage
-Separate user game data from generated emulator data.
-
-User game data:
-- selected XEX/STFS/disc
-- retained file handle/source where browser capabilities allow
-
-Generated data:
-- shader translation cache
-- pipeline metadata
-- texture-transcode cache
-- title settings
-- compatibility data
-- Xbox save data
-
-Use OPFS/IndexedDB as appropriate.
-
-## First real-frame ladder
+## Compatibility ladder
 
 ```text
-STFS/disc mounted
-→ default.xex available
-→ XEX image mapped
-→ first PPC instruction
-→ sustained PPC execution
-→ KernelState/xboxkrnl/XAM startup
-→ guest threads running
-→ first Xenos packet
-→ first guest shader decoded
-→ first WGSL shader compiles
-→ first guest draw submitted
-→ EDRAM/resolve succeeds
-→ guest framebuffer presented
+CPU/VMX foundation closure
+  -> WasmBackend
+  -> full guest memory
+  -> real default.xex entry
+  -> kernel/XAM
+  -> first Xenos packets
+  -> first guest shader
+  -> first guest draw
+  -> first guest framebuffer
+  -> simple XBLA title
+  -> Braid-class playable
+  -> Portal-class bring-up
 ```
 
-The UI should show this exact chain and never advance a gate based on timers or host-side test graphics.
+## Current progress
 
-## Validation order
-1. Xenia portable wasm32 bootstrap.
-2. Xenia PPC/unit tests through the browser-safe CPU backend.
-3. Synthetic PPC executable/homebrew.
-4. Simple XEX/kernel startup.
-5. Null GPU backend logging real ringbuffer packets.
-6. Offline one-shader Xenos → WGSL test.
-7. One guest triangle/draw.
-8. First genuine guest framebuffer.
-9. Small/simple XBLA title.
-10. Braid-class title.
-11. Portal / Orange Box-class title.
-12. GTA IV.
-13. GTA V only after the emulator foundations are proven.
+```text
+Package/XEX foundation             100% ✓
+PPC translation foundation         100% ✓
+Scalar PPC foundation              100% ✓
+Guest control foundation           100% ✓
+FPU foundation                     100% ✓
+VMX / VMX128                       ~15%
+Hot WasmBackend                    ~3%
+Full guest memory                  ~10%
+Real default.xex entry             ~5%
+Kernel/xboxkrnl/XAM                ~1–2%
+Xenos GPU                          ~1–2%
+WebGPU backend                     ~2%
+WebGL2 fallback                    ~1%
+First genuine title boot           ~23–24%
+Small XBLA/Braid-class playable    ~16–17%
+Portal-class playable              ~9–10%
+Overall Render360                  ~25–27%
+```
 
-## Definition of the first major emulator milestone
-The milestone is complete only when user-provided Xbox 360 content causes all of the following:
+## Status rule
 
-1. real XEX found and parsed
-2. image mapped into guest memory
-3. imports bound to real HLE implementations
-4. PPC guest instructions execute
-5. guest threads run
-6. guest-generated Xenos packets are processed
-7. a real guest shader is translated to WGSL
-8. a real guest draw reaches WebGPU
-9. a guest-generated framebuffer is presented
-
-Priority remains:
-
-**correctness → observability → compatibility → performance → visual polish**
+Never report `PLAYABLE`, `FIRST DRAW`, `FIRST PRESENT`, shader translation, guest FPS or title boot unless those events came from genuine guest execution through the corresponding emulator subsystem.

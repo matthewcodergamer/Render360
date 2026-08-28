@@ -125,9 +125,11 @@ for rel in "${SOURCES[@]}"; do
 done
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
+compile_one "render360/hir_correctness_executor.cpp" "$ROOT/src/xenia_web_bootstrap/hir_correctness_executor.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"
 
 echo; echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"; echo "Report: $OUT/report.tsv"
+if [ "$failed" -ne 0 ]; then echo "ERROR: wasm32 compile matrix contains blocked units." >&2; exit 1; fi
 if [ "$passed" -eq 0 ]; then echo "ERROR: no real Xenia CPU/HIR translation unit compiled for wasm32." >&2; exit 1; fi

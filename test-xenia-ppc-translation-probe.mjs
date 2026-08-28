@@ -112,6 +112,19 @@ const nestedCallProgram = wordBytes(
   0x4E800020,
 );
 
+// f1 <- guest double 1.0; f2 <- guest double 2.0; f3 <- f1 + f2;
+// write f3 back and expose its high 32 bits through r3 for the existing
+// architectural-state assertion. Guest readback additionally checks all 64
+// result bits (0x4008000000000000 == double 3.0).
+const faddMemoryProgram = wordBytes(
+  0xC8240000, // lfd  f1,0(r4)
+  0xC8440008, // lfd  f2,8(r4)
+  0xFC61102A, // fadd f3,f1,f2
+  0xD8640010, // stfd f3,16(r4)
+  0x80640010, // lwz  r3,16(r4)
+  0x4E800020, // blr
+);
+
 const tests = [
   { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], memorySeeds: [], expectedR3: 1n },
   { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], memorySeeds: [], expectedR3: 12n },
@@ -176,13 +189,26 @@ const tests = [
     expectedR3: 7n,
   },
   {
-    // fmr f1,f2. The first FPU gate deliberately validates the finalized
-    // FLOAT64 FPR move/context path before non-zero FPR seeding and arithmetic.
     name: 'fpu-fmr-f1-f2-zero-data-path',
     ppc: wordBytes(0xFC201090, 0x4E800020),
     initialGprs: [],
     memorySeeds: [],
     expectedR3: 0n,
+  },
+  {
+    name: 'fpu-lfd-fadd-stfd-three',
+    ppc: faddMemoryProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [
+      [guestDataAddress + 0, 0x3FF00000], [guestDataAddress + 4, 0x00000000],
+      [guestDataAddress + 8, 0x40000000], [guestDataAddress + 12, 0x00000000],
+      [guestDataAddress + 16, 0x00000000], [guestDataAddress + 20, 0x00000000],
+    ],
+    expectedR3: 0x40080000n,
+    expectedMemory: [
+      [guestDataAddress + 16, 0x40080000],
+      [guestDataAddress + 20, 0x00000000],
+    ],
   },
 ];
 
@@ -255,4 +281,4 @@ console.log(`PASS: ${tests.length} real PPC correctness programs translated and 
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
 console.log('PASS: LR/CTR/CR state and a real CTR-controlled bdnz loop are verified through Xenia PPCContext semantics.');
 console.log('PASS: direct and two-level nested bl/callee/blr guest call chains use independently Xenia-scanned and translated callees.');
-console.log('PASS: first PPC FPR move/data-path gate reached finalized FLOAT64 Xenia HIR; arithmetic remains the next FPU tier.');
+console.log('PASS: FPU correctness includes real lfd/fadd/stfd guest-memory flow with raw IEEE-754 result verification.');

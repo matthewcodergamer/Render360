@@ -11,6 +11,7 @@ namespace render360::xenia_web {
 namespace {
 constexpr uint32_t kProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeMaxBytes = 64u * 1024u;
+alignas(16) uint8_t g_input_buffer[kProbeMaxBytes] = {};
 
 enum ProbeStatus : uint32_t {
   kProbeCold = 0,
@@ -64,6 +65,15 @@ void r360_ppc_probe_reset() {
       render360::xenia_web::g_processor
           ? render360::xenia_web::kProbeRuntimeReady
           : render360::xenia_web::kProbeCold;
+}
+
+uint32_t r360_ppc_probe_input_buffer() {
+  return static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(render360::xenia_web::g_input_buffer));
+}
+
+uint32_t r360_ppc_probe_input_capacity() {
+  return render360::xenia_web::kProbeMaxBytes;
 }
 
 uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {

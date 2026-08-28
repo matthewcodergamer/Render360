@@ -1,17 +1,17 @@
-# Render360 Xenia-Web — V34 CPU Foundations / Core V32 Runtime / UI V33
+# Render360 Xenia-Web — V35 CPU Foundations / Core V32 Runtime / UI V33
 
-Render360 is an experimental browser/iOS-oriented Xbox 360 emulator port built around **real Xenia behavior** rather than a second JavaScript imitation of the Xbox 360.
+Render360 is an experimental browser/iOS-oriented Xbox 360 emulator port built around **real upstream Xenia behavior**, not a second JavaScript imitation of the Xbox 360.
 
 ## Version map
 
 ```text
-Render360 project / development track   V34
+Render360 project / development track   V35
 Stable deployed browser WASM core       V32
 Responsive liquid-glass UI shell        V33
-Active CPU foundation track             V34
+Active architecture track               V35 WasmBackend
 ```
 
-The version split is intentional. **Core V32** remains the deployed package/XEX runtime. **UI V33** remains the current responsive shell. **V34** is the active emulator-development milestone containing the completed package/XEX, PPC translation, scalar PPC, guest-control and FPU foundations plus the next VMX/WasmBackend work.
+The split is intentional. **Core V32** remains the deployed package/XEX runtime. **UI V33** remains the current responsive shell. **V35** is the active emulator-development milestone: six CPU/browser foundations are now regression-complete and active work moves to generated WebAssembly execution.
 
 ## Architecture rule
 
@@ -22,15 +22,15 @@ Xbox PPC / FPU / VMX128
   -> Xenia PPCFrontend / PPCTranslator / PPCScanner
   -> Xenia PPCHIRBuilder + ppc_emit_*
   -> Xenia HIR + portable compiler passes
-  -> Render360 wasm32 correctness execution
-  -> future Render360 WasmBackend
+  -> Render360 correctness execution
+  -> Render360 WasmBackend            <- active next
 ```
 
 No fake framebuffer, fake boot success, fake guest FPS, fake shader translation, hardcoded PPC decoder output, or second JavaScript/PPC interpreter is accepted as Xbox output.
 
-## Authoritative V34 CPU gate — run 168
+## Authoritative V35 CPU gate — run 175
 
-GitHub Actions **run 168** (`33149796414`) completed successfully at implementation commit `2533a1fa855bdc4b1df2a348edc31f1ba169bb8c`.
+GitHub Actions **run 175** (`33152187091`) completed successfully at implementation commit `fe11632ec806cb6be53da6ff419b77aa201f4b1f`.
 
 ```text
 V32 package/XEX core rebuild              PASS
@@ -39,32 +39,27 @@ PPC_TRANSLATION_FOUNDATION                PASS
 SCALAR_PPC_CORRECTNESS_FOUNDATION         PASS
 GUEST_CONTROL_FOUNDATION                  PASS
 FPU_FOUNDATION                            PASS
+VMX_STANDARD_BASELINE                     PASS (11 cases)
+VMX128_REPRESENTATIVE                     PASS (1 case)
+VMX_FOUNDATION                            PASS (12 cases)
 wasm32 compile matrix                     64 / 64 PASS
 strict full-export link                   LINKED
 rooted exports                            25
 real PPC/FPU/VMX correctness suite        24 / 24 PASS
 ```
 
-The dedicated FPU foundation status is documented in [`FPU_FOUNDATION.md`](./FPU_FOUNDATION.md).
+Detailed closure documents:
+
+- [`FPU_FOUNDATION.md`](./FPU_FOUNDATION.md)
+- [`VMX_FOUNDATION.md`](./VMX_FOUNDATION.md)
 
 ## Completed foundations — 100%
 
 ### 1. STFS / Xbox package / XEX foundation — 100% ✓
 
-The browser package/XEX loader foundation is regression-gated for:
+Regression-gated browser loader behavior includes LIVE/PIRS/CON recognition, Xenia-aligned STFS structures, native directory traversal, hash-chain traversal, root `default.xex` discovery, fragmented multi-block extraction, byte-for-byte executable reconstruction, structural XEX inspection, metadata extraction, and range-driven browser I/O.
 
-- LIVE / PIRS / CON classification;
-- Xenia-aligned STFS header and volume-descriptor contracts;
-- native directory enumeration;
-- hash-chain traversal;
-- root `default.xex` discovery;
-- fragmented multi-block extraction;
-- byte-for-byte reconstruction of the complete extracted executable;
-- structural XEX inspection;
-- entry point, image base, title ID and media ID extraction;
-- range-driven I/O rather than loading multi-GB packages into WASM memory.
-
-Measured package gate:
+Measured package baseline:
 
 ```text
 core_version        32
@@ -75,126 +70,106 @@ default_xex_blocks  2
 xex_entry           0x82001234
 ```
 
-**100% means the defined browser package/XEX foundation is complete and regression-gated.** It does not mean every retail encryption/compression/title quirk is already compatible.
-
 ### 2. Xenia PPC translation foundation — 100% ✓
 
-The portable translation foundation locks:
-
-- PPC frontend / translator / scanner;
-- PPC context and opcode tables;
-- ALU, control, memory, FPU and Altivec/VMX emitter families;
-- HIR opcodes, blocks, instructions, values and builder;
-- compiler framework;
-- every currently tracked upstream Xenia compiler pass;
-- browser host translation units;
-- strict undefined-symbol link behavior;
-- representative real-PPC runtime categories.
-
-This means **PPC translation foundation = 100%**, not arbitrary retail PPC compatibility = 100%.
+The portable translation graph is locked for PPC frontend/translator/scanner, PPC context/opcodes, ALU/control/memory/FPU/Altivec emitter families, HIR, compiler framework, every tracked upstream portable compiler pass, browser host seams and strict undefined-symbol linking.
 
 ### 3. Scalar PPC correctness foundation — 100% ✓
 
-Real PPC bytes are regression-gated through Xenia translation and finalized-HIR execution for:
-
-```text
-integer arithmetic / bitwise                  ✓
-signed / unsigned comparisons                 ✓
-conditional multi-block branches              ✓
-CTR-controlled backward loops                 ✓
-guest scalar load/store                       ✓
-Xbox endian conversion                        ✓
-CR / LR / CTR architectural state             ✓
-return boundaries                             ✓
-```
+Real PPC bytes execute through Xenia finalized HIR for integer arithmetic/bitwise operations, signed/unsigned comparisons, multi-block conditional branches, CTR loops, scalar guest memory, Xbox endian conversion, CR/LR/CTR state and return boundaries.
 
 ### 4. Guest function / control foundation — 100% ✓
 
-Verified guest-control behavior includes:
-
-```text
-direct bl -> separately scanned callee -> blr          ✓
-two-level nested guest calls                            ✓
-CTR / bctrl runtime-indirect guest call                 ✓
-LR save / update / restore                              ✓
-stack pointer decrement / restore through r1            ✓
-LR spill / reload through Xenia guest memory            ✓
-caller resumes after callee                             ✓
-stack-frame-shaped guest function flow                  ✓
-```
-
-Xenia `PPCScanner` independently discovers guest callees. They are translated through Xenia and execute against the same live `PPCContext`; there is no hardcoded callee result.
+Verified behavior includes direct calls, nested calls, CTR/`bctrl` runtime-indirect calls, independent Xenia scanning/translation of guest callees, LR save/update/restore, stack pointer movement, LR spill/reload through guest memory and caller resume.
 
 ### 5. FPU foundation — 100% ✓
 
-Run 168 closes the defined browser FPU baseline with genuine PPC tests for:
+Run 168 closed the defined FPU baseline:
 
 ```text
 FPR state / lfd / stfd                         ✓
-FLOAT64 ADD                                    ✓
-FLOAT64 SUB                                    ✓
-FLOAT64 MUL                                    ✓
-FLOAT64 DIV                                    ✓
-fcmpu floating compare -> CR                   ✓
-fctiwz float -> signed int, round-to-zero      ✓
+FLOAT64 ADD / SUB / MUL / DIV                  ✓
+fcmpu -> CR                                    ✓
+fctiwz round-to-zero                           ✓
 fcfid signed int64 -> FLOAT64                  ✓
-frsp FLOAT64 -> FLOAT32 -> FLOAT64 rounding    ✓
+frsp f64 -> f32 -> f64 rounding                ✓
 current Xenia UpdateFPSCR path                 ✓
 mffs FPSCR readback                            ✓
 ```
 
-The real `fdiv f3,f1,f2` case executes `6.0 / 2.0`, stores the exact IEEE-754 double `3.0` value back into guest memory, and verifies the result.
+Render360 follows upstream Xenia's FPSCR behavior rather than inventing exception flags Xenia itself still marks TODO.
 
-Render360 intentionally follows upstream Xenia for FPSCR behavior. Deeper exception/NaN/overflow details that upstream Xenia itself still marks TODO are not fabricated just to claim compatibility.
+### 6. VMX / VMX128 foundation — 100% ✓
+
+Run 175 closes the defined vector correctness baseline with **12/12 dedicated VMX cases**:
+
+```text
+VEC128 guest load/store                        ✓
+Xenia-compatible vector byte ordering          ✓
+INT8 unsigned modulo add                       ✓
+INT16 modulo add                               ✓
+INT32 modulo add                               ✓
+INT8 / INT16 / INT32 modulo subtract           ✓
+VEC128 AND / OR / XOR                          ✓
+INT32 vector equality compare                  ✓
+INT32 vector shift left                        ✓
+INT32 vector logical shift right               ✓
+representative Xbox 360 VMX128 vand128         ✓
+```
+
+Measured gate:
+
+```text
+vadduhm   0x10611040  -> 00030003 x4
+vadduwm   0x10611080  -> 01020305 x4
+vsububm   0x10611400  -> 03030303 x4
+vsubuhm   0x10611440  -> 00030003 x4
+vsubuwm   0x10611480  -> 00000003 x4
+vand      0x10611404  -> 00000000 x4
+vor       0x10611484  -> ffffffff x4
+vxor      0x106114c4  -> ffffffff x4
+vcmpequw  0x10611086  -> ffffffff x4
+vslw      0x10611184  -> 2,4,8,16
+vsrw      0x10611284  -> 4,8,16,32
+vand128   0x14611210  -> 0f000f00 x4
+```
+
+The VMX128 case uses a genuine Xbox 360 VX128 encoding derived from Xenia's opcode contract. Unsupported vector behavior remains fail-closed.
 
 ## Current execution milestone
 
-The V34 correctness suite contains **24 / 24** passing real PPC/FPU/VMX programs.
+The general V35 correctness suite remains **24 / 24** real PPC/FPU/VMX programs passing, while dedicated FPU, guest-control and VMX closure suites add deeper subsystem-specific assertions.
 
-The proven execution path now includes:
+The proven execution path now includes scalar arithmetic/control/memory, architectural state, direct/nested/indirect guest functions, FLOAT64 arithmetic/conversion/rounding/FPSCR baseline, and representative VMX/VMX128 arithmetic, logic, compare and shift behavior.
 
-```text
-scalar arithmetic / compare / branch / loop        ✓
-guest scalar memory + endian                        ✓
-CR / LR / CTR                                       ✓
-direct / nested / CTR-indirect calls                ✓
-stack-frame-shaped guest control                     ✓
-FLOAT64 FPR load/store                              ✓
-FLOAT64 ADD / SUB / MUL / DIV                       ✓
-floating compare / conversion / rounding            ✓
-FPSCR update/readback baseline                       ✓
-VEC128 load/store + byte order                       ✓
-VMX unsigned-byte VECTOR_ADD                         ✓
-```
+## Active foundation — Render360 WasmBackend
 
-Unsupported HIR/opcodes still fail closed.
-
-## Active foundation — VMX / VMX128
-
-VMX/VMX128 is now the next CPU completion target.
-
-Already proven:
+The correctness executor has now served its purpose as the reference implementation for the defined CPU foundations. The next architecture step is a hot generated-WASM path:
 
 ```text
-VEC128 guest load                          ✓
-Xenia-compatible vector byte ordering      ✓
-unsigned INT8 VECTOR_ADD / vaddubm         ✓
-VEC128 guest store                         ✓
+finalized Xenia HIR
+  -> Render360 WasmBackend
+  -> generated WebAssembly guest function
+  -> browser WebAssembly engine
+  -> ARM64 host through Safari/JavaScriptCore on iPhone
 ```
 
-Next VMX closure sequence:
+### WasmBackend closure sequence
 
-1. INT16 and INT32 modulo add;
-2. vector subtraction;
-3. vector AND / OR / XOR;
-4. integer vector comparisons;
-5. common vector shifts;
-6. representative Xbox 360 VMX128-specific forms;
-7. dedicated `VMX_FOUNDATION=PASS` CI gate.
+1. generate a WebAssembly function for a finalized-HIR integer arithmetic block;
+2. lower branches and multi-block control flow;
+3. lower guest scalar loads/stores and endian behavior;
+4. lower direct/indirect calls and returns;
+5. lower the completed FPU baseline;
+6. lower the completed VMX/VMX128 baseline;
+7. run generated-WASM output against the correctness executor as an equivalence oracle;
+8. add compiled-function/block caching;
+9. add executable-page versioning and invalidation;
+10. create a dedicated `WASM_BACKEND_FOUNDATION=PASS` gate.
 
-## Progress after run 168
+## Progress after run 175
 
-These are scoped engineering estimates. A 100% bar means the named **foundation** has met its explicit regression gate, not that the full emulator or all retail compatibility is complete.
+These are scoped engineering estimates. A 100% bar means the named **foundation** met its explicit regression contract, not that every retail title is compatible.
 
 ```text
 STFS / Xbox package / XEX foundation
@@ -213,10 +188,10 @@ FPU foundation
 ████████████████████  100%  ✓ FOUNDATION COMPLETE
 
 VMX / VMX128 foundation
-███░░░░░░░░░░░░░░░░░  ~15%  ← ACTIVE NEXT
+████████████████████  100%  ✓ FOUNDATION COMPLETE
 
 Hot WasmBackend
-█░░░░░░░░░░░░░░░░░░░  ~3%
+█░░░░░░░░░░░░░░░░░░░  ~3%  ← ACTIVE NEXT
 
 Full Xbox guest-memory system
 ██░░░░░░░░░░░░░░░░░░  ~10%
@@ -237,44 +212,41 @@ WebGL2 compatibility fallback
 ░░░░░░░░░░░░░░░░░░░░  ~1%
 
 First genuine Xbox title boot
-█████░░░░░░░░░░░░░░░  ~23–24%
+█████░░░░░░░░░░░░░░░  ~24–25%
 
 Small XBLA / Braid-class playable
-███░░░░░░░░░░░░░░░░░  ~16–17%
+████░░░░░░░░░░░░░░░░  ~17–18%
 
 Portal-class playable browser target
-██░░░░░░░░░░░░░░░░░░  ~9–10%
+██░░░░░░░░░░░░░░░░░░  ~10–11%
 
 OVERALL RENDER360
-█████░░░░░░░░░░░░░░░  ~25–27%
+██████░░░░░░░░░░░░░░  ~27–29%
 ```
 
 ## Next implementation order
 
-The five completed foundations remain closed unless their CI gates regress.
+The six completed foundations remain closed unless their CI gates regress.
 
-1. **VMX / VMX128 foundation** — complete the defined vector baseline and add `VMX_FOUNDATION=PASS`.
-2. **Render360 WasmBackend** — lower finalized Xenia HIR into generated WebAssembly functions instead of interpreting hot HIR.
-3. **Compiled-function cache + invalidation** — cache translated guest functions and invalidate them when executable guest pages change.
-4. **Full sparse Xbox guest memory** — page-backed 32-bit virtual/physical memory, mappings, aliases, permissions and executable-page tracking.
-5. **Real XEX mapper** — map the already-extracted `default.xex` sections to their Xbox guest addresses and establish initial CPU state.
-6. **Execute the real `default.xex` entry point** — switch bring-up from synthetic CPU programs to genuine title execution.
-7. **Kernel bring-up** — `KernelState`, xboxkrnl, XAM, threads, synchronization, files and services demanded by the title.
-8. **Graphics/audio** — Xenos packets/registers -> shader translation -> WebGPU/WGSL -> EDRAM -> WebGL2 fallback -> WebAudio -> first genuine guest framebuffer.
+1. **Render360 WasmBackend foundation** — finalized Xenia HIR -> generated WebAssembly execution with equivalence tests.
+2. **Compiled-function cache + invalidation** — cache by guest address/code version and invalidate executable pages when code changes.
+3. **Full sparse Xbox guest memory** — browser-safe page-backed 32-bit virtual/physical mappings, aliases, permissions, MMIO and executable-page tracking.
+4. **Real XEX mapper** — prepare/map the already-extracted `default.xex` sections and initialize CPU/module state.
+5. **Execute the real `default.xex` entry point** — move bring-up from synthetic correctness programs to genuine title execution.
+6. **Kernel bring-up** — `KernelState`, xboxkrnl, XAM, threads, synchronization, VFS/files and services demanded by the title.
+7. **Graphics/audio** — Xenos packet/register processing -> shader translation -> WebGPU/WGSL -> EDRAM -> WebGL2 fallback -> WebAudio -> first genuine guest framebuffer.
 
 ## Graphics architecture
 
-**WebGPU is the primary Xenos host backend. WebGL2 is the compatibility fallback.** Both consume one shared Xenia/Xenos semantic layer; neither is a fake Three.js replacement for guest rendering.
+**WebGPU is the primary Xenos host backend. WebGL2 is the compatibility fallback.** Both consume one shared Xenia/Xenos semantic layer; Three.js remains host/input diagnostics only.
 
 ```text
 Xenos ringbuffer
   -> Xenia generic command/register semantics
   -> shared Render360 browser GPU layer
-     -> WebGPU + WGSL + EDRAM   (primary)
-     -> WebGL2 + GLSL ES        (fallback where feasible)
+     -> WebGPU + WGSL + EDRAM   primary
+     -> WebGL2 + GLSL ES        fallback where feasible
 ```
-
-The existing Three.js arena remains host/input diagnostics only.
 
 ## Build / verification
 
@@ -289,15 +261,17 @@ bash ./build-xenia-ppc-bootstrap.sh
 bash ./link-xenia-ppc-bootstrap.sh
 node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
 
 ## Status language
 
 - **FOUNDATION COMPLETE** means the named scoped regression gate is green.
-- **PPC EXECUTING** means finalized Xenia HIR is changing verified architectural/guest-memory state.
+- **PPC EXECUTING** means finalized Xenia HIR changes verified architectural/guest-memory state.
 - **PLAYABLE** remains reserved for genuine title execution with sufficient CPU, kernel, GPU, input and audio behavior for gameplay.
 
-Stable production remains **Core V32**. The active project-development line is now **V34**. UI remains **V33** until the next UI-specific release.
+Stable production remains **Core V32**. The active project-development line is **V35**. UI remains **V33** until the next UI-specific release.
 
 ## License
 

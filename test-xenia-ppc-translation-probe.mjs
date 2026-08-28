@@ -78,14 +78,8 @@ const nestedCallProgram = wordBytes(
   0x38600004, 0x4E800020,
 );
 const ctrIndirectCallProgram = wordBytes(
-  0x7CA802A6, // mflr  r5              save caller LR
-  0x7C8903A6, // mtctr r4              CTR = runtime guest target
-  0x4E800421, // bctrl                 indirect call, LR = CIA + 4
-  0x38630002, // addi  r3,r3,2         resume after callee
-  0x7CA803A6, // mtlr  r5              restore caller LR
-  0x4E800020, // blr                   return current frame
-  0x38600005, // callee: li r3,5
-  0x4E800020, //         blr
+  0x7CA802A6, 0x7C8903A6, 0x4E800421, 0x38630002,
+  0x7CA803A6, 0x4E800020, 0x38600005, 0x4E800020,
 );
 
 const faddMemoryProgram = wordBytes(
@@ -96,6 +90,42 @@ const fsubMemoryProgram = wordBytes(
 );
 const fmulMemoryProgram = wordBytes(
   0xC8240000, 0xC8440008, 0xFC6100B2, 0xD8640010, 0x80640010, 0x4E800020,
+);
+const fdivMemoryProgram = wordBytes(
+  0xC8240000, // lfd   f1,0(r4)  = 6.0
+  0xC8440008, // lfd   f2,8(r4)  = 2.0
+  0xFC611024, // fdiv  f3,f1,f2
+  0xD8640010, // stfd  f3,16(r4)
+  0x80640010, // lwz   r3,16(r4)
+  0x4E800020, // blr
+);
+const fcmpuLessProgram = wordBytes(
+  0xC8240000, // lfd   f1,0(r4) = 1.0
+  0xC8440008, // lfd   f2,8(r4) = 2.0
+  0xFC011000, // fcmpu cr0,f1,f2
+  0x7C600026, // mfcr  r3
+  0x4E800020, // blr
+);
+const fctiwzProgram = wordBytes(
+  0xC8240000, // lfd    f1,0(r4) = 3.75
+  0xFC60081E, // fctiwz f3,f1    = integer 3 encoded in FPR bits
+  0xD8640010, // stfd   f3,16(r4)
+  0x80640014, // lwz    r3,20(r4) = low integer word
+  0x4E800020, // blr
+);
+const fcfidProgram = wordBytes(
+  0xC8240000, // lfd   f1,0(r4) with raw signed integer bits = 3
+  0xFC600E9C, // fcfid f3,f1 -> 3.0
+  0xD8640010, // stfd  f3,16(r4)
+  0x80640010, // lwz   r3,16(r4)
+  0x4E800020, // blr
+);
+const frspProgram = wordBytes(
+  0xC8240000, // lfd  f1,0(r4) = double 1.1
+  0xFC600818, // frsp f3,f1
+  0xD8640010, // stfd f3,16(r4)
+  0x80640010, // lwz  r3,16(r4)
+  0x4E800020, // blr
 );
 const vmxAddBytesProgram = wordBytes(
   0x7C2020CE, 0x7C4028CE, 0x10611000, 0x7C6039CE, 0x80670000, 0x4E800020,
@@ -110,34 +140,22 @@ const tests = [
   { name: 'branch-equal-not-taken', ppc: conditionalProgram, initialGprs: [[4, 5n]], expectedR3: 1n },
   {
     name: 'lwz-from-xenia-memory', ppc: wordBytes(0x80640000, 0x4E800020),
-    initialGprs: [[4, BigInt(guestDataAddress)]],
-    memorySeeds: [[guestDataAddress, 0x89ABCDEF]], expectedR3: 0x89ABCDEFn,
+    initialGprs: [[4, BigInt(guestDataAddress)]], memorySeeds: [[guestDataAddress, 0x89ABCDEF]], expectedR3: 0x89ABCDEFn,
   },
   {
     name: 'stw-lwz-xenia-memory-roundtrip', ppc: wordBytes(0x90A40000, 0x80640000, 0x4E800020),
-    initialGprs: [[4, BigInt(guestDataAddress)], [5, 0x12345678n]],
-    memorySeeds: [[guestDataAddress, 0]], expectedR3: 0x12345678n,
-    expectedMemory: [[guestDataAddress, 0x12345678]],
+    initialGprs: [[4, BigInt(guestDataAddress)], [5, 0x12345678n]], memorySeeds: [[guestDataAddress, 0]],
+    expectedR3: 0x12345678n, expectedMemory: [[guestDataAddress, 0x12345678]],
   },
-  {
-    name: 'lr-mtlr-mflr-roundtrip', ppc: wordBytes(0x7C8803A6, 0x7C6802A6, 0x4E800020),
-    initialGprs: [[4, 0x80000040n]], expectedR3: 0x80000040n,
-  },
-  {
-    name: 'ctr-mtctr-mfctr-roundtrip', ppc: wordBytes(0x7C8903A6, 0x7C6902A6, 0x4E800020),
-    initialGprs: [[4, 9n]], expectedR3: 9n,
-  },
-  {
-    name: 'cr-cmpwi-equal-mfcr', ppc: wordBytes(0x2C040000, 0x7C600026, 0x4E800020),
-    initialGprs: [[4, 0n]], expectedR3: 0x20000000n,
-  },
+  { name: 'lr-mtlr-mflr-roundtrip', ppc: wordBytes(0x7C8803A6, 0x7C6802A6, 0x4E800020), initialGprs: [[4, 0x80000040n]], expectedR3: 0x80000040n },
+  { name: 'ctr-mtctr-mfctr-roundtrip', ppc: wordBytes(0x7C8903A6, 0x7C6902A6, 0x4E800020), initialGprs: [[4, 9n]], expectedR3: 9n },
+  { name: 'cr-cmpwi-equal-mfcr', ppc: wordBytes(0x2C040000, 0x7C600026, 0x4E800020), initialGprs: [[4, 0n]], expectedR3: 0x20000000n },
   { name: 'ctr-bdnz-loop-three-iterations', ppc: ctrLoopProgram, initialGprs: [[4, 3n]], expectedR3: 3n },
   { name: 'direct-bl-callee-blr-caller', ppc: directCallProgram, expectedR3: 7n },
   { name: 'nested-bl-two-level-call-return', ppc: nestedCallProgram, expectedR3: 7n },
   {
     name: 'ctr-bctrl-indirect-callee-return', ppc: ctrIndirectCallProgram,
-    initialGprs: [[4, BigInt((guestBase + 24) >>> 0)]], expectedR3: 7n,
-    minAssembledFunctions: 2,
+    initialGprs: [[4, BigInt((guestBase + 24) >>> 0)]], expectedR3: 7n, minAssembledFunctions: 2,
   },
   { name: 'fpu-fmr-f1-f2-zero-data-path', ppc: wordBytes(0xFC201090, 0x4E800020), expectedR3: 0n },
   {
@@ -157,6 +175,37 @@ const tests = [
     initialGprs: [[4, BigInt(guestDataAddress)]],
     memorySeeds: [[guestDataAddress,0x3FF80000],[guestDataAddress+4,0],[guestDataAddress+8,0x40000000],[guestDataAddress+12,0],[guestDataAddress+16,0],[guestDataAddress+20,0]],
     expectedR3: 0x40080000n, expectedMemory: fpThreeResult,
+  },
+  {
+    name: 'fpu-lfd-fdiv-stfd-three', ppc: fdivMemoryProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress,0x40180000],[guestDataAddress+4,0],[guestDataAddress+8,0x40000000],[guestDataAddress+12,0],[guestDataAddress+16,0],[guestDataAddress+20,0]],
+    expectedR3: 0x40080000n, expectedMemory: fpThreeResult,
+  },
+  {
+    name: 'fpu-fcmpu-less-cr0', ppc: fcmpuLessProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress,0x3FF00000],[guestDataAddress+4,0],[guestDataAddress+8,0x40000000],[guestDataAddress+12,0]],
+    expectedR3: 0x80000000n,
+  },
+  {
+    name: 'fpu-fctiwz-round-toward-zero', ppc: fctiwzProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress,0x400E0000],[guestDataAddress+4,0],[guestDataAddress+16,0],[guestDataAddress+20,0]],
+    expectedR3: 3n, expectedMemory: [[guestDataAddress+16,0],[guestDataAddress+20,3]],
+  },
+  {
+    name: 'fpu-fcfid-signed-int64-to-double', ppc: fcfidProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress,0],[guestDataAddress+4,3],[guestDataAddress+16,0],[guestDataAddress+20,0]],
+    expectedR3: 0x40080000n, expectedMemory: fpThreeResult,
+  },
+  {
+    name: 'fpu-frsp-round-single', ppc: frspProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress,0x3FF19999],[guestDataAddress+4,0x9999999A],[guestDataAddress+16,0],[guestDataAddress+20,0]],
+    expectedR3: 0x3FF19999n,
+    expectedMemory: [[guestDataAddress+16,0x3FF19999],[guestDataAddress+20,0xA0000000]],
   },
   {
     name: 'vmx-lvx-vaddubm-stvx-bytes', ppc: vmxAddBytesProgram,
@@ -240,5 +289,5 @@ console.log(`PASS: ${tests.length} real PPC correctness programs translated and 
 console.log('PASS: direct, nested and CTR/bctrl indirect guest calls are independently Xenia-scanned/translated and share the live PPCContext.');
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
 console.log('PASS: LR/CTR/CR state and a real CTR-controlled bdnz loop are verified through Xenia PPCContext semantics.');
-console.log('PASS: FPU correctness includes real lfd/fadd/fsub/fmul/stfd guest-memory flow with raw IEEE-754 result verification.');
+console.log('PASS: FPU correctness includes real lfd/fadd/fsub/fmul/fdiv, fcmpu, fctiwz, fcfid and frsp flows with CR/guest-memory verification.');
 console.log('PASS: VMX correctness includes real lvx/vaddubm/stvx byte-lane vector execution with 128-bit guest-memory readback.');

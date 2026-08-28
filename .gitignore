@@ -3,3 +3,5 @@ node_modules/
 .env
 .dev.vars
 *.log
+build/
+upstream/

@@ -11,6 +11,7 @@ on:
       - 'test-package-xex-foundation.mjs'
       - 'test-xex-image-decode.mjs'
       - 'test-xex-image-prepare-none.mjs'
+      - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
@@ -73,6 +74,9 @@ jobs:
 
       - name: Verify streaming unencrypted/uncompressed XEX preparation
         run: node ./test-xex-image-prepare-none.mjs
+
+      - name: Verify streaming BASIC XEX preparation
+        run: node ./test-xex-image-prepare-basic.mjs
 
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh

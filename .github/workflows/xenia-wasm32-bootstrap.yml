@@ -10,6 +10,7 @@ on:
       - 'prepare-xenia-web-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_shims/**'
+      - 'src/xenia_web_bootstrap/**'
       - 'XENIA_WEB_BOOTSTRAP.md'
       - '.github/workflows/xenia-wasm32-bootstrap.yml'
   workflow_dispatch:

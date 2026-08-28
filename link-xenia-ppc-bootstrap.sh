@@ -13,7 +13,7 @@ EXPORTS=(
   _r360_wasm_backend_status _r360_wasm_backend_module_ptr _r360_wasm_backend_module_size _r360_wasm_backend_lowered_instructions _r360_wasm_backend_context_ptr
   _r360_wasm_backend_cfg_status _r360_wasm_backend_cfg_module_ptr _r360_wasm_backend_cfg_module_size _r360_wasm_backend_cfg_lowered_instructions _r360_wasm_backend_cfg_context_ptr
   _r360_wasm_backend_memory_status _r360_wasm_backend_memory_module_ptr _r360_wasm_backend_memory_module_size _r360_wasm_backend_memory_lowered_instructions _r360_wasm_backend_memory_context_ptr
-  _r360_wasm_backend_call_status _r360_wasm_backend_call_function_count _r360_wasm_backend_call_function_address _r360_wasm_backend_call_module_ptr _r360_wasm_backend_call_module_size _r360_wasm_backend_call_lowered_instructions _r360_wasm_backend_call_context_ptr
+  _r360_wasm_backend_call_status _r360_wasm_backend_call_function_count _r360_wasm_backend_call_function_address _r360_wasm_backend_call_function_generation _r360_wasm_backend_call_module_ptr _r360_wasm_backend_call_module_size _r360_wasm_backend_call_lowered_instructions _r360_wasm_backend_call_context_ptr _r360_wasm_backend_call_cache_hits _r360_wasm_backend_call_cache_misses _r360_wasm_backend_call_cache_rebuilds _r360_wasm_backend_call_invalidations _r360_wasm_backend_executable_page_generation _r360_wasm_backend_invalidate_executable_range
   _r360_wasm_backend_fpu_status _r360_wasm_backend_fpu_module_ptr _r360_wasm_backend_fpu_module_size _r360_wasm_backend_fpu_lowered_instructions _r360_wasm_backend_fpu_context_ptr
   _r360_wasm_backend_vmx_status _r360_wasm_backend_vmx_module_ptr _r360_wasm_backend_vmx_module_size _r360_wasm_backend_vmx_lowered_instructions _r360_wasm_backend_vmx_context_ptr _r360_wasm_backend_vmx_vector_ops _r360_wasm_backend_vmx_native_simd_ops _r360_wasm_backend_vmx_scalarized_lane_ops
 )
@@ -21,6 +21,6 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 LINK_ARGS=(-O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -Wl,--error-limit=0 -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1 "-sEXPORTED_FUNCTIONS=$EXPORT_LIST")
 rm -f "$WASM" "$LOG" "$REPORT"
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
-  { echo "status=LINKED"; echo "wasm=$WASM"; echo "exports=${#EXPORTS[@]}"; echo "note=Real Xenia finalized HIR feeds independently gated scalar, CFG, guest-memory, guest-call, FPU, and VMX/SIMD generated-WASM workstreams. Runtime equivalence remains mandatory before promotion."; } | tee "$REPORT"; exit 0
+  { echo "status=LINKED"; echo "wasm=$WASM"; echo "exports=${#EXPORTS[@]}"; echo "note=Real Xenia finalized HIR feeds independently gated scalar, CFG, guest-memory, guest-call, FPU, and VMX/SIMD generated-WASM workstreams. Guest functions are keyed by executable-page generation and stale code is invalidated before dispatch."; } | tee "$REPORT"; exit 0
 fi
 { echo "status=BLOCKED"; echo "wasm=$WASM"; echo "note=Strict full-export runtime exposed a live dependency closure; unresolved symbols are intentionally not stubbed."; grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 500 || true; } | tee "$REPORT"; exit 1

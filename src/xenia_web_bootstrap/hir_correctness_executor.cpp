@@ -7,6 +7,7 @@
 #include <limits>
 #include <unordered_map>
 
+#include "xenia/cpu/function.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
 #include "xenia/cpu/hir/instr.h"
@@ -27,9 +28,12 @@ struct RuntimeValue {
   TypeName type = xe::cpu::hir::INT64_TYPE;
   Value::ConstantValue value{};
 };
-
 using RuntimeValues = std::unordered_map<const Value*, RuntimeValue>;
+
 std::array<uint64_t, 32> g_initial_gprs{};
+HIRCorrectnessCallResolver g_call_resolver = nullptr;
+thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;
+thread_local uint32_t g_execution_depth = 0;
 
 bool IsIntegerType(TypeName type) {
   return type == xe::cpu::hir::INT8_TYPE || type == xe::cpu::hir::INT16_TYPE ||
@@ -45,60 +49,33 @@ void SetUnsigned(RuntimeValue* out, TypeName type, uint64_t value) {
   out->type = type;
   out->value = {};
   switch (type) {
-    case xe::cpu::hir::INT8_TYPE:
-      out->value.u8 = static_cast<uint8_t>(value);
-      break;
-    case xe::cpu::hir::INT16_TYPE:
-      out->value.u16 = static_cast<uint16_t>(value);
-      break;
-    case xe::cpu::hir::INT32_TYPE:
-      out->value.u32 = static_cast<uint32_t>(value);
-      break;
-    case xe::cpu::hir::INT64_TYPE:
-      out->value.u64 = value;
-      break;
-    default:
-      break;
+    case xe::cpu::hir::INT8_TYPE: out->value.u8 = static_cast<uint8_t>(value); break;
+    case xe::cpu::hir::INT16_TYPE: out->value.u16 = static_cast<uint16_t>(value); break;
+    case xe::cpu::hir::INT32_TYPE: out->value.u32 = static_cast<uint32_t>(value); break;
+    case xe::cpu::hir::INT64_TYPE: out->value.u64 = value; break;
+    default: break;
   }
 }
 
 bool GetUnsigned(const RuntimeValue& value, uint64_t* out) {
   if (!out || !IsIntegerType(value.type)) return false;
   switch (value.type) {
-    case xe::cpu::hir::INT8_TYPE:
-      *out = value.value.u8;
-      return true;
-    case xe::cpu::hir::INT16_TYPE:
-      *out = value.value.u16;
-      return true;
-    case xe::cpu::hir::INT32_TYPE:
-      *out = value.value.u32;
-      return true;
-    case xe::cpu::hir::INT64_TYPE:
-      *out = value.value.u64;
-      return true;
-    default:
-      return false;
+    case xe::cpu::hir::INT8_TYPE: *out = value.value.u8; return true;
+    case xe::cpu::hir::INT16_TYPE: *out = value.value.u16; return true;
+    case xe::cpu::hir::INT32_TYPE: *out = value.value.u32; return true;
+    case xe::cpu::hir::INT64_TYPE: *out = value.value.u64; return true;
+    default: return false;
   }
 }
 
 bool GetSigned(const RuntimeValue& value, int64_t* out) {
   if (!out || !IsIntegerType(value.type)) return false;
   switch (value.type) {
-    case xe::cpu::hir::INT8_TYPE:
-      *out = value.value.i8;
-      return true;
-    case xe::cpu::hir::INT16_TYPE:
-      *out = value.value.i16;
-      return true;
-    case xe::cpu::hir::INT32_TYPE:
-      *out = value.value.i32;
-      return true;
-    case xe::cpu::hir::INT64_TYPE:
-      *out = value.value.i64;
-      return true;
-    default:
-      return false;
+    case xe::cpu::hir::INT8_TYPE: *out = value.value.i8; return true;
+    case xe::cpu::hir::INT16_TYPE: *out = value.value.i16; return true;
+    case xe::cpu::hir::INT32_TYPE: *out = value.value.i32; return true;
+    case xe::cpu::hir::INT64_TYPE: *out = value.value.i64; return true;
+    default: return false;
   }
 }
 
@@ -119,12 +96,10 @@ bool ResolveRuntimeValue(const Value* value, const RuntimeValues& values,
 bool ResolveUint64(const Value* value, const RuntimeValues& values,
                    uint64_t* out) {
   RuntimeValue resolved;
-  return ResolveRuntimeValue(value, values, &resolved) &&
-         GetUnsigned(resolved, out);
+  return ResolveRuntimeValue(value, values, &resolved) && GetUnsigned(resolved, out);
 }
 
-bool ResolveCondition(const Value* value, const RuntimeValues& values,
-                      bool* out) {
+bool ResolveCondition(const Value* value, const RuntimeValues& values, bool* out) {
   uint64_t raw = 0;
   if (!out || !ResolveUint64(value, values, &raw)) return false;
   *out = raw != 0;
@@ -133,13 +108,11 @@ bool ResolveCondition(const Value* value, const RuntimeValues& values,
 
 bool StoreResolvedValue(const Value* value, const RuntimeValues& values,
                         void* destination, size_t size) {
-  if (!destination || !value ||
-      size != xe::cpu::hir::GetTypeSize(value->type)) {
+  if (!destination || !value || size != xe::cpu::hir::GetTypeSize(value->type)) {
     return false;
   }
   RuntimeValue resolved;
-  if (!ResolveRuntimeValue(value, values, &resolved) ||
-      resolved.type != value->type) {
+  if (!ResolveRuntimeValue(value, values, &resolved) || resolved.type != value->type) {
     return false;
   }
   std::memcpy(destination, &resolved.value, size);
@@ -149,15 +122,12 @@ bool StoreResolvedValue(const Value* value, const RuntimeValues& values,
 bool LoadContextValue(const xe::cpu::ppc::PPCContext& context, uint64_t offset,
                       Value* destination, RuntimeValues& values) {
   if (!destination) return false;
-  size_t size = xe::cpu::hir::GetTypeSize(destination->type);
-  if (offset > sizeof(context) || size > sizeof(context) - size_t(offset)) {
-    return false;
-  }
-  RuntimeValue runtime_value;
-  runtime_value.type = destination->type;
-  std::memcpy(&runtime_value.value,
-              reinterpret_cast<const uint8_t*>(&context) + offset, size);
-  values[destination] = runtime_value;
+  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
+  if (offset > sizeof(context) || size > sizeof(context) - size_t(offset)) return false;
+  RuntimeValue value;
+  value.type = destination->type;
+  std::memcpy(&value.value, reinterpret_cast<const uint8_t*>(&context) + offset, size);
+  values[destination] = value;
   return true;
 }
 
@@ -190,9 +160,7 @@ bool StoreUnaryInteger(Value* destination, const Value* source,
                        const RuntimeValues& values, RuntimeValues& out_values,
                        uint32_t opcode) {
   if (!destination || !source || !IsIntegerType(destination->type) ||
-      !IsIntegerType(source->type)) {
-    return false;
-  }
+      !IsIntegerType(source->type)) return false;
   RuntimeValue src;
   if (!ResolveRuntimeValue(source, values, &src)) return false;
   uint64_t u = 0;
@@ -219,10 +187,8 @@ bool StoreUnaryInteger(Value* destination, const Value* source,
       SetUnsigned(&result, destination->type, ~u);
       break;
     case xe::cpu::hir::OPCODE_BYTE_SWAP:
-      if (!GetUnsigned(src, &u) || destination->type != source->type)
-        return false;
-      SetUnsigned(&result, destination->type,
-                  ByteSwapUnsigned(u, destination->type));
+      if (!GetUnsigned(src, &u) || destination->type != source->type) return false;
+      SetUnsigned(&result, destination->type, ByteSwapUnsigned(u, destination->type));
       break;
     case xe::cpu::hir::OPCODE_IS_TRUE:
       if (!GetUnsigned(src, &u)) return false;
@@ -243,32 +209,25 @@ bool StoreBinaryInteger(Value* destination, const Value* lhs, const Value* rhs,
                         const RuntimeValues& values, RuntimeValues& out_values,
                         uint32_t opcode) {
   if (!destination || !lhs || !rhs || !IsIntegerType(destination->type) ||
-      !IsIntegerType(lhs->type) || !IsIntegerType(rhs->type)) {
-    return false;
-  }
+      !IsIntegerType(lhs->type) || !IsIntegerType(rhs->type)) return false;
   RuntimeValue a, b;
-  if (!ResolveRuntimeValue(lhs, values, &a) ||
-      !ResolveRuntimeValue(rhs, values, &b)) {
+  if (!ResolveRuntimeValue(lhs, values, &a) || !ResolveRuntimeValue(rhs, values, &b)) {
     return false;
   }
   uint64_t au = 0, bu = 0;
   int64_t as = 0, bs = 0;
   RuntimeValue result;
-  uint32_t shift_mask = IntegerBitWidth(destination->type) - 1u;
-
+  const uint32_t shift_mask = IntegerBitWidth(destination->type) - 1u;
   switch (opcode) {
     case xe::cpu::hir::OPCODE_ADD:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
-      SetUnsigned(&result, destination->type, au + bu);
-      break;
+      SetUnsigned(&result, destination->type, au + bu); break;
     case xe::cpu::hir::OPCODE_SUB:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
-      SetUnsigned(&result, destination->type, au - bu);
-      break;
+      SetUnsigned(&result, destination->type, au - bu); break;
     case xe::cpu::hir::OPCODE_MUL:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
-      SetUnsigned(&result, destination->type, au * bu);
-      break;
+      SetUnsigned(&result, destination->type, au * bu); break;
     case xe::cpu::hir::OPCODE_AND:
     case xe::cpu::hir::OPCODE_AND_NOT:
     case xe::cpu::hir::OPCODE_OR:
@@ -278,8 +237,7 @@ bool StoreBinaryInteger(Value* destination, const Value* lhs, const Value* rhs,
       if (opcode == xe::cpu::hir::OPCODE_AND_NOT) au &= ~bu;
       if (opcode == xe::cpu::hir::OPCODE_OR) au |= bu;
       if (opcode == xe::cpu::hir::OPCODE_XOR) au ^= bu;
-      SetUnsigned(&result, destination->type, au);
-      break;
+      SetUnsigned(&result, destination->type, au); break;
     case xe::cpu::hir::OPCODE_SHL:
     case xe::cpu::hir::OPCODE_SHR:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
@@ -297,36 +255,27 @@ bool StoreBinaryInteger(Value* destination, const Value* lhs, const Value* rhs,
     case xe::cpu::hir::OPCODE_COMPARE_NE:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
       SetUnsigned(&result, destination->type,
-                  opcode == xe::cpu::hir::OPCODE_COMPARE_EQ ? au == bu
-                                                            : au != bu);
+                  opcode == xe::cpu::hir::OPCODE_COMPARE_EQ ? au == bu : au != bu);
       break;
     case xe::cpu::hir::OPCODE_COMPARE_ULT:
     case xe::cpu::hir::OPCODE_COMPARE_ULE:
     case xe::cpu::hir::OPCODE_COMPARE_UGT:
     case xe::cpu::hir::OPCODE_COMPARE_UGE:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_ULT)
-        SetUnsigned(&result, destination->type, au < bu);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_ULE)
-        SetUnsigned(&result, destination->type, au <= bu);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_UGT)
-        SetUnsigned(&result, destination->type, au > bu);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_UGE)
-        SetUnsigned(&result, destination->type, au >= bu);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_ULT) SetUnsigned(&result, destination->type, au < bu);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_ULE) SetUnsigned(&result, destination->type, au <= bu);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_UGT) SetUnsigned(&result, destination->type, au > bu);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_UGE) SetUnsigned(&result, destination->type, au >= bu);
       break;
     case xe::cpu::hir::OPCODE_COMPARE_SLT:
     case xe::cpu::hir::OPCODE_COMPARE_SLE:
     case xe::cpu::hir::OPCODE_COMPARE_SGT:
     case xe::cpu::hir::OPCODE_COMPARE_SGE:
       if (!GetSigned(a, &as) || !GetSigned(b, &bs)) return false;
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SLT)
-        SetUnsigned(&result, destination->type, as < bs);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SLE)
-        SetUnsigned(&result, destination->type, as <= bs);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SGT)
-        SetUnsigned(&result, destination->type, as > bs);
-      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SGE)
-        SetUnsigned(&result, destination->type, as >= bs);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SLT) SetUnsigned(&result, destination->type, as < bs);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SLE) SetUnsigned(&result, destination->type, as <= bs);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SGT) SetUnsigned(&result, destination->type, as > bs);
+      if (opcode == xe::cpu::hir::OPCODE_COMPARE_SGE) SetUnsigned(&result, destination->type, as >= bs);
       break;
     default:
       return false;
@@ -337,11 +286,10 @@ bool StoreBinaryInteger(Value* destination, const Value* lhs, const Value* rhs,
 
 bool ResolveGuestAddress(const Value* address, const Value* offset,
                          const RuntimeValues& values, uint32_t* guest_address) {
-  uint64_t base = 0;
-  uint64_t displacement = 0;
+  uint64_t base = 0, displacement = 0;
   if (!guest_address || !ResolveUint64(address, values, &base)) return false;
   if (offset && !ResolveUint64(offset, values, &displacement)) return false;
-  uint64_t effective = base + displacement;
+  const uint64_t effective = base + displacement;
   if (effective > std::numeric_limits<uint32_t>::max()) return false;
   *guest_address = static_cast<uint32_t>(effective);
   return true;
@@ -349,8 +297,8 @@ bool ResolveGuestAddress(const Value* address, const Value* offset,
 
 bool TranslateGuestRange(xe::Memory* memory, uint32_t guest_address,
                          size_t size, uint8_t** host_address) {
-  if (!memory || !host_address || size == 0) return false;
-  uint64_t last = uint64_t(guest_address) + size - 1u;
+  if (!memory || !host_address || !size) return false;
+  const uint64_t last = uint64_t(guest_address) + size - 1u;
   if (last > std::numeric_limits<uint32_t>::max()) return false;
   auto* first = memory->TranslateVirtual<uint8_t*>(guest_address);
   auto* last_ptr = memory->TranslateVirtual<uint8_t*>(static_cast<uint32_t>(last));
@@ -363,12 +311,10 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
                     const Value* address, const Value* offset,
                     const RuntimeValues& values, RuntimeValues& out_values,
                     uint32_t flags) {
-  // The first correctness tier supports ordinary guest RAM operations only.
-  // Volatile/MMIO/reservation-specific flags stay unsupported until modeled.
   if (flags != 0 || !destination) return false;
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
-  size_t size = xe::cpu::hir::GetTypeSize(destination->type);
+  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
   uint8_t* host = nullptr;
   if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   RuntimeValue loaded;
@@ -384,29 +330,17 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
   if (flags != 0 || !source) return false;
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
-  size_t size = xe::cpu::hir::GetTypeSize(source->type);
+  const size_t size = xe::cpu::hir::GetTypeSize(source->type);
   uint8_t* host = nullptr;
   if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   return StoreResolvedValue(source, values, host, size);
 }
 
-}  // namespace
-
-void ResetHIRCorrectnessInitialState() { g_initial_gprs.fill(0); }
-
-bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
-  if (index >= g_initial_gprs.size()) return false;
-  g_initial_gprs[index] = value;
-  return true;
-}
-
-HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
-    xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory) {
+HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
+                                    xe::Memory* memory,
+                                    xe::cpu::ppc::PPCContext& context) {
   HIRCorrectnessResult result;
   if (!builder || !memory) return result;
-
-  xe::cpu::ppc::PPCContext context{};
-  for (size_t i = 0; i < g_initial_gprs.size(); ++i) context.r[i] = g_initial_gprs[i];
 
   RuntimeValues values;
   bool supported = true;
@@ -416,14 +350,9 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
   while (block && supported && !reached_return) {
     auto* next_block = block->next;
     bool block_terminated = false;
-
     for (auto* instr = block->instr_head; instr && supported && !reached_return;
          instr = instr->next) {
-      if (++result.instructions_executed > kMaxCorrectnessInstructions) {
-        supported = false;
-        break;
-      }
-      if (!instr->opcode) {
+      if (++result.instructions_executed > kMaxCorrectnessInstructions || !instr->opcode) {
         supported = false;
         break;
       }
@@ -434,14 +363,18 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
         case xe::cpu::hir::OPCODE_MEMORY_BARRIER:
           break;
 
+        case xe::cpu::hir::OPCODE_SET_RETURN_ADDRESS: {
+          uint64_t return_address = 0;
+          supported = ResolveUint64(instr->src1.value, values, &return_address);
+          (void)return_address;
+          break;
+        }
+
         case xe::cpu::hir::OPCODE_STORE_CONTEXT: {
           auto* source = instr->src2.value;
-          if (!source) {
-            supported = false;
-            break;
-          }
-          size_t size = xe::cpu::hir::GetTypeSize(source->type);
-          uint64_t offset = instr->src1.offset;
+          if (!source) { supported = false; break; }
+          const size_t size = xe::cpu::hir::GetTypeSize(source->type);
+          const uint64_t offset = instr->src1.offset;
           if (offset > sizeof(context) || size > sizeof(context) - size_t(offset)) {
             supported = false;
             break;
@@ -450,28 +383,25 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
               source, values, reinterpret_cast<uint8_t*>(&context) + offset, size);
           break;
         }
-
         case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
           supported = LoadContextValue(context, instr->src1.offset, instr->dest, values);
           break;
 
         case xe::cpu::hir::OPCODE_LOAD:
-          supported = LoadGuestValue(memory, instr->dest, instr->src1.value,
-                                     nullptr, values, values, instr->flags);
+          supported = LoadGuestValue(memory, instr->dest, instr->src1.value, nullptr,
+                                     values, values, instr->flags);
           break;
         case xe::cpu::hir::OPCODE_LOAD_OFFSET:
           supported = LoadGuestValue(memory, instr->dest, instr->src1.value,
-                                     instr->src2.value, values, values,
-                                     instr->flags);
+                                     instr->src2.value, values, values, instr->flags);
           break;
         case xe::cpu::hir::OPCODE_STORE:
           supported = StoreGuestValue(memory, instr->src1.value, nullptr,
                                       instr->src2.value, values, instr->flags);
           break;
         case xe::cpu::hir::OPCODE_STORE_OFFSET:
-          supported = StoreGuestValue(memory, instr->src1.value,
-                                      instr->src2.value, instr->src3.value,
-                                      values, instr->flags);
+          supported = StoreGuestValue(memory, instr->src1.value, instr->src2.value,
+                                      instr->src3.value, values, instr->flags);
           break;
 
         case xe::cpu::hir::OPCODE_ASSIGN:
@@ -522,13 +452,26 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
         case xe::cpu::hir::OPCODE_BRANCH_FALSE: {
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
-          bool take = instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_TRUE
-                          ? condition
-                          : !condition;
+          const bool take = instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_TRUE
+                                ? condition : !condition;
           if (supported && take) {
             supported = instr->src2.label && instr->src2.label->block;
             if (supported) next_block = instr->src2.label->block;
             block_terminated = true;
+          }
+          break;
+        }
+
+        case xe::cpu::hir::OPCODE_CALL:
+          supported = g_call_resolver && instr->src1.symbol &&
+                      g_call_resolver(instr->src1.symbol);
+          break;
+        case xe::cpu::hir::OPCODE_CALL_TRUE: {
+          bool condition = false;
+          supported = ResolveCondition(instr->src1.value, values, &condition);
+          if (supported && condition) {
+            supported = g_call_resolver && instr->src2.symbol &&
+                        g_call_resolver(instr->src2.symbol);
           }
           break;
         }
@@ -593,6 +536,44 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
   result.supported = supported;
   result.reached_return_boundary = reached_return;
   result.r3 = context.r[3];
+  return result;
+}
+
+}  // namespace
+
+void ResetHIRCorrectnessInitialState() { g_initial_gprs.fill(0); }
+
+bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
+  if (index >= g_initial_gprs.size()) return false;
+  g_initial_gprs[index] = value;
+  return true;
+}
+
+void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver) {
+  g_call_resolver = resolver;
+}
+
+bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }
+
+HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
+    xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory) {
+  HIRCorrectnessResult result;
+  if (!builder || !memory) return result;
+
+  const bool outermost = g_active_context == nullptr;
+  xe::cpu::ppc::PPCContext local_context{};
+  if (outermost) {
+    for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
+      local_context.r[i] = g_initial_gprs[i];
+    }
+    g_active_context = &local_context;
+  }
+
+  ++g_execution_depth;
+  result = ExecuteBuilder(builder, memory, *g_active_context);
+  --g_execution_depth;
+
+  if (outermost) g_active_context = nullptr;
   return result;
 }
 

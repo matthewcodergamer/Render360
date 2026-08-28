@@ -14,6 +14,7 @@ on:
       - 'test-vmx-foundation.mjs'
       - 'test-wasm-backend.mjs'
       - 'test-wasm-backend-cfg.mjs'
+      - 'test-wasm-backend-memory.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
       - 'render360_xenia_core.wasm'
@@ -31,6 +32,7 @@ on:
       - 'src/xenia_web_bootstrap/**'
       - 'README.md'
       - 'XENIA_WEB_BOOTSTRAP.md'
+      - 'WASM_BACKEND_FOUNDATION.md'
       - '.github/workflows/xenia-wasm32-bootstrap.yml'
   workflow_dispatch:
 
@@ -77,6 +79,7 @@ jobs:
             node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-wasm-backend-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi
@@ -84,17 +87,9 @@ jobs:
       - name: Show compile and link state
         if: always()
         run: |
-          if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then
-            cat build/xenia-ppc-bootstrap/report.tsv
-          else
-            echo 'No compile report generated.'
-          fi
+          if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then cat build/xenia-ppc-bootstrap/report.tsv; else echo 'No compile report generated.'; fi
           echo
-          if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then
-            cat build/xenia-ppc-bootstrap/link-report.txt
-          else
-            echo 'No link report generated.'
-          fi
+          if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then cat build/xenia-ppc-bootstrap/link-report.txt; else echo 'No link report generated.'; fi
 
       - name: Upload bootstrap report
         if: always()

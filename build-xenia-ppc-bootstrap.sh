@@ -8,42 +8,22 @@ OUT="$ROOT/build/xenia-ppc-bootstrap"
 CXX="${CXX:-em++}"
 mkdir -p "$OUT"
 
-if [ ! -d "$XENIA/src/xenia" ]; then
-  echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2
-  exit 2
-fi
-if ! command -v "$CXX" >/dev/null 2>&1; then
-  echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2
-  exit 2
-fi
+if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2; exit 2; fi
+if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 
 python3 "$ROOT/prepare-xenia-web-overlay.py"
 
 COMMON=(
-  -std=c++20
-  -O0
-  -g0
-  -I"$OVERLAY"
-  -I"$ROOT/src/xenia_web_shims"
-  -I"$ROOT/src/xenia_web_bootstrap"
-  -I"$XENIA/src"
-  -I"$XENIA"
-  -I"$XENIA/third_party/fmt/include"
-  -I"$XENIA/third_party/utfcpp/source"
-  -I"$XENIA/third_party/capstone/include"
-  -I"$XENIA/third_party/cpptoml/include"
+  -std=c++20 -O0 -g0
+  -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap"
+  -I"$XENIA/src" -I"$XENIA"
+  -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source"
+  -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include"
   -I"$XENIA/third_party/cxxopts/include"
 )
-
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
-if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
-  COMMON+=("-I$LLVM_INCLUDE")
-  echo "LLVM headers: $LLVM_INCLUDE"
-fi
+if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
 
-# Real upstream Xenia CPU/backend units plus Render360's translation-only host
-# backend. The probe backend does not recreate PPC semantics; it is the browser
-# host sink that receives Xenia's finalized HIR and records telemetry.
 SOURCES=(
   "src/xenia/base/cvar.cc"
   "src/xenia/cpu/backend/backend.cc"
@@ -78,40 +58,25 @@ classify_failure() {
   fi
 }
 
-passed=0
-failed=0
-: > "$OUT/report.tsv"
-printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
-
+passed=0; failed=0
+: > "$OUT/report.tsv"; printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
 compile_one() {
-  local label="$1"; local src="$2"
-  local obj="$OUT/$(echo "$label" | tr '/' '_').o"
-  local log="$obj.log"
+  local label="$1"; local src="$2"; local obj="$OUT/$(echo "$label" | tr '/' '_').o"; local log="$obj.log"
   printf '[WASM32] %-48s ' "$label"
   if "$CXX" "${COMMON[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
     echo PASS; printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"; passed=$((passed + 1))
   else
-    local category; category="$(classify_failure "$log")"
-    echo "BLOCKED ($category)"; printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"; failed=$((failed + 1))
+    local category; category="$(classify_failure "$log")"; echo "BLOCKED ($category)"
+    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"; failed=$((failed + 1))
   fi
 }
 
 for rel in "${SOURCES[@]}"; do
-  if [ "$rel" = "src/xenia/base/cvar.cc" ]; then
-    compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc"
-  else
-    compile_one "$rel" "$XENIA/$rel"
-  fi
+  if [ "$rel" = "src/xenia/base/cvar.cc" ]; then compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc"; else compile_one "$rel" "$XENIA/$rel"; fi
 done
-
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
+compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"
 
-echo
-echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"
-echo "Report: $OUT/report.tsv"
-
-if [ "$passed" -eq 0 ]; then
-  echo "ERROR: no real Xenia CPU/HIR translation unit compiled for wasm32." >&2
-  exit 1
-fi
+echo; echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"; echo "Report: $OUT/report.tsv"
+if [ "$passed" -eq 0 ]; then echo "ERROR: no real Xenia CPU/HIR translation unit compiled for wasm32." >&2; exit 1; fi

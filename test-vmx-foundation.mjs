@@ -28,6 +28,7 @@ const lvx1=0x7C2020CE, lvx2=0x7C4028CE, stvx3=0x7C6039CE, lwz3=0x80670000, blr=0
 const program = op => wordBytes(lvx1,lvx2,op,stvx3,lwz3,blr);
 const lanes = (a,b,c,d) => [a>>>0,b>>>0,c>>>0,d>>>0];
 const repeat = x => lanes(x,x,x,x);
+const EXECUTED_WITH_RETURN_BOUNDARY = 3;
 
 const tests = [
   {name:'vadduhm-int16-modulo',op:vx(64),a:repeat(0x00010001),b:repeat(0x00020002),expect:repeat(0x00030003)},
@@ -56,7 +57,7 @@ for (const t of tests) {
   const status=pick('r360_ppc_probe_correctness_status')()>>>0;
   const actual=readWords(dst);
   console.log(`vmx_case=${t.name} opcode=0x${t.op.toString(16).padStart(8,'0')} status=${status} result=${actual.map(x=>x.toString(16).padStart(8,'0')).join(':')}`);
-  if (status!==1 || actual.some((x,i)=>x!==(t.expect[i]>>>0))) throw new Error(`VMX foundation mismatch ${t.name}: got ${actual.map(x=>x.toString(16))}`);
+  if (status!==EXECUTED_WITH_RETURN_BOUNDARY || actual.some((x,i)=>x!==(t.expect[i]>>>0))) throw new Error(`VMX foundation mismatch ${t.name}: got ${actual.map(x=>x.toString(16))}`);
 }
 console.log(`VMX_STANDARD_BASELINE=PASS cases=${tests.length}`);
 console.log('VMX_FOUNDATION_STAGE=STANDARD_BASELINE_PASS');

@@ -29,7 +29,7 @@ struct CallModule {
   std::vector<uint8_t> bytes;
 };
 
-uint32_t g_status = 0;  // 0=cold, 1=unsupported seen, 2=module(s) ready.
+uint32_t g_status = 0;
 std::vector<CallModule> g_modules;
 alignas(64) uint8_t g_context[sizeof(PPCContext)] = {};
 
@@ -40,6 +40,17 @@ void EmitU32Leb(std::vector<uint8_t>& out, uint32_t value) {
     if (value) byte |= 0x80u;
     out.push_back(byte);
   } while (value);
+}
+void EmitI32Leb(std::vector<uint8_t>& out, int32_t value) {
+  bool more = true;
+  while (more) {
+    uint8_t byte = static_cast<uint8_t>(value & 0x7F);
+    const bool sign = (byte & 0x40u) != 0;
+    value >>= 7;
+    more = !((value == 0 && !sign) || (value == -1 && sign));
+    if (more) byte |= 0x80u;
+    out.push_back(byte);
+  }
 }
 void EmitI64Leb(std::vector<uint8_t>& out, int64_t value) {
   bool more = true;
@@ -74,7 +85,7 @@ bool EmitI64Value(const Value* value, const Producers& producers,
       case xe::cpu::hir::INT16_TYPE:
       case xe::cpu::hir::INT32_TYPE:
       case xe::cpu::hir::INT64_TYPE:
-        body.push_back(0x42);  // i64.const
+        body.push_back(0x42);
         EmitI64Leb(body, value->constant.i64);
         return true;
       default:
@@ -92,8 +103,8 @@ bool EmitI64Value(const Value* value, const Producers& producers,
   switch (instr->opcode->num) {
     case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
       if (value->type != xe::cpu::hir::INT64_TYPE) break;
-      body.push_back(0x20); body.push_back(0x00);  // local.get ctx
-      body.push_back(0x29); body.push_back(0x03);  // i64.load align=8
+      body.push_back(0x20); body.push_back(0x00);
+      body.push_back(0x29); body.push_back(0x03);
       EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
       ok = true;
       break;
@@ -127,10 +138,10 @@ bool EmitStoreContext(const Instr* instr, const Producers& producers,
   if (!instr->src2.value || instr->src2.value->type != xe::cpu::hir::INT64_TYPE)
     return false;
   std::unordered_set<const Value*> visiting;
-  body.push_back(0x20); body.push_back(0x00);  // ctx
+  body.push_back(0x20); body.push_back(0x00);
   if (!EmitI64Value(instr->src2.value, producers, visiting, body, lowered))
     return false;
-  body.push_back(0x37); body.push_back(0x03);  // i64.store align=8
+  body.push_back(0x37); body.push_back(0x03);
   EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
   if (lowered) ++*lowered;
   return true;
@@ -161,11 +172,11 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
           break;
         case xe::cpu::hir::OPCODE_CALL: {
           if (!instr->src1.symbol) return false;
-          body.push_back(0x41);  // i32.const guest target
-          EmitU32Leb(body, instr->src1.symbol->address());
-          body.push_back(0x20); body.push_back(0x00);  // ctx
-          body.push_back(0x10); EmitU32Leb(body, 0);   // call imported guest_call
-          body.push_back(0x1A);                       // drop status
+          body.push_back(0x41);  // i32.const uses signed LEB128.
+          EmitI32Leb(body, static_cast<int32_t>(instr->src1.symbol->address()));
+          body.push_back(0x20); body.push_back(0x00);
+          body.push_back(0x10); EmitU32Leb(body, 0);
+          body.push_back(0x1A);
           ++lowered;
           break;
         }
@@ -174,7 +185,7 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
             body.push_back(0x20); body.push_back(0x00);
             body.push_back(0x29); body.push_back(0x03);
             EmitU32Leb(body, static_cast<uint32_t>(offsetof(PPCContext, r) + 3 * sizeof(uint64_t)));
-            body.push_back(0x0F);  // return
+            body.push_back(0x0F);
             saw_return = true;
             ++lowered;
             break;
@@ -182,16 +193,14 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
           std::unordered_set<const Value*> visiting;
           if (!EmitI64Value(instr->src1.value, producers, visiting, body, &lowered))
             return false;
-          body.push_back(0xA7);  // i32.wrap_i64 guest target
-          body.push_back(0x20); body.push_back(0x00);  // ctx
-          body.push_back(0x10); EmitU32Leb(body, 0);   // guest_call
-          body.push_back(0x1A);                       // drop status
+          body.push_back(0xA7);
+          body.push_back(0x20); body.push_back(0x00);
+          body.push_back(0x10); EmitU32Leb(body, 0);
+          body.push_back(0x1A);
           ++lowered;
           break;
         }
         default:
-          // Pure value producers are emitted recursively by stores/calls. They
-          // are accepted here but never executed twice.
           if (instr->dest && (instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_CONTEXT ||
               instr->opcode->num == xe::cpu::hir::OPCODE_ASSIGN ||
               instr->opcode->num == xe::cpu::hir::OPCODE_ADD ||
@@ -207,10 +216,9 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
     }
   }
   if (!saw_return) return false;
-  body.push_back(0x0B);  // function end
+  body.push_back(0x0B);
 
   std::vector<uint8_t> module = {0x00,0x61,0x73,0x6D,0x01,0x00,0x00,0x00};
-  // type0 guest_call: (i32 target, i32 ctx)->i32; type1 run: (i32 ctx)->i64
   std::vector<uint8_t> types;
   EmitU32Leb(types, 2);
   types.push_back(0x60); EmitU32Leb(types,2); types.push_back(0x7F); types.push_back(0x7F); EmitU32Leb(types,1); types.push_back(0x7F);
@@ -248,9 +256,6 @@ bool RegisterWasmBackendCallFunction(xe::cpu::GuestFunction* function,
   }
   CallModule module;
   if (!BuildModule(address, builder, &module)) {
-    // A function outside the call foundation's straight-line integer/control
-    // subset must not poison already-generated call modules, but is recorded as
-    // unsupported until a later workstream handles it.
     if (g_modules.empty()) g_status = 1;
     return false;
   }

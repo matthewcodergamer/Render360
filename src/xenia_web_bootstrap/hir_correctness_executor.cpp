@@ -32,6 +32,7 @@ using RuntimeValues = std::unordered_map<const Value*, RuntimeValue>;
 
 std::array<uint64_t, 32> g_initial_gprs{};
 HIRCorrectnessCallResolver g_call_resolver = nullptr;
+HIRCorrectnessAddressResolver g_address_resolver = nullptr;
 thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;
 thread_local uint32_t g_execution_depth = 0;
 
@@ -119,7 +120,7 @@ bool ResolveRuntimeValue(const Value* value, const RuntimeValues& values,
     out->value = value->constant;
     return true;
   }
-  auto it = values.find(value);
+  const auto it = values.find(value);
   if (it == values.end()) return false;
   *out = it->second;
   return true;
@@ -199,7 +200,6 @@ bool StoreUnaryValue(Value* destination, const Value* source,
                      const RuntimeValues& values, RuntimeValues& out_values,
                      uint32_t opcode) {
   if (!destination || !source) return false;
-
   RuntimeValue src;
   if (!ResolveRuntimeValue(source, values, &src)) return false;
 
@@ -281,7 +281,6 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
                       const RuntimeValues& values, RuntimeValues& out_values,
                       uint32_t opcode) {
   if (!destination || !lhs || !rhs) return false;
-
   RuntimeValue a, b;
   if (!ResolveRuntimeValue(lhs, values, &a) ||
       !ResolveRuntimeValue(rhs, values, &b)) {
@@ -327,7 +326,6 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
   int64_t as = 0, bs = 0;
   RuntimeValue result;
   const uint32_t shift_mask = IntegerBitWidth(destination->type) - 1u;
-
   switch (opcode) {
     case xe::cpu::hir::OPCODE_ADD:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
@@ -469,9 +467,7 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
                     uint32_t flags) {
   if (flags != 0 || !destination) return false;
   uint32_t guest_address = 0;
-  if (!ResolveGuestAddress(address, offset, values, &guest_address)) {
-    return false;
-  }
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
   uint8_t* host = nullptr;
   if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
@@ -487,13 +483,30 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
                      const RuntimeValues& values, uint32_t flags) {
   if (flags != 0 || !source) return false;
   uint32_t guest_address = 0;
-  if (!ResolveGuestAddress(address, offset, values, &guest_address)) {
-    return false;
-  }
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(source->type);
   uint8_t* host = nullptr;
   if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   return StoreResolvedValue(source, values, host, size);
+}
+
+bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
+                     bool* block_terminated) {
+  if (!reached_return || !block_terminated) return false;
+  if (flags & xe::cpu::hir::CALL_POSSIBLE_RETURN) {
+    *reached_return = true;
+    *block_terminated = true;
+    return true;
+  }
+  if (target > std::numeric_limits<uint32_t>::max() || !g_address_resolver) {
+    return false;
+  }
+  if (!g_address_resolver(static_cast<uint32_t>(target))) return false;
+  if (flags & xe::cpu::hir::CALL_TAIL) {
+    *reached_return = true;
+    *block_terminated = true;
+  }
+  return true;
 }
 
 HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
@@ -526,9 +539,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
 
         case xe::cpu::hir::OPCODE_SET_RETURN_ADDRESS: {
           uint64_t return_address = 0;
-          supported =
-              ResolveUint64(instr->src1.value, values, &return_address);
-          (void)return_address;
+          supported = ResolveUint64(instr->src1.value, values, &return_address);
           break;
         }
 
@@ -566,8 +577,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           break;
         case xe::cpu::hir::OPCODE_STORE:
           supported = StoreGuestValue(memory, instr->src1.value, nullptr,
-                                      instr->src2.value, values,
-                                      instr->flags);
+                                      instr->src2.value, values, instr->flags);
           break;
         case xe::cpu::hir::OPCODE_STORE_OFFSET:
           supported = StoreGuestValue(memory, instr->src1.value,
@@ -629,10 +639,9 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         case xe::cpu::hir::OPCODE_BRANCH_FALSE: {
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
-          const bool take =
-              instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_TRUE
-                  ? condition
-                  : !condition;
+          const bool take = instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_TRUE
+                                ? condition
+                                : !condition;
           if (supported && take) {
             supported = instr->src2.label && instr->src2.label->block;
             if (supported) next_block = instr->src2.label->block;
@@ -670,35 +679,23 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         }
 
         case xe::cpu::hir::OPCODE_CALL_INDIRECT: {
-          if (!(instr->flags & xe::cpu::hir::CALL_POSSIBLE_RETURN)) {
-            supported = false;
-            break;
-          }
           uint64_t target = 0;
           supported = ResolveUint64(instr->src1.value, values, &target);
           if (supported) {
-            (void)target;
-            reached_return = true;
-            block_terminated = true;
+            supported = ExecuteIndirect(target, instr->flags, &reached_return,
+                                        &block_terminated);
           }
           break;
         }
         case xe::cpu::hir::OPCODE_CALL_INDIRECT_TRUE: {
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
-          if (!supported) break;
-          if (condition) {
-            if (!(instr->flags & xe::cpu::hir::CALL_POSSIBLE_RETURN)) {
-              supported = false;
-              break;
-            }
-            uint64_t target = 0;
-            supported = ResolveUint64(instr->src2.value, values, &target);
-            if (supported) {
-              (void)target;
-              reached_return = true;
-              block_terminated = true;
-            }
+          if (!supported || !condition) break;
+          uint64_t target = 0;
+          supported = ResolveUint64(instr->src2.value, values, &target);
+          if (supported) {
+            supported = ExecuteIndirect(target, instr->flags, &reached_return,
+                                        &block_terminated);
           }
           break;
         }
@@ -730,6 +727,10 @@ bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
 
 void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver) {
   g_call_resolver = resolver;
+}
+
+void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
+  g_address_resolver = resolver;
 }
 
 bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }

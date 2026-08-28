@@ -89,6 +89,7 @@ EXPORTS=(
   _r360_ppc_probe_correctness_status _r360_ppc_probe_correctness_instructions
   _r360_ppc_probe_correctness_r3
   _r360_ppc_probe_reset _r360_ppc_probe_set_initial_gpr
+  _r360_ppc_probe_write_guest_u32_be _r360_ppc_probe_read_guest_u32_be
   _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity
   _r360_ppc_probe_load _r360_ppc_probe_translate
   _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
@@ -108,7 +109,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
     echo "status=LINKED"
     echo "wasm=$WASM"
     echo "exports=${#EXPORTS[@]}"
-    echo "note=The real Xenia PPC translation path and finalized-HIR correctness executor linked with the complete exported probe ABI. Runtime gates must pass before broader PPC correctness is declared."
+    echo "note=The real Xenia PPC translation path, finalized-HIR correctness executor, and bounded guest-memory correctness ABI linked with the complete exported probe ABI. Runtime gates must pass before broader PPC correctness is declared."
   } | tee "$REPORT"
   exit 0
 fi

@@ -152,6 +152,9 @@ uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {
     g_status = kProbeErrorMemory;
     return 0;
   }
+  // Loading executable bytes is a code mutation. Version the affected pages and
+  // evict any generated guest functions before the new bytes become visible.
+  InvalidateWasmBackendExecutableRange(kProbeGuestBase, length);
   std::memcpy(guest, bytes, length);
   g_loaded_size = length;
   g_status = kProbeCodeLoaded;
@@ -166,10 +169,10 @@ uint32_t r360_ppc_probe_translate() {
   }
 
   ResetProbeTelemetry();
-  ResetWasmBackendCallProbe();
-  // Keep the top-level test function fresh because the harness deliberately
-  // replaces the bytes at the same guest base for each correctness case. The
-  // registered module is still used by Xenia to declare/cache real callees.
+  // Do not clear the generated guest-function cache here. Repeated translation
+  // of unchanged executable pages must hit the address+generation cache. Code
+  // changes are invalidated by r360_ppc_probe_load or the explicit invalidation
+  // API instead.
   ProbeGuestFunction function(g_probe_module, kProbeGuestBase);
   function.set_end_address(kProbeGuestBase + g_loaded_size - 4u);
   if (!g_processor->frontend()->DefineFunction(&function, 0)) {

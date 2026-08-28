@@ -26,7 +26,6 @@ constexpr uint32_t kXexHeaderImageBaseAddress = 0x00010201u;
 constexpr uint32_t kXexHeaderImportLibraries = 0x000103FFu;
 constexpr uint32_t kXexHeaderSystemFlags = 0x00030000u;
 constexpr uint32_t kXexHeaderExecutionInfo = 0x00040006u;
-constexpr uint32_t kXexImagePageSize4K = 0x10000000u;
 
 }  // namespace
 
@@ -118,8 +117,9 @@ uint32_t Decode(const uint8_t* bytes, uint32_t length, ImageMetadata* out) {
   out->encryption_type = read_be16(bytes + out->file_format_info_offset + 4u);
   out->compression_type = read_be16(bytes + out->file_format_info_offset + 6u);
   if (out->encryption_type > 1u) return fail(kDecodeErrorEncryption);
-  // Xenia currently defines NONE, BASIC, NORMAL and DELTA. The first V36 image
-  // path deliberately rejects DELTA rather than pretending it can prepare it.
+  // Xenia defines NONE, BASIC, NORMAL and DELTA. V36 metadata/image bring-up
+  // supports the first three and deliberately rejects DELTA until the patch
+  // path is implemented rather than silently treating it as a normal image.
   if (out->compression_type > 2u) return fail(kDecodeErrorCompression);
 
   const uint32_t sec = out->security_offset;
@@ -147,14 +147,17 @@ uint32_t Decode(const uint8_t* bytes, uint32_t length, ImageMetadata* out) {
     return fail(kDecodeErrorPageDescriptors);
   }
 
-  out->page_size = (out->image_flags & kXexImagePageSize4K) ? 0x1000u : 0x10000u;
+  // Keep this exactly aligned with Xenia's XexModule: titles at/below
+  // 0x90000000 use 64 KiB image pages, higher images use 4 KiB pages.
+  out->page_size = out->image_base <= 0x90000000u ? 0x10000u : 0x1000u;
   uint64_t running_bytes = 0;
-  uint32_t previous_end = out->load_address;
+  uint32_t previous_end = out->image_base;
   for (uint32_t i = 0; i < out->page_descriptor_count; ++i) {
     const uint32_t p = sec + 0x184u + i * 0x18u;
     const uint32_t value = read_be32(bytes + p);
-    // Xenia's xex2_page_descriptor is a 4-bit section type and a 28-bit page
-    // count in the converted host value.
+    // Xenia byteswaps this word before reading its bitfield. read_be32 already
+    // gives that converted host value: low 4 bits are section info, upper 28
+    // bits are the page count.
     const uint32_t type = value & 0xFu;
     const uint32_t page_count = value >> 4u;
     if ((type < kSectionCode || type > kSectionReadOnlyData) || !page_count) {
@@ -177,14 +180,14 @@ uint32_t Decode(const uint8_t* bytes, uint32_t length, ImageMetadata* out) {
   if (running_bytes > 0xFFFFFFFFull) return fail(kDecodeErrorRange);
   out->mapped_span = static_cast<uint32_t>(running_bytes);
 
-  // Descriptors are page-rounded, so they may cover the final partial image
-  // page, but they must never describe less storage than the declared image.
+  // Page descriptors are rounded to Xenia's image page size and may cover the
+  // final partial image page, but must never describe less than image_size.
   if (running_bytes < out->image_size) return fail(kDecodeErrorPageDescriptors);
   uint32_t image_end = 0;
-  if (!add_u32(out->load_address, out->image_size, &image_end)) {
+  if (!add_u32(out->image_base, out->image_size, &image_end)) {
     return fail(kDecodeErrorRange);
   }
-  if (out->entry_point < out->load_address || out->entry_point >= image_end) {
+  if (out->entry_point < out->image_base || out->entry_point >= image_end) {
     return fail(kDecodeErrorRange);
   }
 

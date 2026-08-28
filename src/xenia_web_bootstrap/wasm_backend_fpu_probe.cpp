@@ -224,7 +224,9 @@ bool BuildLocals(HIRBuilder*b,ValueLocals*locals,std::vector<uint8_t>*groups){
   std::vector<const Value*> i32s,i64s,f32s,f64s;std::unordered_set<const Value*>seen;
   for(auto*bl=b->first_block();bl;bl=bl->next)for(auto*in=bl->instr_head;in;in=in->next){if(!in->dest||!seen.insert(in->dest).second)continue;
     if(IsI64(in->dest->type))i64s.push_back(in->dest);else if(IsInt(in->dest->type))i32s.push_back(in->dest);else if(IsF32(in->dest->type))f32s.push_back(in->dest);else if(IsF64(in->dest->type))f64s.push_back(in->dest);}
-  uint32_t next=2; // ctx=0, result=1(i64)
+  // run(i32 ctx) -> i64 has exactly one parameter and no synthetic result local.
+  // WebAssembly local index 0 is ctx, so the first declared HIR value is index 1.
+  uint32_t next=1;
   for(auto*v:i32s)(*locals)[v]={next++,v->type};for(auto*v:i64s)(*locals)[v]={next++,v->type};for(auto*v:f32s)(*locals)[v]={next++,v->type};for(auto*v:f64s)(*locals)[v]={next++,v->type};
   uint32_t ng=(i32s.empty()?0:1)+(i64s.empty()?0:1)+(f32s.empty()?0:1)+(f64s.empty()?0:1);U32(*groups,ng);
   if(!i32s.empty()){U32(*groups,uint32_t(i32s.size()));groups->push_back(0x7F);}if(!i64s.empty()){U32(*groups,uint32_t(i64s.size()));groups->push_back(0x7E);}if(!f32s.empty()){U32(*groups,uint32_t(f32s.size()));groups->push_back(0x7D);}if(!f64s.empty()){U32(*groups,uint32_t(f64s.size()));groups->push_back(0x7C);}return true;

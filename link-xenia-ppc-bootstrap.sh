@@ -15,7 +15,6 @@ OBJECTS=(
   "$OUT/third_party_fmt_src_format.cc.o"
   "$OUT/src_xenia_base_cvar.cc.o"
   "$OUT/src_xenia_base_utf8.cc.o"
-  "$OUT/src_xenia_base_memory_posix.cc.o"
   "$OUT/src_xenia_base_mutex.cc.o"
   "$OUT/src_xenia_memory.cc.o"
   "$OUT/src_xenia_cpu_processor.cc.o"
@@ -69,7 +68,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=The live Xenia translation driver linked with bounded wasm32 probe memory, browser logging, POSIX memory primitives and the real Xenia global mutex. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
+    echo "note=The live Xenia translation driver linked with bounded wasm32 probe memory, browser logging and the real Xenia global mutex. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -77,7 +76,7 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict bounded-memory translation probe exposed the next real Xenia dependency boundary after browser host memory/logging/mutex support."
+  echo "note=Strict bounded-memory translation probe exposed the next real Xenia dependency boundary after browser memory/logging/mutex support."
   echo
   echo "First unresolved-symbol diagnostics:"
   grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 240 || true

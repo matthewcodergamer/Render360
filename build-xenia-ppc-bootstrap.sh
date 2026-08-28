@@ -20,20 +20,18 @@ COMMON=(
   -std=c++20
   -O0
   -g0
-  -fno-exceptions
   -fno-rtti
-  -DXE_PLATFORM_WEB=1
-  -DXE_ARCH_WASM32=1
+  -I"$ROOT/src/xenia_web_shims"
   -I"$XENIA/src"
-  -I"$XENIA/third_party"
+  -I"$XENIA"
   -I"$XENIA/third_party/fmt/include"
   -I"$XENIA/third_party/utfcpp/source"
   -I"$XENIA/third_party/capstone/include"
 )
 
-# This stage intentionally compiles real upstream translation units separately.
-# It does not link them into the production emulator and does not claim PPC
-# execution. Each success proves a real piece of Xenia is wasm32-compilable.
+# Compile real upstream Xenia translation units separately. The Render360
+# include overlay only supplies browser host primitives (platform + atomics).
+# Xbox semantics stay in upstream Xenia source.
 SOURCES=(
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
@@ -48,7 +46,9 @@ SOURCES=(
 
 classify_failure() {
   local log="$1"
-  if grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then
+  if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then
+    echo PPC_CONTEXT_ABI_DEPENDENCY
+  elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then
     echo HOST_ARCH_DEPENDENCY
   elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then
     echo HOST_OS_OR_MEMORY_DEPENDENCY

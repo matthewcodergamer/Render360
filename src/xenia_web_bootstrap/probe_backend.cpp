@@ -10,12 +10,15 @@
 #include "xenia/cpu/hir/hir_builder.h"
 #include "xenia/cpu/hir/instr.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
+#include "xenia/cpu/ppc/ppc_scanner.h"
 #include "xenia/cpu/processor.h"
 
 namespace render360::xenia_web {
 namespace {
 ProbeTelemetry g_probe_telemetry;
 ProbeBackend* g_probe_backend = nullptr;
+constexpr uint32_t kProbeGuestBase = 0x80000000u;
+constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
 
 bool ResolveNestedGuestCall(xe::cpu::Function* function) {
   if (!g_probe_backend || !g_probe_backend->processor() || !function ||
@@ -24,19 +27,28 @@ bool ResolveNestedGuestCall(xe::cpu::Function* function) {
   }
 
   auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
+  auto* frontend = g_probe_backend->processor()->frontend();
+  if (!frontend) return false;
+
   if (!guest_function->has_end_address()) {
-    return false;
+    const uint32_t address = guest_function->address();
+    if (address < kProbeGuestBase || address > kProbeGuestEnd) return false;
+
+    // PPCFrontend::DeclareFunction intentionally doesn't discover an extent.
+    // Give Xenia's own PPCScanner the remainder of the bounded probe window as
+    // a conservative ceiling; Scan then finds the actual guest function end
+    // from real PowerPC control flow and rewrites end_address accordingly.
+    guest_function->set_end_address(kProbeGuestEnd);
+    xe::cpu::ppc::PPCScanner scanner(frontend);
+    if (!scanner.Scan(guest_function, nullptr)) return false;
   }
 
   // The correctness backend deliberately has no executable host code cache, so
-  // don't route nested execution through Processor::DemandFunction's native
-  // runtime/cache state. The target has already been declared/scanned by Xenia
-  // when the CALL symbol was emitted. Define it directly through the real PPC
-  // frontend so it still takes the normal Xenia scanner -> translator -> HIR ->
-  // compiler -> ProbeAssembler path, where the nested finalized HIR executes
-  // against the same active PPCContext as the caller.
-  return g_probe_backend->processor()->frontend()->DefineFunction(
-      guest_function, 0);
+  // nested execution goes directly through the real Xenia PPC frontend after
+  // Xenia has discovered the callee extent. This still performs the normal
+  // PPC translator -> HIR -> compiler -> ProbeAssembler path and executes the
+  // finalized nested HIR against the same active PPCContext as the caller.
+  return frontend->DefineFunction(guest_function, 0);
 }
 }  // namespace
 

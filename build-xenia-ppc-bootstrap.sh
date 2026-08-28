@@ -8,6 +8,7 @@ python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
+python3 "$ROOT/prepare-wasm-fpu-overlay.py"
 COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
@@ -77,7 +78,7 @@ compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wa
 compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"
 compile_one "render360/wasm_backend_memory_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_memory_probe.cpp"
 compile_one "render360/wasm_backend_call_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_call_probe.cpp"
-compile_one "render360/wasm_backend_fpu_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_fpu_probe.cpp"
+compile_one "render360/wasm_backend_fpu_probe.cpp" "$OVERLAY/render360/wasm_backend_fpu_probe_v2.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

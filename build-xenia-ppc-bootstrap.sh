@@ -34,6 +34,7 @@ SOURCES=(
   "src/xenia/base/memory_posix.cc"
   "src/xenia/base/mapped_memory_posix.cc"
   "src/xenia/base/mutex.cc"
+  "src/xenia/base/string.cc"
   "src/xenia/base/string_buffer.cc"
   "src/xenia/memory.cc"
   "src/xenia/cpu/cpu_flags.cc"
@@ -68,6 +69,8 @@ SOURCES=(
   "src/xenia/cpu/compiler/passes/validation_pass.cc"
   "src/xenia/cpu/ppc/ppc_context.cc"
   "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc"
+  "src/xenia/cpu/ppc/ppc_opcode_lookup_gen.cc"
+  "src/xenia/cpu/ppc/ppc_opcode_disasm_gen.cc"
   "src/xenia/cpu/ppc/ppc_opcode_info.cc"
   "src/xenia/cpu/ppc/ppc_emit_alu.cc"
   "src/xenia/cpu/ppc/ppc_emit_control.cc"
@@ -118,6 +121,7 @@ for rel in "${SOURCES[@]}"; do
   esac
 done
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
+compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

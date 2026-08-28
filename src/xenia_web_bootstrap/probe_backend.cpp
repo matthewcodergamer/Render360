@@ -21,34 +21,34 @@ constexpr uint32_t kProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
 
 bool ResolveNestedGuestCall(xe::cpu::Function* function) {
-  if (!g_probe_backend || !g_probe_backend->processor() || !function ||
-      !function->is_guest()) {
+  if (!g_probe_backend || !g_probe_backend->processor() || !function) {
     return false;
   }
 
-  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
   auto* frontend = g_probe_backend->processor()->frontend();
   if (!frontend) return false;
 
-  if (!guest_function->has_end_address()) {
-    const uint32_t address = guest_function->address();
-    if (address < kProbeGuestBase || address > kProbeGuestEnd) return false;
+  const uint32_t address = function->address();
+  if (address < kProbeGuestBase || address > kProbeGuestEnd) return false;
 
-    // PPCFrontend::DeclareFunction intentionally doesn't discover an extent.
-    // Give Xenia's own PPCScanner the remainder of the bounded probe window as
-    // a conservative ceiling; Scan then finds the actual guest function end
-    // from real PowerPC control flow and rewrites end_address accordingly.
-    guest_function->set_end_address(kProbeGuestEnd);
-    xe::cpu::ppc::PPCScanner scanner(frontend);
-    if (!scanner.Scan(guest_function, nullptr)) return false;
-  }
+  // The standalone correctness driver intentionally isn't backed by a normal
+  // title Module yet. Xenia still gives us the resolved CALL symbol/address,
+  // but module-backed demand resolution cannot own the callee. Create a
+  // temporary GuestFunction only as the container for Xenia's own scanner and
+  // frontend. No PowerPC is decoded here: PPCScanner and PPCFrontend remain the
+  // authority for function extent, translation, HIR generation and compiler
+  // passes.
+  ProbeGuestFunction nested_function(function->module(), address);
+  nested_function.set_end_address(kProbeGuestEnd);
 
-  // The correctness backend deliberately has no executable host code cache, so
-  // nested execution goes directly through the real Xenia PPC frontend after
-  // Xenia has discovered the callee extent. This still performs the normal
-  // PPC translator -> HIR -> compiler -> ProbeAssembler path and executes the
-  // finalized nested HIR against the same active PPCContext as the caller.
-  return frontend->DefineFunction(guest_function, 0);
+  xe::cpu::ppc::PPCScanner scanner(frontend);
+  if (!scanner.Scan(&nested_function, nullptr)) return false;
+
+  // ProbeAssembler sees that correctness execution is already active and runs
+  // the nested finalized HIR against the same PPCContext as the caller. A
+  // nested blr therefore returns from this DefineFunction call, after which the
+  // caller's finalized HIR resumes at the instruction following CALL.
+  return frontend->DefineFunction(&nested_function, 0);
 }
 }  // namespace
 

@@ -36,11 +36,11 @@ struct Mapping {
 };
 
 std::vector<Backing> g_backings;
-// Keep sparse virtual pages in an ordered tree rather than libc++'s hash table.
-// WASI's no-exception libc++ path can abort while growing unordered_map buckets
-// (__next_prime overflow). A tree also gives deterministic behavior for the
-// relatively small mapping sets used by the browser bootstrap.
 std::map<uint32_t, Mapping> g_pages;
+// This is the authoritative executable-byte content generation. It is sparse
+// across the full 32-bit Xbox virtual address space and is intentionally
+// independent of permission/mapping invalidation and the legacy backend epoch.
+std::map<uint32_t, uint32_t> g_executable_content_generations;
 uint32_t g_last_fault_address = 0;
 uint32_t g_last_fault_code = kFaultNone;
 
@@ -61,6 +61,18 @@ bool PageRangeValid(uint32_t address, uint32_t page_count) {
   if (!page_count || !IsPageAligned(address)) return false;
   const uint64_t bytes = uint64_t(page_count) * kPageSize;
   return uint64_t(address) + bytes <= (uint64_t{1} << 32);
+}
+
+uint32_t ContentGeneration(uint32_t address) {
+  const uint32_t page = address >> kPageShift;
+  auto it = g_executable_content_generations.find(page);
+  return it == g_executable_content_generations.end() ? 1u : it->second;
+}
+
+void BumpContentGeneration(uint32_t page) {
+  auto [it, inserted] = g_executable_content_generations.emplace(page, 1u);
+  ++it->second;
+  if (it->second == 0) it->second = 1u;
 }
 
 Backing* GetBacking(uint32_t backing_id) {
@@ -93,8 +105,8 @@ void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {
     if (mapping.backing_id == backing_id &&
         mapping.backing_page == backing_page &&
         (mapping.protection & kGuestExecute)) {
-      InvalidateWasmBackendExecutableRange(virtual_page << kPageShift,
-                                           kPageSize);
+      MarkWasmBackendExecutableContentChangedRange(
+          virtual_page << kPageShift, kPageSize);
     }
   }
 }
@@ -116,9 +128,29 @@ bool ValidateSpan(uint32_t address, uint32_t size, uint32_t protection,
 
 }  // namespace
 
+void MarkWasmBackendExecutableContentChangedRange(uint32_t address,
+                                                  uint32_t size) {
+  if (!size) return;
+  const uint64_t end64 = uint64_t(address) + uint64_t(size) - 1u;
+  const uint32_t end_address =
+      end64 > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(end64);
+  const uint32_t first_page = address >> kPageShift;
+  const uint32_t last_page = end_address >> kPageShift;
+  for (uint32_t page = first_page;; ++page) {
+    BumpContentGeneration(page);
+    if (page == last_page) break;
+  }
+  InvalidateWasmBackendExecutableRange(address, size);
+}
+
+uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address) {
+  return ContentGeneration(address);
+}
+
 void ResetSparseGuestMemory() {
   g_backings.clear();
   g_pages.clear();
+  g_executable_content_generations.clear();
   ClearFault();
 }
 
@@ -354,5 +386,13 @@ uint32_t r360_sparse_guest_memory_last_fault_address() {
 }
 uint32_t r360_sparse_guest_memory_last_fault_code() {
   return render360::xenia_web::SparseGuestLastFaultCode();
+}
+uint32_t r360_wasm_backend_executable_content_generation(uint32_t address) {
+  return render360::xenia_web::GetWasmBackendExecutableContentGeneration(address);
+}
+void r360_wasm_backend_mark_executable_content_changed_range(uint32_t address,
+                                                             uint32_t size) {
+  render360::xenia_web::MarkWasmBackendExecutableContentChangedRange(address,
+                                                                     size);
 }
 }

@@ -9,5 +9,13 @@ if [ -d "$DEST/.git" ]; then
 else
   git clone --depth=1 https://github.com/xenia-project/xenia.git "$DEST"
 fi
+
+# Pull only the small third-party dependencies needed by the CPU/HIR bootstrap.
+# Do not initialize the graphics/media stack here.
+git -C "$DEST" submodule update --init --depth=1 \
+  third_party/fmt \
+  third_party/utfcpp \
+  third_party/capstone
+
 git -C "$DEST" rev-parse HEAD | tee "$ROOT/upstream/XENIA_HEAD.txt"
 printf 'Xenia source ready: %s\n' "$DEST"

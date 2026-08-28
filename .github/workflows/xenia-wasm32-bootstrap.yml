@@ -90,6 +90,7 @@ jobs:
         with:
           name: xenia-wasm32-bootstrap-report
           path: |
+            render360_xenia_core.wasm
             build/xenia-ppc-bootstrap/report.tsv
             build/xenia-ppc-bootstrap/link-report.txt
             build/xenia-ppc-bootstrap/*.log

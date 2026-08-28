@@ -51,6 +51,12 @@ bool EnsureRuntime() {
   g_status = kProbeRuntimeReady;
   return true;
 }
+
+bool IsProbeGuestRange(uint32_t address, uint32_t size) {
+  if (!size || address < kProbeGuestBase) return false;
+  uint64_t end = uint64_t(address) + size;
+  return end <= uint64_t(kProbeGuestBase) + kProbeMaxBytes;
+}
 }  // namespace
 }  // namespace render360::xenia_web
 
@@ -68,6 +74,18 @@ void r360_ppc_probe_reset() {
 
 uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value) {
   return render360::xenia_web::SetHIRCorrectnessInitialGPR(index, value) ? 1u : 0u;
+}
+
+uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
+  using namespace render360::xenia_web;
+  if (!EnsureRuntime() || !IsProbeGuestRange(address, 4)) return 0;
+  auto* guest = g_memory->TranslateVirtual<uint8_t*>(address);
+  if (!guest) return 0;
+  guest[0] = static_cast<uint8_t>(value >> 24);
+  guest[1] = static_cast<uint8_t>(value >> 16);
+  guest[2] = static_cast<uint8_t>(value >> 8);
+  guest[3] = static_cast<uint8_t>(value);
+  return 1;
 }
 
 uint32_t r360_ppc_probe_input_buffer() {

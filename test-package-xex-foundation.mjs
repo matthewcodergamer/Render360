@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import zlib from 'node:zlib';
 
 function put32be(mem, off, v) {
   mem[off] = (v >>> 24) & 255;
@@ -25,15 +24,15 @@ function u64(lo, hi) { return (hi >>> 0) * 0x100000000 + (lo >>> 0); }
 function makeXexPayload() {
   const x = new Uint8Array(0x1800);
   ascii(x, 0, 'XEX2');
-  put32be(x, 4, 1);            // module flags
-  put32be(x, 8, 0x280);        // header size
-  put32be(x, 0x10, 0x80);      // security info offset
-  put32be(x, 0x14, 4);         // optional header count
+  put32be(x, 4, 1);
+  put32be(x, 8, 0x280);
+  put32be(x, 0x10, 0x80);
+  put32be(x, 0x14, 4);
   let h = 0x18;
-  put32be(x, h, 0x00010100); put32be(x, h + 4, 0x82001234); h += 8; // entry
-  put32be(x, h, 0x00010201); put32be(x, h + 4, 0x82000000); h += 8; // image base
-  put32be(x, h, 0x00040006); put32be(x, h + 4, 0x40); h += 8;       // execution info
-  put32be(x, h, 0x000003FF); put32be(x, h + 4, 0x58);               // file format
+  put32be(x, h, 0x00010100); put32be(x, h + 4, 0x82001234); h += 8;
+  put32be(x, h, 0x00010201); put32be(x, h + 4, 0x82000000); h += 8;
+  put32be(x, h, 0x00040006); put32be(x, h + 4, 0x40); h += 8;
+  put32be(x, h, 0x000003FF); put32be(x, h + 4, 0x58);
   put32be(x, 0x40, 0xAABBCCDD); put32be(x, 0x4C, 0x584108CE);
   put32be(x, 0x58, 8); put16be(x, 0x5C, 1); put16be(x, 0x5E, 2);
   put32be(x, 0x84, 0x01000000); put32be(x, 0x190, 0x82000000);
@@ -43,8 +42,6 @@ function makeXexPayload() {
 }
 
 function makeSyntheticStfs() {
-  // Header rounds to A000. Hash L0=A000. Data blocks 0..4=B000..F000.
-  // Directory block chain 0 -> 2. default.xex uses data blocks 3 -> 4.
   const bytes = new Uint8Array(0x10000);
   const xex = makeXexPayload();
   ascii(bytes, 0, 'LIVE');
@@ -58,7 +55,6 @@ function makeSyntheticStfs() {
   put32be(bytes, 0x39D, 0); put32be(bytes, 0x3A9, 0);
   utf16be(bytes, 0x411, 'Render360 Foundation Gate');
 
-  // STFS hash records: directory block 0 -> 2; XEX data block 3 -> 4.
   put32be(bytes, 0xA000 + 0 * 0x18 + 0x14, 2);
   put32be(bytes, 0xA000 + 3 * 0x18 + 0x14, 4);
 
@@ -77,10 +73,7 @@ function makeSyntheticStfs() {
   return { bytes, xex };
 }
 
-const embedded = fs.readFileSync('render360_xenia_core_embedded.js', 'utf8');
-const match = embedded.match(/CORE_WASM_GZIP_BASE64\s*=\s*['\"]([^'\"]+)['\"]/);
-if (!match) throw new Error('Embedded V32 core payload not found');
-const wasm = zlib.gunzipSync(Buffer.from(match[1], 'base64'));
+const wasm = fs.readFileSync('render360_xenia_core.wasm');
 const { instance } = await WebAssembly.instantiate(wasm, {});
 const e = instance.exports;
 const required = [

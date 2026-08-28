@@ -1,5 +1,6 @@
 #include "wasm_backend_call_probe.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,15 +24,36 @@ using xe::cpu::hir::Value;
 using xe::cpu::ppc::PPCContext;
 using Producers = std::unordered_map<const Value*, const Instr*>;
 
+constexpr uint32_t kExecutablePageShift = 12;
+constexpr uint32_t kExecutablePageSize = 1u << kExecutablePageShift;
+
 struct CallModule {
   uint32_t address = 0;
+  uint32_t generation = 1;
   uint32_t lowered = 0;
   std::vector<uint8_t> bytes;
 };
 
 uint32_t g_status = 0;
 std::vector<CallModule> g_modules;
+std::unordered_map<uint32_t, uint32_t> g_page_generations;
 alignas(64) uint8_t g_context[sizeof(PPCContext)] = {};
+uint32_t g_cache_hits = 0;
+uint32_t g_cache_misses = 0;
+uint32_t g_cache_rebuilds = 0;
+uint32_t g_invalidations = 0;
+
+uint32_t PageIndex(uint32_t address) { return address >> kExecutablePageShift; }
+uint32_t PageGeneration(uint32_t address) {
+  auto it = g_page_generations.find(PageIndex(address));
+  return it == g_page_generations.end() ? 1u : it->second;
+}
+void BumpPageGeneration(uint32_t page) {
+  uint32_t& generation = g_page_generations[page];
+  if (!generation) generation = 1;
+  ++generation;
+  if (!generation) generation = 1;  // never expose zero as a valid version.
+}
 
 void EmitU32Leb(std::vector<uint8_t>& out, uint32_t value) {
   do {
@@ -147,7 +169,8 @@ bool EmitStoreContext(const Instr* instr, const Producers& producers,
   return true;
 }
 
-bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
+bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
+                 CallModule* out) {
   Producers producers;
   for (auto* block = builder->first_block(); block; block = block->next) {
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
@@ -172,7 +195,7 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
           break;
         case xe::cpu::hir::OPCODE_CALL: {
           if (!instr->src1.symbol) return false;
-          body.push_back(0x41);  // i32.const uses signed LEB128.
+          body.push_back(0x41);
           EmitI32Leb(body, static_cast<int32_t>(instr->src1.symbol->address()));
           body.push_back(0x20); body.push_back(0x00);
           body.push_back(0x10); EmitU32Leb(body, 0);
@@ -235,6 +258,7 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
   std::vector<uint8_t> code; EmitU32Leb(code,1); EmitU32Leb(code,static_cast<uint32_t>(fn.size())); code.insert(code.end(),fn.begin(),fn.end()); EmitSection(module,10,code);
 
   out->address = address;
+  out->generation = generation;
   out->lowered = lowered;
   out->bytes = std::move(module);
   return true;
@@ -244,6 +268,8 @@ bool BuildModule(uint32_t address, HIRBuilder* builder, CallModule* out) {
 void ResetWasmBackendCallProbe() {
   g_status = 0;
   g_modules.clear();
+  g_page_generations.clear();
+  g_cache_hits = g_cache_misses = g_cache_rebuilds = g_invalidations = 0;
   std::memset(g_context, 0, sizeof(g_context));
 }
 
@@ -251,33 +277,84 @@ bool RegisterWasmBackendCallFunction(xe::cpu::GuestFunction* function,
                                      HIRBuilder* builder) {
   if (!function || !builder) { g_status = 1; return false; }
   const uint32_t address = function->address();
+  const uint32_t generation = PageGeneration(address);
   for (auto& existing : g_modules) {
-    if (existing.address == address) return true;
+    if (existing.address != address) continue;
+    if (existing.generation == generation) {
+      ++g_cache_hits;
+      g_status = 2;
+      return true;
+    }
+    CallModule rebuilt;
+    if (!BuildModule(address, generation, builder, &rebuilt)) {
+      g_status = 1;
+      return false;
+    }
+    existing = std::move(rebuilt);
+    ++g_cache_rebuilds;
+    g_status = 2;
+    return true;
   }
   CallModule module;
-  if (!BuildModule(address, builder, &module)) {
+  if (!BuildModule(address, generation, builder, &module)) {
     if (g_modules.empty()) g_status = 1;
     return false;
   }
   g_modules.push_back(std::move(module));
+  ++g_cache_misses;
   g_status = 2;
   return true;
 }
+
+void InvalidateWasmBackendExecutableRange(uint32_t address, uint32_t size) {
+  if (!size) return;
+  const uint64_t end64 = uint64_t(address) + uint64_t(size) - 1u;
+  const uint32_t end_address = end64 > UINT32_MAX ? UINT32_MAX : uint32_t(end64);
+  const uint32_t first_page = PageIndex(address);
+  const uint32_t last_page = PageIndex(end_address);
+  for (uint32_t page = first_page;; ++page) {
+    BumpPageGeneration(page);
+    if (page == last_page) break;
+  }
+  const size_t old_size = g_modules.size();
+  g_modules.erase(std::remove_if(g_modules.begin(), g_modules.end(),
+                                 [first_page, last_page](const CallModule& module) {
+                                   const uint32_t page = PageIndex(module.address);
+                                   return page >= first_page && page <= last_page;
+                                 }),
+                  g_modules.end());
+  ++g_invalidations;
+  if (old_size != g_modules.size()) g_status = g_modules.empty() ? 0u : 2u;
+}
+
+uint32_t GetWasmBackendExecutablePageGeneration(uint32_t address) { return PageGeneration(address); }
 uint32_t GetWasmBackendCallStatus() { return g_status; }
 uint32_t GetWasmBackendCallFunctionCount() { return static_cast<uint32_t>(g_modules.size()); }
 uint32_t GetWasmBackendCallFunctionAddress(uint32_t i) { return i < g_modules.size() ? g_modules[i].address : 0; }
+uint32_t GetWasmBackendCallFunctionGeneration(uint32_t i) { return i < g_modules.size() ? g_modules[i].generation : 0; }
 uint8_t* GetWasmBackendCallFunctionModuleData(uint32_t i) { return i < g_modules.size() && !g_modules[i].bytes.empty() ? g_modules[i].bytes.data() : nullptr; }
 uint32_t GetWasmBackendCallFunctionModuleSize(uint32_t i) { return i < g_modules.size() ? static_cast<uint32_t>(g_modules[i].bytes.size()) : 0; }
 uint32_t GetWasmBackendCallFunctionLowered(uint32_t i) { return i < g_modules.size() ? g_modules[i].lowered : 0; }
 uint8_t* GetWasmBackendCallContextData() { return g_context; }
+uint32_t GetWasmBackendCallCacheHits() { return g_cache_hits; }
+uint32_t GetWasmBackendCallCacheMisses() { return g_cache_misses; }
+uint32_t GetWasmBackendCallCacheRebuilds() { return g_cache_rebuilds; }
+uint32_t GetWasmBackendCallInvalidations() { return g_invalidations; }
 }  // namespace render360::xenia_web
 
 extern "C" {
 uint32_t r360_wasm_backend_call_status() { return render360::xenia_web::GetWasmBackendCallStatus(); }
 uint32_t r360_wasm_backend_call_function_count() { return render360::xenia_web::GetWasmBackendCallFunctionCount(); }
 uint32_t r360_wasm_backend_call_function_address(uint32_t i) { return render360::xenia_web::GetWasmBackendCallFunctionAddress(i); }
+uint32_t r360_wasm_backend_call_function_generation(uint32_t i) { return render360::xenia_web::GetWasmBackendCallFunctionGeneration(i); }
 uint32_t r360_wasm_backend_call_module_ptr(uint32_t i) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCallFunctionModuleData(i))); }
 uint32_t r360_wasm_backend_call_module_size(uint32_t i) { return render360::xenia_web::GetWasmBackendCallFunctionModuleSize(i); }
 uint32_t r360_wasm_backend_call_lowered_instructions(uint32_t i) { return render360::xenia_web::GetWasmBackendCallFunctionLowered(i); }
 uint32_t r360_wasm_backend_call_context_ptr() { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCallContextData())); }
+uint32_t r360_wasm_backend_call_cache_hits() { return render360::xenia_web::GetWasmBackendCallCacheHits(); }
+uint32_t r360_wasm_backend_call_cache_misses() { return render360::xenia_web::GetWasmBackendCallCacheMisses(); }
+uint32_t r360_wasm_backend_call_cache_rebuilds() { return render360::xenia_web::GetWasmBackendCallCacheRebuilds(); }
+uint32_t r360_wasm_backend_call_invalidations() { return render360::xenia_web::GetWasmBackendCallInvalidations(); }
+uint32_t r360_wasm_backend_executable_page_generation(uint32_t address) { return render360::xenia_web::GetWasmBackendExecutablePageGeneration(address); }
+void r360_wasm_backend_invalidate_executable_range(uint32_t address, uint32_t size) { render360::xenia_web::InvalidateWasmBackendExecutableRange(address, size); }
 }

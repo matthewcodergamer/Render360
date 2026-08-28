@@ -29,7 +29,9 @@ if (unresolved.length) {
   process.exit(3);
 }
 
-const { instance } = await WebAssembly.instantiate(module, imports);
+// WebAssembly.instantiate returns an Instance directly when passed an already
+// compiled WebAssembly.Module (the {module, instance} pair is for byte input).
+const instance = await WebAssembly.instantiate(module, imports);
 if (typeof instance.exports._initialize === 'function') {
   wasi.initialize(instance);
 }

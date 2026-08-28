@@ -27,7 +27,6 @@ SOURCES=(
   "third_party/fmt/src/format.cc"
   "src/xenia/base/cvar.cc"
   "src/xenia/base/utf8.cc"
-  "src/xenia/base/memory_posix.cc"
   "src/xenia/base/mutex.cc"
   "src/xenia/memory.cc"
   "src/xenia/cpu/processor.cc"

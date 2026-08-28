@@ -20,6 +20,7 @@ on:
       - 'test-wasm-backend-fpu-semantics.mjs'
       - 'test-wasm-backend-vmx.mjs'
       - 'test-wasm-backend-cache.mjs'
+      - 'test-wasm-backend-foundation.mjs'
       - 'wasm-backend-function-cache.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
@@ -93,6 +94,7 @@ jobs:
             node ./test-wasm-backend-fpu-semantics.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-vmx.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-cache.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-wasm-backend-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

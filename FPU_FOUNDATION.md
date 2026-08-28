@@ -1,6 +1,6 @@
-# Render360 FPU Foundation — Complete
+# Render360 V34 FPU Foundation — Complete
 
-The browser/wasm32 FPU **foundation** is complete for its defined scope and is regression-gated through real PowerPC programs translated by upstream Xenia into finalized HIR.
+The browser/wasm32 FPU **foundation** is complete for its defined V34 scope and is regression-gated through real PowerPC programs translated by upstream Xenia into finalized HIR.
 
 ## Authoritative gate
 
@@ -24,7 +24,7 @@ real PPC correctness suite        24 / 24 PASS
 
 `FPU foundation = 100%` means the defined browser correctness baseline required before moving to VMX/WasmBackend work is complete. It does **not** claim perfect Xbox 360 floating-point compatibility or invent behavior that upstream Xenia itself has not implemented.
 
-The foundation now proves:
+The foundation proves:
 
 ```text
 FPR state / load / store                    ✓
@@ -68,7 +68,7 @@ Render360 intentionally follows upstream Xenia. Current Xenia `UpdateFPSCR` stil
 
 Those deeper compatibility details may be expanded later when required by real titles or when upstream Xenia behavior provides the appropriate contract, without reopening the completed baseline foundation.
 
-## Completed CPU foundations
+## Completed V34 CPU foundations
 
 ```text
 STFS / Xbox package / XEX foundation        100% ✓
@@ -80,7 +80,7 @@ FPU foundation                              100% ✓
 
 ## Next active foundation — VMX / VMX128
 
-The next completion target is VMX/VMX128. Current proven vector behavior is:
+The next V34 completion target is VMX/VMX128. Current proven vector behavior is:
 
 ```text
 VEC128 guest load                 ✓
@@ -89,7 +89,7 @@ unsigned INT8 VECTOR_ADD          ✓
 VEC128 guest store                ✓
 ```
 
-The next VMX closure sequence is:
+The VMX closure sequence is:
 
 1. halfword and word modulo arithmetic;
 2. vector subtraction;

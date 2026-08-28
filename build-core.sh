@@ -40,10 +40,13 @@ EXPORTS=(
   r360_stfs_entry_length r360_stfs_entry_is_directory
   r360_stfs_entry_is_contiguous r360_stfs_block_offset_lo
   r360_stfs_block_offset_hi
-  r360_stfs_extract_reset r360_stfs_extract_begin r360_stfs_extract_status
-  r360_stfs_extract_entry_index r360_stfs_extract_current_block
-  r360_stfs_extract_logical_offset r360_stfs_extract_bytes_total
-  r360_stfs_extract_bytes_done r360_stfs_extract_blocks_done
+  r360_stfs_extract_reset r360_stfs_extract_begin r360_stfs_extract_default_xex
+  r360_stfs_extract_status r360_stfs_extract_entry_index
+  r360_stfs_extract_current_block r360_stfs_extract_logical_offset
+  r360_stfs_extract_bytes_total r360_stfs_extract_bytes_done
+  r360_stfs_extract_blocks_done r360_stfs_extract_expected_blocks
+  r360_stfs_extract_declared_valid_blocks
+  r360_stfs_extract_declared_allocated_blocks
   r360_stfs_extract_is_contiguous
   r360_feature_bits
 )

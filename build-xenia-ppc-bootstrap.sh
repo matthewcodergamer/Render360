@@ -32,7 +32,17 @@ COMMON=(
   -I"$XENIA/third_party/utfcpp/source"
   -I"$XENIA/third_party/capstone/include"
   -I"$XENIA/third_party/cpptoml/include"
+  -I"$XENIA/third_party/cxxopts/include"
 )
+
+# Xenia's ContextPromotionPass uses llvm::BitVector. On CI the headers come
+# from llvm-dev, but em++ doesn't automatically search the distro LLVM include
+# directory, so add it explicitly when llvm-config is available.
+LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
+if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
+  COMMON+=("-I$LLVM_INCLUDE")
+  echo "LLVM headers: $LLVM_INCLUDE"
+fi
 
 # Compile real upstream Xenia translation units separately. Render360's include
 # overlays adapt browser host ABI/platform details only; Xbox semantics remain
@@ -66,7 +76,7 @@ classify_failure() {
     echo HOST_OS_OR_MEMORY_DEPENDENCY
   elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore' "$log"; then
     echo THREADING_DEPENDENCY
-  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|third_party|not found|file not found|no such file' "$log"; then
+  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party|not found|file not found|no such file' "$log"; then
     echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
   else
     echo CXX_OR_PORTABILITY_DEPENDENCY

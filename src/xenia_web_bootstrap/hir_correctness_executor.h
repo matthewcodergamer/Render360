@@ -3,9 +3,12 @@
 
 #include <cstdint>
 
-namespace xe::cpu::hir {
+namespace xe {
+class Memory;
+namespace cpu::hir {
 class HIRBuilder;
 }
+}  // namespace xe
 
 namespace render360::xenia_web {
 
@@ -22,10 +25,10 @@ struct HIRCorrectnessResult {
 void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 
-// Executes a deliberately small, verified subset of finalized Xenia HIR against
-// a real PPCContext. This does not decode PowerPC. The input must already have
-// passed through Xenia PPCFrontend/PPCTranslator/PPCHIRBuilder/compiler passes.
-HIRCorrectnessResult ExecuteHIRCorrectnessProbe(xe::cpu::hir::HIRBuilder* builder);
+// Executes finalized Xenia HIR against a real PPCContext and the same Xenia
+// Memory instance owned by Processor. PowerPC has already been decoded by Xenia.
+HIRCorrectnessResult ExecuteHIRCorrectnessProbe(xe::cpu::hir::HIRBuilder* builder,
+                                                xe::Memory* memory);
 
 }  // namespace render360::xenia_web
 

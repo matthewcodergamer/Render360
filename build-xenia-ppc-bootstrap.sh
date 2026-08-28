@@ -27,7 +27,7 @@ SOURCES=(
   "third_party/fmt/src/format.cc"
   "src/xenia/base/cvar.cc"
   "src/xenia/base/utf8.cc"
-  "src/xenia/base/logging.cc"
+  "src/xenia/base/memory_posix.cc"
   "src/xenia/base/mutex.cc"
   "src/xenia/memory.cc"
   "src/xenia/cpu/processor.cc"
@@ -86,6 +86,7 @@ for rel in "${SOURCES[@]}"; do
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac
 done
+compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

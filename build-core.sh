@@ -2,6 +2,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/render360_xenia_core_v32.cpp"
+DECODER="$ROOT/src/xenia_web_bootstrap/xex_image_decoder.cpp"
+DECODER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_decoder_exports.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
 
@@ -46,13 +48,26 @@ EXPORTS=(
   r360_stfs_extract_bytes_total r360_stfs_extract_bytes_done
   r360_stfs_extract_blocks_done r360_stfs_extract_expected_blocks
   r360_stfs_extract_declared_valid_blocks
-  r360_stfs_extract_declared_allocated_blocks
-  r360_stfs_extract_is_contiguous
+  r360_stfs_extract_declared_allocated_blocks r360_stfs_extract_is_contiguous
+  r360_xex_image_decode_reset r360_xex_image_decode r360_xex_image_status
+  r360_xex_image_module_flags r360_xex_image_header_size
+  r360_xex_image_security_offset r360_xex_image_header_count
+  r360_xex_image_entry_point r360_xex_image_base r360_xex_image_system_flags
+  r360_xex_image_execution_info_offset r360_xex_image_file_format_info_offset
+  r360_xex_image_import_libraries_offset r360_xex_image_title_id
+  r360_xex_image_media_id r360_xex_image_size r360_xex_image_flags
+  r360_xex_image_load_address r360_xex_image_region
+  r360_xex_image_allowed_media_types r360_xex_image_encryption_type
+  r360_xex_image_compression_type r360_xex_image_page_size
+  r360_xex_image_page_descriptor_count r360_xex_image_mapped_span
+  r360_xex_image_page_type r360_xex_image_page_count
+  r360_xex_image_page_address r360_xex_image_page_bytes
   r360_feature_bits
 )
 
 ARGS=(
   --target=wasm32 -std=c++20 -O2 -nostdlib -I"$ROOT"
+  -I"$ROOT/src/xenia_web_bootstrap"
   -Wl,--no-entry -Wl,--export-memory
   -Wl,--initial-memory=16777216 -Wl,--max-memory=16777216
 )
@@ -60,5 +75,5 @@ for symbol in "${EXPORTS[@]}"; do
   ARGS+=("-Wl,--export=$symbol")
 done
 
-"$CXX" "${ARGS[@]}" -o "$OUT" "$SRC"
-printf 'Built %s from %s\n' "$OUT" "$(basename "$SRC")"
+"$CXX" "${ARGS[@]}" -o "$OUT" "$SRC" "$DECODER" "$DECODER_EXPORTS"
+printf 'Built %s from V32 package core + V36 XEX image decoder\n' "$OUT"

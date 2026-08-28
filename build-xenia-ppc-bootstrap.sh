@@ -71,6 +71,7 @@ SOURCES=(
   "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc"
   "src/xenia/cpu/ppc/ppc_opcode_lookup_gen.cc"
   "src/xenia/cpu/ppc/ppc_opcode_disasm_gen.cc"
+  "src/xenia/cpu/ppc/ppc_opcode_disasm.cc"
   "src/xenia/cpu/ppc/ppc_opcode_info.cc"
   "src/xenia/cpu/ppc/ppc_emit_alu.cc"
   "src/xenia/cpu/ppc/ppc_emit_control.cc"

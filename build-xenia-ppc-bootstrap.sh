@@ -36,7 +36,6 @@ SOURCES=(
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
   "src/xenia/cpu/hir/instr.cc"
-  "src/xenia/cpu/hir/label.cc"
   "src/xenia/cpu/hir/value.cc"
   "src/xenia/cpu/hir/hir_builder.cc"
   "src/xenia/cpu/compiler/compiler.cc"

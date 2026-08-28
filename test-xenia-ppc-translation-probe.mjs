@@ -35,21 +35,13 @@ const exportedNames = Object.keys(instance.exports).sort();
 console.log(`wasm_exports=${exportedNames.join(',')}`);
 const pick = (name) => instance.exports[name] ?? instance.exports[`_${name}`];
 const required = [
-  'r360_ppc_probe_reset',
-  'r360_ppc_probe_set_initial_gpr',
-  'r360_ppc_probe_input_buffer',
-  'r360_ppc_probe_input_capacity',
-  'r360_ppc_probe_load',
-  'r360_ppc_probe_translate',
-  'r360_ppc_probe_status',
-  'r360_ppc_probe_guest_base',
-  'r360_ppc_probe_loaded_size',
-  'r360_ppc_probe_assembled_functions',
-  'r360_ppc_probe_hir_block_count',
-  'r360_ppc_probe_hir_instruction_count',
-  'r360_ppc_probe_last_guest_address',
-  'r360_ppc_probe_correctness_status',
-  'r360_ppc_probe_correctness_instructions',
+  'r360_ppc_probe_reset', 'r360_ppc_probe_set_initial_gpr',
+  'r360_ppc_probe_input_buffer', 'r360_ppc_probe_input_capacity',
+  'r360_ppc_probe_load', 'r360_ppc_probe_translate', 'r360_ppc_probe_status',
+  'r360_ppc_probe_guest_base', 'r360_ppc_probe_loaded_size',
+  'r360_ppc_probe_assembled_functions', 'r360_ppc_probe_hir_block_count',
+  'r360_ppc_probe_hir_instruction_count', 'r360_ppc_probe_last_guest_address',
+  'r360_ppc_probe_correctness_status', 'r360_ppc_probe_correctness_instructions',
   'r360_ppc_probe_correctness_r3',
 ];
 for (const name of required) {
@@ -66,33 +58,25 @@ if (!(instance.exports.memory instanceof WebAssembly.Memory)) {
 
 const inputPtr = pick('r360_ppc_probe_input_buffer')() >>> 0;
 const capacity = pick('r360_ppc_probe_input_capacity')() >>> 0;
-
 const wordBytes = (...words) => Uint8Array.from(words.flatMap((word) => [
-  (word >>> 24) & 0xFF,
-  (word >>> 16) & 0xFF,
-  (word >>> 8) & 0xFF,
-  word & 0xFF,
+  (word >>> 24) & 0xFF, (word >>> 16) & 0xFF, (word >>> 8) & 0xFF, word & 0xFF,
 ]));
 
+const conditionalProgram = wordBytes(
+  0x2C040000, // cmpwi r4,0
+  0x4182000C, // beq +12 -> li r3,2
+  0x38600001, // li r3,1
+  0x48000008, // b +8 -> blr
+  0x38600002, // li r3,2
+  0x4E800020, // blr
+);
+
 const tests = [
-  {
-    name: 'li-r3-1',
-    ppc: wordBytes(0x38600001, 0x4E800020), // li r3,1 ; blr
-    initialGprs: [],
-    expectedR3: 1n,
-  },
-  {
-    name: 'runtime-addi-r4-plus-5',
-    ppc: wordBytes(0x38640005, 0x4E800020), // addi r3,r4,5 ; blr
-    initialGprs: [[4, 7n]],
-    expectedR3: 12n,
-  },
-  {
-    name: 'runtime-ori-r4-f0',
-    ppc: wordBytes(0x608300F0, 0x4E800020), // ori r3,r4,0x00f0 ; blr
-    initialGprs: [[4, 0x0F00n]],
-    expectedR3: 0x0FF0n,
-  },
+  { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], expectedR3: 1n },
+  { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], expectedR3: 12n },
+  { name: 'runtime-ori-r4-f0', ppc: wordBytes(0x608300F0, 0x4E800020), initialGprs: [[4, 0x0F00n]], expectedR3: 0x0FF0n },
+  { name: 'branch-equal-taken', ppc: conditionalProgram, initialGprs: [[4, 0n]], expectedR3: 2n },
+  { name: 'branch-equal-not-taken', ppc: conditionalProgram, initialGprs: [[4, 5n]], expectedR3: 1n },
 ];
 
 function fail(message, code) {
@@ -101,10 +85,7 @@ function fail(message, code) {
 }
 
 for (const test of tests) {
-  if (capacity < test.ppc.length) {
-    fail(`Probe input capacity too small for ${test.name}: ${capacity}`, 6);
-  }
-
+  if (capacity < test.ppc.length) fail(`Probe input capacity too small for ${test.name}: ${capacity}`, 6);
   pick('r360_ppc_probe_reset')();
   for (const [index, value] of test.initialGprs) {
     const accepted = pick('r360_ppc_probe_set_initial_gpr')(index, value) >>> 0;
@@ -146,11 +127,9 @@ for (const test of tests) {
       hir === 0 || translatedCount === 0 || lastGuest !== guestBase) {
     fail(`FAIL ${test.name}: real PPC bytes did not complete Xenia PPC -> finalized HIR.`, 9);
   }
-  if (correctnessStatus !== 3 || correctnessInstructions === 0 ||
-      correctnessR3 !== test.expectedR3) {
+  if (correctnessStatus !== 3 || correctnessInstructions === 0 || correctnessR3 !== test.expectedR3) {
     fail(`FAIL ${test.name}: finalized Xenia HIR produced r3=${correctnessR3}, expected ${test.expectedR3}.`, 10);
   }
-
   console.log(`PASS: ${test.name} -> r3=${correctnessR3}`);
 }
 

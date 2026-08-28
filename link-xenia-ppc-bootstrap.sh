@@ -31,6 +31,7 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_ppc_ppc_translator.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_frontend.cc.o"
   "$OUT/render360_probe_backend.cpp.o"
+  "$OUT/render360_ppc_translation_probe.cpp.o"
   "$OUT/render360_ppc_context_abi_probe.cpp.o"
 )
 
@@ -39,27 +40,19 @@ for obj in "${OBJECTS[@]}"; do if [ ! -f "$obj" ]; then echo "MISSING object: $o
 if [ "$missing" -ne 0 ]; then exit 2; fi
 
 EXPORTS=(
-  _r360_ppc_context_size
-  _r360_ppc_context_offset_gpr
-  _r360_ppc_context_offset_fpr
-  _r360_ppc_context_offset_vr
-  _r360_ppc_context_offset_lr
-  _r360_ppc_context_offset_ctr
+  _r360_ppc_context_size _r360_ppc_context_offset_gpr _r360_ppc_context_offset_fpr
+  _r360_ppc_context_offset_vr _r360_ppc_context_offset_lr _r360_ppc_context_offset_ctr
   _r360_ppc_context_offset_reserved_val
-  _r360_ppc_probe_assembled_functions
-  _r360_ppc_probe_hir_block_count
-  _r360_ppc_probe_hir_instruction_count
-  _r360_ppc_probe_last_guest_address
+  _r360_ppc_probe_assembled_functions _r360_ppc_probe_hir_block_count
+  _r360_ppc_probe_hir_instruction_count _r360_ppc_probe_last_guest_address
+  _r360_ppc_probe_reset _r360_ppc_probe_load _r360_ppc_probe_translate
+  _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
 )
 
 LINK_ARGS=(
-  -O0
-  -sSTANDALONE_WASM=1
-  -sERROR_ON_UNDEFINED_SYMBOLS=1
-  -Wl,--no-entry
-  -Wl,--export-memory
-  -sINITIAL_MEMORY=33554432
-  -sALLOW_MEMORY_GROWTH=1
+  -O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1
+  -Wl,--no-entry -Wl,--export-memory
+  -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1
 )
 for symbol in "${EXPORTS[@]}"; do LINK_ARGS+=("-sEXPORTED_FUNCTIONS=$symbol"); done
 
@@ -68,7 +61,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=Xenia PPC/HIR plus the translation-only ProbeBackend linked. HIR telemetry exports are live, but no guest translation has been invoked yet."
+    echo "note=The real translation driver linked. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -76,9 +69,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict probe-backend link failed. See link.log for the next real Xenia dependency boundary."
+  echo "note=Strict translation-driver link exposed the next real Xenia Processor/Memory/compiler dependency boundary."
   echo
   echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 100 || true
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 120 || true
 } | tee "$REPORT"
 exit 0

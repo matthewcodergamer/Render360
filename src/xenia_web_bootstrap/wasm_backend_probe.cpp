@@ -19,6 +19,7 @@ namespace {
 
 using xe::cpu::hir::HIRBuilder;
 using xe::cpu::hir::Instr;
+using xe::cpu::hir::TypeName;
 using xe::cpu::hir::Value;
 using xe::cpu::ppc::PPCContext;
 
@@ -31,6 +32,30 @@ alignas(64) uint8_t g_context[sizeof(PPCContext)] = {};
 
 using Producers = std::unordered_map<const Value*, const Instr*>;
 
+bool IsIntegerType(TypeName type) {
+  return type == xe::cpu::hir::INT8_TYPE ||
+         type == xe::cpu::hir::INT16_TYPE ||
+         type == xe::cpu::hir::INT32_TYPE ||
+         type == xe::cpu::hir::INT64_TYPE;
+}
+
+bool IsI64(TypeName type) { return type == xe::cpu::hir::INT64_TYPE; }
+
+uint32_t TypeBits(TypeName type) {
+  switch (type) {
+    case xe::cpu::hir::INT8_TYPE:
+      return 8;
+    case xe::cpu::hir::INT16_TYPE:
+      return 16;
+    case xe::cpu::hir::INT32_TYPE:
+      return 32;
+    case xe::cpu::hir::INT64_TYPE:
+      return 64;
+    default:
+      return 0;
+  }
+}
+
 void EmitU32Leb(std::vector<uint8_t>& out, uint32_t value) {
   do {
     uint8_t byte = static_cast<uint8_t>(value & 0x7Fu);
@@ -38,6 +63,18 @@ void EmitU32Leb(std::vector<uint8_t>& out, uint32_t value) {
     if (value) byte |= 0x80u;
     out.push_back(byte);
   } while (value);
+}
+
+void EmitI32Leb(std::vector<uint8_t>& out, int32_t value) {
+  bool more = true;
+  while (more) {
+    uint8_t byte = static_cast<uint8_t>(value & 0x7F);
+    const bool sign = (byte & 0x40u) != 0;
+    value >>= 7;
+    more = !((value == 0 && !sign) || (value == -1 && sign));
+    if (more) byte |= 0x80u;
+    out.push_back(byte);
+  }
 }
 
 void EmitI64Leb(std::vector<uint8_t>& out, int64_t value) {
@@ -65,14 +102,133 @@ void EmitSection(std::vector<uint8_t>& module, uint8_t id,
   module.insert(module.end(), payload.begin(), payload.end());
 }
 
-bool EmitI64Value(const Value* value, const Producers& producers,
-                  std::unordered_set<const Value*>& visiting,
-                  std::vector<uint8_t>& body, uint32_t* lowered) {
-  if (!value || value->type != xe::cpu::hir::INT64_TYPE) return false;
+void EmitI32Const(std::vector<uint8_t>& out, int32_t value) {
+  out.push_back(0x41);
+  EmitI32Leb(out, value);
+}
+
+void EmitI64Const(std::vector<uint8_t>& out, int64_t value) {
+  out.push_back(0x42);
+  EmitI64Leb(out, value);
+}
+
+void EmitMaskForType(std::vector<uint8_t>& body, TypeName type) {
+  if (type == xe::cpu::hir::INT8_TYPE) {
+    EmitI32Const(body, 0xFF);
+    body.push_back(0x71);  // i32.and
+  } else if (type == xe::cpu::hir::INT16_TYPE) {
+    EmitI32Const(body, 0xFFFF);
+    body.push_back(0x71);  // i32.and
+  }
+}
+
+void EmitSignNormalizeI32(std::vector<uint8_t>& body, TypeName type) {
+  if (type == xe::cpu::hir::INT8_TYPE) {
+    body.push_back(0xC0);  // i32.extend8_s
+  } else if (type == xe::cpu::hir::INT16_TYPE) {
+    body.push_back(0xC1);  // i32.extend16_s
+  }
+}
+
+bool EmitIntegerValue(const Value* value, const Producers& producers,
+                      std::unordered_set<const Value*>& visiting,
+                      std::vector<uint8_t>& body, uint32_t* lowered);
+
+bool EmitAdaptedIntegerValue(const Value* value, bool want_i64,
+                             bool sign_extend, const Producers& producers,
+                             std::unordered_set<const Value*>& visiting,
+                             std::vector<uint8_t>& body, uint32_t* lowered) {
+  if (!value || !IsIntegerType(value->type)) return false;
+  if (!EmitIntegerValue(value, producers, visiting, body, lowered)) return false;
+
+  if (IsI64(value->type) == want_i64) {
+    if (!want_i64 && sign_extend) EmitSignNormalizeI32(body, value->type);
+    return true;
+  }
+
+  if (want_i64) {
+    if (sign_extend) {
+      EmitSignNormalizeI32(body, value->type);
+      body.push_back(0xAC);  // i64.extend_i32_s
+    } else {
+      body.push_back(0xAD);  // i64.extend_i32_u
+    }
+  } else {
+    body.push_back(0xA7);  // i32.wrap_i64
+    if (sign_extend) EmitSignNormalizeI32(body, value->type);
+  }
+  return true;
+}
+
+bool EmitCompare(const Instr* instr, const Producers& producers,
+                 std::unordered_set<const Value*>& visiting,
+                 std::vector<uint8_t>& body, uint32_t* lowered) {
+  if (!instr->src1.value || !instr->src2.value ||
+      !IsIntegerType(instr->src1.value->type) ||
+      !IsIntegerType(instr->src2.value->type)) {
+    return false;
+  }
+
+  const bool i64 = IsI64(instr->src1.value->type) ||
+                   IsI64(instr->src2.value->type);
+  const auto opcode = instr->opcode->num;
+  const bool signed_compare =
+      opcode == xe::cpu::hir::OPCODE_COMPARE_SLT ||
+      opcode == xe::cpu::hir::OPCODE_COMPARE_SLE ||
+      opcode == xe::cpu::hir::OPCODE_COMPARE_SGT ||
+      opcode == xe::cpu::hir::OPCODE_COMPARE_SGE;
+
+  if (!EmitAdaptedIntegerValue(instr->src1.value, i64, signed_compare,
+                               producers, visiting, body, lowered) ||
+      !EmitAdaptedIntegerValue(instr->src2.value, i64, signed_compare,
+                               producers, visiting, body, lowered)) {
+    return false;
+  }
+
+  if (!i64) {
+    switch (opcode) {
+      case xe::cpu::hir::OPCODE_COMPARE_EQ: body.push_back(0x46); break;
+      case xe::cpu::hir::OPCODE_COMPARE_NE: body.push_back(0x47); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLT: body.push_back(0x48); break;
+      case xe::cpu::hir::OPCODE_COMPARE_ULT: body.push_back(0x49); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGT: body.push_back(0x4A); break;
+      case xe::cpu::hir::OPCODE_COMPARE_UGT: body.push_back(0x4B); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLE: body.push_back(0x4C); break;
+      case xe::cpu::hir::OPCODE_COMPARE_ULE: body.push_back(0x4D); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGE: body.push_back(0x4E); break;
+      case xe::cpu::hir::OPCODE_COMPARE_UGE: body.push_back(0x4F); break;
+      default: return false;
+    }
+  } else {
+    switch (opcode) {
+      case xe::cpu::hir::OPCODE_COMPARE_EQ: body.push_back(0x51); break;
+      case xe::cpu::hir::OPCODE_COMPARE_NE: body.push_back(0x52); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLT: body.push_back(0x53); break;
+      case xe::cpu::hir::OPCODE_COMPARE_ULT: body.push_back(0x54); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGT: body.push_back(0x55); break;
+      case xe::cpu::hir::OPCODE_COMPARE_UGT: body.push_back(0x56); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLE: body.push_back(0x57); break;
+      case xe::cpu::hir::OPCODE_COMPARE_ULE: body.push_back(0x58); break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGE: body.push_back(0x59); break;
+      case xe::cpu::hir::OPCODE_COMPARE_UGE: body.push_back(0x5A); break;
+      default: return false;
+    }
+  }
+  return true;
+}
+
+bool EmitIntegerValue(const Value* value, const Producers& producers,
+                      std::unordered_set<const Value*>& visiting,
+                      std::vector<uint8_t>& body, uint32_t* lowered) {
+  if (!value || !IsIntegerType(value->type)) return false;
 
   if (value->IsConstant()) {
-    body.push_back(0x42);  // i64.const
-    EmitI64Leb(body, value->constant.i64);
+    if (IsI64(value->type)) {
+      EmitI64Const(body, value->constant.i64);
+    } else {
+      EmitI32Const(body, value->constant.i32);
+      EmitMaskForType(body, value->type);
+    }
     return true;
   }
 
@@ -86,54 +242,175 @@ bool EmitI64Value(const Value* value, const Producers& producers,
   const Instr* instr = it->second;
   bool supported = false;
   switch (instr->opcode->num) {
-    case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
-      // run(ctx_ptr: i32) -> i64. The generated module imports the parent
-      // WebAssembly.Memory, so this is a direct load from Xenia PPCContext.
-      body.push_back(0x20);  // local.get
-      body.push_back(0x00);  // parameter 0
-      body.push_back(0x29);  // i64.load
-      body.push_back(0x03);  // align = 2^3 = 8
+    case xe::cpu::hir::OPCODE_LOAD_CONTEXT: {
+      body.push_back(0x20);  // local.get ctx
+      body.push_back(0x00);
+      switch (value->type) {
+        case xe::cpu::hir::INT8_TYPE:
+          body.push_back(0x2D);  // i32.load8_u
+          body.push_back(0x00);
+          break;
+        case xe::cpu::hir::INT16_TYPE:
+          body.push_back(0x2F);  // i32.load16_u
+          body.push_back(0x01);
+          break;
+        case xe::cpu::hir::INT32_TYPE:
+          body.push_back(0x28);  // i32.load
+          body.push_back(0x02);
+          break;
+        case xe::cpu::hir::INT64_TYPE:
+          body.push_back(0x29);  // i64.load
+          body.push_back(0x03);
+          break;
+        default:
+          visiting.erase(value);
+          return false;
+      }
       EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
       supported = true;
       break;
+    }
 
     case xe::cpu::hir::OPCODE_ASSIGN:
-      supported = EmitI64Value(instr->src1.value, producers, visiting, body,
-                               lowered);
+      supported = EmitAdaptedIntegerValue(instr->src1.value, IsI64(value->type),
+                                           false, producers, visiting, body,
+                                           lowered);
+      if (supported) EmitMaskForType(body, value->type);
+      break;
+
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+      if (!instr->src1.value || !IsIntegerType(instr->src1.value->type)) break;
+      supported = EmitIntegerValue(instr->src1.value, producers, visiting, body,
+                                   lowered);
+      if (supported && IsI64(instr->src1.value->type) && !IsI64(value->type)) {
+        body.push_back(0xA7);  // i32.wrap_i64
+      }
+      if (supported) EmitMaskForType(body, value->type);
+      break;
+
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+      if (!instr->src1.value || !IsIntegerType(instr->src1.value->type)) break;
+      supported = EmitAdaptedIntegerValue(instr->src1.value, IsI64(value->type),
+                                           false, producers, visiting, body,
+                                           lowered);
+      if (supported) EmitMaskForType(body, value->type);
+      break;
+
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+      if (!instr->src1.value || !IsIntegerType(instr->src1.value->type)) break;
+      supported = EmitAdaptedIntegerValue(instr->src1.value, IsI64(value->type),
+                                           true, producers, visiting, body,
+                                           lowered);
+      break;
+
+    case xe::cpu::hir::OPCODE_IS_TRUE:
+    case xe::cpu::hir::OPCODE_IS_FALSE: {
+      if (!instr->src1.value || !IsIntegerType(instr->src1.value->type)) break;
+      const bool source_i64 = IsI64(instr->src1.value->type);
+      if (!EmitIntegerValue(instr->src1.value, producers, visiting, body,
+                            lowered)) break;
+      body.push_back(source_i64 ? 0x50 : 0x45);  // *.eqz
+      if (instr->opcode->num == xe::cpu::hir::OPCODE_IS_TRUE) {
+        body.push_back(0x45);  // i32.eqz, invert eqz -> truthy
+      }
+      supported = true;
+      break;
+    }
+
+    case xe::cpu::hir::OPCODE_COMPARE_EQ:
+    case xe::cpu::hir::OPCODE_COMPARE_NE:
+    case xe::cpu::hir::OPCODE_COMPARE_SLT:
+    case xe::cpu::hir::OPCODE_COMPARE_SLE:
+    case xe::cpu::hir::OPCODE_COMPARE_SGT:
+    case xe::cpu::hir::OPCODE_COMPARE_SGE:
+    case xe::cpu::hir::OPCODE_COMPARE_ULT:
+    case xe::cpu::hir::OPCODE_COMPARE_ULE:
+    case xe::cpu::hir::OPCODE_COMPARE_UGT:
+    case xe::cpu::hir::OPCODE_COMPARE_UGE:
+      supported = EmitCompare(instr, producers, visiting, body, lowered);
       break;
 
     case xe::cpu::hir::OPCODE_ADD:
     case xe::cpu::hir::OPCODE_SUB:
     case xe::cpu::hir::OPCODE_AND:
     case xe::cpu::hir::OPCODE_OR:
-    case xe::cpu::hir::OPCODE_XOR: {
-      if (!EmitI64Value(instr->src1.value, producers, visiting, body, lowered) ||
-          !EmitI64Value(instr->src2.value, producers, visiting, body, lowered)) {
-        supported = false;
+    case xe::cpu::hir::OPCODE_XOR:
+    case xe::cpu::hir::OPCODE_SHL:
+    case xe::cpu::hir::OPCODE_SHR:
+    case xe::cpu::hir::OPCODE_SHA:
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT: {
+      const bool i64 = IsI64(value->type);
+      if (!EmitAdaptedIntegerValue(instr->src1.value, i64, false, producers,
+                                   visiting, body, lowered) ||
+          !EmitAdaptedIntegerValue(instr->src2.value, i64, false, producers,
+                                   visiting, body, lowered)) {
         break;
       }
-      switch (instr->opcode->num) {
-        case xe::cpu::hir::OPCODE_ADD:
-          body.push_back(0x7C);  // i64.add
-          break;
-        case xe::cpu::hir::OPCODE_SUB:
-          body.push_back(0x7D);  // i64.sub
-          break;
-        case xe::cpu::hir::OPCODE_AND:
-          body.push_back(0x83);  // i64.and
-          break;
-        case xe::cpu::hir::OPCODE_OR:
-          body.push_back(0x84);  // i64.or
-          break;
-        case xe::cpu::hir::OPCODE_XOR:
-          body.push_back(0x85);  // i64.xor
-          break;
-        default:
-          break;
+      if (!i64) {
+        switch (instr->opcode->num) {
+          case xe::cpu::hir::OPCODE_ADD: body.push_back(0x6A); break;
+          case xe::cpu::hir::OPCODE_SUB: body.push_back(0x6B); break;
+          case xe::cpu::hir::OPCODE_AND: body.push_back(0x71); break;
+          case xe::cpu::hir::OPCODE_OR: body.push_back(0x72); break;
+          case xe::cpu::hir::OPCODE_XOR: body.push_back(0x73); break;
+          case xe::cpu::hir::OPCODE_SHL: body.push_back(0x74); break;
+          case xe::cpu::hir::OPCODE_SHA: body.push_back(0x75); break;
+          case xe::cpu::hir::OPCODE_SHR: body.push_back(0x76); break;
+          case xe::cpu::hir::OPCODE_ROTATE_LEFT: body.push_back(0x77); break;
+          default: break;
+        }
+      } else {
+        switch (instr->opcode->num) {
+          case xe::cpu::hir::OPCODE_ADD: body.push_back(0x7C); break;
+          case xe::cpu::hir::OPCODE_SUB: body.push_back(0x7D); break;
+          case xe::cpu::hir::OPCODE_AND: body.push_back(0x83); break;
+          case xe::cpu::hir::OPCODE_OR: body.push_back(0x84); break;
+          case xe::cpu::hir::OPCODE_XOR: body.push_back(0x85); break;
+          case xe::cpu::hir::OPCODE_SHL: body.push_back(0x86); break;
+          case xe::cpu::hir::OPCODE_SHA: body.push_back(0x87); break;
+          case xe::cpu::hir::OPCODE_SHR: body.push_back(0x88); break;
+          case xe::cpu::hir::OPCODE_ROTATE_LEFT: body.push_back(0x89); break;
+          default: break;
+        }
       }
+      EmitMaskForType(body, value->type);
       supported = true;
       break;
     }
+
+    case xe::cpu::hir::OPCODE_NOT:
+      if (EmitAdaptedIntegerValue(instr->src1.value, IsI64(value->type), false,
+                                  producers, visiting, body, lowered)) {
+        if (IsI64(value->type)) {
+          EmitI64Const(body, -1);
+          body.push_back(0x85);  // i64.xor
+        } else {
+          EmitI32Const(body, -1);
+          body.push_back(0x73);  // i32.xor
+          EmitMaskForType(body, value->type);
+        }
+        supported = true;
+      }
+      break;
+
+    case xe::cpu::hir::OPCODE_NEG:
+      if (IsI64(value->type)) {
+        EmitI64Const(body, 0);
+        if (EmitAdaptedIntegerValue(instr->src1.value, true, false, producers,
+                                    visiting, body, lowered)) {
+          body.push_back(0x7D);  // i64.sub
+          supported = true;
+        }
+      } else {
+        EmitI32Const(body, 0);
+        if (EmitAdaptedIntegerValue(instr->src1.value, false, false, producers,
+                                    visiting, body, lowered)) {
+          body.push_back(0x6B);  // i32.sub
+          EmitMaskForType(body, value->type);
+          supported = true;
+        }
+      }
+      break;
 
     default:
       supported = false;
@@ -149,7 +426,8 @@ bool BuildChildModule(const Value* r3_source, const Producers& producers) {
   std::vector<uint8_t> expression;
   std::unordered_set<const Value*> visiting;
   uint32_t lowered = 0;
-  if (!EmitI64Value(r3_source, producers, visiting, expression, &lowered)) {
+  if (!EmitAdaptedIntegerValue(r3_source, true, false, producers, visiting,
+                               expression, &lowered)) {
     return false;
   }
 
@@ -191,30 +469,26 @@ bool BuildChildModule(const Value* r3_source, const Producers& producers) {
   EmitName(imports, "memory");
   imports.push_back(0x02);  // external kind: memory
   imports.push_back(0x00);  // limits: minimum only
-  EmitU32Leb(imports, 0);   // any parent memory with >= 0 pages is accepted
+  EmitU32Leb(imports, 0);
   EmitSection(module, 2, imports);
 
-  // Function section: one function of type 0.
   std::vector<uint8_t> functions;
   EmitU32Leb(functions, 1);
   EmitU32Leb(functions, 0);
   EmitSection(module, 3, functions);
 
-  // Export section: run -> function index 0.
   std::vector<uint8_t> exports;
   EmitU32Leb(exports, 1);
   EmitName(exports, "run");
-  exports.push_back(0x00);  // external kind: function
+  exports.push_back(0x00);
   EmitU32Leb(exports, 0);
   EmitSection(module, 7, exports);
 
-  // Code section. One local group containing local 1 as i64.
   std::vector<uint8_t> function_body;
-  EmitU32Leb(function_body, 1);  // local declaration groups
-  EmitU32Leb(function_body, 1);  // one local
-  function_body.push_back(0x7E); // i64
-  function_body.insert(function_body.end(), expression.begin(),
-                       expression.end());
+  EmitU32Leb(function_body, 1);
+  EmitU32Leb(function_body, 1);
+  function_body.push_back(0x7E);  // one i64 result local
+  function_body.insert(function_body.end(), expression.begin(), expression.end());
 
   std::vector<uint8_t> code;
   EmitU32Leb(code, 1);
@@ -250,9 +524,10 @@ bool BuildWasmBackendProbe(HIRBuilder* builder) {
   for (auto* block = builder->first_block(); block; block = block->next) {
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       if (instr->dest) producers[instr->dest] = instr;
-      if (instr->opcode && instr->opcode->num == xe::cpu::hir::OPCODE_STORE_CONTEXT &&
+      if (instr->opcode &&
+          instr->opcode->num == xe::cpu::hir::OPCODE_STORE_CONTEXT &&
           instr->src1.offset == r3_offset && instr->src2.value &&
-          instr->src2.value->type == xe::cpu::hir::INT64_TYPE) {
+          IsIntegerType(instr->src2.value->type)) {
         r3_source = instr->src2.value;
       }
     }

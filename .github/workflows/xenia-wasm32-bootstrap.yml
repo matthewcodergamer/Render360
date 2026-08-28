@@ -10,6 +10,7 @@ on:
       - 'xenia_translation_foundation_check.py'
       - 'test-package-xex-foundation.mjs'
       - 'test-xex-image-decode.mjs'
+      - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
       - 'test-vmx-foundation.mjs'
@@ -104,6 +105,7 @@ jobs:
             node ./test-wasm-backend-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-sparse-guest-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-xex-real-mapper-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

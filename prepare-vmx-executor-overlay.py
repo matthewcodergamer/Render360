@@ -99,23 +99,23 @@ bool StoreVectorShift(Value* destination, const Value* lhs, const Value* rhs,
   RuntimeValue result;
   result.type = xe::cpu::hir::VEC128_TYPE;
   result.value = {};
-#define R360_SHIFT_LANE(field, stype, count, mask) do { \
+#define R360_SHIFT_LANE(field, utype, stype, count, mask) do { \
   for (size_t i = 0; i < (count); ++i) { \
     const uint32_t sh = static_cast<uint32_t>(b.value.v128.field[i]) & (mask); \
     if (opcode == xe::cpu::hir::OPCODE_VECTOR_SHL) \
-      result.value.v128.field[i] = static_cast<decltype(result.value.v128.field[i])>(a.value.v128.field[i] << sh); \
+      result.value.v128.field[i] = static_cast<utype>(a.value.v128.field[i] << sh); \
     else if (opcode == xe::cpu::hir::OPCODE_VECTOR_SHR) \
-      result.value.v128.field[i] = static_cast<decltype(result.value.v128.field[i])>(a.value.v128.field[i] >> sh); \
+      result.value.v128.field[i] = static_cast<utype>(a.value.v128.field[i] >> sh); \
     else \
-      result.value.v128.field[i] = static_cast<decltype(result.value.v128.field[i])>(static_cast<stype>(a.value.v128.field[i]) >> sh); \
+      result.value.v128.field[i] = static_cast<utype>(static_cast<stype>(a.value.v128.field[i]) >> sh); \
   } \
 } while (0)
   if (part_type == xe::cpu::hir::INT8_TYPE) {
-    R360_SHIFT_LANE(u8, int8_t, 16, 7u);
+    R360_SHIFT_LANE(u8, uint8_t, int8_t, 16, 7u);
   } else if (part_type == xe::cpu::hir::INT16_TYPE) {
-    R360_SHIFT_LANE(u16, int16_t, 8, 15u);
+    R360_SHIFT_LANE(u16, uint16_t, int16_t, 8, 15u);
   } else if (part_type == xe::cpu::hir::INT32_TYPE) {
-    R360_SHIFT_LANE(u32, int32_t, 4, 31u);
+    R360_SHIFT_LANE(u32, uint32_t, int32_t, 4, 31u);
   } else {
     return false;
   }

@@ -94,6 +94,27 @@ const tests = [
     expectedR3: 0x12345678n,
     expectedMemory: [[guestDataAddress, 0x12345678]],
   },
+  {
+    name: 'lr-mtlr-mflr-roundtrip',
+    ppc: wordBytes(0x7C8803A6, 0x7C6802A6, 0x4E800020), // mtlr r4; mflr r3; blr
+    initialGprs: [[4, 0x80000040n]],
+    memorySeeds: [],
+    expectedR3: 0x80000040n,
+  },
+  {
+    name: 'ctr-mtctr-mfctr-roundtrip',
+    ppc: wordBytes(0x7C8903A6, 0x7C6902A6, 0x4E800020), // mtctr r4; mfctr r3; blr
+    initialGprs: [[4, 9n]],
+    memorySeeds: [],
+    expectedR3: 9n,
+  },
+  {
+    name: 'cr-cmpwi-equal-mfcr',
+    ppc: wordBytes(0x2C040000, 0x7C600026, 0x4E800020), // cmpwi r4,0; mfcr r3; blr
+    initialGprs: [[4, 0n]],
+    memorySeeds: [],
+    expectedR3: 0x20000000n,
+  },
 ];
 
 function fail(message, code) {
@@ -163,3 +184,4 @@ for (const test of tests) {
 
 console.log(`PASS: ${tests.length} real PPC correctness programs translated and executed through finalized Xenia HIR.`);
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
+console.log('PASS: LR/CTR round-trips and CR0 equality state are verified through Xenia PPCContext semantics.');

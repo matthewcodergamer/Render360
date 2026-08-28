@@ -27,6 +27,9 @@ SOURCES=(
   "third_party/fmt/src/format.cc"
   "src/xenia/base/cvar.cc"
   "src/xenia/base/utf8.cc"
+  "src/xenia/base/memory_posix.cc"
+  "src/xenia/base/logging.cc"
+  "src/xenia/base/mutex.cc"
   "src/xenia/memory.cc"
   "src/xenia/cpu/processor.cc"
   "src/xenia/cpu/backend/backend.cc"
@@ -52,7 +55,7 @@ classify_failure() {
   local log="$1"
   if grep -Eqi 'Instruction pointer not specified|target CPU architecture|x64_backend|x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
   elif grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then echo PPC_CONTEXT_ABI_DEPENDENCY
-  elif grep -Eqi 'CreateFileMapping|MapView|file.?mapping|4gb|address space|windows\.h|win32|VirtualAlloc|sys/mman|mmap' "$log"; then echo HOST_MEMORY_MAPPING_DEPENDENCY
+  elif grep -Eqi 'CreateFileMapping|MapView|file.?mapping|4gb|address space|windows\.h|win32|VirtualAlloc|sys/mman|mmap|shm_open|ftruncate64|mprotect|munmap' "$log"; then echo HOST_MEMORY_MAPPING_DEPENDENCY
   elif grep -Eqi 'error:.*char8_t|no viable.*char8_t|u8 literal' "$log"; then echo UTF8_LITERAL_ABI_DEPENDENCY
   elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then echo LLVM_HEADER_DEPENDENCY
   elif grep -Eqi 'pthread|unistd|mach/' "$log"; then echo HOST_OS_DEPENDENCY

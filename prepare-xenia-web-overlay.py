@@ -98,7 +98,7 @@ translate_replacement = '''  template <typename T = uint8_t*>
     if (guest_address < kRender360ProbeGuestBase ||
         guest_address >= kRender360ProbeGuestBase + kRender360ProbeGuestSize ||
         render360_wasm32_probe_code_window_.empty()) {
-      return reinterpret_cast<T>(nullptr);
+      return static_cast<T>(nullptr);
     }
     return reinterpret_cast<T>(render360_wasm32_probe_code_window_.data() +
                                (guest_address - kRender360ProbeGuestBase));
@@ -119,8 +119,10 @@ if private_anchor not in memory_h:
 private_replacement = private_anchor + (
     "#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)\n"
     "  // Translation-probe-only guest code backing. Full sparse Xbox memory\n"
-    "  // is a separate browser host implementation stage.\n"
-    "  std::vector<uint8_t> render360_wasm32_probe_code_window_;\n"
+    "  // is a separate browser host implementation stage. Mutable preserves\n"
+    "  // Xenia's const TranslateVirtual API, which intentionally returns a\n"
+    "  // writable guest pointer even when called through const Memory.\n"
+    "  mutable std::vector<uint8_t> render360_wasm32_probe_code_window_;\n"
     "#endif\n"
 )
 memory_h = memory_h.replace(private_anchor, private_replacement, 1)
@@ -239,9 +241,7 @@ wasm_init = '''bool Memory::Initialize() {
   return true;
 #else
 '''
-# Keep the exact upstream desktop Initialize body nested below the browser case.
 desktop_body = upstream_init[len("bool Memory::Initialize() {\n"):]
-# desktop_body already ends with closing brace and blank lines.
 last_close = desktop_body.rfind("}\n")
 if last_close < 0:
     raise SystemExit("Upstream Memory::Initialize closing brace drifted")

@@ -10,7 +10,6 @@ mkdir -p "$OUT"
 
 if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2; exit 2; fi
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
-
 python3 "$ROOT/prepare-xenia-web-overlay.py"
 
 COMMON=(
@@ -26,6 +25,8 @@ if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCL
 
 SOURCES=(
   "src/xenia/base/cvar.cc"
+  "src/xenia/memory.cc"
+  "src/xenia/cpu/processor.cc"
   "src/xenia/cpu/backend/backend.cc"
   "src/xenia/cpu/backend/assembler.cc"
   "src/xenia/cpu/function.cc"
@@ -49,9 +50,10 @@ classify_failure() {
   local log="$1"
   if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then echo PPC_CONTEXT_ABI_DEPENDENCY
   elif grep -Eqi 'char8_t|u8 literal' "$log"; then echo UTF8_LITERAL_ABI_DEPENDENCY
+  elif grep -Eqi 'x64_backend|x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
+  elif grep -Eqi 'CreateFileMapping|MapView|file.?mapping|4gb|address space|windows\.h|win32|VirtualAlloc|sys/mman|mmap' "$log"; then echo HOST_MEMORY_MAPPING_DEPENDENCY
   elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then echo LLVM_HEADER_DEPENDENCY
-  elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
-  elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then echo HOST_OS_OR_MEMORY_DEPENDENCY
+  elif grep -Eqi 'pthread|unistd|mach/' "$log"; then echo HOST_OS_DEPENDENCY
   elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore|threading\.h|chrono\.h' "$log"; then echo THREADING_DEPENDENCY
   elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party/date|third_party|not found|file not found|no such file' "$log"; then echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
   else echo CXX_OR_PORTABILITY_DEPENDENCY

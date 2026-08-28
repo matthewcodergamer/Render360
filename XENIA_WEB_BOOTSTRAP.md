@@ -6,6 +6,29 @@ Prove the real upstream Xenia PowerPC frontend and HIR/compiler boundary can be 
 
 This milestone must not claim guest execution until real guest instructions execute.
 
+## Current measured result
+
+The compile-only bootstrap is now running in GitHub Actions with real upstream Xenia source and Emscripten.
+
+Current matrix:
+
+```text
+PASS  src/xenia/cpu/hir/opcodes.cc
+PASS  src/xenia/cpu/hir/block.cc
+PASS  src/xenia/cpu/hir/instr.cc
+PASS  src/xenia/cpu/hir/value.cc
+PASS  src/xenia/cpu/compiler/compiler_pass.cc
+
+BLOCK src/xenia/cpu/ppc/ppc_context.cc      PPC_CONTEXT_ABI_DEPENDENCY
+BLOCK src/xenia/cpu/ppc/ppc_hir_builder.cc  PPC_CONTEXT_ABI_DEPENDENCY
+BLOCK src/xenia/cpu/ppc/ppc_translator.cc   PPC_CONTEXT_ABI_DEPENDENCY
+BLOCK src/xenia/cpu/ppc/ppc_frontend.cc     PPC_CONTEXT_ABI_DEPENDENCY
+```
+
+So the current boundary is **5 real Xenia translation units compiling for wasm32, 4 blocked by one shared issue: PPCContext layout/padding on the wasm32 ABI**.
+
+The browser host overlay currently contains only platform and atomic primitives in `src/xenia_web_shims/`. It does not replace Xbox instruction semantics.
+
 ## Verified upstream split
 
 Current upstream Xenia keeps the useful CPU boundary in `src/xenia/cpu/ppc/`:
@@ -38,24 +61,33 @@ Run:
 
 ```bash
 ./fetch-xenia.sh
+python3 xenia_contract_check.py
 python3 xenia_web_bootstrap_check.py
 ```
 
-The audit must pass before we copy or adapt more CPU code. It intentionally checks upstream files rather than pretending Render360 already executes PPC.
+The audits now run automatically in `.github/workflows/xenia-wasm32-bootstrap.yml` before the compile matrix.
 
 ## Phase 2 — compile-only wasm32 target
 
-Create a separate experimental target, `xenia_ppc_bootstrap.wasm`, so the stable V32 runtime keeps working while dependencies are removed one at a time.
+Run locally with an Emscripten environment:
+
+```bash
+./fetch-xenia.sh
+bash ./build-xenia-ppc-bootstrap.sh
+```
+
+The stable V32 runtime stays separate while dependencies are removed one at a time.
 
 Target sequence:
 
-1. compile PPC data/context headers;
-2. compile HIR core;
-3. compile compiler core and portable passes;
+1. compile HIR core — **partially achieved**;
+2. compile compiler core and portable passes — **first compiler pass achieved**;
+3. make `PPCContext` layout explicitly valid on wasm32 — **current blocker**;
 4. compile PPC opcode tables and emit categories;
 5. compile `PPCHIRBuilder`;
 6. compile `PPCTranslator`;
-7. compile `PPCFrontend` behind a minimal processor/memory host boundary.
+7. compile `PPCFrontend` behind a minimal processor/memory host boundary;
+8. link the separate `xenia_ppc_bootstrap.wasm` experiment.
 
 Every failure should be classified as one of:
 
@@ -64,6 +96,7 @@ Every failure should be classified as one of:
 - `HOST_ARCH_DEPENDENCY`
 - `THREADING_DEPENDENCY`
 - `MEMORY_MAPPING_DEPENDENCY`
+- `PPC_CONTEXT_ABI_DEPENDENCY`
 - `LOGGING_OR_UTILITY_DEPENDENCY`
 
 Do not solve an x64 dependency by recreating PPC semantics in JavaScript. Move the host-specific dependency behind a web adapter.

@@ -14,6 +14,7 @@ python3 "$ROOT/prepare-xenia-web-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
+python3 "$ROOT/prepare-vmx-executor-overlay.py"
 
 COMMON=(
   -std=c++20 -O0 -g0
@@ -127,10 +128,10 @@ for rel in "${SOURCES[@]}"; do
 done
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
-# The FPU correctness semantics now live directly in the canonical executor.
-# Compile that source instead of patching it a second time through a generated
-# overlay; this keeps the tested file identical to the committed implementation.
-compile_one "render360/hir_correctness_executor.cpp" "$ROOT/src/xenia_web_bootstrap/hir_correctness_executor.cpp"
+# V34 VMX correctness extends the committed canonical executor through a
+# deterministic generated overlay. The overlay script fails if the canonical
+# source contract drifts, so CI cannot silently build against stale semantics.
+compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

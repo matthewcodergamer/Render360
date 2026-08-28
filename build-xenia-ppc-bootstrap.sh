@@ -11,6 +11,7 @@ mkdir -p "$OUT"
 if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2; exit 2; fi
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 python3 "$ROOT/prepare-xenia-web-overlay.py"
+python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 
 COMMON=(
   -std=c++20 -O0 -g0
@@ -103,6 +104,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/base/cvar.cc") compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc" ;;
     "src/xenia/base/utf8.cc") compile_one "$rel" "$OVERLAY/xenia/base/utf8.cc" ;;
     "src/xenia/memory.cc") compile_one "$rel" "$OVERLAY/xenia/memory.cc" ;;
+    "src/xenia/cpu/mmio_handler.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/mmio_handler.cc" ;;
     "src/xenia/cpu/processor.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac

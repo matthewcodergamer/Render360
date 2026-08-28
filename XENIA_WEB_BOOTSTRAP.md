@@ -10,7 +10,7 @@ Milestone language remains strict:
 - **PPC EXECUTING**: finalized Xenia HIR executes and produces verified PowerPC architectural-state changes.
 - **PLAYABLE**: genuine title execution, kernel, graphics, input and audio work sufficiently for gameplay.
 
-## Current measured result — nested guest calls + FLOAT64 arithmetic
+## Current authoritative green result — nested guest calls + FLOAT64 arithmetic
 
 GitHub Actions run **133** (`33143476524`) completed successfully at commit `9cceb0529df209f1226f9b81da6918e6e2e24991`.
 
@@ -35,7 +35,7 @@ real big-endian Xbox PPC bytes
   -> asserted architectural and guest-memory state
 ```
 
-## New measured boundaries
+## Completed in this CPU pass
 
 ### Direct and nested guest calls
 
@@ -62,7 +62,7 @@ No Render360 PPC decoder or hardcoded callee implementation is involved.
 
 ### First non-zero FPU arithmetic path
 
-The earlier `fmr f1,f2` FPR data-path gate remains green. Run 133 additionally executes:
+Run 133 executes:
 
 ```text
 lfd  f1,0(r4)       ; 1.0
@@ -87,6 +87,40 @@ full result bits         0x4008000000000000
 ```
 
 The full result is IEEE-754 double **3.0**, proving a real floating load/arithmetic/store path against Xenia guest memory.
+
+## VMX diagnostic boundary — run 136
+
+GitHub Actions diagnostic run **136** (`33143785258`) tested genuine VMX instructions:
+
+```text
+lvx      v1,0,r4
+lvx      v2,0,r5
+vaddubm  v3,v1,v2
+stvx     v3,0,r7
+lwz      r3,0(r7)
+blr
+```
+
+The graph still compiled **62/62** and linked strictly. The real Xenia PPC/Altivec frontend accepted the instructions and generated **29 finalized HIR instructions**, including:
+
+```text
+LOAD VEC128
+BYTE_SWAP VEC128
+STORE_CONTEXT
+LOAD VEC128
+BYTE_SWAP VEC128
+STORE_CONTEXT
+VECTOR_ADD          ; byte lane type
+STORE_CONTEXT
+BYTE_SWAP VEC128
+STORE
+```
+
+The correctness run failed deliberately at the first VEC128 `BYTE_SWAP`, which is not yet part of the executor subset. This diagnostic therefore establishes a precise boundary:
+
+**VMX/Altivec PPC decode and translation are already working in wasm32; VEC128 finalized-HIR execution is the active missing tier.**
+
+The VMX diagnostic was removed from the required green runtime gate after measuring the boundary. Unsupported VEC128 operations remain fail-closed instead of being treated as pass-through behavior.
 
 ## Existing measured correctness set
 
@@ -125,13 +159,13 @@ The memory operations use the same bounded Xenia `Memory` instance owned by `Pro
 - typed FLOAT32/FLOAT64 `ADD`, `SUB`, `MUL` execution support, with FLOAT64 `ADD` measured in run 133;
 - `BRANCH`, conditional branches, backward loops;
 - `LOAD`, `STORE`, `LOAD_OFFSET`, `STORE_OFFSET` against Xenia Memory;
-- `BYTE_SWAP` for Xbox guest byte order;
+- scalar `BYTE_SWAP` for Xbox guest byte order;
 - LR, CTR and CR state;
 - direct/conditional HIR calls with nested Xenia-scanned guest translation;
 - return / `CALL_POSSIBLE_RETURN` boundaries;
 - a 4096-instruction correctness guard.
 
-Unsupported HIR fails the gate instead of being ignored or guessed.
+Run 136 additionally proves that finalized VEC128 `LOAD`, `STORE_CONTEXT`, `VECTOR_ADD`, `BYTE_SWAP` and `STORE` reach the executor, but vector execution is not yet enabled. Unsupported HIR fails the gate instead of being ignored or guessed.
 
 ## Strict CI behavior
 
@@ -145,6 +179,8 @@ source matrix PASS
 -> complete required probe ABI present
 -> every required real PPC runtime program PASS
 ```
+
+Diagnostic experiments may intentionally fail the runtime step to expose the next unsupported finalized-HIR operation; they are not promoted to milestones until a later green run verifies them.
 
 ## Browser-only host adaptations
 
@@ -178,8 +214,9 @@ Phase 4E  CR/LR/CTR architectural state                       COMPLETE FIRST SUB
 Phase 4F  CTR-controlled backward loops                       COMPLETE FIRST SUBSET
 Phase 4G  direct + nested guest calls/returns                 COMPLETE FIRST SUBSET
 Phase 4H  FPR movement + FLOAT64 load/add/store                COMPLETE FIRST SUBSET (run 133)
-Phase 4I  broader FPU compare/convert/FPSCR/divide            ACTIVE NEXT
-Phase 4J  VMX / VMX128 correctness                            NEXT
+Phase 4I  VMX PPC -> finalized VEC128 HIR                     COMPLETE FIRST TRACE (run 136)
+Phase 4J  VEC128 BYTE_SWAP + VECTOR_ADD execution             ACTIVE NEXT
+Phase 4K  broader FPU + VMX/VMX128 correctness                NEXT
 Phase 5   hot-block WasmBackend                               FUTURE
 Phase 6   executable-page invalidation + sparse guest memory  FUTURE
 Phase 7   map/enter captured default.xex                      FUTURE
@@ -192,11 +229,13 @@ Phase 10  WebAudio + first genuine guest framebuffer          FUTURE
 
 Continue expanding only from real Xenia HIR traces:
 
-1. add genuine PPC floating subtraction/multiplication/division tests with exact guest-memory result bits;
-2. add floating compare and conversion/FPSCR cases as Xenia emits them;
-3. add first VMX/VMX128 context/vector correctness programs;
-4. keep unsupported HIR fail-closed;
-5. after the correctness subset is broad enough, lower finalized Xenia HIR to the hot `WasmBackend` rather than extending the interpreter indefinitely.
+1. implement VEC128 `BYTE_SWAP` with Xenia's 128-bit byte ordering;
+2. implement measured `VECTOR_ADD` lane semantics, beginning with the `INT8` lane form emitted by `vaddubm`;
+3. reinstate the `lvx -> vaddubm -> stvx` test and verify all 16 result bytes in guest memory;
+4. broaden vector integer ops and then VMX128 encodings as measured;
+5. expand FPU subtraction/multiplication/division, compare/convert and FPSCR behavior;
+6. keep unsupported HIR fail-closed;
+7. after the correctness subset is broad enough, lower finalized Xenia HIR to the hot `WasmBackend` rather than extending the interpreter indefinitely.
 
 ## Hot execution tier after correctness
 

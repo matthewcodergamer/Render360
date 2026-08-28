@@ -21,7 +21,6 @@ python3 "$ROOT/prepare-xenia-web-overlay.py"
 
 COMMON=(
   -std=c++20
-  -fno-char8_t
   -O0
   -g0
   -I"$OVERLAY"
@@ -35,12 +34,6 @@ COMMON=(
   -I"$XENIA/third_party/cxxopts/include"
 )
 
-# Upstream Xenia's current base utilities intentionally treat u8 literals as
-# char-based UTF-8 strings. Modern Clang C++20 makes u8 literals char8_t by
-# default, which breaks cvar.cc's std::string operations. Keep C++20 language
-# mode while matching Xenia's existing UTF-8 ABI with -fno-char8_t rather than
-# editing the upstream cvar implementation.
-
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   COMMON+=("-I$LLVM_INCLUDE")
@@ -48,8 +41,8 @@ if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
 fi
 
 # Real upstream Xenia units required by the browser CPU bootstrap. cvar.cc is
-# included because the first strict link proved PPCHIRBuilder references the
-# real cvar::ConfigVars registry.
+# included because the strict link proved PPCHIRBuilder references the real
+# cvar::ConfigVars registry.
 SOURCES=(
   "src/xenia/base/cvar.cc"
   "src/xenia/cpu/hir/opcodes.cc"
@@ -97,10 +90,12 @@ printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
 compile_one() {
   local label="$1"
   local src="$2"
+  shift 2
+  local extra=("$@")
   local obj="$OUT/$(echo "$label" | tr '/' '_').o"
   local log="$obj.log"
   printf '[WASM32] %-48s ' "$label"
-  if "$CXX" "${COMMON[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
+  if "$CXX" "${COMMON[@]}" "${extra[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
     echo PASS
     printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"
     passed=$((passed + 1))
@@ -114,7 +109,14 @@ compile_one() {
 }
 
 for rel in "${SOURCES[@]}"; do
-  compile_one "$rel" "$XENIA/$rel"
+  if [ "$rel" = "src/xenia/base/cvar.cc" ]; then
+    # cvar.cc predates C++20 char8_t semantics and appends u8 literals directly
+    # to std::string. Compile only this upstream utility unit as C++17. The PPC,
+    # HIR and compiler units stay on the already-proven C++20 configuration.
+    compile_one "$rel" "$XENIA/$rel" -std=c++17
+  else
+    compile_one "$rel" "$XENIA/$rel"
+  fi
 done
 
 compile_one \

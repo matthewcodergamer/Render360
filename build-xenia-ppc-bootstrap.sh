@@ -25,6 +25,7 @@ COMMON=(
   -g0
   -I"$OVERLAY"
   -I"$ROOT/src/xenia_web_shims"
+  -I"$ROOT/src/xenia_web_bootstrap"
   -I"$XENIA/src"
   -I"$XENIA"
   -I"$XENIA/third_party/fmt/include"
@@ -40,8 +41,14 @@ if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   echo "LLVM headers: $LLVM_INCLUDE"
 fi
 
+# Real upstream Xenia CPU/backend units plus Render360's translation-only host
+# backend. The probe backend does not recreate PPC semantics; it is the browser
+# host sink that receives Xenia's finalized HIR and records telemetry.
 SOURCES=(
   "src/xenia/base/cvar.cc"
+  "src/xenia/cpu/backend/backend.cc"
+  "src/xenia/cpu/backend/assembler.cc"
+  "src/xenia/cpu/function.cc"
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
   "src/xenia/cpu/hir/instr.cc"
@@ -60,22 +67,14 @@ SOURCES=(
 
 classify_failure() {
   local log="$1"
-  if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then
-    echo PPC_CONTEXT_ABI_DEPENDENCY
-  elif grep -Eqi 'char8_t|u8 literal' "$log"; then
-    echo UTF8_LITERAL_ABI_DEPENDENCY
-  elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then
-    echo LLVM_HEADER_DEPENDENCY
-  elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then
-    echo HOST_ARCH_DEPENDENCY
-  elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then
-    echo HOST_OS_OR_MEMORY_DEPENDENCY
-  elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore|threading\.h|chrono\.h' "$log"; then
-    echo THREADING_DEPENDENCY
-  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party/date|third_party|not found|file not found|no such file' "$log"; then
-    echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
-  else
-    echo CXX_OR_PORTABILITY_DEPENDENCY
+  if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then echo PPC_CONTEXT_ABI_DEPENDENCY
+  elif grep -Eqi 'char8_t|u8 literal' "$log"; then echo UTF8_LITERAL_ABI_DEPENDENCY
+  elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then echo LLVM_HEADER_DEPENDENCY
+  elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
+  elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then echo HOST_OS_OR_MEMORY_DEPENDENCY
+  elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore|threading\.h|chrono\.h' "$log"; then echo THREADING_DEPENDENCY
+  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party/date|third_party|not found|file not found|no such file' "$log"; then echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
+  else echo CXX_OR_PORTABILITY_DEPENDENCY
   fi
 }
 
@@ -85,38 +84,28 @@ failed=0
 printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
 
 compile_one() {
-  local label="$1"
-  local src="$2"
+  local label="$1"; local src="$2"
   local obj="$OUT/$(echo "$label" | tr '/' '_').o"
   local log="$obj.log"
   printf '[WASM32] %-48s ' "$label"
   if "$CXX" "${COMMON[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
-    echo PASS
-    printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"
-    passed=$((passed + 1))
+    echo PASS; printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"; passed=$((passed + 1))
   else
-    local category
-    category="$(classify_failure "$log")"
-    echo "BLOCKED ($category)"
-    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
-    failed=$((failed + 1))
+    local category; category="$(classify_failure "$log")"
+    echo "BLOCKED ($category)"; printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"; failed=$((failed + 1))
   fi
 }
 
 for rel in "${SOURCES[@]}"; do
   if [ "$rel" = "src/xenia/base/cvar.cc" ]; then
-    # Compile the generated, semantics-preserving C++20 source overlay. It only
-    # normalizes legacy u8 prefixes on ASCII byte literals; the real Xenia cvar
-    # registry and implementation are otherwise unchanged.
     compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc"
   else
     compile_one "$rel" "$XENIA/$rel"
   fi
 done
 
-compile_one \
-  "render360/ppc_context_abi_probe.cpp" \
-  "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"
+compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
+compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"
 
 echo
 echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"

@@ -23,14 +23,16 @@ struct HIRCorrectnessResult {
 };
 
 using HIRCorrectnessCallResolver = bool (*)(xe::cpu::Function* function);
+using HIRCorrectnessAddressResolver = bool (*)(uint32_t guest_address);
 
 void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 
-// ProbeBackend installs a resolver that asks the real Xenia PPCFrontend to
-// define/translate a called guest Function. The nested assembler then executes
-// that finalized HIR against the same active PPCContext as the caller.
+// ProbeBackend installs resolvers that send direct symbols and runtime-resolved
+// indirect targets back through the real Xenia PPCScanner/PPCFrontend. Nested
+// finalized HIR then executes against the same active PPCContext as the caller.
 void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver);
+void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver);
 bool IsHIRCorrectnessExecutionActive();
 
 HIRCorrectnessResult ExecuteHIRCorrectnessProbe(xe::cpu::hir::HIRBuilder* builder,

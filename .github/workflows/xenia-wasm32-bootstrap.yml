@@ -15,6 +15,7 @@ on:
       - 'render360_xenia_core_embedded.js'
       - 'build-core.sh'
       - 'wasm-core-v32.js'
+      - 'xenia_port/**'
       - 'prepare-xenia-*-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'

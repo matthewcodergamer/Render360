@@ -79,6 +79,7 @@ compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstra
 compile_one "render360/wasm_backend_memory_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_memory_probe.cpp"
 compile_one "render360/wasm_backend_call_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_call_probe.cpp"
 compile_one "render360/wasm_backend_fpu_probe.cpp" "$OVERLAY/render360/wasm_backend_fpu_probe_v2.cpp"
+compile_one "render360/wasm_backend_vmx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_vmx_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

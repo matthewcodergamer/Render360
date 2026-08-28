@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "hir_correctness_executor.h"
+#include "wasm_backend_cfg_probe.h"
 #include "wasm_backend_probe.h"
 #include "xenia/cpu/function_debug_info.h"
 #include "xenia/cpu/hir/block.h"
@@ -39,8 +40,6 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
     return false;
   }
 
-  // A temporary GuestFunction is only the container for Xenia's own scanner,
-  // frontend, translator and compiler. Render360 does not decode PPC here.
   ProbeGuestFunction nested_function(module, address);
   xe::cpu::ppc::PPCScanner scanner(frontend);
   if (!scanner.Scan(&nested_function, nullptr)) {
@@ -68,9 +67,6 @@ bool ResolveNestedGuestCall(xe::cpu::Function* function) {
 }
 
 bool ResolveNestedGuestAddress(uint32_t address) {
-  // Indirect CTR/LR calls do not carry a resolved Function symbol in HIR. The
-  // runtime address is still sent through PPCScanner/PPCFrontend exactly like
-  // direct calls. The standalone probe has no title Module yet, so module=null.
   return TranslateNestedGuestAddress(address, nullptr);
 }
 }  // namespace
@@ -117,15 +113,20 @@ bool ProbeAssembler::Assemble(
     g_probe_telemetry.hir_instructions = instruction_count;
     g_probe_telemetry.last_guest_address = function ? function->address() : 0;
 
-    // This is the first real hot-backend seam: consume the exact finalized HIR
-    // that Xenia hands to Assembler, and lower only the supported scalar slice
-    // into a separate child WebAssembly module. Unsupported HIR remains
-    // fail-closed and still uses the correctness executor as the reference.
+    // Independent hot-backend workstreams consume the exact same finalized HIR
+    // handed to Xenia's Assembler seam. Each stage stays fail-closed outside its
+    // measured scope and is validated against the correctness executor.
     BuildWasmBackendProbe(builder);
+    BuildWasmBackendCfgProbe(builder);
     std::fprintf(stderr,
                  "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n",
                  GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(),
                  GetWasmBackendProbeLoweredInstructions());
+    std::fprintf(stderr,
+                 "R360_WASM_BACKEND_CFG status=%u module_bytes=%u lowered=%u\n",
+                 GetWasmBackendCfgProbeStatus(),
+                 GetWasmBackendCfgProbeModuleSize(),
+                 GetWasmBackendCfgProbeLoweredInstructions());
   }
 
   auto* memory = backend_ && backend_->processor()
@@ -134,8 +135,7 @@ bool ProbeAssembler::Assemble(
   const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);
 
   if (!nested_execution) {
-    g_probe_telemetry.correctness_instructions =
-        correctness.instructions_executed;
+    g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
     g_probe_telemetry.correctness_r3 = correctness.r3;
     if (!correctness.supported) {
       g_probe_telemetry.correctness_status = 1;
@@ -174,8 +174,6 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   SetHIRCorrectnessCallResolver(&ResolveNestedGuestCall);
   SetHIRCorrectnessAddressResolver(&ResolveNestedGuestAddress);
 
-  // These are compiler allocator resources only. They intentionally match a
-  // viable Xenia allocation model without claiming native x64 execution.
   machine_info_.supports_extended_load_store = false;
   auto& gprs = machine_info_.register_sets[0];
   gprs.id = 0;

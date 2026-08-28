@@ -9,6 +9,7 @@
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
 #include "xenia/cpu/hir/instr.h"
+#include "xenia/cpu/processor.h"
 
 namespace render360::xenia_web {
 namespace {
@@ -24,8 +25,6 @@ ProbeGuestFunction::ProbeGuestFunction(xe::cpu::Module* module,
 ProbeGuestFunction::~ProbeGuestFunction() = default;
 
 bool ProbeGuestFunction::CallImpl(xe::cpu::ThreadState*, uint32_t) {
-  // ProbeBackend still owns no native executable code. Phase 4 execution is
-  // performed explicitly from finalized Xenia HIR by HIRCorrectnessExecutor.
   return false;
 }
 
@@ -46,9 +45,8 @@ bool ProbeAssembler::Assemble(
                    block_index, instr->ordinal,
                    instr->opcode && instr->opcode->name ? instr->opcode->name
                                                         : "<null>",
-                   instr->opcode
-                       ? static_cast<unsigned>(instr->opcode->num)
-                       : 0u);
+                   instr->opcode ? static_cast<unsigned>(instr->opcode->num)
+                                 : 0u);
     }
   }
 
@@ -57,7 +55,10 @@ bool ProbeAssembler::Assemble(
   g_probe_telemetry.hir_instructions = instruction_count;
   g_probe_telemetry.last_guest_address = function ? function->address() : 0;
 
-  const auto correctness = ExecuteHIRCorrectnessProbe(builder);
+  auto* memory = backend_ && backend_->processor()
+                     ? backend_->processor()->memory()
+                     : nullptr;
+  const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);
   g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
   g_probe_telemetry.correctness_r3 = correctness.r3;
   if (!correctness.supported) {
@@ -74,9 +75,7 @@ bool ProbeAssembler::Assemble(
                static_cast<unsigned long long>(g_probe_telemetry.correctness_r3),
                correctness.reached_return_boundary ? 1u : 0u);
 
-  if (function && debug_info) {
-    function->set_debug_info(std::move(debug_info));
-  }
+  if (function && debug_info) function->set_debug_info(std::move(debug_info));
   return true;
 }
 
@@ -84,12 +83,9 @@ ProbeBackend::ProbeBackend() = default;
 ProbeBackend::~ProbeBackend() = default;
 
 bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
-  if (!xe::cpu::backend::Backend::Initialize(processor)) {
-    return false;
-  }
+  if (!xe::cpu::backend::Backend::Initialize(processor)) return false;
 
   machine_info_.supports_extended_load_store = false;
-
   auto& gprs = machine_info_.register_sets[0];
   gprs.id = 0;
   std::strcpy(gprs.name, "gpr");
@@ -102,7 +98,6 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   vecs.types = xe::cpu::backend::MachineInfo::RegisterSet::FLOAT_TYPES |
                xe::cpu::backend::MachineInfo::RegisterSet::VEC_TYPES;
   vecs.count = 12;
-
   return true;
 }
 

@@ -30,12 +30,19 @@ uint32_t g_lowered = 0;
 std::vector<uint8_t> g_module;
 alignas(64) uint8_t g_context[sizeof(PPCContext)] = {};
 
-using Producers = std::unordered_map<const Value*, const Instr*>;
+struct LocalInfo {
+  uint32_t index = 0;
+  TypeName type = xe::cpu::hir::INT32_TYPE;
+};
+
+using ValueLocals = std::unordered_map<const Value*, LocalInfo>;
 using BlockIndices = std::unordered_map<const Block*, uint32_t>;
 
 bool IsIntegerType(TypeName type) {
-  return type == xe::cpu::hir::INT8_TYPE || type == xe::cpu::hir::INT16_TYPE ||
-         type == xe::cpu::hir::INT32_TYPE || type == xe::cpu::hir::INT64_TYPE;
+  return type == xe::cpu::hir::INT8_TYPE ||
+         type == xe::cpu::hir::INT16_TYPE ||
+         type == xe::cpu::hir::INT32_TYPE ||
+         type == xe::cpu::hir::INT64_TYPE;
 }
 
 bool IsI64(TypeName type) { return type == xe::cpu::hir::INT64_TYPE; }
@@ -107,20 +114,35 @@ void EmitMask(std::vector<uint8_t>& out, TypeName type) {
 }
 
 void EmitSignNormalize(std::vector<uint8_t>& out, TypeName type) {
-  if (type == xe::cpu::hir::INT8_TYPE) out.push_back(0xC0);
-  if (type == xe::cpu::hir::INT16_TYPE) out.push_back(0xC1);
+  if (type == xe::cpu::hir::INT8_TYPE) {
+    out.push_back(0xC0);
+  } else if (type == xe::cpu::hir::INT16_TYPE) {
+    out.push_back(0xC1);
+  }
 }
 
-bool EmitIntegerValue(const Value* value, const Producers& producers,
-                      std::unordered_set<const Value*>& visiting,
-                      std::vector<uint8_t>& out, uint32_t* lowered);
-
-bool EmitAdapted(const Value* value, bool want_i64, bool sign_extend,
-                 const Producers& producers,
-                 std::unordered_set<const Value*>& visiting,
-                 std::vector<uint8_t>& out, uint32_t* lowered) {
+bool EmitValue(const Value* value, const ValueLocals& locals,
+               std::vector<uint8_t>& out) {
   if (!value || !IsIntegerType(value->type)) return false;
-  if (!EmitIntegerValue(value, producers, visiting, out, lowered)) return false;
+  if (value->IsConstant()) {
+    if (IsI64(value->type)) {
+      EmitI64Const(out, value->constant.i64);
+    } else {
+      EmitI32Const(out, value->constant.i32);
+      EmitMask(out, value->type);
+    }
+    return true;
+  }
+  const auto it = locals.find(value);
+  if (it == locals.end()) return false;
+  out.push_back(0x20);
+  EmitU32Leb(out, it->second.index);
+  return true;
+}
+
+bool EmitAdaptedValue(const Value* value, bool want_i64, bool sign_extend,
+                      const ValueLocals& locals, std::vector<uint8_t>& out) {
+  if (!EmitValue(value, locals, out)) return false;
   const bool source_i64 = IsI64(value->type);
   if (source_i64 == want_i64) {
     if (!want_i64 && sign_extend) EmitSignNormalize(out, value->type);
@@ -140,24 +162,23 @@ bool EmitAdapted(const Value* value, bool want_i64, bool sign_extend,
   return true;
 }
 
-bool EmitCompare(const Instr* instr, const Producers& producers,
-                 std::unordered_set<const Value*>& visiting,
-                 std::vector<uint8_t>& out, uint32_t* lowered) {
+bool EmitCompare(const Instr* instr, const ValueLocals& locals,
+                 std::vector<uint8_t>& out) {
   if (!instr->src1.value || !instr->src2.value ||
       !IsIntegerType(instr->src1.value->type) ||
       !IsIntegerType(instr->src2.value->type)) {
     return false;
   }
   const auto op = instr->opcode->num;
-  const bool i64 = IsI64(instr->src1.value->type) || IsI64(instr->src2.value->type);
-  const bool signed_compare = op == xe::cpu::hir::OPCODE_COMPARE_SLT ||
-                              op == xe::cpu::hir::OPCODE_COMPARE_SLE ||
-                              op == xe::cpu::hir::OPCODE_COMPARE_SGT ||
-                              op == xe::cpu::hir::OPCODE_COMPARE_SGE;
-  if (!EmitAdapted(instr->src1.value, i64, signed_compare, producers, visiting,
-                   out, lowered) ||
-      !EmitAdapted(instr->src2.value, i64, signed_compare, producers, visiting,
-                   out, lowered)) {
+  const bool i64 = IsI64(instr->src1.value->type) ||
+                   IsI64(instr->src2.value->type);
+  const bool signed_compare =
+      op == xe::cpu::hir::OPCODE_COMPARE_SLT ||
+      op == xe::cpu::hir::OPCODE_COMPARE_SLE ||
+      op == xe::cpu::hir::OPCODE_COMPARE_SGT ||
+      op == xe::cpu::hir::OPCODE_COMPARE_SGE;
+  if (!EmitAdaptedValue(instr->src1.value, i64, signed_compare, locals, out) ||
+      !EmitAdaptedValue(instr->src2.value, i64, signed_compare, locals, out)) {
     return false;
   }
   if (!i64) {
@@ -192,35 +213,23 @@ bool EmitCompare(const Instr* instr, const Producers& producers,
   return true;
 }
 
-bool EmitIntegerValue(const Value* value, const Producers& producers,
-                      std::unordered_set<const Value*>& visiting,
-                      std::vector<uint8_t>& out, uint32_t* lowered) {
-  if (!value || !IsIntegerType(value->type)) return false;
-  if (value->IsConstant()) {
-    if (IsI64(value->type)) {
-      EmitI64Const(out, value->constant.i64);
-    } else {
-      EmitI32Const(out, value->constant.i32);
-      EmitMask(out, value->type);
-    }
-    return true;
-  }
-  if (!visiting.insert(value).second) return false;
-  const auto found = producers.find(value);
-  if (found == producers.end() || !found->second || !found->second->opcode) {
-    visiting.erase(value);
+bool EmitProducer(const Instr* instr, const ValueLocals& locals,
+                  std::vector<uint8_t>& out) {
+  if (!instr || !instr->opcode || !instr->dest ||
+      !IsIntegerType(instr->dest->type)) {
     return false;
   }
-  const Instr* instr = found->second;
+  const TypeName dest_type = instr->dest->type;
+  const bool dest_i64 = IsI64(dest_type);
   bool ok = false;
   switch (instr->opcode->num) {
     case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
       out.push_back(0x20); out.push_back(0x00);
-      if (value->type == xe::cpu::hir::INT8_TYPE) {
+      if (dest_type == xe::cpu::hir::INT8_TYPE) {
         out.push_back(0x2D); out.push_back(0x00);
-      } else if (value->type == xe::cpu::hir::INT16_TYPE) {
+      } else if (dest_type == xe::cpu::hir::INT16_TYPE) {
         out.push_back(0x2F); out.push_back(0x01);
-      } else if (value->type == xe::cpu::hir::INT32_TYPE) {
+      } else if (dest_type == xe::cpu::hir::INT32_TYPE) {
         out.push_back(0x28); out.push_back(0x02);
       } else {
         out.push_back(0x29); out.push_back(0x03);
@@ -229,32 +238,29 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
       ok = true;
       break;
     case xe::cpu::hir::OPCODE_ASSIGN:
-      ok = EmitAdapted(instr->src1.value, IsI64(value->type), false, producers,
-                       visiting, out, lowered);
-      if (ok) EmitMask(out, value->type);
+      ok = EmitAdaptedValue(instr->src1.value, dest_i64, false, locals, out);
+      if (ok) EmitMask(out, dest_type);
       break;
     case xe::cpu::hir::OPCODE_TRUNCATE:
-      ok = EmitIntegerValue(instr->src1.value, producers, visiting, out, lowered);
-      if (ok && IsI64(instr->src1.value->type) && !IsI64(value->type)) out.push_back(0xA7);
-      if (ok) EmitMask(out, value->type);
+      if (!instr->src1.value || !IsIntegerType(instr->src1.value->type)) break;
+      ok = EmitValue(instr->src1.value, locals, out);
+      if (ok && IsI64(instr->src1.value->type) && !dest_i64) out.push_back(0xA7);
+      if (ok) EmitMask(out, dest_type);
       break;
     case xe::cpu::hir::OPCODE_ZERO_EXTEND:
-      ok = EmitAdapted(instr->src1.value, IsI64(value->type), false, producers,
-                       visiting, out, lowered);
-      if (ok) EmitMask(out, value->type);
+      ok = EmitAdaptedValue(instr->src1.value, dest_i64, false, locals, out);
+      if (ok) EmitMask(out, dest_type);
       break;
     case xe::cpu::hir::OPCODE_SIGN_EXTEND:
-      ok = EmitAdapted(instr->src1.value, IsI64(value->type), true, producers,
-                       visiting, out, lowered);
+      ok = EmitAdaptedValue(instr->src1.value, dest_i64, true, locals, out);
       break;
     case xe::cpu::hir::OPCODE_IS_TRUE:
-    case xe::cpu::hir::OPCODE_IS_FALSE: {
-      if (!EmitIntegerValue(instr->src1.value, producers, visiting, out, lowered)) break;
+    case xe::cpu::hir::OPCODE_IS_FALSE:
+      if (!instr->src1.value || !EmitValue(instr->src1.value, locals, out)) break;
       out.push_back(IsI64(instr->src1.value->type) ? 0x50 : 0x45);
       if (instr->opcode->num == xe::cpu::hir::OPCODE_IS_TRUE) out.push_back(0x45);
       ok = true;
       break;
-    }
     case xe::cpu::hir::OPCODE_COMPARE_EQ:
     case xe::cpu::hir::OPCODE_COMPARE_NE:
     case xe::cpu::hir::OPCODE_COMPARE_SLT:
@@ -265,7 +271,7 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
     case xe::cpu::hir::OPCODE_COMPARE_ULE:
     case xe::cpu::hir::OPCODE_COMPARE_UGT:
     case xe::cpu::hir::OPCODE_COMPARE_UGE:
-      ok = EmitCompare(instr, producers, visiting, out, lowered);
+      ok = EmitCompare(instr, locals, out);
       break;
     case xe::cpu::hir::OPCODE_ADD:
     case xe::cpu::hir::OPCODE_SUB:
@@ -274,11 +280,11 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
     case xe::cpu::hir::OPCODE_XOR:
     case xe::cpu::hir::OPCODE_SHL:
     case xe::cpu::hir::OPCODE_SHR:
-    case xe::cpu::hir::OPCODE_SHA: {
-      const bool i64 = IsI64(value->type);
-      if (!EmitAdapted(instr->src1.value, i64, false, producers, visiting, out, lowered) ||
-          !EmitAdapted(instr->src2.value, i64, false, producers, visiting, out, lowered)) break;
-      if (!i64) {
+    case xe::cpu::hir::OPCODE_SHA:
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT:
+      if (!EmitAdaptedValue(instr->src1.value, dest_i64, false, locals, out) ||
+          !EmitAdaptedValue(instr->src2.value, dest_i64, false, locals, out)) break;
+      if (!dest_i64) {
         switch (instr->opcode->num) {
           case xe::cpu::hir::OPCODE_ADD: out.push_back(0x6A); break;
           case xe::cpu::hir::OPCODE_SUB: out.push_back(0x6B); break;
@@ -288,7 +294,8 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
           case xe::cpu::hir::OPCODE_SHL: out.push_back(0x74); break;
           case xe::cpu::hir::OPCODE_SHA: out.push_back(0x75); break;
           case xe::cpu::hir::OPCODE_SHR: out.push_back(0x76); break;
-          default: break;
+          case xe::cpu::hir::OPCODE_ROTATE_LEFT: out.push_back(0x77); break;
+          default: return false;
         }
       } else {
         switch (instr->opcode->num) {
@@ -300,112 +307,185 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
           case xe::cpu::hir::OPCODE_SHL: out.push_back(0x86); break;
           case xe::cpu::hir::OPCODE_SHA: out.push_back(0x87); break;
           case xe::cpu::hir::OPCODE_SHR: out.push_back(0x88); break;
-          default: break;
+          case xe::cpu::hir::OPCODE_ROTATE_LEFT: out.push_back(0x89); break;
+          default: return false;
         }
       }
-      EmitMask(out, value->type);
+      EmitMask(out, dest_type);
       ok = true;
       break;
-    }
-    default:
-      ok = false;
+    case xe::cpu::hir::OPCODE_NOT:
+      if (!EmitAdaptedValue(instr->src1.value, dest_i64, false, locals, out)) break;
+      if (dest_i64) {
+        EmitI64Const(out, -1); out.push_back(0x85);
+      } else {
+        EmitI32Const(out, -1); out.push_back(0x73); EmitMask(out, dest_type);
+      }
+      ok = true;
       break;
-  }
-  if (ok && lowered) ++*lowered;
-  visiting.erase(value);
-  return ok;
-}
-
-bool EmitTruthy(const Value* value, bool invert, const Producers& producers,
-                std::vector<uint8_t>& out, uint32_t* lowered) {
-  std::unordered_set<const Value*> visiting;
-  if (!EmitIntegerValue(value, producers, visiting, out, lowered)) return false;
-  out.push_back(IsI64(value->type) ? 0x50 : 0x45);  // eqz
-  if (!invert) out.push_back(0x45);                 // eqz(eqz(v))
-  return true;
-}
-
-bool EmitStoreContext(const Instr* instr, const Producers& producers,
-                      std::vector<uint8_t>& out, uint32_t* lowered) {
-  if (!instr->src2.value || !IsIntegerType(instr->src2.value->type)) return false;
-  out.push_back(0x20); out.push_back(0x00);  // ctx
-  std::unordered_set<const Value*> visiting;
-  if (!EmitIntegerValue(instr->src2.value, producers, visiting, out, lowered)) return false;
-  switch (instr->src2.value->type) {
-    case xe::cpu::hir::INT8_TYPE:
-      out.push_back(0x3A); out.push_back(0x00); break;
-    case xe::cpu::hir::INT16_TYPE:
-      out.push_back(0x3B); out.push_back(0x01); break;
-    case xe::cpu::hir::INT32_TYPE:
-      out.push_back(0x36); out.push_back(0x02); break;
-    case xe::cpu::hir::INT64_TYPE:
-      out.push_back(0x37); out.push_back(0x03); break;
+    case xe::cpu::hir::OPCODE_NEG:
+      if (dest_i64) {
+        EmitI64Const(out, 0);
+        if (!EmitAdaptedValue(instr->src1.value, true, false, locals, out)) break;
+        out.push_back(0x7D);
+      } else {
+        EmitI32Const(out, 0);
+        if (!EmitAdaptedValue(instr->src1.value, false, false, locals, out)) break;
+        out.push_back(0x6B); EmitMask(out, dest_type);
+      }
+      ok = true;
+      break;
     default:
       return false;
   }
+  if (!ok) return false;
+  const auto local_it = locals.find(instr->dest);
+  if (local_it == locals.end()) return false;
+  out.push_back(0x21);
+  EmitU32Leb(out, local_it->second.index);
+  return true;
+}
+
+bool EmitStoreContext(const Instr* instr, const ValueLocals& locals,
+                      std::vector<uint8_t>& out) {
+  if (!instr->src2.value || !IsIntegerType(instr->src2.value->type)) return false;
+  out.push_back(0x20); out.push_back(0x00);
+  if (!EmitValue(instr->src2.value, locals, out)) return false;
+  switch (instr->src2.value->type) {
+    case xe::cpu::hir::INT8_TYPE: out.push_back(0x3A); out.push_back(0x00); break;
+    case xe::cpu::hir::INT16_TYPE: out.push_back(0x3B); out.push_back(0x01); break;
+    case xe::cpu::hir::INT32_TYPE: out.push_back(0x36); out.push_back(0x02); break;
+    case xe::cpu::hir::INT64_TYPE: out.push_back(0x37); out.push_back(0x03); break;
+    default: return false;
+  }
   EmitU32Leb(out, static_cast<uint32_t>(instr->src1.offset));
-  if (lowered) ++*lowered;
+  return true;
+}
+
+bool EmitTruthy(const Value* value, bool invert, const ValueLocals& locals,
+                std::vector<uint8_t>& out) {
+  if (!value || !EmitValue(value, locals, out)) return false;
+  out.push_back(IsI64(value->type) ? 0x50 : 0x45);
+  if (!invert) out.push_back(0x45);
   return true;
 }
 
 void EmitSetPc(std::vector<uint8_t>& out, uint32_t pc) {
   EmitI32Const(out, static_cast<int32_t>(pc));
-  out.push_back(0x21); out.push_back(0x01);  // local.set pc
+  out.push_back(0x21); out.push_back(0x01);
 }
 
-bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
-                    const BlockIndices& indices) {
+bool IsPureIntegerProducer(const Instr* instr) {
+  if (!instr || !instr->opcode || !instr->dest || !IsIntegerType(instr->dest->type)) return false;
+  switch (instr->opcode->num) {
+    case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
+    case xe::cpu::hir::OPCODE_ASSIGN:
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+    case xe::cpu::hir::OPCODE_IS_TRUE:
+    case xe::cpu::hir::OPCODE_IS_FALSE:
+    case xe::cpu::hir::OPCODE_COMPARE_EQ:
+    case xe::cpu::hir::OPCODE_COMPARE_NE:
+    case xe::cpu::hir::OPCODE_COMPARE_SLT:
+    case xe::cpu::hir::OPCODE_COMPARE_SLE:
+    case xe::cpu::hir::OPCODE_COMPARE_SGT:
+    case xe::cpu::hir::OPCODE_COMPARE_SGE:
+    case xe::cpu::hir::OPCODE_COMPARE_ULT:
+    case xe::cpu::hir::OPCODE_COMPARE_ULE:
+    case xe::cpu::hir::OPCODE_COMPARE_UGT:
+    case xe::cpu::hir::OPCODE_COMPARE_UGE:
+    case xe::cpu::hir::OPCODE_ADD:
+    case xe::cpu::hir::OPCODE_SUB:
+    case xe::cpu::hir::OPCODE_AND:
+    case xe::cpu::hir::OPCODE_OR:
+    case xe::cpu::hir::OPCODE_XOR:
+    case xe::cpu::hir::OPCODE_SHL:
+    case xe::cpu::hir::OPCODE_SHR:
+    case xe::cpu::hir::OPCODE_SHA:
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT:
+    case xe::cpu::hir::OPCODE_NOT:
+    case xe::cpu::hir::OPCODE_NEG:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool BuildValueLocals(HIRBuilder* builder, ValueLocals* locals,
+                      uint32_t* i32_count, uint32_t* i64_count) {
+  std::vector<const Value*> i32_values;
+  std::vector<const Value*> i64_values;
+  std::unordered_set<const Value*> seen;
+  for (auto* block = builder->first_block(); block; block = block->next) {
+    for (auto* instr = block->instr_head; instr; instr = instr->next) {
+      if (!instr->dest || !IsIntegerType(instr->dest->type) || !seen.insert(instr->dest).second) continue;
+      if (IsI64(instr->dest->type)) i64_values.push_back(instr->dest);
+      else i32_values.push_back(instr->dest);
+    }
+  }
+  uint32_t next = 3;  // ctx=0, pc=1, dispatch budget=2
+  for (const Value* value : i32_values) (*locals)[value] = LocalInfo{next++, value->type};
+  *i32_count = static_cast<uint32_t>(i32_values.size());
+  for (const Value* value : i64_values) (*locals)[value] = LocalInfo{next++, value->type};
+  *i64_count = static_cast<uint32_t>(i64_values.size());
+  return true;
+}
+
+bool BuildCfgModule(HIRBuilder* builder, const ValueLocals& locals,
+                    const BlockIndices& indices, uint32_t i32_count,
+                    uint32_t i64_count) {
   std::vector<uint8_t> body;
   uint32_t lowered = 0;
-  EmitSetPc(body, 0);
-  EmitI32Const(body, 100000);
-  body.push_back(0x21); body.push_back(0x02);  // local.set budget
-
-  body.push_back(0x02); body.push_back(0x40);  // block $exit
-  body.push_back(0x03); body.push_back(0x40);  // loop $dispatch
-
-  // A bad or unsupported CFG must fail deterministically rather than pinning
-  // the browser main thread or a CI runner in an unbounded dispatcher loop.
-  body.push_back(0x20); body.push_back(0x02);  // local.get budget
-  body.push_back(0x45);                       // i32.eqz
-  body.push_back(0x04); body.push_back(0x40); // if
-  body.push_back(0x00);                       // unreachable
-  body.push_back(0x0B);                       // end
-  body.push_back(0x20); body.push_back(0x02);  // local.get budget
-  EmitI32Const(body, 1);
-  body.push_back(0x6B);                       // i32.sub
-  body.push_back(0x21); body.push_back(0x02);  // local.set budget
-
   uint32_t block_count = 0;
   for (auto* block = builder->first_block(); block; block = block->next) ++block_count;
 
+  EmitSetPc(body, 0);
+  EmitI32Const(body, 100000);
+  body.push_back(0x21); body.push_back(0x02);
+  body.push_back(0x02); body.push_back(0x40);
+  body.push_back(0x03); body.push_back(0x40);
+  body.push_back(0x20); body.push_back(0x02);
+  body.push_back(0x45);
+  body.push_back(0x04); body.push_back(0x40);
+  body.push_back(0x00);
+  body.push_back(0x0B);
+  body.push_back(0x20); body.push_back(0x02);
+  EmitI32Const(body, 1); body.push_back(0x6B);
+  body.push_back(0x21); body.push_back(0x02);
+
   for (auto* block = builder->first_block(); block; block = block->next) {
-    const auto index_it = indices.find(block);
-    if (index_it == indices.end()) return false;
-    const uint32_t block_index = index_it->second;
-    body.push_back(0x20); body.push_back(0x01);  // local.get pc
-    EmitI32Const(body, static_cast<int32_t>(block_index));
-    body.push_back(0x46);                       // i32.eq
-    body.push_back(0x04); body.push_back(0x40); // if
+    const auto block_it = indices.find(block);
+    if (block_it == indices.end()) return false;
+    body.push_back(0x20); body.push_back(0x01);
+    EmitI32Const(body, static_cast<int32_t>(block_it->second));
+    body.push_back(0x46);
+    body.push_back(0x04); body.push_back(0x40);
 
     bool terminated = false;
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       if (!instr->opcode) return false;
+      if (IsPureIntegerProducer(instr)) {
+        if (!EmitProducer(instr, locals, body)) return false;
+        ++lowered;
+        continue;
+      }
       switch (instr->opcode->num) {
+        case xe::cpu::hir::OPCODE_NOP:
         case xe::cpu::hir::OPCODE_SOURCE_OFFSET:
         case xe::cpu::hir::OPCODE_CONTEXT_BARRIER:
           break;
         case xe::cpu::hir::OPCODE_STORE_CONTEXT:
-          if (!EmitStoreContext(instr, producers, body, &lowered)) return false;
+          if (!EmitStoreContext(instr, locals, body)) return false;
+          ++lowered;
           break;
         case xe::cpu::hir::OPCODE_BRANCH: {
           if (!instr->src1.label || !instr->src1.label->block) return false;
           const auto target = indices.find(instr->src1.label->block);
           if (target == indices.end()) return false;
           EmitSetPc(body, target->second);
-          body.push_back(0x0C); EmitU32Leb(body, 1);  // continue loop
-          terminated = true;
-          break;
+          body.push_back(0x0C); EmitU32Leb(body, 1);
+          ++lowered; terminated = true; break;
         }
         case xe::cpu::hir::OPCODE_BRANCH_TRUE:
         case xe::cpu::hir::OPCODE_BRANCH_FALSE: {
@@ -413,10 +493,10 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
           const auto target = indices.find(instr->src2.label->block);
           if (target == indices.end()) return false;
           const bool invert = instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_FALSE;
-          if (!EmitTruthy(instr->src1.value, invert, producers, body, &lowered)) return false;
-          body.push_back(0x04); body.push_back(0x40);  // if cond
+          if (!EmitTruthy(instr->src1.value, invert, locals, body)) return false;
+          body.push_back(0x04); body.push_back(0x40);
           EmitSetPc(body, target->second);
-          body.push_back(0x05);                       // else
+          body.push_back(0x05);
           if (block->next) {
             const auto fallthrough = indices.find(block->next);
             if (fallthrough == indices.end()) return false;
@@ -424,47 +504,17 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
           } else {
             EmitSetPc(body, block_count);
           }
-          body.push_back(0x0B);                       // end inner if
-          body.push_back(0x0C); EmitU32Leb(body, 1); // continue dispatch
-          terminated = true;
-          break;
+          body.push_back(0x0B);
+          body.push_back(0x0C); EmitU32Leb(body, 1);
+          ++lowered; terminated = true; break;
         }
         case xe::cpu::hir::OPCODE_RETURN:
-          body.push_back(0x0C); EmitU32Leb(body, 2); // break outer block
-          terminated = true;
-          break;
+          body.push_back(0x0C); EmitU32Leb(body, 2);
+          ++lowered; terminated = true; break;
         case xe::cpu::hir::OPCODE_CALL_INDIRECT:
           if ((instr->flags & xe::cpu::hir::CALL_POSSIBLE_RETURN) == 0) return false;
-          body.push_back(0x0C); EmitU32Leb(body, 2); // LR return boundary
-          terminated = true;
-          break;
-        case xe::cpu::hir::OPCODE_ASSIGN:
-        case xe::cpu::hir::OPCODE_TRUNCATE:
-        case xe::cpu::hir::OPCODE_ZERO_EXTEND:
-        case xe::cpu::hir::OPCODE_SIGN_EXTEND:
-        case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
-        case xe::cpu::hir::OPCODE_IS_TRUE:
-        case xe::cpu::hir::OPCODE_IS_FALSE:
-        case xe::cpu::hir::OPCODE_COMPARE_EQ:
-        case xe::cpu::hir::OPCODE_COMPARE_NE:
-        case xe::cpu::hir::OPCODE_COMPARE_SLT:
-        case xe::cpu::hir::OPCODE_COMPARE_SLE:
-        case xe::cpu::hir::OPCODE_COMPARE_SGT:
-        case xe::cpu::hir::OPCODE_COMPARE_SGE:
-        case xe::cpu::hir::OPCODE_COMPARE_ULT:
-        case xe::cpu::hir::OPCODE_COMPARE_ULE:
-        case xe::cpu::hir::OPCODE_COMPARE_UGT:
-        case xe::cpu::hir::OPCODE_COMPARE_UGE:
-        case xe::cpu::hir::OPCODE_ADD:
-        case xe::cpu::hir::OPCODE_SUB:
-        case xe::cpu::hir::OPCODE_AND:
-        case xe::cpu::hir::OPCODE_OR:
-        case xe::cpu::hir::OPCODE_XOR:
-        case xe::cpu::hir::OPCODE_SHL:
-        case xe::cpu::hir::OPCODE_SHR:
-        case xe::cpu::hir::OPCODE_SHA:
-          // Pure value producers are recursively emitted at their use site.
-          break;
+          body.push_back(0x0C); EmitU32Leb(body, 2);
+          ++lowered; terminated = true; break;
         default:
           return false;
       }
@@ -481,44 +531,37 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
         body.push_back(0x0C); EmitU32Leb(body, 2);
       }
     }
-    body.push_back(0x0B);  // end block selector if
+    body.push_back(0x0B);
   }
 
-  // Invalid pc: leave the dispatch loop rather than spinning forever.
   body.push_back(0x0C); EmitU32Leb(body, 1);
-  body.push_back(0x0B);  // end loop
-  body.push_back(0x0B);  // end exit block
-
+  body.push_back(0x0B);
+  body.push_back(0x0B);
   body.push_back(0x20); body.push_back(0x00);
   body.push_back(0x29); body.push_back(0x03);
   EmitU32Leb(body, static_cast<uint32_t>(offsetof(PPCContext, r) + 3 * sizeof(uint64_t)));
   body.push_back(0x0B);
 
-  std::vector<uint8_t> module = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};
+  std::vector<uint8_t> module = {0x00,0x61,0x73,0x6D,0x01,0x00,0x00,0x00};
   std::vector<uint8_t> type;
-  EmitU32Leb(type, 1); type.push_back(0x60); EmitU32Leb(type, 1); type.push_back(0x7F);
-  EmitU32Leb(type, 1); type.push_back(0x7E); EmitSection(module, 1, type);
-
+  EmitU32Leb(type,1); type.push_back(0x60); EmitU32Leb(type,1); type.push_back(0x7F); EmitU32Leb(type,1); type.push_back(0x7E);
+  EmitSection(module,1,type);
   std::vector<uint8_t> imports;
-  EmitU32Leb(imports, 1); EmitName(imports, "env"); EmitName(imports, "memory");
-  imports.push_back(0x02); imports.push_back(0x00); EmitU32Leb(imports, 0);
-  EmitSection(module, 2, imports);
-
+  EmitU32Leb(imports,1); EmitName(imports,"env"); EmitName(imports,"memory"); imports.push_back(0x02); imports.push_back(0x00); EmitU32Leb(imports,0);
+  EmitSection(module,2,imports);
   std::vector<uint8_t> functions;
-  EmitU32Leb(functions, 1); EmitU32Leb(functions, 0); EmitSection(module, 3, functions);
-
+  EmitU32Leb(functions,1); EmitU32Leb(functions,0); EmitSection(module,3,functions);
   std::vector<uint8_t> exports;
-  EmitU32Leb(exports, 1); EmitName(exports, "run"); exports.push_back(0x00);
-  EmitU32Leb(exports, 0); EmitSection(module, 7, exports);
+  EmitU32Leb(exports,1); EmitName(exports,"run"); exports.push_back(0x00); EmitU32Leb(exports,0); EmitSection(module,7,exports);
 
   std::vector<uint8_t> function_body;
-  EmitU32Leb(function_body, 1); EmitU32Leb(function_body, 2); function_body.push_back(0x7F);
+  EmitU32Leb(function_body, 1 + (i64_count ? 1u : 0u));
+  EmitU32Leb(function_body, 2 + i32_count); function_body.push_back(0x7F);
+  if (i64_count) { EmitU32Leb(function_body, i64_count); function_body.push_back(0x7E); }
   function_body.insert(function_body.end(), body.begin(), body.end());
   std::vector<uint8_t> code;
-  EmitU32Leb(code, 1); EmitU32Leb(code, static_cast<uint32_t>(function_body.size()));
-  code.insert(code.end(), function_body.begin(), function_body.end());
-  EmitSection(module, 10, code);
-
+  EmitU32Leb(code,1); EmitU32Leb(code,static_cast<uint32_t>(function_body.size())); code.insert(code.end(),function_body.begin(),function_body.end());
+  EmitSection(module,10,code);
   g_module = std::move(module);
   g_lowered = lowered;
   return true;
@@ -527,34 +570,20 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
 }  // namespace
 
 void ResetWasmBackendCfgProbe() {
-  g_status = 0;
-  g_lowered = 0;
-  g_module.clear();
-  std::memset(g_context, 0, sizeof(g_context));
+  g_status = 0; g_lowered = 0; g_module.clear(); std::memset(g_context, 0, sizeof(g_context));
 }
 
 bool BuildWasmBackendCfgProbe(HIRBuilder* builder) {
   ResetWasmBackendCfgProbe();
-  if (!builder || !builder->first_block() || !builder->first_block()->next) {
-    g_status = 1;
-    return false;
-  }
-
-  Producers producers;
+  if (!builder || !builder->first_block() || !builder->first_block()->next) { g_status = 1; return false; }
   BlockIndices indices;
-  uint32_t index = 0;
-  for (auto* block = builder->first_block(); block; block = block->next) {
-    indices[block] = index++;
-    for (auto* instr = block->instr_head; instr; instr = instr->next) {
-      if (instr->dest) producers[instr->dest] = instr;
-    }
-  }
-
-  if (!BuildCfgModule(builder, producers, indices)) {
-    g_status = 1;
-    g_lowered = 0;
-    g_module.clear();
-    return false;
+  uint32_t block_index = 0;
+  for (auto* block = builder->first_block(); block; block = block->next) indices[block] = block_index++;
+  ValueLocals locals;
+  uint32_t i32_count = 0, i64_count = 0;
+  if (!BuildValueLocals(builder, &locals, &i32_count, &i64_count) ||
+      !BuildCfgModule(builder, locals, indices, i32_count, i64_count)) {
+    g_status = 1; g_lowered = 0; g_module.clear(); return false;
   }
   g_status = 2;
   return true;
@@ -569,19 +598,9 @@ uint8_t* GetWasmBackendCfgProbeContextData() { return g_context; }
 }  // namespace render360::xenia_web
 
 extern "C" {
-uint32_t r360_wasm_backend_cfg_status() {
-  return render360::xenia_web::GetWasmBackendCfgProbeStatus();
-}
-uint32_t r360_wasm_backend_cfg_module_ptr() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCfgProbeModuleData()));
-}
-uint32_t r360_wasm_backend_cfg_module_size() {
-  return render360::xenia_web::GetWasmBackendCfgProbeModuleSize();
-}
-uint32_t r360_wasm_backend_cfg_lowered_instructions() {
-  return render360::xenia_web::GetWasmBackendCfgProbeLoweredInstructions();
-}
-uint32_t r360_wasm_backend_cfg_context_ptr() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCfgProbeContextData()));
-}
+uint32_t r360_wasm_backend_cfg_status() { return render360::xenia_web::GetWasmBackendCfgProbeStatus(); }
+uint32_t r360_wasm_backend_cfg_module_ptr() { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCfgProbeModuleData())); }
+uint32_t r360_wasm_backend_cfg_module_size() { return render360::xenia_web::GetWasmBackendCfgProbeModuleSize(); }
+uint32_t r360_wasm_backend_cfg_lowered_instructions() { return render360::xenia_web::GetWasmBackendCfgProbeLoweredInstructions(); }
+uint32_t r360_wasm_backend_cfg_context_ptr() { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::GetWasmBackendCfgProbeContextData())); }
 }

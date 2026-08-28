@@ -18,6 +18,7 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
 fi
 
 OBJECTS=(
+  "$OUT/src_xenia_base_cvar.cc.o"
   "$OUT/src_xenia_cpu_hir_opcodes.cc.o"
   "$OUT/src_xenia_cpu_hir_block.cc.o"
   "$OUT/src_xenia_cpu_hir_instr.cc.o"
@@ -71,10 +72,6 @@ done
 
 rm -f "$WASM" "$LOG" "$REPORT"
 
-# This link is intentionally strict. A failure is a useful result: it exposes
-# the exact additional Xenia translation units / host boundaries required to
-# turn the compile-only CPU surface into one real wasm module. Never suppress
-# unresolved symbols merely to produce a misleading .wasm file.
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
@@ -93,6 +90,4 @@ fi
   grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 80 || true
 } | tee "$REPORT"
 
-# Dependency discovery is the expected outcome of this stage, so keep CI alive
-# and publish the report/log. The status remains explicitly BLOCKED.
 exit 0

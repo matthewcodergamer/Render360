@@ -9,11 +9,22 @@
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
 #include "xenia/cpu/hir/instr.h"
+#include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
 
 namespace render360::xenia_web {
 namespace {
 ProbeTelemetry g_probe_telemetry;
+ProbeBackend* g_probe_backend = nullptr;
+
+bool ResolveNestedGuestCall(xe::cpu::Function* function) {
+  if (!g_probe_backend || !g_probe_backend->processor() || !function ||
+      !function->is_guest()) {
+    return false;
+  }
+  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
+  return g_probe_backend->processor()->frontend()->DefineFunction(guest_function, 0);
+}
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
@@ -35,14 +46,16 @@ ProbeAssembler::~ProbeAssembler() = default;
 bool ProbeAssembler::Assemble(
     xe::cpu::GuestFunction* function, xe::cpu::hir::HIRBuilder* builder,
     uint32_t, std::unique_ptr<xe::cpu::FunctionDebugInfo> debug_info) {
+  const bool nested_execution = IsHIRCorrectnessExecutionActive();
   uint32_t block_count = 0;
   uint32_t instruction_count = 0;
   for (auto* block = builder->first_block(); block; block = block->next) {
     const uint32_t block_index = block_count++;
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       ++instruction_count;
-      std::fprintf(stderr, "R360_HIR block=%u ordinal=%u opcode=%s(%u)\n",
-                   block_index, instr->ordinal,
+      std::fprintf(stderr, "R360_HIR%s block=%u ordinal=%u opcode=%s(%u)\n",
+                   nested_execution ? "_NESTED" : "", block_index,
+                   instr->ordinal,
                    instr->opcode && instr->opcode->name ? instr->opcode->name
                                                         : "<null>",
                    instr->opcode ? static_cast<unsigned>(instr->opcode->num)
@@ -51,31 +64,47 @@ bool ProbeAssembler::Assemble(
   }
 
   ++g_probe_telemetry.assembled_functions;
-  g_probe_telemetry.hir_blocks = block_count;
-  g_probe_telemetry.hir_instructions = instruction_count;
-  g_probe_telemetry.last_guest_address = function ? function->address() : 0;
+  if (!nested_execution) {
+    g_probe_telemetry.hir_blocks = block_count;
+    g_probe_telemetry.hir_instructions = instruction_count;
+    g_probe_telemetry.last_guest_address = function ? function->address() : 0;
+  }
 
   auto* memory = backend_ && backend_->processor()
                      ? backend_->processor()->memory()
                      : nullptr;
   const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);
-  g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
-  g_probe_telemetry.correctness_r3 = correctness.r3;
-  if (!correctness.supported) {
-    g_probe_telemetry.correctness_status = 1;
-  } else if (!correctness.reached_return_boundary) {
-    g_probe_telemetry.correctness_status = 2;
-  } else {
-    g_probe_telemetry.correctness_status = 3;
+
+  if (!nested_execution) {
+    g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
+    g_probe_telemetry.correctness_r3 = correctness.r3;
+    if (!correctness.supported) {
+      g_probe_telemetry.correctness_status = 1;
+    } else if (!correctness.reached_return_boundary) {
+      g_probe_telemetry.correctness_status = 2;
+    } else {
+      g_probe_telemetry.correctness_status = 3;
+    }
   }
+
   std::fprintf(stderr,
-               "R360_EXEC status=%u instructions=%u r3=%llu return_boundary=%u\n",
-               g_probe_telemetry.correctness_status,
-               g_probe_telemetry.correctness_instructions,
-               static_cast<unsigned long long>(g_probe_telemetry.correctness_r3),
+               "R360_EXEC%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
+               nested_execution ? "_NESTED" : "",
+               correctness.supported
+                   ? (correctness.reached_return_boundary ? 3u : 2u)
+                   : 1u,
+               correctness.instructions_executed,
+               static_cast<unsigned long long>(correctness.r3),
                correctness.reached_return_boundary ? 1u : 0u);
 
   if (function && debug_info) function->set_debug_info(std::move(debug_info));
+
+  // A nested CALL must fail back into the caller executor if the callee's
+  // finalized HIR is unsupported or never reaches its return boundary. The
+  // top-level probe retains the existing telemetry-based failure contract.
+  if (nested_execution) {
+    return correctness.supported && correctness.reached_return_boundary;
+  }
   return true;
 }
 
@@ -84,6 +113,9 @@ ProbeBackend::~ProbeBackend() = default;
 
 bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   if (!xe::cpu::backend::Backend::Initialize(processor)) return false;
+
+  g_probe_backend = this;
+  SetHIRCorrectnessCallResolver(&ResolveNestedGuestCall);
 
   machine_info_.supports_extended_load_store = false;
   auto& gprs = machine_info_.register_sets[0];

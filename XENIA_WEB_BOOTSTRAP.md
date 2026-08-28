@@ -4,123 +4,43 @@
 
 Bring the real upstream Xenia PowerPC frontend, instruction semantics, HIR/compiler pipeline, Processor runtime and the minimum browser-safe Memory/runtime support into wasm32 without pulling Xenia's x64 JIT or desktop graphics stack into the browser.
 
-Milestone language is strict:
+Milestone language stays strict:
 
 - **PPC TRANSLATION READY** only after real PPC bytes produce real finalized Xenia HIR at runtime.
-- **PPC EXECUTING** only after a correctness backend executes Xenia HIR and verified PowerPC architectural state changes.
+- **PPC EXECUTING** only after a correctness backend executes finalized Xenia HIR and verified PowerPC architectural state changes.
 - **PLAYABLE** only after genuine title execution, kernel services, graphics, input and audio work sufficiently for gameplay.
 
-## Current measured result
+## Current measured result — PPC TRANSLATION READY
 
-The latest completed measurement is GitHub Actions run 76: **60 passed, 0 blocked** under Emscripten/wasm32.
-
-The live compile graph now includes real Xenia:
-
-- `Memory`, `Processor`, `EntryTable`, `Module`, `ThreadState`;
-- Backend, Assembler, Function and FunctionDebugInfo;
-- HIR builder/opcodes/block/instruction/value code;
-- Compiler plus the complete compiler-pass chain currently installed by PPCTranslator;
-- PPCContext;
-- PPCFrontend, PPCTranslator, PPCScanner and PPCHIRBuilder;
-- all five PPC emitter categories;
-- generated opcode table, opcode lookup and opcode disassembly units;
-- POSIX memory/mapped-memory/filesystem/mutex support;
-- arena, strings, UTF-8, cvars and CPU flags;
-- MMIO range handling;
-- Render360 browser logging, host sleep, ProbeBackend, translation driver and PPCContext ABI probe.
-
-The strict link uses the **complete exported probe ABI in one `EXPORTED_FUNCTIONS` list** and `ERROR_ON_UNDEFINED_SYMBOLS=1`. Runtime code is intentionally rooted so dead-code elimination cannot hide dependencies.
-
-### Latest completed link boundary
-
-Run 76 narrowed the remaining strict-link symbols to:
+GitHub Actions run **84** (`33136788561`) completed successfully at commit `4a6d7b9521d7bf697cade285ce0dbf8434d3bc36`.
 
 ```text
-xe::cpu::ppc::PadStringBuffer(...)
-xe::cpu::ppc::PrintDisasm_bcx(...)
+wasm32 compile matrix   61 passed / 0 blocked
+strict full-export link LINKED
+runtime status          3 (translated)
+guest base              0x80000000
+loaded bytes            8
+assembled functions     1
+HIR blocks              1
+HIR instructions        6
+translate return        6
+last guest address      0x80000000
 ```
 
-Both are real upstream definitions in `src/xenia/cpu/ppc/ppc_opcode_disasm.cc`. That source has now been added to the real compile/link graph and is being verified by the next CI gate. No replacement decoder or fake helper was written.
-
-## Browser-only host adaptations
-
-Generated overlays keep upstream Xenia as the semantic authority.
-
-### PPCContext
-
-wasm32 host pointers make `PPCContext` 16 bytes short of Xenia's existing 64-byte padding invariant. Render360 appends 16 bytes of **tail-only padding after the final existing field**. Existing GPR/FPR/VMX/LR/CTR/CR/runtime field offsets are unchanged and independently exported by `ppc_context_abi_probe.cpp`.
-
-### C++20 UTF-8 compatibility
-
-The pinned Xenia revision predates modern `char8_t` behavior in a small number of old utility literals. The generated cvar/UTF-8 overlays remove only the `u8` prefix from ASCII byte literals consumed as narrow strings. Byte payloads and algorithms are unchanged.
-
-### Processor debugger host PC
-
-Xenia's native debugger exception-resume path knows AMD64 RIP and ARM64 PC. wasm32 has no corresponding native host program counter to restore. Only that host debugger branch is a wasm32 no-op. `Processor::Setup`, builtins, function resolution and frontend behavior remain upstream Xenia.
-
-### Bounded translation-probe Memory
-
-Desktop Xenia creates an approximately 4.5 GiB file-backed host mapping with aliased fixed virtual/physical views. That host strategy cannot be copied directly into wasm32/Safari.
-
-For the translation probe only, the browser Memory overlay exposes a **64 KiB guest code window at `0x80000000`**:
+The runtime input is genuine big-endian PowerPC:
 
 ```text
-guest 0x80000000 ... 0x8000FFFF
-              ↓
-64 KiB wasm32 backing
+0x38600001  addi r3, r0, 1   ; li r3, 1
+0x4E800020  blr
 ```
 
-`Memory::TranslateVirtual` resolves only this probe window. Out-of-window addresses return null. This is explicitly **not** presented as a fake full Xbox memory map. Full execution later requires sparse/page-backed guest memory with aliases, protection metadata, physical views and executable-page invalidation.
-
-### Browser logging
-
-`src/xenia_web_bootstrap/browser_logging.cpp` implements Xenia's logging API without Xenia's desktop logging thread/ring-buffer/filesystem host design. It uses synchronous bootstrap-safe formatting.
-
-### MMIO native host fault boundary
-
-Xenia's MMIO range registration, lookup and semantics remain upstream. The wasm overlay only marks native AMD64/ARM64 faulting-instruction decoding and native host-register context access unsupported, because wasm32 does not expose those host machine contexts.
-
-### ContextPromotionPass private bitset
-
-Pinned Xenia's `ContextPromotionPass` uses `llvm::BitVector` only through `resize`, `reset`, `test` and `set`. Linking the machine-native LLVM Support library into standalone wasm32 is invalid. The browser overlay keeps the pass algorithm unchanged and replaces only that private storage container with an equivalent vector-backed bitset.
-
-### Browser host Sleep
-
-The translation dependency closure requires `xe::threading::Sleep(std::chrono::microseconds)`. Rather than importing Xenia's entire native pthread/signal/timer host subsystem, the browser bootstrap provides this host primitive with libc `nanosleep`, retrying on `EINTR`. This is host behavior, not Xbox behavior.
-
-## Real translation-only backend
-
-`src/xenia_web_bootstrap/probe_backend.cpp` implements the Xenia backend/assembler seam for **translation observation only**:
-
-- real Xenia `Backend`, `Assembler` and `GuestFunction` interfaces;
-- no native executable-memory allocation;
-- no x64 emitter;
-- no guest execution claim;
-- finalized Xenia HIR block/instruction telemetry;
-- translated guest-address telemetry.
-
-`ProbeGuestFunction::CallImpl` refuses execution. Translation must be proven before the execution tier is added.
-
-## Live translation probe ABI
-
-`src/xenia_web_bootstrap/ppc_translation_probe.cpp` exports:
+The CI harness reported:
 
 ```text
-r360_ppc_probe_reset()
-r360_ppc_probe_input_buffer()
-r360_ppc_probe_input_capacity()
-r360_ppc_probe_load(bytes, length)
-r360_ppc_probe_translate()
-r360_ppc_probe_status()
-r360_ppc_probe_guest_base()
-r360_ppc_probe_loaded_size()
-r360_ppc_probe_assembled_functions()
-r360_ppc_probe_hir_block_count()
-r360_ppc_probe_hir_instruction_count()
-r360_ppc_probe_last_guest_address()
+PASS: real PPC bytes reached Xenia HIR and the ProbeAssembler observed finalized HIR.
 ```
 
-The runtime path is intentionally real:
+This proves the live runtime path:
 
 ```text
 WASM input memory
@@ -131,46 +51,59 @@ WASM input memory
   -> Xenia PPCScanner
   -> Xenia opcode lookup / ppc_emit_*
   -> Xenia PPCHIRBuilder
-  -> Xenia compiler passes
+  -> Xenia compiler + complete current pass chain
   -> ProbeAssembler
-  -> finalized HIR telemetry
+  -> finalized Xenia HIR telemetry
 ```
 
-## Runtime CI gate
+**PPC TRANSLATION READY is complete. PPC EXECUTING is not yet complete.**
 
-`test-xenia-ppc-translation-probe.mjs` runs only after a successful strict link. It instantiates the standalone WASM and writes genuine big-endian PowerPC instructions:
+## What had to be closed to reach the runtime gate
 
-```text
-0x38600001  addi r3, r0, 1   ; li r3, 1
-0x4E800020  blr
-```
+The full 61-unit graph includes real Xenia `Memory`, `Processor`, `EntryTable`, `Module`, `ThreadState`, Backend/Assembler/Function, HIR, Compiler and its current pass chain, PPCContext, generated opcode units, all PPC emitter categories, PPCScanner/HIRBuilder/Translator/Frontend, POSIX memory/filesystem/mutex/mapped-memory support, Arena/string/cvar/UTF-8 utilities, plus the browser host seams and Render360 probe code.
 
-The test only passes when all are true:
+The strict linker keeps the entire probe ABI rooted in one `EXPORTED_FUNCTIONS` list with `ERROR_ON_UNDEFINED_SYMBOLS=1`; no dead-stripping workaround is used to manufacture a link.
 
-```text
-probe status == translated (3)
-loaded bytes == 8
-assembled functions > 0
-HIR blocks > 0
-HIR instructions > 0
-translate return > 0
-last guest address == 0x80000000
-```
+The final runtime boundaries resolved before run 84 were:
 
-Until this gate actually passes, the project must continue to say **PPC translation probe in progress**, not `PPC TRANSLATION READY`.
+- initialize the standalone WASM as a WASI reactor before any imported WASI function is called;
+- preserve Xenia's required 16-byte Arena chunk alignment with arbitrary-size `posix_memalign` on wasm32;
+- describe a legitimate target register-allocation model in ProbeBackend so Xenia's `RegisterAllocationPass` can finalize HIR: 7 integer allocation slots and 12 shared float/vector slots, matching the mature Xenia x64 allocator shape without importing or executing the x64 backend;
+- ensure every `prepare-xenia-*-overlay.py` change triggers the CPU workflow.
 
-## Strict dependency policy
+## Browser-only host adaptations
 
-`link-xenia-ppc-bootstrap.sh` uses strict undefined-symbol checking. We do not use blanket unresolved imports, dummy guest behavior, fake decoder output, fake framebuffers, or JavaScript PPC emulation to manufacture progress.
+Generated overlays keep upstream Xenia as the semantic authority.
 
-Closure rule:
+### PPCContext
 
-1. identify the exact unresolved Xenia symbol;
-2. add the real portable Xenia translation unit when appropriate;
-3. adapt only a genuinely host-specific OS/architecture implementation;
-4. rerun wasm32 compile and strict link with the full ABI rooted;
-5. run the real PPC-to-HIR runtime test if WASM is produced;
-6. record measured results.
+wasm32 host pointers make `PPCContext` 16 bytes short of Xenia's existing 64-byte padding invariant. Render360 appends 16 bytes of **tail-only padding after the final existing field**. Existing GPR/FPR/VMX/LR/CTR/CR/runtime field offsets are unchanged and independently exported by `ppc_context_abi_probe.cpp`.
+
+### Bounded translation-probe Memory
+
+For the translation probe, the browser Memory overlay exposes a **64 KiB guest code window at `0x80000000`**. It is not presented as a fake full Xbox address space. Full title execution later requires sparse/page-backed guest memory with aliases, protection metadata, physical views and executable-page invalidation.
+
+### MMIO and host exceptions
+
+Xenia's MMIO range registration/lookup semantics remain upstream. Native AMD64/ARM64 fault-instruction decoding and host-register context access are unsupported in wasm32 because those native machine contexts do not exist in the browser target.
+
+### ContextPromotionPass
+
+The compiler algorithm is unchanged. Only the private `llvm::BitVector` storage used through resize/reset/test/set is replaced by an equivalent browser-safe container to avoid linking the machine-native LLVM Support runtime into standalone wasm32.
+
+### Arena
+
+Xenia's 16-byte Arena payload contract remains enforced. The browser overlay uses `posix_memalign(..., 16, capacity)` for arbitrary-sized chunks because the standalone wasm32 libc configuration did not satisfy the desktop `malloc` alignment assumption in the runtime probe.
+
+### Browser logging and sleep
+
+The browser bootstrap implements the Xenia logging API synchronously and provides only the required host sleep primitive with libc `nanosleep`; it does not import desktop logging threads or the entire native threading subsystem merely for translation.
+
+## Translation-only ProbeBackend
+
+`ProbeBackend` remains deliberately non-executing. It uses real Xenia Backend/Assembler/GuestFunction interfaces, owns no native executable code cache, and `ProbeGuestFunction::CallImpl` returns false.
+
+Its machine register description is a **compiler allocation contract only**. It does not claim x64 execution or wasm machine registers. The purpose is to let the same Xenia compiler pipeline produce finalized HIR that the next correctness backend can consume.
 
 ## Current phase ladder
 
@@ -179,14 +112,15 @@ Phase 1   upstream source / contract audit                    COMPLETE
 Phase 2   PPC/HIR/frontend wasm32 compile                     COMPLETE
 Phase 2A  PPCContext wasm32 ABI                               COMPLETE
 Phase 2B  translation-only ProbeBackend                       COMPLETE
-Phase 2C  real Xenia Memory + Processor compile               COMPLETE
-Phase 2D  UTF8 / fmt and utility runtime closure              COMPLETE
+Phase 2C  real Xenia Memory + Processor runtime closure       COMPLETE
+Phase 2D  utilities/opcode/compiler dependency closure        COMPLETE
 Phase 2E  bounded wasm32 Memory probe window                  COMPLETE FOR PROBE
-Phase 2F  browser logging / MMIO / host sleep boundaries      COMPLETE FOR PROBE
-Phase 2G  live support units + generated opcode tables        COMPLETE (run 76)
-Phase 3   strict full-export translation-driver link          ACTIVE
-Phase 3A  real PPC bytes -> finalized Xenia HIR CI gate       WAITING ON PHASE 3
-Phase 4   browser-safe HIR correctness executor               NEXT AFTER 3A
+Phase 2F  browser host/compiler/Arena boundaries              COMPLETE FOR PROBE
+Phase 3   strict full-export translation-driver link          COMPLETE
+Phase 3A  real PPC bytes -> finalized Xenia HIR CI gate       COMPLETE (run 84)
+Phase 3B  PPC TRANSLATION READY                               COMPLETE
+Phase 4   browser-safe HIR correctness executor               ACTIVE NEXT
+Phase 4A  li r3,1; blr -> verify PPCContext.r[3] == 1         NEXT GATE
 Phase 5   hot-block WasmBackend                               FUTURE
 Phase 6   sparse/page-backed full guest memory                FUTURE
 Phase 7   map/enter captured default.xex                      FUTURE
@@ -195,27 +129,35 @@ Phase 9   Xenos -> WebGPU / WGSL / EDRAM                      FUTURE
 Phase 10  WebAudio + first genuine guest framebuffer          FUTURE
 ```
 
-## What comes after PPC translation is proven
+## Phase 4 rule — execute Xenia HIR, not PPC a second time
 
-The next CPU stage is a correctness executor that consumes **finalized Xenia HIR**, not a second PPC decoder. Its first execution test should reuse:
+The next CPU tier must consume the **already finalized Xenia HIR**. It must not add another PowerPC decoder/interpreter beside Xenia.
+
+The first execution contract is intentionally tiny:
 
 ```text
-li r3, 1
-blr
+PPC: li r3, 1; blr
+  -> Xenia translation and compiler passes
+  -> finalized Xenia HIR
+  -> Render360 correctness executor
+  -> real PPCContext
+  -> require PPCContext.r[3] == 1
 ```
 
-Create and initialize a real `PPCContext`, execute the finalized HIR and require `r3 == 1`. Only then mark **PPC EXECUTING**.
+Only after that architectural-state check passes may the project declare **PPC EXECUTING**.
 
 Then broaden correctness in this order:
 
-1. integer and control operations;
-2. guest load/store and memory semantics;
-3. condition/LR/CTR behavior;
+1. integer arithmetic and control flow;
+2. guest loads/stores and memory semantics;
+3. condition register, LR and CTR behavior;
 4. FPU;
 5. VMX/VMX128;
 6. verify GPR/FPR/vector/CR/LR/CTR/memory results for every test.
 
-After a useful correctness subset passes, add the hot tier:
+## After correctness execution
+
+Once a useful correctness subset is verified, add the hot tier:
 
 ```text
 Xenia finalized HIR
@@ -227,16 +169,13 @@ Xenia finalized HIR
 
 Guest writes to executable pages must invalidate affected translated blocks.
 
-Then implement sparse/page-backed browser guest memory with required aliases/protection/physical views; map the already captured `default.xex` sections and entry point; create KernelState/xboxkrnl/XAM support; then connect Xenos packet/register/shader/texture/EDRAM semantics to WebGPU/WGSL; then WebAudio and the first genuine guest framebuffer.
+Then implement sparse/page-backed full guest memory, map the already captured `default.xex` sections and entry point, bring up KernelState/xboxkrnl/XAM, connect Xenos packet/register/shader/texture/EDRAM semantics to WebGPU/WGSL, then WebAudio and the first genuine guest framebuffer.
 
 ## Do not port into the browser CPU bootstrap
 
 - x64 backend / x64 emitter / native executable code cache;
-- D3D12;
-- Vulkan;
-- desktop windowing;
-- desktop HID;
-- native desktop audio output;
+- D3D12 or Vulkan;
+- desktop windowing/HID/audio output;
 - desktop fixed-address 4.5 GiB host mapping as though wasm32 supported it.
 
 Those are host implementations, not Xbox semantics.
@@ -252,4 +191,4 @@ bash ./link-xenia-ppc-bootstrap.sh
 node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
 
-The Node test is meaningful only after strict link produces the WASM. GitHub Actions performs this sequence automatically and uploads the reports/artifacts.
+GitHub Actions performs the same audit, compile, strict-link and runtime sequence and uploads the reports/artifacts.

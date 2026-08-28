@@ -1,21 +1,54 @@
-# V30 upstream Xenia port map
+# Render360 upstream Xenia port map — V33
 
-Render360 currently keeps a small freestanding wasm32 compatibility subset instead of vendoring the full Xenia tree. `scripts/fetch-xenia.sh` brings current upstream into `upstream/xenia/`, and `scripts/xenia_contract_check.py` detects drift in the pieces V30 mirrors.
+Render360 uses Xenia as the source of truth for Xbox 360 behavior. The browser project should progressively consume Xenia's portable/common implementation while keeping browser host services separate.
 
-| Render360 V30 area | Xenia source of truth | V30 status |
+`fetch-xenia.sh` pulls current upstream into `upstream/xenia/`. `xenia_contract_check.py` protects the existing XEX/STFS compatibility subset, and `xenia_web_bootstrap_check.py` now audits the PPC frontend/HIR/compiler surface required for the V33 CPU bootstrap.
+
+| Render360 area | Xenia source of truth | Current status / next boundary |
 |---|---|---|
-| XEX header / optional-header keys | `src/xenia/kernel/util/xex2_info.h` | portability subset in `src/xenia_port/xex2_layout.h` |
-| XEX module boundary | `src/xenia/cpu/xex_module.h/.cc` | structure inspection only; full module/image load future |
-| XContent package / STFS structs | `src/xenia/vfs/devices/stfs_xbox.h` | on-disk constants in `src/xenia_port/stfs_layout.h` |
-| STFS device mount | `src/xenia/vfs/devices/stfs_container_device.cc` | native pull-driven mount state machine |
-| STFS block mapping | `BlockToOffsetSTFS` | ported for wasm32 |
-| STFS hash-table selection | `BlockToHashBlockNumberSTFS`, `GetBlockHash` | L0/L1/L2 active-index logic ported |
-| STFS directory enumeration | `ReadSTFS` | native 0x40 entry parser + flat parent indices |
-| Browser file I/O | host-specific Render360 adapter | `File.slice()` fulfills native range requests |
-| Xenia VFS `Device` / `Entry` objects | `src/xenia/vfs/` | V31 target |
-| PowerPC | `src/xenia/cpu/` | not yet ported |
-| Kernel/XAM | `src/xenia/kernel/` | not yet ported |
-| Xenos command processing | `src/xenia/gpu/command_processor.cc` | future shared subsystem |
-| Web host GPU | Render360-specific | direct WebGPU diagnostic today; emulator backend future |
+| XEX header / optional-header keys | `src/xenia/kernel/util/xex2_info.h` | wasm32 compatibility subset active |
+| XEX module boundary | `src/xenia/cpu/xex_module.h/.cc` | structural inspection active; image preparation/mapping next |
+| XContent / STFS structs | `src/xenia/vfs/devices/stfs_xbox.h` | on-disk constants mirrored |
+| STFS device behavior | `src/xenia/vfs/devices/stfs_container_device.cc` | native pull-driven browser mount active |
+| STFS block/hash mapping | `BlockToOffsetSTFS`, `BlockToHashBlockNumberSTFS`, `GetBlockHash` | active |
+| STFS directory + default.xex | `ReadSTFS()` and Xenia STFS structures | complete executable streaming/capture active |
+| Browser random access | Render360 host adapter | `File.slice()` range reads active; OPFS/retained handles future |
+| Xenia VFS objects | `src/xenia/vfs/` | integrate after executable-image boundary |
+| PPC architectural state | `src/xenia/cpu/ppc/ppc_context.*` | V33 bootstrap target |
+| PPC frontend | `src/xenia/cpu/ppc/ppc_frontend.*` | V33 bootstrap target |
+| PPC translator | `src/xenia/cpu/ppc/ppc_translator.*` | V33 bootstrap target |
+| PPC -> HIR semantics | `src/xenia/cpu/ppc/ppc_hir_builder.*`, `ppc_emit_*.cc` | V33 bootstrap target |
+| HIR | `src/xenia/cpu/hir/` | V33 reusable portable boundary |
+| compiler / passes | `src/xenia/cpu/compiler/` | V33 reusable portable boundary |
+| x64 backend | `src/xenia/cpu/backend/x64/` | **do not port to browser** |
+| browser correctness backend | Render360 | build after real Xenia HIR compiles |
+| WasmBackend | Render360 | hot-block backend after correctness tests |
+| Kernel/XAM | `src/xenia/kernel/` | reuse heavily after PPC execution |
+| Xenos command processing | `src/xenia/gpu/command_processor.cc` + common GPU code | reuse after kernel startup |
+| Xenos shader knowledge | Xenia shader translator/common GPU code | reuse analysis; add WGSL emission |
+| D3D12/Vulkan | Xenia host GPU backends | reference behavior only; **do not port APIs** |
+| WebGPU | Render360 host backend | diagnostic host active; real Xenos backend future |
+| EDRAM / render targets | Xenia common semantics + backend behavior | add WebGPU implementation |
+| Browser audio | Xenia Xbox/APU behavior + Render360 WebAudio host | future |
+| Browser HID | Xenia Xbox input semantics + Render360 Gamepad/touch host | host input bridge already active |
 
-The goal is to progressively reduce the compatibility subset as more actual upstream Xenia source can compile for the web target.
+## CPU seam we are preserving
+
+```text
+Xbox PPC / VMX128
+        -> Xenia PPCFrontend
+        -> Xenia PPCTranslator
+        -> Xenia PPCHIRBuilder / emit semantics
+        -> Xenia HIR
+        -> portable compiler passes
+        -> [browser correctness backend]
+        -> [Render360 WasmBackend]
+```
+
+Upstream `PPCFrontend::DefineFunction` already allocates a `PPCTranslator` and invokes `Translate`, so Render360 should preserve that real path rather than creating a parallel JavaScript PPC decoder.
+
+## Rule
+
+If a subsystem describes **Xbox behavior**, prefer upstream Xenia implementation or semantics. If it describes **host OS / host CPU / host graphics API behavior**, replace it with a browser adapter.
+
+See `XENIA_WEB_BOOTSTRAP.md` for the V33 CPU milestone and its no-fake-success criteria.

@@ -21,6 +21,7 @@ python3 "$ROOT/prepare-xenia-web-overlay.py"
 
 COMMON=(
   -std=c++20
+  -fno-char8_t
   -O0
   -g0
   -I"$OVERLAY"
@@ -33,6 +34,12 @@ COMMON=(
   -I"$XENIA/third_party/cpptoml/include"
   -I"$XENIA/third_party/cxxopts/include"
 )
+
+# Upstream Xenia's current base utilities intentionally treat u8 literals as
+# char-based UTF-8 strings. Modern Clang C++20 makes u8 literals char8_t by
+# default, which breaks cvar.cc's std::string operations. Keep C++20 language
+# mode while matching Xenia's existing UTF-8 ABI with -fno-char8_t rather than
+# editing the upstream cvar implementation.
 
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
@@ -65,6 +72,8 @@ classify_failure() {
   local log="$1"
   if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then
     echo PPC_CONTEXT_ABI_DEPENDENCY
+  elif grep -Eqi 'char8_t|u8 literal' "$log"; then
+    echo UTF8_LITERAL_ABI_DEPENDENCY
   elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then
     echo LLVM_HEADER_DEPENDENCY
   elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then

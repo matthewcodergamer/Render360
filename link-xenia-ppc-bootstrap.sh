@@ -24,14 +24,30 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_hir_opcodes.cc.o"
   "$OUT/src_xenia_cpu_hir_block.cc.o"
   "$OUT/src_xenia_cpu_hir_instr.cc.o"
+  "$OUT/src_xenia_cpu_hir_label.cc.o"
   "$OUT/src_xenia_cpu_hir_value.cc.o"
+  "$OUT/src_xenia_cpu_hir_hir_builder.cc.o"
+  "$OUT/src_xenia_cpu_compiler_compiler.cc.o"
   "$OUT/src_xenia_cpu_compiler_compiler_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_conditional_group_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_conditional_group_subpass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_constant_propagation_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_context_promotion_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_control_flow_analysis_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_control_flow_simplification_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_dead_code_elimination_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_finalization_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_memory_sequence_combination_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_register_allocation_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_simplification_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_validation_pass.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_context.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_alu.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_control.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_memory.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_fpu.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_emit_altivec.cc.o"
+  "$OUT/src_xenia_cpu_ppc_ppc_scanner.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_hir_builder.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_translator.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_frontend.cc.o"
@@ -68,7 +84,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=The live Xenia translation driver linked with bounded wasm32 probe memory, browser logging and the real Xenia global mutex. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
+    echo "note=The live Xenia translation driver linked with the real scanner/compiler/pass pipeline, bounded wasm32 probe memory, browser logging and Xenia mutex. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -76,9 +92,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict bounded-memory translation probe exposed the next real Xenia dependency boundary after browser memory/logging/mutex support."
+  echo "note=Strict translation probe exposed the next real dependency after the confirmed scanner/compiler/pass pipeline was linked."
   echo
   echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 240 || true
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 300 || true
 } | tee "$REPORT"
 exit 0

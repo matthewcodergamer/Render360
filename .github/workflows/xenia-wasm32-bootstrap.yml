@@ -21,6 +21,7 @@ on:
       - 'test-wasm-backend-vmx.mjs'
       - 'test-wasm-backend-cache.mjs'
       - 'test-wasm-backend-foundation.mjs'
+      - 'test-sparse-guest-memory.mjs'
       - 'wasm-backend-function-cache.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
@@ -41,6 +42,7 @@ on:
       - 'README.md'
       - 'XENIA_WEB_BOOTSTRAP.md'
       - 'WASM_BACKEND_FOUNDATION.md'
+      - 'SPARSE_GUEST_MEMORY_FOUNDATION.md'
       - 'BROWSER_ARCHITECTURE.md'
       - '.github/workflows/xenia-wasm32-bootstrap.yml'
   workflow_dispatch:
@@ -79,7 +81,7 @@ jobs:
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
 
-      - name: Verify real PPC and generated WasmBackend execution
+      - name: Verify real PPC, Hot WasmBackend, and sparse guest memory
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then
             node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
@@ -95,6 +97,7 @@ jobs:
             node ./test-wasm-backend-vmx.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-cache.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-sparse-guest-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

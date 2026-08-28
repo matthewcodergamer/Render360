@@ -32,7 +32,7 @@ No fake framebuffer, fake boot success, fake guest FPS, fake shader translation,
 
 ## V33 CPU milestone — nested guest calls + real FLOAT64 arithmetic
 
-GitHub Actions **run 133** (`33143476524`) is the current measured CPU gate at commit `9cceb0529df209f1226f9b81da6918e6e2e24991`:
+GitHub Actions **run 133** (`33143476524`) is the current authoritative green CPU gate at commit `9cceb0529df209f1226f9b81da6918e6e2e24991`:
 
 ```text
 wasm32 compile matrix       62 / 62 PASS
@@ -43,7 +43,7 @@ real PPC correctness cases  15 / 15 PASS
 
 Every case begins as genuine big-endian Xbox 360 PowerPC bytes, passes through the real Xenia PPC frontend/translator/scanner/HIR builder/compiler passes, and executes the **finalized Xenia HIR** against a real `PPCContext` and, for memory cases, the same bounded Xenia `Memory` object owned by `Processor`.
 
-The verified runtime set now includes integer arithmetic, conditional/multi-block control flow, guest load/store with Xbox byte order, CR/LR/CTR state, repeated CTR-controlled loops, direct guest calls, two-level nested guest calls, FLOAT64 FPR movement, and the first real floating-point arithmetic/load/store flow.
+The verified runtime set includes integer arithmetic, conditional/multi-block control flow, guest load/store with Xbox byte order, CR/LR/CTR state, repeated CTR-controlled loops, direct guest calls, two-level nested guest calls, FLOAT64 FPR movement, and the first real floating-point arithmetic/load/store flow.
 
 ### Real guest calls execute through independently translated callees
 
@@ -70,14 +70,7 @@ No second PPC decoder or hardcoded callee behavior is used.
 
 ### Real FPU arithmetic now executes
 
-The first FPR move/data-path gate remains green:
-
-```text
-fmr f1,f2
-blr
-```
-
-Run 133 additionally proves a non-zero floating-point memory/arithmetic path:
+Run 133 proves a non-zero floating-point memory/arithmetic path:
 
 ```text
 lfd  f1,0(r4)       ; guest double 1.0
@@ -99,7 +92,38 @@ guest[+16..+23] = 0x4008000000000000
 
 `0x4008000000000000` is IEEE-754 double **3.0**, so this is a real architectural + guest-memory floating result rather than a translation-only claim.
 
-### Existing architectural gates remain green
+### VMX/VMX128 — translation reached, execution boundary measured
+
+Diagnostic GitHub Actions **run 136** (`33143785258`) deliberately introduced a real VMX program:
+
+```text
+lvx      v1,0,r4
+lvx      v2,0,r5
+vaddubm  v3,v1,v2
+stvx     v3,0,r7
+lwz      r3,0(r7)
+blr
+```
+
+The source matrix still compiled **62/62** and linked strictly. Xenia accepted the genuine VMX opcodes and produced **29 finalized HIR instructions**. The measured vector path includes:
+
+```text
+LOAD VEC128
+BYTE_SWAP VEC128
+STORE_CONTEXT (VR)
+...
+VECTOR_ADD          ; INT8 lane type for vaddubm
+STORE_CONTEXT (VR)
+...
+BYTE_SWAP VEC128
+STORE
+```
+
+The correctness executor intentionally failed at the first VEC128 `BYTE_SWAP`, because vector byte-swap and `VECTOR_ADD` execution are not implemented yet. The diagnostic test was removed from the required green gate after measuring this boundary; `main` keeps the last proven 15-test CPU gate while VMX execution is implemented next.
+
+This is useful progress: **VMX PPC decoding and Xenia translation are already working in wasm32. The active missing boundary is finalized VEC128 HIR execution, not instruction recognition.**
+
+## Existing architectural gates remain green
 
 ```text
 li r3,1 ; blr                                      -> r3 = 1
@@ -136,11 +160,13 @@ Measured/support coverage includes:
 - typed FLOAT32/FLOAT64 arithmetic support for `ADD`, `SUB`, `MUL` (FLOAT64 `ADD` measured in run 133);
 - `BRANCH`, `BRANCH_TRUE`, `BRANCH_FALSE` and backward loops;
 - `LOAD`, `STORE`, `LOAD_OFFSET`, `STORE_OFFSET` against Xenia `Memory`;
-- `BYTE_SWAP` for Xbox guest endianness;
+- scalar `BYTE_SWAP` for Xbox guest endianness;
 - LR/CTR/CR state;
 - direct `CALL` / conditional-call plumbing with nested Xenia function translation;
 - return and `CALL_POSSIBLE_RETURN` boundaries;
 - a 4096-instruction correctness guard.
+
+VMX diagnostic run 136 proves Xenia emits VEC128 load/store/context and `VECTOR_ADD` HIR in wasm32; VEC128 `BYTE_SWAP` and vector arithmetic remain fail-closed until implemented.
 
 Unsupported HIR fails the correctness gate rather than being guessed or silently ignored.
 
@@ -177,10 +203,11 @@ direct guest call/return                                    ✓
 two-level nested guest calls                                ✓
 FLOAT64 FPR move/data path                                  ✓
 real lfd -> fadd -> stfd                                    ✓ run 133
+VMX PPC -> finalized VEC128 HIR                             ✓ diagnostic run 136
         ↓
-broader FPU SUB/MUL/DIV + compare/convert/FPSCR             ACTIVE NEXT
+VEC128 BYTE_SWAP + VECTOR_ADD execution                     ACTIVE NEXT
         ↓
-VMX / VMX128 correctness
+broader FPU + VMX / VMX128 correctness
         ↓
 hot-block WasmBackend + executable-page invalidation
         ↓
@@ -196,7 +223,7 @@ Xenos -> shared browser GPU layer
         ↓
 WebAudio + first genuine guest framebuffer
         ↓
-title compatibility / iPhone performance work
+title compatibility / performance work
 ```
 
 ## Braid / XBLA title path
@@ -211,7 +238,8 @@ LIVE/STFS package
   -> integer/control/memory execution       ✓ growing subset
   -> nested guest functions                ✓ first subset
   -> FPU load/add/store                     ✓ first arithmetic subset
-  -> VMX/VMX128                             ACTIVE AFTER FPU EXPANSION
+  -> VMX decode/translation                ✓ first measured path
+  -> VMX finalized-HIR execution           ACTIVE NEXT
   -> full sparse guest memory              FUTURE
   -> map / enter default.xex               FUTURE
   -> Kernel / XAM                          FUTURE

@@ -71,20 +71,22 @@ EXPORTS=(
   _r360_ppc_probe_load _r360_ppc_probe_translate
   _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
 )
+EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 
 LINK_ARGS=(
   -O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1
   -Wl,--no-entry -Wl,--export-memory
   -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1
+  "-sEXPORTED_FUNCTIONS=$EXPORT_LIST"
 )
-for symbol in "${EXPORTS[@]}"; do LINK_ARGS+=("-sEXPORTED_FUNCTIONS=$symbol"); done
 
 rm -f "$WASM" "$LOG" "$REPORT"
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=The live Xenia translation driver linked with the real scanner/compiler/pass pipeline, bounded wasm32 probe memory, browser logging and portable Xenia filesystem/mutex support. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
+    echo "exports=${#EXPORTS[@]}"
+    echo "note=The live Xenia translation driver linked with the complete exported probe ABI, real scanner/compiler/pass pipeline, bounded wasm32 probe memory, browser logging and portable Xenia filesystem/mutex support. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi

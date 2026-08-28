@@ -47,12 +47,14 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_compiler_passes_context_promotion_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_control_flow_analysis_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_control_flow_simplification_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_data_flow_analysis_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_dead_code_elimination_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_finalization_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_memory_sequence_combination_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_register_allocation_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_simplification_pass.cc.o"
   "$OUT/src_xenia_cpu_compiler_passes_validation_pass.cc.o"
+  "$OUT/src_xenia_cpu_compiler_passes_value_reduction_pass.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_context.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_table_gen.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_opcode_lookup_gen.cc.o"
@@ -109,7 +111,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
     echo "status=LINKED"
     echo "wasm=$WASM"
     echo "exports=${#EXPORTS[@]}"
-    echo "note=The real Xenia PPC translation path, finalized-HIR correctness executor, and bounded guest-memory correctness ABI linked with the complete exported probe ABI. Runtime gates must pass before broader PPC correctness is declared."
+    echo "note=The real Xenia PPC translation path, complete current compiler-pass source set, finalized-HIR correctness executor, and bounded guest-memory correctness ABI linked strictly. Runtime gates must pass before broader PPC correctness is declared."
   } | tee "$REPORT"
   exit 0
 fi

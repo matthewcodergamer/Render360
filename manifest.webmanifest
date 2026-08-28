@@ -6,5 +6,5 @@
   "display": "standalone",
   "background_color": "#030406",
   "theme_color": "#030406",
-  "description": "Render360 Xenia-Web V32 — complete STFS default.xex streaming + dual analog controls."
+  "description": "Render360 Xenia-Web — V34 development track, stable Core V32, UI V33. Five CPU/browser foundations are regression-complete; VMX/VMX128 is the active next foundation."
 }

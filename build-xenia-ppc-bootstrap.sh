@@ -48,10 +48,10 @@ SOURCES=(
 
 classify_failure() {
   local log="$1"
-  if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then echo PPC_CONTEXT_ABI_DEPENDENCY
-  elif grep -Eqi 'char8_t|u8 literal' "$log"; then echo UTF8_LITERAL_ABI_DEPENDENCY
-  elif grep -Eqi 'x64_backend|x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
+  if grep -Eqi 'Instruction pointer not specified|target CPU architecture|x64_backend|x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then echo HOST_ARCH_DEPENDENCY
+  elif grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then echo PPC_CONTEXT_ABI_DEPENDENCY
   elif grep -Eqi 'CreateFileMapping|MapView|file.?mapping|4gb|address space|windows\.h|win32|VirtualAlloc|sys/mman|mmap' "$log"; then echo HOST_MEMORY_MAPPING_DEPENDENCY
+  elif grep -Eqi 'error:.*char8_t|no viable.*char8_t|u8 literal' "$log"; then echo UTF8_LITERAL_ABI_DEPENDENCY
   elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then echo LLVM_HEADER_DEPENDENCY
   elif grep -Eqi 'pthread|unistd|mach/' "$log"; then echo HOST_OS_DEPENDENCY
   elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore|threading\.h|chrono\.h' "$log"; then echo THREADING_DEPENDENCY
@@ -74,7 +74,11 @@ compile_one() {
 }
 
 for rel in "${SOURCES[@]}"; do
-  if [ "$rel" = "src/xenia/base/cvar.cc" ]; then compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc"; else compile_one "$rel" "$XENIA/$rel"; fi
+  case "$rel" in
+    "src/xenia/base/cvar.cc") compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc" ;;
+    "src/xenia/cpu/processor.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
+    *) compile_one "$rel" "$XENIA/$rel" ;;
+  esac
 done
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"

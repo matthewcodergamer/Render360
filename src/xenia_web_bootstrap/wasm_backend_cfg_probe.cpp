@@ -494,19 +494,22 @@ bool BuildCfgModule(HIRBuilder* builder, const ValueLocals& locals,
           if (target == indices.end()) return false;
           const bool invert = instr->opcode->num == xe::cpu::hir::OPCODE_BRANCH_FALSE;
           if (!EmitTruthy(instr->src1.value, invert, locals, body)) return false;
-          body.push_back(0x04); body.push_back(0x40);
+
+          // Xenia finalized HIR may represent a conditional branch and its
+          // not-taken continuation in the same HIR Block. Do not substitute
+          // block->next for that continuation: doing so aliases the false path
+          // to the branch label for common PPC sequences such as
+          // cmpwi/beq/li/b/li. Only leave the current instruction stream if the
+          // HIR condition is taken. Otherwise execution continues with the
+          // following HIR instruction, preserving Xenia's exact semantics.
+          body.push_back(0x04); body.push_back(0x40);  // if
           EmitSetPc(body, target->second);
-          body.push_back(0x05);
-          if (block->next) {
-            const auto fallthrough = indices.find(block->next);
-            if (fallthrough == indices.end()) return false;
-            EmitSetPc(body, fallthrough->second);
-          } else {
-            EmitSetPc(body, block_count);
-          }
-          body.push_back(0x0B);
-          body.push_back(0x0C); EmitU32Leb(body, 1);
-          ++lowered; terminated = true; break;
+          // Nesting here is: condition-if (0), per-PC block-if (1), dispatcher
+          // loop (2). Branch directly back to the dispatcher loop when taken.
+          body.push_back(0x0C); EmitU32Leb(body, 2);
+          body.push_back(0x0B);  // end condition-if
+          ++lowered;
+          break;
         }
         case xe::cpu::hir::OPCODE_RETURN:
           body.push_back(0x0C); EmitU32Leb(body, 2);

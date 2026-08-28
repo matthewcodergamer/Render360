@@ -27,6 +27,7 @@ on:
       - 'xenia_port/**'
       - 'prepare-xenia-*-overlay.py'
       - 'prepare-render360-*-overlay.py'
+      - 'prepare-wasm-*-overlay.py'
       - 'prepare-vmx-executor-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'

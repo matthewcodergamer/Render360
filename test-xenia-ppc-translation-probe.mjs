@@ -29,7 +29,11 @@ if (unresolved.length) {
 }
 
 const instance = await WebAssembly.instantiate(module, imports);
-if (typeof instance.exports._initialize === 'function') wasi.initialize(instance);
+// This standalone Emscripten module is used as a WASI reactor: it intentionally
+// has no _start entry point. Node's WASI implementation still must be marked as
+// initialized before any imported WASI function can be called. initialize()
+// does that and invokes _initialize when the module exports one.
+wasi.initialize(instance);
 
 const exportedNames = Object.keys(instance.exports).sort();
 console.log(`wasm_exports=${exportedNames.join(',')}`);

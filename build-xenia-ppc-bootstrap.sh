@@ -3,6 +3,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 XENIA="$ROOT/upstream/xenia"
+OVERLAY="$ROOT/build/xenia-web-overlay"
 OUT="$ROOT/build/xenia-ppc-bootstrap"
 CXX="${CXX:-em++}"
 mkdir -p "$OUT"
@@ -16,22 +17,26 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   exit 2
 fi
 
+python3 "$ROOT/prepare-xenia-web-overlay.py"
+
 COMMON=(
   -std=c++20
   -O0
   -g0
   -fno-rtti
+  -I"$OVERLAY"
   -I"$ROOT/src/xenia_web_shims"
   -I"$XENIA/src"
   -I"$XENIA"
   -I"$XENIA/third_party/fmt/include"
   -I"$XENIA/third_party/utfcpp/source"
   -I"$XENIA/third_party/capstone/include"
+  -I"$XENIA/third_party/cpptoml/include"
 )
 
-# Compile real upstream Xenia translation units separately. The Render360
-# include overlay only supplies browser host primitives (platform + atomics).
-# Xbox semantics stay in upstream Xenia source.
+# Compile real upstream Xenia translation units separately. Render360's include
+# overlays adapt browser host ABI/platform details only; Xbox semantics remain
+# in the upstream Xenia implementation.
 SOURCES=(
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
@@ -48,13 +53,15 @@ classify_failure() {
   local log="$1"
   if grep -Eqi 'static assertion.*64b padded|sizeof\(PPCContext\)' "$log"; then
     echo PPC_CONTEXT_ABI_DEPENDENCY
+  elif grep -Eqi 'llvm/ADT|llvm/' "$log"; then
+    echo LLVM_HEADER_DEPENDENCY
   elif grep -Eqi 'x64|amd64|avx|sse|m128|m256|xbyak|executable.*memory|code.?cache' "$log"; then
     echo HOST_ARCH_DEPENDENCY
   elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then
     echo HOST_OS_OR_MEMORY_DEPENDENCY
   elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore' "$log"; then
     echo THREADING_DEPENDENCY
-  elif grep -Eqi 'fmt/|utf8|capstone|third_party|not found|file not found|no such file' "$log"; then
+  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|third_party|not found|file not found|no such file' "$log"; then
     echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
   else
     echo CXX_OR_PORTABILITY_DEPENDENCY

@@ -7,6 +7,7 @@ on:
       - 'fetch-xenia.sh'
       - 'xenia_contract_check.py'
       - 'xenia_web_bootstrap_check.py'
+      - 'prepare-xenia-web-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_shims/**'
       - 'XENIA_WEB_BOOTSTRAP.md'
@@ -38,7 +39,7 @@ jobs:
             -v "$PWD:/src" \
             -w /src \
             emscripten/emsdk:latest \
-            bash ./build-xenia-ppc-bootstrap.sh
+            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh'
 
       - name: Show compile matrix
         if: always()

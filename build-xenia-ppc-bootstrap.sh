@@ -27,7 +27,6 @@ SOURCES=(
   "third_party/fmt/src/format.cc"
   "src/xenia/base/cvar.cc"
   "src/xenia/base/utf8.cc"
-  "src/xenia/base/memory_posix.cc"
   "src/xenia/base/logging.cc"
   "src/xenia/base/mutex.cc"
   "src/xenia/memory.cc"
@@ -82,6 +81,7 @@ for rel in "${SOURCES[@]}"; do
   case "$rel" in
     "src/xenia/base/cvar.cc") compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc" ;;
     "src/xenia/base/utf8.cc") compile_one "$rel" "$OVERLAY/xenia/base/utf8.cc" ;;
+    "src/xenia/memory.cc") compile_one "$rel" "$OVERLAY/xenia/memory.cc" ;;
     "src/xenia/cpu/processor.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac

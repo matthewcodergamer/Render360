@@ -9,7 +9,11 @@ on:
       - 'xenia_web_bootstrap_check.py'
       - 'xenia_translation_foundation_check.py'
       - 'test-package-xex-foundation.mjs'
+      - 'render360_xenia_core.cpp'
+      - 'render360_xenia_core_v32.cpp'
+      - 'render360_xenia_core.wasm'
       - 'render360_xenia_core_embedded.js'
+      - 'build-core.sh'
       - 'wasm-core-v32.js'
       - 'prepare-xenia-*-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
@@ -32,6 +36,9 @@ jobs:
     steps:
       - name: Checkout Render360
         uses: actions/checkout@v4
+
+      - name: Rebuild V32 package/XEX WASM core from source
+        run: bash ./build-core.sh
 
       - name: Verify STFS/XEX package foundation
         run: node ./test-package-xex-foundation.mjs

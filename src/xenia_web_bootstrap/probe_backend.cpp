@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "hir_correctness_executor.h"
+#include "wasm_backend_call_probe.h"
 #include "wasm_backend_cfg_probe.h"
 #include "wasm_backend_memory_probe.h"
 #include "wasm_backend_probe.h"
@@ -94,6 +95,19 @@ bool ProbeAssembler::Assemble(
 
   ++g_probe_telemetry.assembled_functions;
   auto* memory = backend_ && backend_->processor() ? backend_->processor()->memory() : nullptr;
+
+  // Unlike the single-function scalar/CFG/memory probes, the call workstream
+  // must observe every Xenia-produced function. Nested callees are therefore
+  // registered here too, after their own scanner/frontend/compiler pipeline has
+  // finalized HIR. The generated caller never decodes PPC and never asks the
+  // correctness executor to impersonate a callee.
+  const bool call_registered = RegisterWasmBackendCallFunction(function, builder);
+  std::fprintf(stderr,
+               "R360_WASM_BACKEND_CALL%s address=0x%08X registered=%u status=%u functions=%u\n",
+               nested_execution ? "_NESTED" : "",
+               function ? function->address() : 0u, call_registered ? 1u : 0u,
+               GetWasmBackendCallStatus(), GetWasmBackendCallFunctionCount());
+
   if (!nested_execution) {
     g_probe_telemetry.hir_blocks = block_count;
     g_probe_telemetry.hir_instructions = instruction_count;

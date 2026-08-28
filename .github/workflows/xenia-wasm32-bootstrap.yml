@@ -7,7 +7,7 @@ on:
       - 'fetch-xenia.sh'
       - 'xenia_contract_check.py'
       - 'xenia_web_bootstrap_check.py'
-      - 'prepare-xenia-web-overlay.py'
+      - 'prepare-xenia-*-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'test-xenia-ppc-translation-probe.mjs'

@@ -24,7 +24,9 @@ LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
 
 SOURCES=(
+  "third_party/fmt/src/format.cc"
   "src/xenia/base/cvar.cc"
+  "src/xenia/base/utf8.cc"
   "src/xenia/memory.cc"
   "src/xenia/cpu/processor.cc"
   "src/xenia/cpu/backend/backend.cc"

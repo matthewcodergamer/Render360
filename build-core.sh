@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC="$ROOT/render360_xenia_core.cpp"
+SRC="$ROOT/render360_xenia_core_v32.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
 
@@ -39,7 +39,13 @@ EXPORTS=(
   r360_stfs_entry_start_block r360_stfs_entry_parent_index
   r360_stfs_entry_length r360_stfs_entry_is_directory
   r360_stfs_entry_is_contiguous r360_stfs_block_offset_lo
-  r360_stfs_block_offset_hi r360_feature_bits
+  r360_stfs_block_offset_hi
+  r360_stfs_extract_reset r360_stfs_extract_begin r360_stfs_extract_status
+  r360_stfs_extract_entry_index r360_stfs_extract_current_block
+  r360_stfs_extract_logical_offset r360_stfs_extract_bytes_total
+  r360_stfs_extract_bytes_done r360_stfs_extract_blocks_done
+  r360_stfs_extract_is_contiguous
+  r360_feature_bits
 )
 
 ARGS=(
@@ -52,4 +58,4 @@ for symbol in "${EXPORTS[@]}"; do
 done
 
 "$CXX" "${ARGS[@]}" -o "$OUT" "$SRC"
-printf 'Built %s\n' "$OUT"
+printf 'Built %s from %s\n' "$OUT" "$(basename "$SRC")"

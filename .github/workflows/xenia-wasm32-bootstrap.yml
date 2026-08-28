@@ -12,6 +12,7 @@ on:
       - 'test-xex-image-decode.mjs'
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
+      - 'test-xex-image-prepare-normal-frame.mjs'
       - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
@@ -77,6 +78,9 @@ jobs:
 
       - name: Verify streaming BASIC XEX preparation
         run: node ./test-xex-image-prepare-basic.mjs
+
+      - name: Verify streaming NORMAL block/hash/chunk framing
+        run: node ./test-xex-image-prepare-normal-frame.mjs
 
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh

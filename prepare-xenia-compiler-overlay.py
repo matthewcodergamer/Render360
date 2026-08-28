@@ -28,8 +28,12 @@ replacement = r'''// Browser portability boundary: this pass only needs resize/r
 class Render360ContextBitVector {
  public:
   void resize(uint32_t size) { bits_.assign(size, 0); }
-  void reset() { std::fill(bits_.begin(), bits_.end(), uint8_t{0}); }
-  bool test(uint32_t index) const { return index < bits_.size() && bits_[index] != 0; }
+  void reset() {
+    for (auto& bit : bits_) bit = 0;
+  }
+  bool test(uint32_t index) const {
+    return index < bits_.size() && bits_[index] != 0;
+  }
   void set(uint32_t index) {
     if (index < bits_.size()) bits_[index] = 1;
   }

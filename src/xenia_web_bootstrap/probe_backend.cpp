@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "hir_correctness_executor.h"
+#include "wasm_backend_probe.h"
 #include "xenia/cpu/function_debug_info.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -115,6 +116,16 @@ bool ProbeAssembler::Assemble(
     g_probe_telemetry.hir_blocks = block_count;
     g_probe_telemetry.hir_instructions = instruction_count;
     g_probe_telemetry.last_guest_address = function ? function->address() : 0;
+
+    // This is the first real hot-backend seam: consume the exact finalized HIR
+    // that Xenia hands to Assembler, and lower only the supported scalar slice
+    // into a separate child WebAssembly module. Unsupported HIR remains
+    // fail-closed and still uses the correctness executor as the reference.
+    BuildWasmBackendProbe(builder);
+    std::fprintf(stderr,
+                 "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n",
+                 GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(),
+                 GetWasmBackendProbeLoweredInstructions());
   }
 
   auto* memory = backend_ && backend_->processor()

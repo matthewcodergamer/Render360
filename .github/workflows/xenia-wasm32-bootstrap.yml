@@ -7,6 +7,10 @@ on:
       - 'fetch-xenia.sh'
       - 'xenia_contract_check.py'
       - 'xenia_web_bootstrap_check.py'
+      - 'xenia_translation_foundation_check.py'
+      - 'test-package-xex-foundation.mjs'
+      - 'render360_xenia_core_embedded.js'
+      - 'wasm-core-v32.js'
       - 'prepare-xenia-*-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -29,13 +33,17 @@ jobs:
       - name: Checkout Render360
         uses: actions/checkout@v4
 
+      - name: Verify STFS/XEX package foundation
+        run: node ./test-package-xex-foundation.mjs
+
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh
 
-      - name: Audit Xenia contracts
+      - name: Audit Xenia contracts and translation foundation
         run: |
           python3 ./xenia_contract_check.py
           python3 ./xenia_web_bootstrap_check.py
+          python3 ./xenia_translation_foundation_check.py
 
       - name: Compile and link real Xenia PPC/HIR wasm32 bootstrap
         run: |

@@ -5,6 +5,7 @@
 
 #include "hir_correctness_executor.h"
 #include "probe_backend.h"
+#include "wasm_backend_call_probe.h"
 #include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
@@ -96,6 +97,7 @@ extern "C" {
 void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
+  render360::xenia_web::ResetWasmBackendCallProbe();
   render360::xenia_web::g_loaded_size = 0;
   render360::xenia_web::g_status =
       render360::xenia_web::g_processor
@@ -164,6 +166,7 @@ uint32_t r360_ppc_probe_translate() {
   }
 
   ResetProbeTelemetry();
+  ResetWasmBackendCallProbe();
   // Keep the top-level test function fresh because the harness deliberately
   // replaces the bytes at the same guest base for each correctness case. The
   // registered module is still used by Xenia to declare/cache real callees.

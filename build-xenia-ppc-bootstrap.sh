@@ -78,6 +78,7 @@ compile_one() {
 for rel in "${SOURCES[@]}"; do
   case "$rel" in
     "src/xenia/base/cvar.cc") compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc" ;;
+    "src/xenia/base/utf8.cc") compile_one "$rel" "$OVERLAY/xenia/base/utf8.cc" ;;
     "src/xenia/cpu/processor.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac

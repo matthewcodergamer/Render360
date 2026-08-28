@@ -65,20 +65,32 @@ const wordBytes = (...words) => Uint8Array.from(words.flatMap((word) => [
 ]));
 
 const conditionalProgram = wordBytes(
-  0x2C040000, // cmpwi r4,0
-  0x4182000C, // beq +12 -> li r3,2
-  0x38600001, // li r3,1
-  0x48000008, // b +8 -> blr
-  0x38600002, // li r3,2
-  0x4E800020, // blr
+  0x2C040000,
+  0x4182000C,
+  0x38600001,
+  0x48000008,
+  0x38600002,
+  0x4E800020,
 );
 
 const ctrLoopProgram = wordBytes(
-  0x7C8903A6, // mtctr r4
-  0x38600000, // li r3,0
-  0x38630001, // loop: addi r3,r3,1
-  0x4200FFFC, // bdnz loop
-  0x4E800020, // blr
+  0x7C8903A6,
+  0x38600000,
+  0x38630001,
+  0x4200FFFC,
+  0x4E800020,
+);
+
+// Save caller LR in r5, call a local leaf function, add 2 to its result,
+// restore caller LR, then return. Callee returns r3=5, so final r3 must be 7.
+const directCallProgram = wordBytes(
+  0x7CA802A6, // mflr r5
+  0x48000011, // bl +16 -> callee at +20
+  0x38630002, // addi r3,r3,2
+  0x7CA803A6, // mtlr r5
+  0x4E800020, // blr (outer return)
+  0x38600005, // callee: li r3,5
+  0x4E800020, // blr (return to caller +8)
 );
 
 const tests = [
@@ -129,6 +141,13 @@ const tests = [
     initialGprs: [[4, 3n]],
     memorySeeds: [],
     expectedR3: 3n,
+  },
+  {
+    name: 'direct-bl-callee-blr-caller',
+    ppc: directCallProgram,
+    initialGprs: [],
+    memorySeeds: [],
+    expectedR3: 7n,
   },
 ];
 

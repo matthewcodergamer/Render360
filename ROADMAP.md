@@ -1,4 +1,4 @@
-# Render360 Xenia-Web Roadmap — V34
+# Render360 Xenia-Web Roadmap — V35
 
 ## Project rule
 
@@ -9,16 +9,17 @@ Xenia remains the source of truth for Xbox 360 behavior. Render360 owns the brow
 ## Version map
 
 ```text
-Project development line   V34
+Project development line   V35
 Stable deployed core       V32
 Responsive UI shell        V33
+Active architecture        WasmBackend
 ```
 
-The stable V32 browser core and V33 UI are not being renamed just because CPU research advanced. V34 identifies the active emulator-development milestone.
+The stable V32 browser core and V33 UI are not renamed just because emulator research advances. V35 identifies the VMX-complete CPU milestone and the start of hot generated-WASM execution work.
 
-## Current verified V34 boundary
+## Current verified V35 boundary
 
-Authoritative CPU gate: **GitHub Actions run 168 (`33149796414`)**.
+Authoritative CPU gate: **GitHub Actions run 175 (`33152187091`)** at `fe11632ec806cb6be53da6ff419b77aa201f4b1f`.
 
 ```text
 PACKAGE_XEX_FOUNDATION                    PASS
@@ -26,6 +27,9 @@ PPC_TRANSLATION_FOUNDATION                PASS
 SCALAR_PPC_CORRECTNESS_FOUNDATION         PASS
 GUEST_CONTROL_FOUNDATION                  PASS
 FPU_FOUNDATION                            PASS
+VMX_STANDARD_BASELINE                     PASS (11)
+VMX128_REPRESENTATIVE                     PASS (1)
+VMX_FOUNDATION                            PASS (12)
 wasm32 compile matrix                     64 / 64 PASS
 strict full-export link                   LINKED
 rooted exports                            25
@@ -34,51 +38,24 @@ real PPC/FPU/VMX correctness suite        24 / 24 PASS
 
 ## Foundations closed at 100%
 
-### STFS / Xbox package / XEX
-
-Complete for the defined browser-loader baseline: package recognition, STFS traversal/hash-chain behavior, root `default.xex` discovery, fragmented extraction, complete byte reconstruction and structural XEX metadata inspection.
-
-### Xenia PPC translation
-
-Complete for the defined portable translation baseline: frontend, translator, scanner, PPC emitter families, HIR, compiler/pass framework, browser host seams and strict wasm32 linking.
-
-### Scalar PPC correctness
-
-Complete for the defined scalar baseline: arithmetic, comparisons, branches, CTR loops, scalar guest memory, endian conversion, CR/LR/CTR and return boundaries.
-
-### Guest function/control
-
-Complete for the defined control baseline: direct calls, nested calls, CTR/bctrl indirect calls, LR save/restore, stack-frame-shaped flow, guest-memory LR spill/reload and caller resume.
-
-### FPU
-
-Complete for the defined FPU baseline: FPR state/load/store, FLOAT64 add/sub/mul/div, floating compare, common conversions, round-to-zero, f64/f32 rounding and the current upstream-Xenia FPSCR update/readback path.
-
-## Active next foundation — VMX / VMX128
-
-Current proven vector behavior:
-
 ```text
-VEC128 guest load                          ✓
-Xenia-compatible byte ordering             ✓
-unsigned INT8 vector add / vaddubm         ✓
-VEC128 guest store                         ✓
+STFS / Xbox package / XEX       100% ✓
+Xenia PPC translation           100% ✓
+Scalar PPC correctness          100% ✓
+Guest function/control          100% ✓
+FPU                             100% ✓
+VMX / VMX128                    100% ✓
 ```
 
-Closure work:
+These are defined regression foundations, not claims of universal title compatibility.
 
-1. INT16 modulo add;
-2. INT32 modulo add;
-3. vector subtraction;
-4. AND / OR / XOR;
-5. integer vector comparisons;
-6. common vector shifts;
-7. representative Xbox 360 VMX128 forms;
-8. dedicated `VMX_FOUNDATION=PASS` regression gate.
+### VMX closure added in V35
 
-## Next architecture — hot WasmBackend
+The dedicated VMX gate verifies VEC128 memory/byte order, INT8/INT16/INT32 modulo arithmetic, subtraction, AND/OR/XOR, equality compare, word shifts, and a representative genuine Xbox 360 `vand128` encoding. See `VMX_FOUNDATION.md`.
 
-After VMX baseline closure, stop expanding the correctness executor indefinitely.
+## Active next foundation — Hot WasmBackend
+
+The correctness executor now acts as the reference oracle. Hot guest code should move to generated WebAssembly:
 
 ```text
 finalized Xenia HIR
@@ -87,17 +64,23 @@ finalized Xenia HIR
   -> browser WASM engine
 ```
 
-Required follow-up:
+### WasmBackend closure plan
 
-- translated-function/block cache;
-- guest address + code-version cache key;
-- executable-page versioning;
-- invalidation when guest executable memory changes;
-- correctness fallback for unsupported hot-path operations.
+1. integer arithmetic block lowering;
+2. multi-block branch/control-flow lowering;
+3. scalar guest load/store/endian lowering;
+4. direct/indirect call + return lowering;
+5. FPU baseline lowering;
+6. VMX/VMX128 baseline lowering;
+7. result equivalence against the correctness executor;
+8. compiled-function/block cache;
+9. guest address + executable-code-version cache keys;
+10. executable-page invalidation;
+11. dedicated `WASM_BACKEND_FOUNDATION=PASS` gate.
 
 ## Full Xbox guest memory
 
-Replace the current bounded correctness window with a sparse/page-backed 32-bit guest address model.
+After the hot execution baseline, replace the bounded correctness window with a sparse/page-backed 32-bit guest address model.
 
 Required behavior:
 
@@ -107,11 +90,11 @@ Required behavior:
 - MMIO routing;
 - executable-page tracking;
 - dirty/version tracking;
-- browser-safe allocation rather than desktop 4+ GB host alias mappings.
+- browser-safe allocation instead of desktop multi-gigabyte host alias mappings.
 
 ## Real XEX mapping and entry execution
 
-The package foundation already extracts a complete `default.xex`. The next title-bring-up stage is:
+The package foundation already extracts a complete `default.xex`. Title bring-up then becomes:
 
 1. prepare/decrypt/decompress supported XEX images;
 2. map sections at their Xbox addresses;
@@ -121,39 +104,17 @@ The package foundation already extracts a complete `default.xex`. The next title
 6. execute the real entry point;
 7. fail visibly at the first genuine missing runtime dependency.
 
-This is the next major visible emulator milestone.
+This is the next major visible emulator milestone after WasmBackend + full guest memory.
 
 ## Kernel / xboxkrnl / XAM
 
 Reuse Xenia kernel HLE rather than recreating Xbox APIs in JavaScript.
 
-Target:
-
-- `KernelState`;
-- export resolver;
-- xboxkrnl;
-- XAM;
-- kernel objects;
-- memory APIs;
-- threads/events/semaphores/timers;
-- VFS/file APIs;
-- input-facing exports.
-
-No broad unknown-export `return success` stubs.
+Target: `KernelState`, export resolver, xboxkrnl, XAM, kernel objects, memory APIs, threads/events/semaphores/timers, VFS/files and input-facing exports. No broad unknown-export `return success` stubs.
 
 ## Browser I/O / VFS
 
-Never load a multi-gigabyte image with one `File.arrayBuffer()`.
-
-Use random-access sources:
-
-```text
-size()
-read(offset, length)
-close()
-```
-
-Backends: Blob/File slices, OPFS, IndexedDB cache/chunks where useful, and explicit HTTP Range sources when authorized.
+Never load a multi-gigabyte image with one `File.arrayBuffer()`. Keep random-access sources (`size`, `read(offset,length)`, `close`) backed by Blob/File slices, OPFS and cache layers where useful.
 
 ## GPU architecture
 
@@ -167,28 +128,24 @@ Xenos ringbuffer
      -> WebGL2 + GLSL ES        fallback where feasible
 ```
 
-Do not route guest rendering through Three.js. The existing Three.js arena remains a host/input diagnostic only.
+Three.js remains host/input diagnostics only and is never presented as guest Xbox rendering.
 
-### WebGPU targets
+### GPU targets
 
 - Xenos command processor integration;
 - shared memory/resource tracking;
-- texture cache;
-- pipeline cache;
+- texture and pipeline caches;
 - render-target cache;
 - WGSL shader translator;
 - EDRAM/resolve behavior;
 - presentation from guest-generated framebuffer state.
 
-## Audio
-
-Port Xbox/Xenia audio behavior incrementally to WebAudio/AudioWorklet with a ring buffer and guest/host timing kept separate.
-
 ## Compatibility ladder
 
 ```text
-CPU/VMX foundation closure
+six CPU/browser foundations complete
   -> WasmBackend
+  -> compiled-function cache + invalidation
   -> full guest memory
   -> real default.xex entry
   -> kernel/XAM
@@ -209,18 +166,18 @@ PPC translation foundation         100% ✓
 Scalar PPC foundation              100% ✓
 Guest control foundation           100% ✓
 FPU foundation                     100% ✓
-VMX / VMX128                       ~15%
-Hot WasmBackend                    ~3%
+VMX / VMX128 foundation            100% ✓
+Hot WasmBackend                    ~3%   ← ACTIVE
 Full guest memory                  ~10%
 Real default.xex entry             ~5%
 Kernel/xboxkrnl/XAM                ~1–2%
 Xenos GPU                          ~1–2%
 WebGPU backend                     ~2%
 WebGL2 fallback                    ~1%
-First genuine title boot           ~23–24%
-Small XBLA/Braid-class playable    ~16–17%
-Portal-class playable              ~9–10%
-Overall Render360                  ~25–27%
+First genuine title boot           ~24–25%
+Small XBLA/Braid-class playable    ~17–18%
+Portal-class playable              ~10–11%
+Overall Render360                  ~27–29%
 ```
 
 ## Status rule

@@ -1,5 +1,6 @@
 #include "probe_backend.h"
 
+#include <cstring>
 #include <memory>
 
 #include "xenia/cpu/function_debug_info.h"
@@ -60,9 +61,28 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   if (!xe::cpu::backend::Backend::Initialize(processor)) {
     return false;
   }
-  // Conservative translation target. Do not advertise host capabilities the
-  // browser correctness backend does not yet implement.
+
+  // The Xenia compiler's RegisterAllocationPass requires the backend to
+  // describe the host register sets it is translating for. Keep the probe
+  // target aligned with Xenia's mature x64 allocator shape (7 allocatable GPRs
+  // and 12 shared floating/vector registers) without importing the x64 emitter
+  // or claiming that these registers are executable wasm32 machine registers.
+  // They are only the allocation contract consumed while finalizing Xenia HIR.
   machine_info_.supports_extended_load_store = false;
+
+  auto& gprs = machine_info_.register_sets[0];
+  gprs.id = 0;
+  std::strcpy(gprs.name, "gpr");
+  gprs.types = xe::cpu::backend::MachineInfo::RegisterSet::INT_TYPES;
+  gprs.count = 7;
+
+  auto& vecs = machine_info_.register_sets[1];
+  vecs.id = 1;
+  std::strcpy(vecs.name, "vec");
+  vecs.types = xe::cpu::backend::MachineInfo::RegisterSet::FLOAT_TYPES |
+               xe::cpu::backend::MachineInfo::RegisterSet::VEC_TYPES;
+  vecs.count = 12;
+
   return true;
 }
 

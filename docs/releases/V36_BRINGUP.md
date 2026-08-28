@@ -1,132 +1,166 @@
 # V36 XEX bring-up
 
-V36 is the transition from closed synthetic CPU/browser foundations to genuine title-image bring-up.
+V36 is the transition from closed CPU/browser foundations to genuine title-image bring-up.
 
-## Locked foundation baseline
-
-The eight CPU/browser foundations remain locked by **Xenia WASM32 Bootstrap Run 254** on implementation commit:
-
-`3b39da31b6fc3e296e356f7143574951f7fc8861`
-
-Hot WasmBackend and Sparse Xbox Memory remain regression-locked foundations; V36 does not reopen their percentages.
-
-## V36 strict mapper closure
-
-`src/xenia_web_bootstrap/xex_guest_mapper.{h,cpp}` is a verified closed component layer on top of `SparseGuestMemory`.
-
-The authoritative mapper gate is **Xenia WASM32 Bootstrap run 261** (Actions run ID `33212297082`) on implementation commit:
-
-`f602d889293440a4840c3310a8e5fbf07ddc7756`
-
-Conclusion: **SUCCESS**.
-
-The mapper proves RX/R/RW section mapping, bounded loading, final permission sealing, overlap and wraparound rejection, executable-entry validation, and post-finalize fail-closed behavior. It closes the mapper component only; it does not claim genuine title execution.
-
-## V36 strict STFS extraction closure
-
-The complete pull-driven `default.xex` STFS extraction path is now verified by **Xenia WASM32 Bootstrap run 265** (Actions run ID `33218179582`) on implementation commit:
-
-`0ba0587bc335ad8391f43cdc8c750da36d149005`
-
-Conclusion: **SUCCESS**.
-
-The run rebuilt `render360_xenia_core.wasm`, passed the strengthened STFS/XEX package critic, then passed the complete Xenia PPC/HIR bootstrap, locked foundation matrix, SparseGuestMemory gate, and V36 XEX mapper gate.
-
-The extractor contract now includes:
+## Verified gates
 
 ```text
-root default.xex discovery                    PASS
-fragmented block-chain extraction             PASS
-byte-for-byte complete reconstruction         PASS
-extracted bytes == declared file length       PASS
-expected block count == consumed blocks       PASS
-declared valid/allocated block validation     PASS
-exact 24-bit repeated/cyclic block detection  FAIL CLOSED
-early/truncated chain                         FAIL CLOSED
-out-of-range package request                  FAIL CLOSED
-STFS_DEFAULT_XEX_EXTRACT                      PASS
-STFS_CHAIN_CYCLE_FAIL_CLOSED                  PASS
-STFS_DECLARED_BLOCK_TRUNCATION_FAIL_CLOSED    PASS
+Run 254  eight CPU/browser foundations
+         commit 3b39da31b6fc3e296e356f7143574951f7fc8861
+
+Run 261  strict XEX guest mapper
+         Actions ID 33212297082
+         commit f602d889293440a4840c3310a8e5fbf07ddc7756
+
+Run 265  full pull-driven default.xex STFS extraction
+         Actions ID 33218179582
+         commit 0ba0587bc335ad8391f43cdc8c750da36d149005
+
+Run 276  XEX2 metadata decode + decoded mapper integration
+         Actions ID 33219831630
+         commit c9fe8dec88e47b2ded17a0ede461bcf3d44acbe7
 ```
 
-Cycle detection uses a compact bitset over the STFS 24-bit block-number space. The source package is still consumed through bounded pull requests, so the browser does not need to duplicate the entire package inside WebAssembly memory.
+All four aggregate gates completed successfully.
 
-## Current boundary
+## Run 276 — XEX2 metadata decode closure
 
-A complete synthetic `default.xex` file is now proven through the real STFS block-chain machinery. What is **not** complete yet is full XEX2 image preparation suitable for genuine title execution.
-
-The active real-title sequence is now:
+New maintained files:
 
 ```text
-STFS root default.xex
-        ↓
-complete file extraction                    ✓
-        ↓
-XEX2 header/security/file-format decode     ← ACTIVE
-        ↓
-supported decrypt/decompress path
-        ↓
-real image base / entry / page descriptors
-        ↓
-real section addresses + permissions
-        ↓
-V36 XEX guest mapper                        ✓ component
-        ↓
-real RX / R / RW mappings
-        ↓
-genuine entry PC validation
-        ↓
-PPCContext + Xenia frontend / HIR
-        ↓
-Hot WasmBackend cache / dispatch
-        ↓
-first genuine title instruction
-        ↓
-first genuine missing kernel/runtime service
+src/xenia_web_bootstrap/xex_image_decoder.h
+src/xenia_web_bootstrap/xex_image_decoder.cpp
+src/xenia_web_bootstrap/xex_image_decoder_exports.cpp
+test-xex-image-decode.mjs
+test-xex-real-mapper-integration.mjs
 ```
 
-## Next CI gate: XEX2 image decode
+The decoder uses a separate `r360_xex_decode_*` ABI. Run 272 first exposed an ABI collision with the older lightweight inspector (`r360_xex_image_base` / `r360_xex_image_size`); that was fixed by separating the new decoder namespace rather than removing the established inspector API.
 
-The next critic must consume the exact reconstructed XEX bytes and prove image metadata rather than relying on synthetic mapper constants:
+The green decode critic verifies:
 
 ```text
-XEX2 header / magic                    PASS
-header table bounds                    PASS
-security-info bounds                   PASS
-image base                             VALID
-entry point                            VALID
-page/section descriptors               VALID
-loader/security metadata               VALID
-file-format metadata                   VALID
-supported decode/decompression         PASS
-unsupported encryption/compression     FAIL CLOSED
-section ranges non-overlapping         PASS
-32-bit range/wrap validation           PASS
-XEX_IMAGE_DECODE                       PASS
+XEX2 magic/header                             PASS
+optional-header table bounds                  PASS
+security-info bounds                          PASS
+image base / load address / image size        VALID
+entry point                                    VALID
+title/media execution metadata                VALID
+file-format metadata                          VALID
+NONE/NORMAL encryption classification         PASS
+NONE/BASIC/NORMAL compression classification  PASS
+DELTA before patch support                    FAIL CLOSED
+Xenia page descriptor decoding                PASS
+code/data/readonly descriptor types           PASS
+64 KiB title image-page rule                  PASS
+4 KiB high-image page rule                    PASS
+entry outside image                           FAIL CLOSED
+32-bit image wrap                             FAIL CLOSED
+corrupt/truncated descriptor data             FAIL CLOSED
+XEX_IMAGE_DECODE                              PASS
 ```
 
-Prefer Xenia's existing XEX/XEX2 structures and semantics wherever practical. After decode is green, feed those decoded values directly into the already-closed mapper and prove the integration without hard-coded section addresses.
+The page-size behavior is intentionally aligned with current Xenia `XexModule`: title images based at or below `0x90000000` use 64 KiB image pages; higher images use 4 KiB pages.
 
-## Following gate: real entry execution
+## Run 276 — decoded metadata → mapper closure
 
-After decoded XEX sections are mapped and the genuine entry PC is validated:
+The integration critic does not feed a parallel set of hard-coded section addresses into the mapper. It reads page-descriptor type/address/size and entry PC from the decoder ABI and uses those values to drive the already-verified `XexGuestMapper`.
 
 ```text
-construct PPCContext
+code descriptor       → R|X
+readonly descriptor   → R
+data descriptor       → R|W
+entry                  → set_entry / finalize
+RX after finalize      → write rejected
+RW after finalize      → write allowed
+relocated second XEX   → mappings re-derived from new metadata
+
+XEX_DECODED_SECTION_MAPPING=PASS
+XEX_DECODED_PERMISSIONS=PASS
+XEX_DECODED_ENTRY_VALIDATION=PASS
+XEX_METADATA_RELOCATION_REUSE=PASS
+XEX_REAL_MAPPER_INTEGRATION=PASS
+```
+
+This closes the **metadata interpretation and metadata→mapper contracts**. It does not claim that encrypted/compressed executable payloads have already been transformed into runnable image bytes.
+
+## Current boundary — image preparation
+
+The active V36 path is now:
+
+```text
+STFS default.xex extraction                   ✓
         ↓
-set genuine title entry
+XEX2 metadata decode                          ✓
         ↓
+metadata-derived mapper layout                ✓
+        ↓
+XEX IMAGE PREPARATION                         ← ACTIVE
+        ├── NONE encryption / NONE compression
+        ├── BASIC compression
+        ├── NORMAL LZX compression
+        ├── NORMAL encryption / session key
+        └── DELTA patch path remains fail closed
+        ↓
+prepared executable image bytes
+        ↓
+SparseGuestMemory / XexGuestMapper            ✓
+        ↓
+genuine entry PC
+        ↓
+PPCContext / Xenia frontend / HIR
+        ↓
+Hot WasmBackend
+        ↓
+first genuine title instructions
+```
+
+## Next CI gate — `XEX_IMAGE_PREPARE`
+
+The image preparation implementation should follow Xenia's current XEX semantics rather than creating a browser-specific executable format. Start with the unencrypted/uncompressed path, then add BASIC, NORMAL/LZX and NORMAL encryption with the real session-key behavior.
+
+Minimum fail-closed requirements:
+
+```text
+source offset/length bounds                   PASS
+output image bounds                           PASS
+prepared byte count == declared image size    PASS
+zero-fill semantics                           PASS
+BASIC block size accounting                   PASS when supported
+NORMAL/LZX stream/block validation            PASS when supported
+AES input alignment/session-key rules         PASS when supported
+DELTA without patch implementation            FAIL CLOSED
+truncated source                              FAIL CLOSED
+malformed compression data                    FAIL CLOSED
+arithmetic/address overflow                   FAIL CLOSED
+```
+
+Do not mark the entire image-preparation layer 100% while BASIC/NORMAL/encryption forms included in the declared contract remain unimplemented.
+
+## After image preparation
+
+Prepared bytes are streamed into decoder-derived guest mappings, permissions are sealed, and the genuine entry PC is used to construct initial PPC state:
+
+```text
+prepared XEX image
+    ↓
+decoder-derived RX/R/RW mappings
+    ↓
+genuine entry PC
+    ↓
+PPCContext
+    ↓
 Xenia PPCScanner / frontend
-        ↓
+    ↓
 finalized HIR
-        ↓
-Hot WasmBackend dispatch
-        ↓
+    ↓
+Hot WasmBackend
+    ↓
 execute until first genuine unresolved dependency
 ```
 
-That first failure chooses the next subsystem: xboxkrnl, XAM, TLS, threading, memory services, filesystem, or GPU initialization.
+That first real failure — xboxkrnl, XAM, TLS, threading, memory, filesystem or GPU initialization — selects the next implementation target.
 
 ## Promotion rule
 
-Do not mark `REAL XEX ENTRY EXECUTION`, kernel bring-up, GPU bring-up, a guest frame, playability, or FPS complete until the corresponding event comes from genuine title execution. Component critics close component contracts only.
+Metadata decode is not image preparation. Mapper integration is not title execution. Do not mark `REAL XEX ENTRY EXECUTION`, kernel bring-up, GPU bring-up, guest frame, playability or FPS complete until the corresponding event comes from genuine title execution.

@@ -26,6 +26,9 @@ COMMON=(
   -DXE_ARCH_WASM32=1
   -I"$XENIA/src"
   -I"$XENIA/third_party"
+  -I"$XENIA/third_party/fmt/include"
+  -I"$XENIA/third_party/utfcpp/source"
+  -I"$XENIA/third_party/capstone/include"
 )
 
 # This stage intentionally compiles real upstream translation units separately.
@@ -51,7 +54,7 @@ classify_failure() {
     echo HOST_OS_OR_MEMORY_DEPENDENCY
   elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore' "$log"; then
     echo THREADING_DEPENDENCY
-  elif grep -Eqi 'fmt/|third_party|not found|file not found|no such file' "$log"; then
+  elif grep -Eqi 'fmt/|utf8|capstone|third_party|not found|file not found|no such file' "$log"; then
     echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
   else
     echo CXX_OR_PORTABILITY_DEPENDENCY
@@ -77,7 +80,6 @@ for rel in "${SOURCES[@]}"; do
     echo "BLOCKED ($category)"
     printf '%s\tBLOCKED\t%s\n' "$rel" "$category" >> "$OUT/report.tsv"
     failed=$((failed + 1))
-    # Keep going: the purpose of this target is dependency discovery.
   fi
 done
 
@@ -85,9 +87,6 @@ echo
 echo "Xenia PPC/HIR wasm32 compile matrix: $passed passed, $failed blocked"
 echo "Report: $OUT/report.tsv"
 
-# The bootstrap stage is considered healthy if the audit ran and at least one
-# real Xenia translation unit compiled. Full PPC frontend success is a later
-# gate and is visible in the report rather than hidden behind fake success.
 if [ "$passed" -eq 0 ]; then
   echo "ERROR: no real Xenia CPU/HIR translation unit compiled for wasm32." >&2
   exit 1

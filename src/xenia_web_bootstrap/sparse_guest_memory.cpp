@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 #include "wasm_backend_call_probe.h"
@@ -30,13 +30,17 @@ struct Backing {
 };
 
 struct Mapping {
-  uint32_t backing_id = 0;       // 1-based backing object id.
+  uint32_t backing_id = 0;
   uint32_t backing_page = 0;
   uint32_t protection = 0;
 };
 
 std::vector<Backing> g_backings;
-std::unordered_map<uint32_t, Mapping> g_pages;
+// Keep sparse virtual pages in an ordered tree rather than libc++'s hash table.
+// WASI's no-exception libc++ path can abort while growing unordered_map buckets
+// (__next_prime overflow). A tree also gives deterministic behavior for the
+// relatively small mapping sets used by the browser bootstrap.
+std::map<uint32_t, Mapping> g_pages;
 uint32_t g_last_fault_address = 0;
 uint32_t g_last_fault_code = kFaultNone;
 

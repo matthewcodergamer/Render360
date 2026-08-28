@@ -70,6 +70,7 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_ppc_ppc_frontend.cc.o"
   "$OUT/render360_browser_logging.cpp.o"
   "$OUT/render360_browser_threading_sleep.cpp.o"
+  "$OUT/render360_hir_correctness_executor.cpp.o"
   "$OUT/render360_probe_backend.cpp.o"
   "$OUT/render360_ppc_translation_probe.cpp.o"
   "$OUT/render360_ppc_context_abi_probe.cpp.o"
@@ -85,6 +86,8 @@ EXPORTS=(
   _r360_ppc_context_offset_reserved_val
   _r360_ppc_probe_assembled_functions _r360_ppc_probe_hir_block_count
   _r360_ppc_probe_hir_instruction_count _r360_ppc_probe_last_guest_address
+  _r360_ppc_probe_correctness_status _r360_ppc_probe_correctness_instructions
+  _r360_ppc_probe_correctness_r3
   _r360_ppc_probe_reset _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity
   _r360_ppc_probe_load _r360_ppc_probe_translate
   _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
@@ -104,7 +107,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
     echo "status=LINKED"
     echo "wasm=$WASM"
     echo "exports=${#EXPORTS[@]}"
-    echo "note=The live Xenia translation driver linked with the complete exported probe ABI. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
+    echo "note=The real Xenia PPC translation path and finalized-HIR correctness executor linked with the complete exported probe ABI. Runtime gates must pass before PPC EXECUTING is declared."
   } | tee "$REPORT"
   exit 0
 fi
@@ -112,9 +115,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict full-export translation probe exposed the next live Xenia dependency closure; unresolved symbols are intentionally not stubbed."
+  echo "note=Strict full-export runtime exposed a live dependency closure; unresolved symbols are intentionally not stubbed."
   echo
   echo "Unresolved-symbol diagnostics:"
   grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 500 || true
 } | tee "$REPORT"
-exit 0
+exit 1

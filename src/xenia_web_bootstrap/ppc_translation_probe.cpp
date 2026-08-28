@@ -23,29 +23,32 @@ enum ProbeStatus : uint32_t {
   kProbeErrorTranslate = 0xE004,
 };
 
-std::unique_ptr<xe::Memory> g_memory;
-std::unique_ptr<xe::cpu::Processor> g_processor;
+// The bootstrap probe is process-lifetime state. Deliberately avoid teardown of
+// a partial emulator graph at wasm module shutdown; full runtime lifecycle and
+// reclamation belongs to the later browser Memory/Kernel implementation.
+xe::Memory* g_memory = nullptr;
+xe::cpu::Processor* g_processor = nullptr;
 uint32_t g_loaded_size = 0;
 uint32_t g_status = kProbeCold;
 
 bool EnsureRuntime() {
   if (g_processor) return true;
 
-  auto memory = std::make_unique<xe::Memory>();
+  auto* memory = new xe::Memory();
   if (!memory->Initialize()) {
     g_status = kProbeErrorMemory;
     return false;
   }
 
-  auto processor = std::make_unique<xe::cpu::Processor>(memory.get(), nullptr);
+  auto* processor = new xe::cpu::Processor(memory, nullptr);
   auto backend = std::make_unique<ProbeBackend>();
   if (!processor->Setup(std::move(backend))) {
     g_status = kProbeErrorProcessor;
     return false;
   }
 
-  g_memory = std::move(memory);
-  g_processor = std::move(processor);
+  g_memory = memory;
+  g_processor = processor;
   g_status = kProbeRuntimeReady;
   return true;
 }

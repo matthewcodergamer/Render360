@@ -15,12 +15,15 @@ PPC_CONTEXT_SOURCE = XENIA / "src/xenia/cpu/ppc/ppc_context.h"
 PPC_CONTEXT_DEST = OVERLAY / "xenia/cpu/ppc/ppc_context.h"
 CVAR_SOURCE = XENIA / "src/xenia/base/cvar.cc"
 CVAR_DEST = OVERLAY / "xenia/base/cvar.cc"
+UTF8_SOURCE = XENIA / "src/xenia/base/utf8.cc"
+UTF8_DEST = OVERLAY / "xenia/base/utf8.cc"
 PROCESSOR_SOURCE = XENIA / "src/xenia/cpu/processor.cc"
 PROCESSOR_DEST = OVERLAY / "xenia/cpu/processor.cc"
 
 for path, label in (
     (PPC_CONTEXT_SOURCE, "PPCContext header"),
     (CVAR_SOURCE, "cvar.cc"),
+    (UTF8_SOURCE, "utf8.cc"),
     (PROCESSOR_SOURCE, "processor.cc"),
 ):
     if not path.exists():
@@ -45,16 +48,22 @@ text = text.replace(needle, replacement, 1)
 PPC_CONTEXT_DEST.parent.mkdir(parents=True, exist_ok=True)
 PPC_CONTEXT_DEST.write_text(text)
 
-# cvar.cc: this pinned Xenia revision predates C++20's char8_t type and uses u8
-# literals directly with std::string. All affected literals are ASCII TOML /
-# escape syntax, so removing only the prefix preserves the exact byte strings.
-cvar_text = CVAR_SOURCE.read_text(errors="strict")
-u8_count = cvar_text.count('u8"')
-if u8_count == 0:
-    raise SystemExit("Upstream cvar.cc UTF-8 literal pattern drifted: no u8 literals found")
-cvar_text = cvar_text.replace('u8"', '"')
-CVAR_DEST.parent.mkdir(parents=True, exist_ok=True)
-CVAR_DEST.write_text(cvar_text)
+# This pinned Xenia revision predates C++20 char8_t semantics in two base
+# utilities. Their u8 literals are narrow UTF-8 byte strings consumed through
+# std::string/std::string_view<char>. Removing only the u8 prefix preserves the
+# exact byte payload while keeping the real Xenia implementations intact.
+def write_narrow_utf8_overlay(source: Path, dest: Path, label: str) -> int:
+    source_text = source.read_text(errors="strict")
+    count = source_text.count('u8"')
+    if count == 0:
+        raise SystemExit(f"Upstream {label} UTF-8 literal pattern drifted: no u8 literals found")
+    source_text = source_text.replace('u8"', '"')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(source_text)
+    return count
+
+cvar_u8_count = write_narrow_utf8_overlay(CVAR_SOURCE, CVAR_DEST, "cvar.cc")
+utf8_u8_count = write_narrow_utf8_overlay(UTF8_SOURCE, UTF8_DEST, "utf8.cc")
 
 # processor.cc: the debugger exception-resume path knows how to restore a
 # native AMD64 RIP or ARM64 PC. The translation-only wasm32 backend has no
@@ -93,6 +102,8 @@ PROCESSOR_DEST.write_text(processor_text)
 print(f"Generated web PPCContext overlay: {PPC_CONTEXT_DEST}")
 print("ABI rule: upstream field offsets unchanged; wasm32 tail padded by 16 bytes")
 print(f"Generated web cvar source overlay: {CVAR_DEST}")
-print(f"UTF-8 rule: normalized {u8_count} legacy u8 literals to identical narrow byte literals")
+print(f"cvar UTF-8 rule: normalized {cvar_u8_count} legacy u8 literals to identical narrow byte literals")
+print(f"Generated web utf8 source overlay: {UTF8_DEST}")
+print(f"utf8 UTF-8 rule: normalized {utf8_u8_count} legacy u8 literals to identical narrow byte literals")
 print(f"Generated web processor source overlay: {PROCESSOR_DEST}")
 print("Processor rule: wasm32 has no native exception-resume PC; translation/runtime logic is unchanged")

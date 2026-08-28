@@ -29,10 +29,6 @@ if (unresolved.length) {
 }
 
 const instance = await WebAssembly.instantiate(module, imports);
-// This standalone Emscripten module is used as a WASI reactor: it intentionally
-// has no _start entry point. Node's WASI implementation still must be marked as
-// initialized before any imported WASI function can be called. initialize()
-// does that and invokes _initialize when the module exports one.
 wasi.initialize(instance);
 
 const exportedNames = Object.keys(instance.exports).sort();
@@ -51,6 +47,9 @@ const required = [
   'r360_ppc_probe_hir_block_count',
   'r360_ppc_probe_hir_instruction_count',
   'r360_ppc_probe_last_guest_address',
+  'r360_ppc_probe_correctness_status',
+  'r360_ppc_probe_correctness_instructions',
+  'r360_ppc_probe_correctness_r3',
 ];
 for (const name of required) {
   if (typeof pick(name) !== 'function') {
@@ -92,6 +91,9 @@ const assembled = pick('r360_ppc_probe_assembled_functions')() >>> 0;
 const blocks = pick('r360_ppc_probe_hir_block_count')() >>> 0;
 const hir = pick('r360_ppc_probe_hir_instruction_count')() >>> 0;
 const lastGuest = pick('r360_ppc_probe_last_guest_address')() >>> 0;
+const correctnessStatus = pick('r360_ppc_probe_correctness_status')() >>> 0;
+const correctnessInstructions = pick('r360_ppc_probe_correctness_instructions')() >>> 0;
+const correctnessR3 = BigInt.asUintN(64, pick('r360_ppc_probe_correctness_r3')());
 
 console.log(`status=${status}`);
 console.log(`guest_base=0x${guestBase.toString(16).padStart(8, '0')}`);
@@ -101,6 +103,9 @@ console.log(`hir_blocks=${blocks}`);
 console.log(`hir_instructions=${hir}`);
 console.log(`translate_return=${translatedCount}`);
 console.log(`last_guest_address=0x${lastGuest.toString(16).padStart(8, '0')}`);
+console.log(`correctness_status=${correctnessStatus}`);
+console.log(`correctness_instructions=${correctnessInstructions}`);
+console.log(`correctness_r3=${correctnessR3}`);
 
 if (status !== 3 || loadedSize !== ppc.length || assembled === 0 || blocks === 0 ||
     hir === 0 || translatedCount === 0 || lastGuest !== guestBase) {
@@ -108,4 +113,10 @@ if (status !== 3 || loadedSize !== ppc.length || assembled === 0 || blocks === 0
   process.exit(8);
 }
 
-console.log('PASS: real PPC bytes reached Xenia HIR and the ProbeAssembler observed finalized HIR.');
+if (correctnessStatus !== 3 || correctnessInstructions === 0 || correctnessR3 !== 1n) {
+  console.error('FAIL: finalized Xenia HIR did not execute the first PPCContext correctness contract (r3 == 1).');
+  process.exit(9);
+}
+
+console.log('PASS: real PPC bytes reached finalized Xenia HIR.');
+console.log('PASS: finalized Xenia HIR executed against PPCContext and produced r3 == 1.');

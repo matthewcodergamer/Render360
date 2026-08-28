@@ -1,5 +1,6 @@
 #include "probe_backend.h"
 
+#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -37,9 +38,19 @@ bool ProbeAssembler::Assemble(
   uint32_t block_count = 0;
   uint32_t instruction_count = 0;
   for (auto* block = builder->first_block(); block; block = block->next) {
-    ++block_count;
+    const uint32_t block_index = block_count++;
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       ++instruction_count;
+      // Phase 4 observability: report the finalized HIR that Xenia itself has
+      // already translated and optimized. The correctness executor will be
+      // implemented against this HIR stream; this is not a second PPC decoder.
+      std::fprintf(stderr, "R360_HIR block=%u ordinal=%u opcode=%s(%u)\n",
+                   block_index, instr->ordinal,
+                   instr->opcode && instr->opcode->name ? instr->opcode->name
+                                                        : "<null>",
+                   instr->opcode
+                       ? static_cast<unsigned>(instr->opcode->num)
+                       : 0u);
     }
   }
 

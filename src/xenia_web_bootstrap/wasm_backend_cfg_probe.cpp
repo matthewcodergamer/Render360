@@ -358,9 +358,23 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
   std::vector<uint8_t> body;
   uint32_t lowered = 0;
   EmitSetPc(body, 0);
+  EmitI32Const(body, 100000);
+  body.push_back(0x21); body.push_back(0x02);  // local.set budget
 
   body.push_back(0x02); body.push_back(0x40);  // block $exit
   body.push_back(0x03); body.push_back(0x40);  // loop $dispatch
+
+  // A bad or unsupported CFG must fail deterministically rather than pinning
+  // the browser main thread or a CI runner in an unbounded dispatcher loop.
+  body.push_back(0x20); body.push_back(0x02);  // local.get budget
+  body.push_back(0x45);                       // i32.eqz
+  body.push_back(0x04); body.push_back(0x40); // if
+  body.push_back(0x00);                       // unreachable
+  body.push_back(0x0B);                       // end
+  body.push_back(0x20); body.push_back(0x02);  // local.get budget
+  EmitI32Const(body, 1);
+  body.push_back(0x6B);                       // i32.sub
+  body.push_back(0x21); body.push_back(0x02);  // local.set budget
 
   uint32_t block_count = 0;
   for (auto* block = builder->first_block(); block; block = block->next) ++block_count;
@@ -498,7 +512,7 @@ bool BuildCfgModule(HIRBuilder* builder, const Producers& producers,
   EmitU32Leb(exports, 0); EmitSection(module, 7, exports);
 
   std::vector<uint8_t> function_body;
-  EmitU32Leb(function_body, 1); EmitU32Leb(function_body, 1); function_body.push_back(0x7F);
+  EmitU32Leb(function_body, 1); EmitU32Leb(function_body, 2); function_body.push_back(0x7F);
   function_body.insert(function_body.end(), body.begin(), body.end());
   std::vector<uint8_t> code;
   EmitU32Leb(code, 1); EmitU32Leb(code, static_cast<uint32_t>(function_body.size()));

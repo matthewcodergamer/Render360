@@ -4,7 +4,6 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 XENIA="$ROOT/upstream/xenia"
 OVERLAY="$ROOT/build/xenia-web-overlay"
-R360_FPU_OVERLAY="$ROOT/build/render360-fpu-overlay"
 OUT="$ROOT/build/xenia-ppc-bootstrap"
 CXX="${CXX:-em++}"
 mkdir -p "$OUT"
@@ -15,7 +14,6 @@ python3 "$ROOT/prepare-xenia-web-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
-python3 "$ROOT/prepare-render360-fpu-overlay.py"
 
 COMMON=(
   -std=c++20 -O0 -g0
@@ -129,7 +127,10 @@ for rel in "${SOURCES[@]}"; do
 done
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
-compile_one "render360/hir_correctness_executor.cpp" "$R360_FPU_OVERLAY/hir_correctness_executor.cpp"
+# The FPU correctness semantics now live directly in the canonical executor.
+# Compile that source instead of patching it a second time through a generated
+# overlay; this keeps the tested file identical to the committed implementation.
+compile_one "render360/hir_correctness_executor.cpp" "$ROOT/src/xenia_web_bootstrap/hir_correctness_executor.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

@@ -10,6 +10,7 @@
 #include "wasm_backend_fpu_probe.h"
 #include "wasm_backend_memory_probe.h"
 #include "wasm_backend_probe.h"
+#include "wasm_backend_vmx_probe.h"
 #include "xenia/cpu/function_debug_info.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -90,11 +91,16 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
     uint8_t* guest_host_base = memory ? memory->TranslateVirtual<uint8_t*>(kProbeGuestBase) : nullptr;
     BuildWasmBackendMemoryProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
     BuildWasmBackendFpuProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
+    BuildWasmBackendVmxProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
 
     std::fprintf(stderr, "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n", GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(), GetWasmBackendProbeLoweredInstructions());
     std::fprintf(stderr, "R360_WASM_BACKEND_CFG status=%u module_bytes=%u lowered=%u\n", GetWasmBackendCfgProbeStatus(), GetWasmBackendCfgProbeModuleSize(), GetWasmBackendCfgProbeLoweredInstructions());
     std::fprintf(stderr, "R360_WASM_BACKEND_MEMORY status=%u module_bytes=%u lowered=%u guest_host=0x%08X\n", GetWasmBackendMemoryProbeStatus(), GetWasmBackendMemoryProbeModuleSize(), GetWasmBackendMemoryProbeLoweredInstructions(), static_cast<uint32_t>(reinterpret_cast<uintptr_t>(guest_host_base)));
     std::fprintf(stderr, "R360_WASM_BACKEND_FPU status=%u module_bytes=%u lowered=%u\n", GetWasmBackendFpuProbeStatus(), GetWasmBackendFpuProbeModuleSize(), GetWasmBackendFpuProbeLoweredInstructions());
+    std::fprintf(stderr, "R360_WASM_BACKEND_VMX status=%u module_bytes=%u lowered=%u vector_ops=%u native_simd=%u scalarized_lanes=%u\n",
+                 GetWasmBackendVmxProbeStatus(), GetWasmBackendVmxProbeModuleSize(),
+                 GetWasmBackendVmxProbeLoweredInstructions(), GetWasmBackendVmxProbeVectorOps(),
+                 GetWasmBackendVmxProbeNativeSimdOps(), GetWasmBackendVmxProbeScalarizedLaneOps());
   }
 
   const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);

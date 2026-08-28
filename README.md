@@ -2,7 +2,7 @@
 
 Render360 is a browser/iOS-oriented Xbox 360 emulator port built around **real Xenia behavior**, not a JavaScript imitation of an Xbox 360.
 
-The deployed browser runtime remains **Core V32**. It mounts LIVE/PIRS/CON content in native C++/WASM, walks STFS structures, streams a complete `default.xex`, inspects XEX structure, and exposes real browser input/WebGPU host infrastructure. It does **not** claim retail-title execution or playable Xbox 360 games yet.
+The deployed browser runtime remains **Core V32**. It mounts LIVE/PIRS/CON content in native C++/WASM, walks STFS structures, streams a complete `default.xex`, inspects XEX structure, and exposes browser input/WebGPU host infrastructure. It does **not** claim retail-title execution or playable Xbox 360 games yet.
 
 The active **V33 CPU bootstrap** ports upstream Xenia's PowerPC frontend, instruction semantics, HIR/compiler pipeline and required runtime support to Emscripten/wasm32 while excluding the native x64 JIT and desktop graphics stack.
 
@@ -11,7 +11,7 @@ The active **V33 CPU bootstrap** ports upstream Xenia's PowerPC frontend, instru
 **Xenia owns Xbox 360 behavior. Render360 owns browser/iOS host behavior.**
 
 ```text
-Xbox PPC / VMX128
+Xbox PPC / FPU / VMX128
   -> Xenia PPCFrontend / PPCTranslator / PPCScanner
   -> Xenia PPCHIRBuilder + ppc_emit_*
   -> Xenia HIR + portable compiler passes
@@ -30,55 +30,74 @@ No fake framebuffer, fake boot success, fake guest FPS, fake shader translation,
 - WebGPU host surface and dynamic-resolution infrastructure;
 - honest first-frame readiness gate.
 
-## V33 CPU milestone — nested guest calls + first FPR data path
+## V33 CPU milestone — nested guest calls + real FLOAT64 arithmetic
 
-GitHub Actions **run 129** (`33142914018`) is the current measured CPU gate at commit `0b373c648bc343e41b360a5aa01bf092efa0aba4`:
+GitHub Actions **run 133** (`33143476524`) is the current measured CPU gate at commit `9cceb0529df209f1226f9b81da6918e6e2e24991`:
 
 ```text
 wasm32 compile matrix       62 / 62 PASS
 strict full-export link     LINKED
 rooted probe exports        25
-real PPC correctness cases  14 / 14 PASS
+real PPC correctness cases  15 / 15 PASS
 ```
 
 Every case begins as genuine big-endian Xbox 360 PowerPC bytes, passes through the real Xenia PPC frontend/translator/scanner/HIR builder/compiler passes, and executes the **finalized Xenia HIR** against a real `PPCContext` and, for memory cases, the same bounded Xenia `Memory` object owned by `Processor`.
 
-The verified runtime set now includes integer arithmetic, conditional/multi-block control flow, guest load/store with Xbox byte order, CR/LR/CTR state, repeated CTR-controlled loops, direct guest calls, two-level nested guest calls, and the first FLOAT64 FPR move/data path.
+The verified runtime set now includes integer arithmetic, conditional/multi-block control flow, guest load/store with Xbox byte order, CR/LR/CTR state, repeated CTR-controlled loops, direct guest calls, two-level nested guest calls, FLOAT64 FPR movement, and the first real floating-point arithmetic/load/store flow.
 
-### Real guest calls now execute
+### Real guest calls execute through independently translated callees
 
-A direct PPC `bl` now works across a separate guest function boundary:
+Direct PPC `bl` now crosses a separate guest function boundary. Xenia emits `SET_RETURN_ADDRESS`, stores LR and emits `CALL`; Render360 uses the real Xenia `PPCScanner` to discover the callee extent and sends the callee through Xenia's frontend/translator/compiler. Nested finalized HIR executes against the same live `PPCContext`, returns, and the caller continues.
+
+Measured direct-call result:
 
 ```text
-caller: save LR
-        bl callee
-        addi r3,r3,2
-        restore LR
-        blr
-callee: li r3,5
-        blr
+caller -> callee(li r3,5) -> caller(addi +2) -> r3 = 7
+assembled guest functions = 2
 ```
 
-Xenia emits `SET_RETURN_ADDRESS`, stores LR and emits `CALL`. Render360 asks the **real Xenia PPCScanner** to discover the callee extent, then sends that guest function back through the real Xenia PPC frontend/translator/compiler. The nested finalized HIR executes against the same live `PPCContext`, returns to the caller, and the measured result is `r3 = 7`.
-
-A stronger two-level call test also passes:
+A two-level call chain also passes:
 
 ```text
 caller -> function A -> function B -> function A -> caller
+function B r3 = 4
+function A resumes -> r3 = 6
+caller resumes -> r3 = 7
+assembled guest functions = 3
 ```
 
-Function B returns `r3 = 4`, function A resumes and reaches `r3 = 6`, then the caller resumes and reaches `r3 = 7`. The test assembled **3 independently Xenia-scanned/translated guest functions**. No second PPC decoder or hardcoded callee behavior is used.
+No second PPC decoder or hardcoded callee behavior is used.
 
-### First FPR/FPU data-path gate
+### Real FPU arithmetic now executes
 
-Run 129 also passes genuine PPC:
+The first FPR move/data-path gate remains green:
 
 ```text
 fmr f1,f2
 blr
 ```
 
-It produces **11 finalized HIR instructions** and successfully executes Xenia's FLOAT64 FPR context load/store path plus FPSCR-maintenance HIR. This first FPU gate intentionally uses zero-initialized FPR state, so it proves the **FPR move/data path**, not floating-point arithmetic yet. Non-zero exact-bit FPR seeding plus `fadd` is the active next FPU boundary.
+Run 133 additionally proves a non-zero floating-point memory/arithmetic path:
+
+```text
+lfd  f1,0(r4)       ; guest double 1.0
+lfd  f2,8(r4)       ; guest double 2.0
+fadd f3,f1,f2
+stfd f3,16(r4)
+lwz  r3,16(r4)
+blr
+```
+
+Xenia produced **33 finalized HIR instructions**. The measured path includes guest `LOAD`, Xbox `BYTE_SWAP`, same-width HIR `CAST` between the 64-bit guest bit pattern and `FLOAT64`, typed HIR `ADD`, FPR context stores, conversion back to integer bits, and guest `STORE`.
+
+The executor produced:
+
+```text
+r3 = 0x40080000
+guest[+16..+23] = 0x4008000000000000
+```
+
+`0x4008000000000000` is IEEE-754 double **3.0**, so this is a real architectural + guest-memory floating result rather than a translation-only claim.
 
 ### Existing architectural gates remain green
 
@@ -88,44 +107,42 @@ seed r4=7; addi r3,r4,5 ; blr                     -> r3 = 12
 seed r4=0x0F00; ori r3,r4,0xF0 ; blr              -> r3 = 0x0FF0
 cmpwi/beq, r4=0                                   -> taken, r3 = 2
 cmpwi/beq, r4=5                                   -> fallthrough, r3 = 1
-lwz r3,0(r4), guest[0x80000100]=0x89ABCDEF       -> r3 = 0x89ABCDEF
-stw r5,0(r4); lwz r3,0(r4)                        -> r3 = 0x12345678
-                                                   guest readback = 0x12345678
+lwz r3,0(r4), guest=0x89ABCDEF                   -> r3 = 0x89ABCDEF
+stw r5,0(r4); lwz r3,0(r4)                        -> guest/r3 = 0x12345678
 mtlr r4; mflr r3                                  -> r3 = 0x80000040
 mtctr r4; mfctr r3                                -> r3 = 9
 cmpwi r4,0; mfcr r3                               -> r3 = 0x20000000 (CR0 EQ)
 mtctr r4; addi loop; bdnz loop, r4=3              -> r3 = 3
+direct bl/callee/blr                              -> r3 = 7
+two-level nested bl chain                         -> r3 = 7
+fmr f1,f2                                         -> FLOAT64 FPR path PASS
+lfd/fadd/stfd 1.0 + 2.0                           -> guest double 3.0
 ```
 
-The guest-memory path is measured through Xenia HIR including `LOAD_OFFSET`, `STORE_OFFSET` and `BYTE_SWAP`. The `stw -> lwz` round trip verifies both architectural state and the underlying guest bytes. This is still the **64 KiB bounded probe memory**, not the final Xbox 360 address space.
+The current memory remains a **64 KiB bounded correctness window**, not the final Xbox 360 address-space implementation.
 
-**PPC TRANSLATION READY and PPC EXECUTING remain complete for this growing correctness subset.** This still does not mean arbitrary retail PPC, a mapped retail XEX, Kernel/XAM, Xenos rendering, audio, or a playable game.
+**PPC TRANSLATION READY and PPC EXECUTING remain complete for this growing correctness subset.** This does not yet mean arbitrary retail PPC, a mapped retail XEX, Kernel/XAM, Xenos rendering, audio, or a playable game.
 
 ## Current correctness executor coverage
 
-Measured HIR support now includes:
+Measured/support coverage includes:
 
-- context load/store and barriers, including measured FLOAT64 FPR context movement;
-- assign/cast/zero-extend/sign-extend/truncate for the current integer subset;
+- context load/store and barriers for GPR/FPR architectural state;
+- same-width HIR bit-casts including measured INT64 ↔ FLOAT64 paths;
+- integer zero/sign extension and truncation;
 - integer negation/not/truth tests;
-- integer `ADD`, `SUB`, `MUL`;
-- `AND`, `AND_NOT`, `OR`, `XOR`;
-- `SHL`, `SHR`, arithmetic shift;
+- integer `ADD`, `SUB`, `MUL`, bitwise logic and shifts;
 - signed/unsigned comparisons;
-- `BRANCH`, `BRANCH_TRUE`, `BRANCH_FALSE`;
-- repeated backward control-flow through a real CTR-controlled loop;
+- typed FLOAT32/FLOAT64 arithmetic support for `ADD`, `SUB`, `MUL` (FLOAT64 `ADD` measured in run 133);
+- `BRANCH`, `BRANCH_TRUE`, `BRANCH_FALSE` and backward loops;
 - `LOAD`, `STORE`, `LOAD_OFFSET`, `STORE_OFFSET` against Xenia `Memory`;
 - `BYTE_SWAP` for Xbox guest endianness;
-- LR/CTR/CR state through normal Xenia context HIR;
-- direct `CALL` / conditional-call correctness plumbing with nested Xenia function translation;
-- return and Xenia `CALL_POSSIBLE_RETURN` boundaries;
-- a 4096-instruction guard so unsupported/infinite correctness paths fail instead of hanging CI.
+- LR/CTR/CR state;
+- direct `CALL` / conditional-call plumbing with nested Xenia function translation;
+- return and `CALL_POSSIBLE_RETURN` boundaries;
+- a 4096-instruction correctness guard.
 
 Unsupported HIR fails the correctness gate rather than being guessed or silently ignored.
-
-## Browser compatibility boundaries
-
-The wasm32 build keeps Xbox/PPC behavior upstream and adapts only host/compiler seams: PPCContext tail padding, old C++20 UTF-8 literals, native debugger-PC handling, a bounded 64 KiB guest probe window at `0x80000000`, wasm32 MMIO host-fault boundaries, private ContextPromotionPass bitset storage, 16-byte Arena allocation, and narrow browser logging/sleep adapters. ProbeBackend's 7 integer + 12 shared float/vector register slots are only Xenia compiler-allocation metadata, not x64 execution.
 
 ## Browser GPU backend plan
 
@@ -136,10 +153,10 @@ Xenos ringbuffer / registers / resources / shaders / EDRAM
   -> reuse Xenia command processing and guest GPU semantics
   -> shared Render360 browser GPU layer
        -> WebGPU   PRIMARY backend (WGSL)
-       -> WebGL2   FALLBACK backend (GLSL ES / compatibility path)
+       -> WebGL2   FALLBACK backend (GLSL ES compatibility)
 ```
 
-**WebGPU is the main target. WebGL2 is the fallback when WebGPU is unavailable or unsuitable.** Both must consume the same guest command/resource/shader semantics. WebGL2 is not a Three.js scene or fake substitute for Xbox rendering.
+**WebGPU is the main renderer. WebGL2 is the fallback.** Both consume the same guest command/resource/shader semantics. WebGL2 is not a Three.js scene or fake substitute for Xbox rendering.
 
 ## CPU milestone ladder
 
@@ -147,22 +164,21 @@ Xenos ringbuffer / registers / resources / shaders / EDRAM
 upstream Xenia source / contract audit                       ✓
 62/62 wasm32 compile matrix                                  ✓
 strict full-export WASM link                                ✓
-known PPC -> finalized Xenia HIR                            ✓
+PPC -> finalized Xenia HIR                                  ✓
 PPC TRANSLATION READY                                       ✓
-finalized-HIR execution -> real PPCContext                  ✓
+finalized HIR -> real PPCContext                            ✓
 PPC EXECUTING                                               ✓ correctness subset
 runtime integer arithmetic                                  ✓
 conditional + multi-block control flow                      ✓
 guest LOAD/STORE/OFFSET + endian correctness                ✓
 LR / CTR / CR architectural state                           ✓
-real backward CTR-controlled bdnz loop                      ✓
-direct bl -> callee -> blr -> caller                        ✓ run 126
-two-level nested guest calls                                ✓ run 127
-FLOAT64 FPR move/data path                                  ✓ run 129
+real backward CTR-controlled loop                           ✓
+direct guest call/return                                    ✓
+two-level nested guest calls                                ✓
+FLOAT64 FPR move/data path                                  ✓
+real lfd -> fadd -> stfd                                    ✓ run 133
         ↓
-non-zero FPR state + floating ADD/SUB/MUL/DIV               ACTIVE NEXT
-        ↓
-FP compare / convert / FPSCR expansion
+broader FPU SUB/MUL/DIV + compare/convert/FPSCR             ACTIVE NEXT
         ↓
 VMX / VMX128 correctness
         ↓
@@ -180,21 +196,22 @@ Xenos -> shared browser GPU layer
         ↓
 WebAudio + first genuine guest framebuffer
         ↓
-title compatibility / performance work
+title compatibility / iPhone performance work
 ```
 
 ## Braid / XBLA title path
 
-Use original LIVE/PIRS/CON content you own; do not rename it to `.iso` merely to pass a file picker.
+Use original LIVE/PIRS/CON content you own.
 
 ```text
 LIVE/STFS package
   -> native STFS + default.xex             ✓
   -> XEX structural inspection             ✓
   -> PPC translation                       ✓
-  -> PPC correctness execution             ✓ growing subset
-  -> calls / nested functions              ✓ first subset
-  -> FPR/FPU path                          ✓ first move path; arithmetic next
+  -> integer/control/memory execution       ✓ growing subset
+  -> nested guest functions                ✓ first subset
+  -> FPU load/add/store                     ✓ first arithmetic subset
+  -> VMX/VMX128                             ACTIVE AFTER FPU EXPANSION
   -> full sparse guest memory              FUTURE
   -> map / enter default.xex               FUTURE
   -> Kernel / XAM                          FUTURE
@@ -212,9 +229,9 @@ bash ./link-xenia-ppc-bootstrap.sh
 node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
 
-A green CPU workflow means the source matrix compiled, the full rooted ABI linked strictly, and every required runtime correctness program passed.
+A green CPU workflow means the 62-unit source matrix compiled, the complete probe ABI linked strictly, and every required runtime correctness program passed.
 
-The stable production core remains separate: Core build 32, ABI `0x00030004`, features `0x00001FFF`. Keep GitHub Pages on `main` / root; V33 CPU work remains isolated from the deployed V32 runtime until real title bring-up is ready.
+The stable production core remains separate: Core build 32, ABI `0x00030004`, features `0x00001FFF`. V33 CPU work remains isolated from the deployed V32 runtime until real title bring-up is ready.
 
 ## License
 

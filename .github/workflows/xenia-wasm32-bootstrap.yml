@@ -12,6 +12,7 @@ on:
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
       - 'test-vmx-foundation.mjs'
+      - 'test-wasm-backend.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
       - 'render360_xenia_core.wasm'
@@ -66,13 +67,14 @@ jobs:
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
 
-      - name: Verify real PPC bytes reach Xenia HIR
+      - name: Verify real PPC and generated WasmBackend execution
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then
             node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-wasm-backend.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

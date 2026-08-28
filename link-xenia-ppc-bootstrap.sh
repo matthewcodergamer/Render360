@@ -13,6 +13,8 @@ if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run in
 
 OBJECTS=(
   "$OUT/src_xenia_base_cvar.cc.o"
+  "$OUT/src_xenia_memory.cc.o"
+  "$OUT/src_xenia_cpu_processor.cc.o"
   "$OUT/src_xenia_cpu_backend_backend.cc.o"
   "$OUT/src_xenia_cpu_backend_assembler.cc.o"
   "$OUT/src_xenia_cpu_function.cc.o"
@@ -61,7 +63,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=The real translation driver linked. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
+    echo "note=The real translation driver linked with Xenia Memory and Processor. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -69,9 +71,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict translation-driver link exposed the next real Xenia Processor/Memory/compiler dependency boundary."
+  echo "note=Strict translation-driver link exposed the next real Xenia dependency boundary after Memory and Processor were included."
   echo
   echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 120 || true
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 160 || true
 } | tee "$REPORT"
 exit 0

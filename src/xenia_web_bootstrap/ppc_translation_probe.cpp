@@ -2,6 +2,7 @@
 #include <cstring>
 #include <memory>
 
+#include "hir_correctness_executor.h"
 #include "probe_backend.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
@@ -24,9 +25,6 @@ enum ProbeStatus : uint32_t {
   kProbeErrorTranslate = 0xE004,
 };
 
-// The bootstrap probe is process-lifetime state. Deliberately avoid teardown of
-// a partial emulator graph at wasm module shutdown; full runtime lifecycle and
-// reclamation belongs to the later browser Memory/Kernel implementation.
 xe::Memory* g_memory = nullptr;
 xe::cpu::Processor* g_processor = nullptr;
 uint32_t g_loaded_size = 0;
@@ -60,11 +58,16 @@ extern "C" {
 
 void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
+  render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::g_loaded_size = 0;
   render360::xenia_web::g_status =
       render360::xenia_web::g_processor
           ? render360::xenia_web::kProbeRuntimeReady
           : render360::xenia_web::kProbeCold;
+}
+
+uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value) {
+  return render360::xenia_web::SetHIRCorrectnessInitialGPR(index, value) ? 1u : 0u;
 }
 
 uint32_t r360_ppc_probe_input_buffer() {

@@ -44,36 +44,48 @@ No fake framebuffer, fake boot success, fake guest FPS, fake shader translation,
 
 The bootstrap is intentionally separate from `render360_xenia_core.wasm`, so CPU-port experiments cannot break the working V32 STFS/XEX runtime.
 
-The last completed measured baseline before the current expanded source pass was:
+### Latest completed expanded compile result
+
+GitHub Actions has now compiled **11 of 15** entries in the expanded wasm32 CPU matrix. Ten of those are real upstream Xenia CPU/HIR/PPC translation units; the eleventh is Render360's ABI telemetry probe.
 
 ```text
-PASS  Xenia HIR opcodes
-PASS  Xenia HIR blocks
-PASS  Xenia HIR instructions
-PASS  Xenia HIR values
-PASS  Xenia compiler pass
+PASS  src/xenia/cpu/hir/opcodes.cc
+PASS  src/xenia/cpu/hir/block.cc
+PASS  src/xenia/cpu/hir/instr.cc
+PASS  src/xenia/cpu/hir/value.cc
+PASS  src/xenia/cpu/compiler/compiler_pass.cc
+PASS  src/xenia/cpu/ppc/ppc_context.cc
+PASS  src/xenia/cpu/ppc/ppc_emit_alu.cc
+PASS  src/xenia/cpu/ppc/ppc_emit_memory.cc
+PASS  src/xenia/cpu/ppc/ppc_emit_fpu.cc
+PASS  src/xenia/cpu/ppc/ppc_emit_altivec.cc
+PASS  render360/ppc_context_abi_probe.cpp
 
-BLOCK PPCContext
-BLOCK PPCHIRBuilder
-BLOCK PPCTranslator
-BLOCK PPCFrontend
+BLOCK src/xenia/cpu/ppc/ppc_emit_control.cc
+BLOCK src/xenia/cpu/ppc/ppc_hir_builder.cc
+BLOCK src/xenia/cpu/ppc/ppc_translator.cc
+BLOCK src/xenia/cpu/ppc/ppc_frontend.cc
 ```
 
-That was **5 real upstream Xenia translation units compiling under Emscripten/wasm32**.
+This is a major change from the earlier 5/9 baseline: `PPCContext` is no longer blocked, four real Xenia instruction-emitter categories now compile for wasm32, and LLVM's header boundary has been cleared.
 
-The blocking `PPCContext` issue was identified precisely: WebAssembly's 32-bit host pointers make Xenia's packed context 16 bytes short of its existing 64-byte padding invariant. V33 now generates a browser-only overlay that adds **tail padding only after Xenia's final context data member**, preserving all existing architectural/runtime field offsets while restoring the 64-byte size invariant.
+### PPCContext wasm32 ABI
 
-Current bootstrap infrastructure also includes:
+WebAssembly's 32-bit host pointers make Xenia's packed `PPCContext` 16 bytes short of its existing 64-byte padding invariant. V33 solves this with a generated browser-only overlay that adds **16 bytes of tail padding after Xenia's final existing context data member**.
+
+This intentionally does not move Xenia's existing GPR, FPR, VMX, LR, CTR, CR or runtime-context fields. `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` independently compiles against the adapted header and exposes size/offset telemetry for the future linked bootstrap WASM.
+
+### Bootstrap infrastructure
 
 - `src/xenia_web_shims/xenia/base/platform.h` — Emscripten/wasm32 host platform definitions.
 - `src/xenia_web_shims/xenia/base/atomic.h` — browser-compatible atomic primitives.
-- `prepare-xenia-web-overlay.py` — generates the tail-only `PPCContext` ABI adaptation from the fetched upstream header.
-- `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` — compile-time/runtime telemetry for context size and key field offsets.
-- `fetch-xenia.sh` — shallow upstream Xenia fetch plus only the CPU-side submodules currently needed (`fmt`, `utfcpp`, `capstone`, `cpptoml`).
-- `build-xenia-ppc-bootstrap.sh` — real Emscripten compile matrix with dependency classification.
-- `.github/workflows/xenia-wasm32-bootstrap.yml` — CI audit, Emscripten build, LLVM-header setup, compile report and uploaded failure logs.
+- `prepare-xenia-web-overlay.py` — generates the tail-only `PPCContext` ABI adaptation from fetched upstream source.
+- `src/xenia_web_bootstrap/ppc_context_abi_probe.cpp` — context size and key field-offset telemetry.
+- `fetch-xenia.sh` — shallow Xenia fetch plus the CPU-side dependencies currently needed (`fmt`, `utfcpp`, `capstone`, `cpptoml`, `cxxopts`, `date`).
+- `build-xenia-ppc-bootstrap.sh` — real Emscripten compile matrix with dependency classification and LLVM include discovery.
+- `.github/workflows/xenia-wasm32-bootstrap.yml` — automated audits, Emscripten compilation and uploaded per-source logs.
 
-The expanded source matrix now tests the real Xenia instruction-semantics categories too:
+The expanded matrix includes Xenia's real PPC instruction semantics:
 
 ```text
 ppc_emit_alu.cc
@@ -83,20 +95,24 @@ ppc_emit_fpu.cc
 ppc_emit_altivec.cc
 ```
 
-The GitHub Actions compile report is the source of truth for what is currently portable. A source is not marked ready merely because an adapter exists.
+ALU, memory, FPU and Altivec/VMX already compile. The control emitter and frontend stack are being pushed through their remaining host/utility boundaries. RTTI is enabled because Xenia's `cpptoml` dependency legitimately uses `dynamic_cast`; `third_party/date` is now fetched for Xenia's chrono/threading headers.
+
+The GitHub Actions compile report is the source of truth. A layer is not marked ready merely because an adapter exists.
 
 ## CPU milestone ladder
 
 ```text
-upstream Xenia source audit
+upstream Xenia source audit                 ✓
         ↓
-real HIR/compiler .cc files compile as wasm32
+portable HIR/compiler subset on wasm32      ✓
         ↓
-PPCContext browser ABI validated
+PPCContext browser ABI validated            ✓
         ↓
-real PPC emit categories compile
+ALU / memory / FPU / VMX emitters           ✓
         ↓
-PPCHIRBuilder + PPCTranslator + PPCFrontend compile
+control emitter + PPCHIRBuilder             IN DEVELOPMENT
+        ↓
+PPCTranslator + PPCFrontend                 IN DEVELOPMENT
         ↓
 link separate xenia_ppc_bootstrap.wasm
         ↓

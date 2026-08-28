@@ -17,6 +17,10 @@ CVAR_SOURCE = XENIA / "src/xenia/base/cvar.cc"
 CVAR_DEST = OVERLAY / "xenia/base/cvar.cc"
 UTF8_SOURCE = XENIA / "src/xenia/base/utf8.cc"
 UTF8_DEST = OVERLAY / "xenia/base/utf8.cc"
+MEMORY_HEADER_SOURCE = XENIA / "src/xenia/memory.h"
+MEMORY_HEADER_DEST = OVERLAY / "xenia/memory.h"
+MEMORY_SOURCE = XENIA / "src/xenia/memory.cc"
+MEMORY_DEST = OVERLAY / "xenia/memory.cc"
 PROCESSOR_SOURCE = XENIA / "src/xenia/cpu/processor.cc"
 PROCESSOR_DEST = OVERLAY / "xenia/cpu/processor.cc"
 
@@ -24,6 +28,8 @@ for path, label in (
     (PPC_CONTEXT_SOURCE, "PPCContext header"),
     (CVAR_SOURCE, "cvar.cc"),
     (UTF8_SOURCE, "utf8.cc"),
+    (MEMORY_HEADER_SOURCE, "memory.h"),
+    (MEMORY_SOURCE, "memory.cc"),
     (PROCESSOR_SOURCE, "processor.cc"),
 ):
     if not path.exists():
@@ -65,6 +71,186 @@ def write_narrow_utf8_overlay(source: Path, dest: Path, label: str) -> int:
 cvar_u8_count = write_narrow_utf8_overlay(CVAR_SOURCE, CVAR_DEST, "cvar.cc")
 utf8_u8_count = write_narrow_utf8_overlay(UTF8_SOURCE, UTF8_DEST, "utf8.cc")
 
+# memory.h / memory.cc: desktop Xenia reserves a 4.5 GiB host file mapping with
+# fixed aliased views. wasm32 cannot represent that host address-space model.
+# For the translation probe only, expose a bounded 64 KiB guest code window at
+# 0x80000000. This is intentionally NOT the final Xbox memory implementation;
+# it only gives the real PPC scanner/HIR builder a valid byte source while the
+# later sparse browser memory system is developed.
+memory_h = MEMORY_HEADER_SOURCE.read_text(errors="strict")
+translate_anchor = '''  template <typename T = uint8_t*>
+  inline T TranslateVirtual(uint32_t guest_address) const {
+    uint8_t* host_address = virtual_membase_ + guest_address;
+    const auto heap = LookupHeap(guest_address);
+    if (heap) {
+      host_address += heap->host_address_offset();
+    }
+    return reinterpret_cast<T>(host_address);
+  }
+'''
+if translate_anchor not in memory_h:
+    raise SystemExit("Upstream memory.h TranslateVirtual block drifted")
+translate_replacement = '''  template <typename T = uint8_t*>
+  inline T TranslateVirtual(uint32_t guest_address) const {
+#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)
+    constexpr uint32_t kRender360ProbeGuestBase = 0x80000000u;
+    constexpr uint32_t kRender360ProbeGuestSize = 64u * 1024u;
+    if (guest_address < kRender360ProbeGuestBase ||
+        guest_address >= kRender360ProbeGuestBase + kRender360ProbeGuestSize ||
+        render360_wasm32_probe_code_window_.empty()) {
+      return reinterpret_cast<T>(nullptr);
+    }
+    return reinterpret_cast<T>(render360_wasm32_probe_code_window_.data() +
+                               (guest_address - kRender360ProbeGuestBase));
+#else
+    uint8_t* host_address = virtual_membase_ + guest_address;
+    const auto heap = LookupHeap(guest_address);
+    if (heap) {
+      host_address += heap->host_address_offset();
+    }
+    return reinterpret_cast<T>(host_address);
+#endif
+  }
+'''
+memory_h = memory_h.replace(translate_anchor, translate_replacement, 1)
+private_anchor = "  uint8_t* virtual_membase_ = nullptr;\n  uint8_t* physical_membase_ = nullptr;\n"
+if private_anchor not in memory_h:
+    raise SystemExit("Upstream memory.h membase field anchor drifted")
+private_replacement = private_anchor + (
+    "#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)\n"
+    "  // Translation-probe-only guest code backing. Full sparse Xbox memory\n"
+    "  // is a separate browser host implementation stage.\n"
+    "  std::vector<uint8_t> render360_wasm32_probe_code_window_;\n"
+    "#endif\n"
+)
+memory_h = memory_h.replace(private_anchor, private_replacement, 1)
+MEMORY_HEADER_DEST.parent.mkdir(parents=True, exist_ok=True)
+MEMORY_HEADER_DEST.write_text(memory_h)
+
+memory_cc = MEMORY_SOURCE.read_text(errors="strict")
+ctor_anchor = '''Memory::Memory() {
+  system_page_size_ = uint32_t(xe::memory::page_size());
+  system_allocation_granularity_ =
+      uint32_t(xe::memory::allocation_granularity());
+  assert_zero(active_memory_);
+  active_memory_ = this;
+}
+'''
+ctor_replacement = '''Memory::Memory() {
+#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)
+  // Probe-only wasm32 host values. No desktop fixed-address mapping exists.
+  system_page_size_ = 64u * 1024u;
+  system_allocation_granularity_ = 64u * 1024u;
+#else
+  system_page_size_ = uint32_t(xe::memory::page_size());
+  system_allocation_granularity_ =
+      uint32_t(xe::memory::allocation_granularity());
+#endif
+  assert_zero(active_memory_);
+  active_memory_ = this;
+}
+'''
+if ctor_anchor not in memory_cc:
+    raise SystemExit("Upstream Memory constructor block drifted")
+memory_cc = memory_cc.replace(ctor_anchor, ctor_replacement, 1)
+
+dtor_anchor = '''Memory::~Memory() {
+  assert_true(active_memory_ == this);
+  active_memory_ = nullptr;
+
+  // Uninstall the MMIO handler, as we won't be able to service more
+  // requests.
+  mmio_handler_.reset();
+
+  for (auto invalidation_callback : physical_memory_invalidation_callbacks_) {
+    delete invalidation_callback;
+  }
+
+  heaps_.v00000000.Dispose();
+  heaps_.v40000000.Dispose();
+  heaps_.v80000000.Dispose();
+  heaps_.v90000000.Dispose();
+  heaps_.vA0000000.Dispose();
+  heaps_.vC0000000.Dispose();
+  heaps_.vE0000000.Dispose();
+  heaps_.physical.Dispose();
+
+  // Unmap all views and close mapping.
+  if (mapping_ != xe::memory::kFileMappingHandleInvalid) {
+    UnmapViews();
+    xe::memory::CloseFileMappingHandle(mapping_, file_name_);
+    mapping_base_ = nullptr;
+    mapping_ = xe::memory::kFileMappingHandleInvalid;
+  }
+
+  virtual_membase_ = nullptr;
+  physical_membase_ = nullptr;
+}
+'''
+dtor_replacement = '''Memory::~Memory() {
+  assert_true(active_memory_ == this);
+  active_memory_ = nullptr;
+#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)
+  render360_wasm32_probe_code_window_.clear();
+  virtual_membase_ = nullptr;
+  physical_membase_ = nullptr;
+#else
+  // Uninstall the MMIO handler, as we won't be able to service more requests.
+  mmio_handler_.reset();
+  for (auto invalidation_callback : physical_memory_invalidation_callbacks_) {
+    delete invalidation_callback;
+  }
+  heaps_.v00000000.Dispose();
+  heaps_.v40000000.Dispose();
+  heaps_.v80000000.Dispose();
+  heaps_.v90000000.Dispose();
+  heaps_.vA0000000.Dispose();
+  heaps_.vC0000000.Dispose();
+  heaps_.vE0000000.Dispose();
+  heaps_.physical.Dispose();
+  if (mapping_ != xe::memory::kFileMappingHandleInvalid) {
+    UnmapViews();
+    xe::memory::CloseFileMappingHandle(mapping_, file_name_);
+    mapping_base_ = nullptr;
+    mapping_ = xe::memory::kFileMappingHandleInvalid;
+  }
+  virtual_membase_ = nullptr;
+  physical_membase_ = nullptr;
+#endif
+}
+'''
+if dtor_anchor not in memory_cc:
+    raise SystemExit("Upstream Memory destructor block drifted")
+memory_cc = memory_cc.replace(dtor_anchor, dtor_replacement, 1)
+
+init_start = memory_cc.find("bool Memory::Initialize() {\n")
+map_info_start = memory_cc.find("static const struct {\n", init_start)
+if init_start < 0 or map_info_start < 0:
+    raise SystemExit("Upstream Memory::Initialize boundaries drifted")
+upstream_init = memory_cc[init_start:map_info_start]
+wasm_init = '''bool Memory::Initialize() {
+#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)
+  constexpr size_t kRender360ProbeGuestSize = 64u * 1024u;
+  render360_wasm32_probe_code_window_.assign(kRender360ProbeGuestSize, 0);
+  virtual_membase_ = render360_wasm32_probe_code_window_.data();
+  physical_membase_ = nullptr;
+  mapping_base_ = nullptr;
+  mapping_ = xe::memory::kFileMappingHandleInvalid;
+  return true;
+#else
+'''
+# Keep the exact upstream desktop Initialize body nested below the browser case.
+desktop_body = upstream_init[len("bool Memory::Initialize() {\n"):]
+# desktop_body already ends with closing brace and blank lines.
+last_close = desktop_body.rfind("}\n")
+if last_close < 0:
+    raise SystemExit("Upstream Memory::Initialize closing brace drifted")
+desktop_body_without_close = desktop_body[:last_close]
+wasm_init += desktop_body_without_close + "#endif\n}\n\n"
+memory_cc = memory_cc[:init_start] + wasm_init + memory_cc[map_info_start:]
+MEMORY_DEST.parent.mkdir(parents=True, exist_ok=True)
+MEMORY_DEST.write_text(memory_cc)
+
 # processor.cc: the debugger exception-resume path knows how to restore a
 # native AMD64 RIP or ARM64 PC. The translation-only wasm32 backend has no
 # native host instruction stream to resume, so this host-debugging branch must
@@ -105,5 +291,7 @@ print(f"Generated web cvar source overlay: {CVAR_DEST}")
 print(f"cvar UTF-8 rule: normalized {cvar_u8_count} legacy u8 literals to identical narrow byte literals")
 print(f"Generated web utf8 source overlay: {UTF8_DEST}")
 print(f"utf8 UTF-8 rule: normalized {utf8_u8_count} legacy u8 literals to identical narrow byte literals")
+print(f"Generated web memory header/source overlay: {MEMORY_HEADER_DEST}, {MEMORY_DEST}")
+print("Memory rule: wasm32 translation probe exposes only a 64 KiB code window at guest 0x80000000; no fake full 4.5 GiB mapping")
 print(f"Generated web processor source overlay: {PROCESSOR_DEST}")
 print("Processor rule: wasm32 has no native exception-resume PC; translation/runtime logic is unchanged")

@@ -16,7 +16,8 @@ git -C "$DEST" submodule update --init --depth=1 \
   third_party/fmt \
   third_party/utfcpp \
   third_party/capstone \
-  third_party/cpptoml
+  third_party/cpptoml \
+  third_party/cxxopts
 
 git -C "$DEST" rev-parse HEAD | tee "$ROOT/upstream/XENIA_HEAD.txt"
 printf 'Xenia source ready: %s\n' "$DEST"

@@ -17,6 +17,7 @@ on:
       - 'test-wasm-backend-memory.mjs'
       - 'test-wasm-backend-calls.mjs'
       - 'test-wasm-backend-fpu.mjs'
+      - 'test-wasm-backend-fpu-semantics.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
       - 'render360_xenia_core.wasm'
@@ -35,6 +36,7 @@ on:
       - 'README.md'
       - 'XENIA_WEB_BOOTSTRAP.md'
       - 'WASM_BACKEND_FOUNDATION.md'
+      - 'BROWSER_ARCHITECTURE.md'
       - '.github/workflows/xenia-wasm32-bootstrap.yml'
   workflow_dispatch:
 
@@ -84,6 +86,7 @@ jobs:
             node ./test-wasm-backend-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-calls.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-wasm-backend-fpu.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-wasm-backend-fpu-semantics.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

@@ -22,7 +22,7 @@ const required = [
   'r360_sparse_guest_memory_write_u8','r360_sparse_guest_memory_write_u32_be',
   'r360_sparse_guest_memory_mapped_pages','r360_sparse_guest_memory_backing_pages',
   'r360_sparse_guest_memory_last_fault_address','r360_sparse_guest_memory_last_fault_code',
-  'r360_wasm_backend_executable_page_generation'
+  'r360_wasm_backend_executable_page_generation','r360_wasm_backend_call_invalidations'
 ];
 for (const n of required) if (typeof pick(n) !== 'function') throw new Error(`Missing sparse-memory export ${n}`);
 
@@ -72,31 +72,40 @@ eq(pick('r360_sparse_guest_memory_read_u8')(0x30000000),0,'unmapped read value')
 fault(1,0x30000000,'unmapped read');
 
 // Executable alias invalidation: code is RX at 0x80002000, but modified through
-// a separate RW alias. The Hot WasmBackend generation must still advance.
+// a separate RW alias. Content mutation must advance the executable generation.
 ok(pick('r360_sparse_guest_memory_map')(0x80002000,1,backing,2,R|X),'map executable alias');
-const before = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
+const generationBefore = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
+const invalidationsBeforeWrite = pick('r360_wasm_backend_call_invalidations')()>>>0;
 ok(pick('r360_sparse_guest_memory_write_u8')(0x50000044,0xcc),'write through non-exec alias');
-const after = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
-if (after === before) throw new Error(`Executable alias generation did not advance (${before})`);
+const generationAfterWrite = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
+const invalidationsAfterWrite = pick('r360_wasm_backend_call_invalidations')()>>>0;
+if (generationAfterWrite === generationBefore) throw new Error(`Executable alias generation did not advance (${generationBefore})`);
+if (invalidationsAfterWrite === invalidationsBeforeWrite) throw new Error('Executable alias write did not invalidate cached code');
 
-// Changing execute permission and unmapping executable pages also invalidates.
+// Mapping/protection changes invalidate compiled code even when code bytes are
+// unchanged. Content generation and mapping invalidation are distinct contracts.
+const invalidationsBeforeProtect = pick('r360_wasm_backend_call_invalidations')()>>>0;
 ok(pick('r360_sparse_guest_memory_protect')(0x80002000,1,R),'remove execute protection');
-const afterProtect = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
-if (afterProtect === after) throw new Error('Execute-protection change did not invalidate');
+const invalidationsAfterProtect = pick('r360_wasm_backend_call_invalidations')()>>>0;
+if (invalidationsAfterProtect === invalidationsBeforeProtect) throw new Error('Execute-protection change did not invalidate cached code');
 ok(pick('r360_sparse_guest_memory_protect')(0x80002000,1,R|X),'restore execute protection');
-const beforeUnmap = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
+const invalidationsBeforeUnmap = pick('r360_wasm_backend_call_invalidations')()>>>0;
 ok(pick('r360_sparse_guest_memory_unmap')(0x80002000,1),'unmap executable page');
-const afterUnmap = pick('r360_wasm_backend_executable_page_generation')(0x80002000)>>>0;
-if (afterUnmap === beforeUnmap) throw new Error('Executable unmap did not invalidate');
+const invalidationsAfterUnmap = pick('r360_wasm_backend_call_invalidations')()>>>0;
+if (invalidationsAfterUnmap === invalidationsBeforeUnmap) throw new Error('Executable unmap did not invalidate cached code');
 
 console.log(`sparse_backing_pages=${pick('r360_sparse_guest_memory_backing_pages')()>>>0}`);
 console.log(`sparse_mapped_pages=${pick('r360_sparse_guest_memory_mapped_pages')()>>>0}`);
-console.log(`executable_generation_before=${before}`);
-console.log(`executable_generation_after_alias_write=${after}`);
+console.log(`executable_generation_before=${generationBefore}`);
+console.log(`executable_generation_after_alias_write=${generationAfterWrite}`);
+console.log(`backend_invalidations_after_alias_write=${invalidationsAfterWrite}`);
+console.log(`backend_invalidations_after_protect=${invalidationsAfterProtect}`);
+console.log(`backend_invalidations_after_unmap=${invalidationsAfterUnmap}`);
 console.log('SPARSE_WIDELY_SEPARATED_MAPS=PASS');
 console.log('SPARSE_CROSS_PAGE_RW=PASS');
 console.log('SPARSE_ALIAS_BACKING=PASS');
 console.log('SPARSE_PROTECTION_FAIL_CLOSED=PASS');
 console.log('SPARSE_UNMAPPED_FAIL_CLOSED=PASS');
 console.log('SPARSE_EXECUTABLE_ALIAS_INVALIDATION=PASS');
+console.log('SPARSE_MAPPING_INVALIDATION=PASS');
 console.log('SPARSE_GUEST_MEMORY_FOUNDATION=PASS');

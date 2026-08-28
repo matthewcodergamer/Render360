@@ -73,6 +73,14 @@ const conditionalProgram = wordBytes(
   0x4E800020, // blr
 );
 
+const ctrLoopProgram = wordBytes(
+  0x7C8903A6, // mtctr r4
+  0x38600000, // li r3,0
+  0x38630001, // loop: addi r3,r3,1
+  0x4200FFFC, // bdnz loop
+  0x4E800020, // blr
+);
+
 const tests = [
   { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], memorySeeds: [], expectedR3: 1n },
   { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], memorySeeds: [], expectedR3: 12n },
@@ -81,14 +89,14 @@ const tests = [
   { name: 'branch-equal-not-taken', ppc: conditionalProgram, initialGprs: [[4, 5n]], memorySeeds: [], expectedR3: 1n },
   {
     name: 'lwz-from-xenia-memory',
-    ppc: wordBytes(0x80640000, 0x4E800020), // lwz r3,0(r4); blr
+    ppc: wordBytes(0x80640000, 0x4E800020),
     initialGprs: [[4, BigInt(guestDataAddress)]],
     memorySeeds: [[guestDataAddress, 0x89ABCDEF]],
     expectedR3: 0x89ABCDEFn,
   },
   {
     name: 'stw-lwz-xenia-memory-roundtrip',
-    ppc: wordBytes(0x90A40000, 0x80640000, 0x4E800020), // stw r5,0(r4); lwz r3,0(r4); blr
+    ppc: wordBytes(0x90A40000, 0x80640000, 0x4E800020),
     initialGprs: [[4, BigInt(guestDataAddress)], [5, 0x12345678n]],
     memorySeeds: [[guestDataAddress, 0]],
     expectedR3: 0x12345678n,
@@ -96,24 +104,31 @@ const tests = [
   },
   {
     name: 'lr-mtlr-mflr-roundtrip',
-    ppc: wordBytes(0x7C8803A6, 0x7C6802A6, 0x4E800020), // mtlr r4; mflr r3; blr
+    ppc: wordBytes(0x7C8803A6, 0x7C6802A6, 0x4E800020),
     initialGprs: [[4, 0x80000040n]],
     memorySeeds: [],
     expectedR3: 0x80000040n,
   },
   {
     name: 'ctr-mtctr-mfctr-roundtrip',
-    ppc: wordBytes(0x7C8903A6, 0x7C6902A6, 0x4E800020), // mtctr r4; mfctr r3; blr
+    ppc: wordBytes(0x7C8903A6, 0x7C6902A6, 0x4E800020),
     initialGprs: [[4, 9n]],
     memorySeeds: [],
     expectedR3: 9n,
   },
   {
     name: 'cr-cmpwi-equal-mfcr',
-    ppc: wordBytes(0x2C040000, 0x7C600026, 0x4E800020), // cmpwi r4,0; mfcr r3; blr
+    ppc: wordBytes(0x2C040000, 0x7C600026, 0x4E800020),
     initialGprs: [[4, 0n]],
     memorySeeds: [],
     expectedR3: 0x20000000n,
+  },
+  {
+    name: 'ctr-bdnz-loop-three-iterations',
+    ppc: ctrLoopProgram,
+    initialGprs: [[4, 3n]],
+    memorySeeds: [],
+    expectedR3: 3n,
   },
 ];
 
@@ -184,4 +199,4 @@ for (const test of tests) {
 
 console.log(`PASS: ${tests.length} real PPC correctness programs translated and executed through finalized Xenia HIR.`);
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
-console.log('PASS: LR/CTR round-trips and CR0 equality state are verified through Xenia PPCContext semantics.');
+console.log('PASS: LR/CTR/CR state and a real CTR-controlled bdnz loop are verified through Xenia PPCContext semantics.');

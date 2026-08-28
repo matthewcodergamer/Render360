@@ -40,9 +40,6 @@ if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   echo "LLVM headers: $LLVM_INCLUDE"
 fi
 
-# Real upstream Xenia units required by the browser CPU bootstrap. cvar.cc is
-# included because the strict link proved PPCHIRBuilder references the real
-# cvar::ConfigVars registry.
 SOURCES=(
   "src/xenia/base/cvar.cc"
   "src/xenia/cpu/hir/opcodes.cc"
@@ -90,12 +87,10 @@ printf 'source\tresult\tclassification\n' >> "$OUT/report.tsv"
 compile_one() {
   local label="$1"
   local src="$2"
-  shift 2
-  local extra=("$@")
   local obj="$OUT/$(echo "$label" | tr '/' '_').o"
   local log="$obj.log"
   printf '[WASM32] %-48s ' "$label"
-  if "$CXX" "${COMMON[@]}" "${extra[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
+  if "$CXX" "${COMMON[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
     echo PASS
     printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"
     passed=$((passed + 1))
@@ -110,10 +105,10 @@ compile_one() {
 
 for rel in "${SOURCES[@]}"; do
   if [ "$rel" = "src/xenia/base/cvar.cc" ]; then
-    # cvar.cc predates C++20 char8_t semantics and appends u8 literals directly
-    # to std::string. Compile only this upstream utility unit as C++17. The PPC,
-    # HIR and compiler units stay on the already-proven C++20 configuration.
-    compile_one "$rel" "$XENIA/$rel" -std=c++17
+    # Compile the generated, semantics-preserving C++20 source overlay. It only
+    # normalizes legacy u8 prefixes on ASCII byte literals; the real Xenia cvar
+    # registry and implementation are otherwise unchanged.
+    compile_one "$rel" "$OVERLAY/xenia/base/cvar.cc"
   else
     compile_one "$rel" "$XENIA/$rel"
   fi

@@ -10,6 +10,7 @@ on:
       - 'prepare-xenia-web-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
+      - 'test-xenia-ppc-translation-probe.mjs'
       - 'src/xenia_web_shims/**'
       - 'src/xenia_web_bootstrap/**'
       - 'README.md'
@@ -43,6 +44,14 @@ jobs:
             -w /src \
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
+
+      - name: Verify real PPC bytes reach Xenia HIR
+        run: |
+          if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then
+            node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          else
+            echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
+          fi
 
       - name: Show compile and link state
         if: always()

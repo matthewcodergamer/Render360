@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/src/render360_xenia_core.cpp"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+SRC="$ROOT/render360_xenia_core.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
 
@@ -43,7 +43,7 @@ EXPORTS=(
 )
 
 ARGS=(
-  --target=wasm32 -std=c++20 -O2 -nostdlib -I"$ROOT/src"
+  --target=wasm32 -std=c++20 -O2 -nostdlib -I"$ROOT"
   -Wl,--no-entry -Wl,--export-memory
   -Wl,--initial-memory=16777216 -Wl,--max-memory=16777216
 )

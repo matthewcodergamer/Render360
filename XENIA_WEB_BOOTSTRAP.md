@@ -2,127 +2,44 @@
 
 ## Goal
 
-Bring the real upstream Xenia PowerPC frontend, instruction semantics, HIR/compiler pipeline, Processor runtime and minimum browser-safe host support into wasm32 without importing Xenia's native x64 JIT or desktop graphics backends.
+Bring the real upstream Xenia PowerPC/FPU/VMX frontend, instruction semantics, HIR/compiler pipeline, Processor runtime and minimum browser-safe host support into wasm32 without importing Xenia's native x64 JIT or desktop graphics backends.
 
 Milestone language remains strict:
 
-- **PPC TRANSLATION READY**: real PPC bytes reach real finalized Xenia HIR at runtime.
-- **PPC EXECUTING**: finalized Xenia HIR executes and produces verified PowerPC architectural-state changes.
+- **PPC TRANSLATION READY**: real PPC bytes reach finalized Xenia HIR at runtime.
+- **PPC EXECUTING**: finalized Xenia HIR executes and produces verified PowerPC architectural-state or guest-memory changes.
 - **PLAYABLE**: genuine title execution, kernel, graphics, input and audio work sufficiently for gameplay.
 
-## Current authoritative green result — nested guest calls + FLOAT64 arithmetic
+## Current authoritative green result — run 141
 
-GitHub Actions run **133** (`33143476524`) completed successfully at commit `9cceb0529df209f1226f9b81da6918e6e2e24991`.
+GitHub Actions run **141** (`33144177521`) completed successfully at implementation commit `d3dbfc74e9a7949485039d8e591410c6fe0cc099`.
 
 ```text
 wasm32 compile matrix       62 passed / 0 blocked
 strict full-export link     LINKED
 rooted exports              25
-real PPC correctness cases  15 / 15 PASS
+real PPC correctness cases  18 / 18 PASS
 ```
 
-The live path is:
+The live path remains:
 
 ```text
-real big-endian Xbox PPC bytes
+real big-endian Xbox PPC/FPU/VMX bytes
   -> bounded Xenia Memory @ 0x80000000
   -> Xenia Processor / PPCFrontend / PPCTranslator / PPCScanner
   -> Xenia PPCHIRBuilder + ppc_emit_*
-  -> Xenia compiler + current pass chain
+  -> Xenia compiler + portable pass chain
   -> finalized Xenia HIR
   -> Render360 HIRCorrectnessExecutor
   -> real Xenia PPCContext + Processor-owned Xenia Memory
   -> asserted architectural and guest-memory state
 ```
 
-## Completed in this CPU pass
+## What is now verified
 
-### Direct and nested guest calls
+### Integer / control / memory
 
-Xenia now drives guest call discovery and translation in the correctness tier. A direct `bl` emits `SET_RETURN_ADDRESS`, LR state and HIR `CALL`; the resolver asks the real Xenia `PPCScanner` to discover the target function extent, then runs that callee through the real Xenia frontend/translator/compiler. Nested HIR executes against the same active `PPCContext` and returns to the caller.
-
-Measured direct call:
-
-```text
-caller -> callee(li r3,5) -> caller(addi +2) -> r3 = 7
-assembled guest functions = 2
-```
-
-Measured two-level chain:
-
-```text
-caller -> A -> B -> A -> caller
-B result = 4
-A result after resume = 6
-caller result = 7
-assembled guest functions = 3
-```
-
-No Render360 PPC decoder or hardcoded callee implementation is involved.
-
-### First non-zero FPU arithmetic path
-
-Run 133 executes:
-
-```text
-lfd  f1,0(r4)       ; 1.0
-lfd  f2,8(r4)       ; 2.0
-fadd f3,f1,f2
-stfd f3,16(r4)
-lwz  r3,16(r4)
-blr
-```
-
-Xenia emits **33 finalized HIR instructions**, including guest loads, `BYTE_SWAP`, same-width `CAST` between guest INT64 bits and FLOAT64, typed `ADD`, FPR context operations, cast back to integer bits, guest store, and the final return path.
-
-Measured result:
-
-```text
-correctness_status       3
-correctness_instructions 33
-r3                       0x40080000
-guest high word          0x40080000
-guest low word           0x00000000
-full result bits         0x4008000000000000
-```
-
-The full result is IEEE-754 double **3.0**, proving a real floating load/arithmetic/store path against Xenia guest memory.
-
-## VMX diagnostic boundary — run 136
-
-GitHub Actions diagnostic run **136** (`33143785258`) tested genuine VMX instructions:
-
-```text
-lvx      v1,0,r4
-lvx      v2,0,r5
-vaddubm  v3,v1,v2
-stvx     v3,0,r7
-lwz      r3,0(r7)
-blr
-```
-
-The graph still compiled **62/62** and linked strictly. The real Xenia PPC/Altivec frontend accepted the instructions and generated **29 finalized HIR instructions**, including:
-
-```text
-LOAD VEC128
-BYTE_SWAP VEC128
-STORE_CONTEXT
-LOAD VEC128
-BYTE_SWAP VEC128
-STORE_CONTEXT
-VECTOR_ADD          ; byte lane type
-STORE_CONTEXT
-BYTE_SWAP VEC128
-STORE
-```
-
-The correctness run failed deliberately at the first VEC128 `BYTE_SWAP`, which is not yet part of the executor subset. This diagnostic therefore establishes a precise boundary:
-
-**VMX/Altivec PPC decode and translation are already working in wasm32; VEC128 finalized-HIR execution is the active missing tier.**
-
-The VMX diagnostic was removed from the required green runtime gate after measuring the boundary. Unsupported VEC128 operations remain fail-closed instead of being treated as pass-through behavior.
-
-## Existing measured correctness set
+The earlier gates remain green:
 
 ```text
 li r3,1 ; blr                                      -> r3 = 1
@@ -138,34 +55,105 @@ cmpwi r4,0; mfcr r3                               -> r3 = 0x20000000
 mtctr r4; addi loop; bdnz loop, r4=3              -> r3 = 3
 direct bl/callee/blr                              -> r3 = 7
 two-level nested bl                               -> r3 = 7
-fmr f1,f2                                         -> FPR FLOAT64 path PASS
-lfd/fadd/stfd 1.0 + 2.0                           -> guest double 3.0
 ```
 
-The memory operations use the same bounded Xenia `Memory` instance owned by `Processor`. The current 64 KiB window is a correctness environment, not a fake full Xbox memory model.
+Direct and nested calls are not hardcoded. Xenia emits call/LR behavior, the real Xenia `PPCScanner` discovers callee extents, and each callee is independently translated through Xenia before its finalized HIR executes against the same active `PPCContext`.
+
+### FLOAT64 arithmetic — ADD / SUB / MUL
+
+The FPU tier now verifies three non-zero arithmetic operations through guest memory.
+
+```text
+1.0 + 2.0 = 3.0
+5.0 - 2.0 = 3.0
+1.5 * 2.0 = 3.0
+```
+
+Each test uses genuine PPC:
+
+```text
+lfd  f1,0(r4)
+lfd  f2,8(r4)
+< fadd | fsub | fmul > f3,f1,f2
+stfd f3,16(r4)
+lwz  r3,16(r4)
+blr
+```
+
+Each program produces **33 finalized Xenia HIR instructions** and completes with:
+
+```text
+correctness_status       3
+correctness_instructions 33
+r3                       0x40080000
+guest high word          0x40080000
+guest low word           0x00000000
+full result bits         0x4008000000000000
+```
+
+The result is IEEE-754 double **3.0**. The path includes Xenia guest loads, Xbox byte swapping, same-width INT64↔FLOAT64 HIR casts, typed arithmetic, FPR context state, conversion back to guest bits and guest stores.
+
+This closes the first basic FLOAT64 add/subtract/multiply correctness tier. Division, compare/conversion and broader FPSCR semantics remain open.
+
+### First VMX VEC128 execution tier
+
+Diagnostic run 136 previously proved that genuine `lvx/vaddubm/stvx` PPC decoded and translated successfully but stopped at the first VEC128 `BYTE_SWAP` in the correctness executor.
+
+Run 141 closes that boundary. The required program is:
+
+```text
+lvx      v1,0,r4
+lvx      v2,0,r5
+vaddubm  v3,v1,v2
+stvx     v3,0,r7
+lwz      r3,0(r7)
+blr
+```
+
+Xenia emits **29 finalized HIR instructions** containing VEC128 loads, VEC128 byte swaps, VR context operations, `VECTOR_ADD`, VEC128 guest store and scalar readback.
+
+The executor now implements exactly the measured semantics:
+
+- VEC128 `BYTE_SWAP` using Xenia's own 128-bit convention: byte reversal within each 32-bit word;
+- `VECTOR_ADD` only for the measured `INT8_TYPE + ARITHMETIC_UNSIGNED` form emitted by `vaddubm`;
+- modulo-256 addition of all sixteen byte lanes.
+
+With sixteen `0x01` source bytes and sixteen `0x02` source bytes, CI verifies:
+
+```text
+correctness_status       3
+correctness_instructions 29
+r3                       0x03030303
+guest[0x80000160]        0x03030303
+guest[0x80000164]        0x03030303
+guest[0x80000168]        0x03030303
+guest[0x8000016c]        0x03030303
+```
+
+This is the first genuine **VMX load → vector arithmetic → store** path executing through finalized Xenia HIR on wasm32. Other vector lane widths, saturation modes, vector comparisons, logical operations and VMX128-specific instructions remain fail-closed until measured.
 
 ## Current HIR correctness subset
 
 `src/xenia_web_bootstrap/hir_correctness_executor.cpp` consumes finalized Xenia HIR directly. Current support/measurement includes:
 
 - `SOURCE_OFFSET`, context/memory barriers;
-- `LOAD_CONTEXT`, `STORE_CONTEXT` for integer and FPR state;
-- same-width `CAST`, including measured INT64 ↔ FLOAT64 bit reinterpretation;
-- integer zero/sign extend and truncate;
-- integer negation/not/truth tests;
+- `LOAD_CONTEXT`, `STORE_CONTEXT` for GPR/FPR/VR state as reached by measured programs;
+- same-width `CAST`, including INT64 ↔ FLOAT64 bit reinterpretation;
+- integer zero/sign extend, truncate, negate, not and truth tests;
 - integer `ADD`, `SUB`, `MUL`;
-- bitwise logic and integer shifts;
+- integer bitwise logic and shifts;
 - signed/unsigned comparisons;
-- typed FLOAT32/FLOAT64 `ADD`, `SUB`, `MUL` execution support, with FLOAT64 `ADD` measured in run 133;
-- `BRANCH`, conditional branches, backward loops;
+- typed FLOAT32/FLOAT64 `ADD`, `SUB`, `MUL` support, with FLOAT64 forms independently verified;
+- `BRANCH`, conditional branches and backward loops;
 - `LOAD`, `STORE`, `LOAD_OFFSET`, `STORE_OFFSET` against Xenia Memory;
-- scalar `BYTE_SWAP` for Xbox guest byte order;
+- scalar `BYTE_SWAP` plus measured VEC128 `BYTE_SWAP`;
 - LR, CTR and CR state;
-- direct/conditional HIR calls with nested Xenia-scanned guest translation;
+- direct/conditional HIR calls with nested Xenia-scanned translation;
 - return / `CALL_POSSIBLE_RETURN` boundaries;
+- measured `VECTOR_ADD` for unsigned INT8 lanes;
 - a 4096-instruction correctness guard.
 
-Run 136 additionally proves that finalized VEC128 `LOAD`, `STORE_CONTEXT`, `VECTOR_ADD`, `BYTE_SWAP` and `STORE` reach the executor, but vector execution is not yet enabled. Unsupported HIR fails the gate instead of being ignored or guessed.
+Unsupported HIR fails the gate rather than being ignored, guessed or treated as no-op behavior.
 
 ## Strict CI behavior
 
@@ -177,22 +165,20 @@ A green workflow means:
 source matrix PASS
 -> strict link PASS
 -> complete required probe ABI present
--> every required real PPC runtime program PASS
+-> every required real PPC/FPU/VMX runtime program PASS
 ```
-
-Diagnostic experiments may intentionally fail the runtime step to expose the next unsupported finalized-HIR operation; they are not promoted to milestones until a later green run verifies them.
 
 ## Browser-only host adaptations
 
 Generated overlays keep Xenia as the semantic authority:
 
 - PPCContext wasm32 tail padding preserves upstream field offsets;
-- current Memory overlay provides only a bounded 64 KiB guest probe window;
-- Processor/MMIO native host exception seams are adapted where wasm has no AMD64/ARM64 host context;
-- ContextPromotionPass private storage is browser-safe while the algorithm remains Xenia's;
+- current Memory overlay provides only a bounded 64 KiB guest correctness window;
+- Processor/MMIO native host exception seams are adapted where wasm has no AMD64/ARM64 machine context;
+- ContextPromotionPass private storage is browser-safe while its algorithm remains Xenia's;
 - Arena retains Xenia's 16-byte allocation contract;
 - browser logging/sleep replace only host facilities;
-- ProbeBackend's register counts are compiler allocation metadata, not x64 execution.
+- ProbeBackend register counts are compiler-allocation metadata, not x64 execution.
 
 ## Current phase ladder
 
@@ -208,17 +194,19 @@ Phase 3B  PPC TRANSLATION READY                               COMPLETE
 Phase 4   finalized-HIR correctness execution                 ACTIVE / VERIFIED
 Phase 4A  first PPCContext state change                       COMPLETE
 Phase 4B  runtime integer arithmetic                          COMPLETE FIRST SUBSET
-Phase 4C  signed compare + multi-block branch                 COMPLETE FIRST SUBSET
+Phase 4C  compare + multi-block branch                        COMPLETE FIRST SUBSET
 Phase 4D  guest load/store + endian semantics                 COMPLETE FIRST SUBSET
 Phase 4E  CR/LR/CTR architectural state                       COMPLETE FIRST SUBSET
 Phase 4F  CTR-controlled backward loops                       COMPLETE FIRST SUBSET
 Phase 4G  direct + nested guest calls/returns                 COMPLETE FIRST SUBSET
-Phase 4H  FPR movement + FLOAT64 load/add/store                COMPLETE FIRST SUBSET (run 133)
-Phase 4I  VMX PPC -> finalized VEC128 HIR                     COMPLETE FIRST TRACE (run 136)
-Phase 4J  VEC128 BYTE_SWAP + VECTOR_ADD execution             ACTIVE NEXT
-Phase 4K  broader FPU + VMX/VMX128 correctness                NEXT
-Phase 5   hot-block WasmBackend                               FUTURE
-Phase 6   executable-page invalidation + sparse guest memory  FUTURE
+Phase 4H  FPR movement + FLOAT64 load/store                   COMPLETE FIRST SUBSET
+Phase 4I  FLOAT64 ADD/SUB/MUL                                 COMPLETE FIRST SUBSET (run 141)
+Phase 4J  VMX VEC128 load/byte-add/store                      COMPLETE FIRST SUBSET (run 141)
+Phase 4K  FP DIV + compare/convert/FPSCR                      ACTIVE NEXT
+Phase 4L  broader VMX / VMX128 correctness                    NEXT
+Phase 5   hot-block WasmBackend + function cache              FUTURE
+Phase 5A  executable-page invalidation                        FUTURE
+Phase 6   sparse/page-backed full Xbox guest memory           FUTURE
 Phase 7   map/enter captured default.xex                      FUTURE
 Phase 8   KernelState / xboxkrnl / XAM                        FUTURE
 Phase 9   shared Xenos browser GPU layer                      FUTURE
@@ -227,15 +215,14 @@ Phase 10  WebAudio + first genuine guest framebuffer          FUTURE
 
 ## Next CPU boundary
 
-Continue expanding only from real Xenia HIR traces:
+Continue from real Xenia HIR traces rather than guessing:
 
-1. implement VEC128 `BYTE_SWAP` with Xenia's 128-bit byte ordering;
-2. implement measured `VECTOR_ADD` lane semantics, beginning with the `INT8` lane form emitted by `vaddubm`;
-3. reinstate the `lvx -> vaddubm -> stvx` test and verify all 16 result bytes in guest memory;
-4. broaden vector integer ops and then VMX128 encodings as measured;
-5. expand FPU subtraction/multiplication/division, compare/convert and FPSCR behavior;
-6. keep unsupported HIR fail-closed;
-7. after the correctness subset is broad enough, lower finalized Xenia HIR to the hot `WasmBackend` rather than extending the interpreter indefinitely.
+1. add genuine PPC `fdiv` and typed FLOAT32/FLOAT64 HIR `DIV` execution;
+2. add real floating compare/conversion cases and verify CR/FPSCR state;
+3. broaden VMX to halfword/word adds, vector subtraction and logical operations as emitted by Xenia;
+4. add VMX128-specific correctness cases representative of Xbox 360 compiled code;
+5. keep unsupported HIR fail-closed;
+6. once this correctness subset is sufficient, move hot execution into `WasmBackend` rather than turning the correctness executor into a full permanent interpreter.
 
 ## Hot execution tier after correctness
 
@@ -248,9 +235,21 @@ Xenia finalized HIR
 
 Writes to executable guest pages must invalidate affected translated blocks.
 
-## Browser graphics architecture
+## Major emulator transition after CPU correctness
 
-Xenos semantics remain shared; only the browser host API changes:
+The large next architecture transition is:
+
+```text
+sparse/page-backed Xbox guest memory
+  -> map captured default.xex sections at guest addresses
+  -> establish initial CPU state
+  -> execute the real default.xex entry point
+  -> observe requested KernelState/xboxkrnl/XAM services
+```
+
+That is where the CPU stops being driven only by handcrafted correctness programs and starts executing real title code.
+
+## Browser graphics architecture
 
 ```text
 Xenia Xenos command/register/resource/shader/EDRAM semantics
@@ -258,21 +257,10 @@ Xenia Xenos command/register/resource/shader/EDRAM semantics
        -> WebGPU PRIMARY backend
             -> WGSL
        -> WebGL2 FALLBACK backend
-            -> GLSL ES compatibility
+            -> GLSL ES compatibility emission
 ```
 
-**WebGPU is the main renderer. WebGL2 is a fallback**, not a fake alternate game renderer. Both consume the same guest command stream, resources and shader semantics.
-
-After full/sparse memory and XEX entry execution, bring up KernelState/xboxkrnl/XAM, then Xenos packet processing, shader translation, textures, render targets/EDRAM, WebAudio, and finally the first genuine guest framebuffer.
-
-## Do not port into the browser CPU bootstrap
-
-- x64 emitter/native executable-code cache;
-- D3D12 or Vulkan;
-- desktop windowing/HID/audio output;
-- desktop fixed-address 4.5 GiB mapping as though wasm32 supported it.
-
-Those are host implementations, not Xbox semantics.
+Both graphics backends must consume the same guest Xenos semantics. WebGL2 is a compatibility backend, not a fake alternate renderer.
 
 ## Build / verification
 
@@ -284,3 +272,12 @@ bash ./build-xenia-ppc-bootstrap.sh
 bash ./link-xenia-ppc-bootstrap.sh
 node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
+
+## Do not port into the browser CPU bootstrap
+
+- x64 emitter/native executable-code cache;
+- D3D12 or Vulkan;
+- desktop windowing/HID/audio output;
+- desktop fixed-address 4.5 GiB mapping as though wasm32 supported it.
+
+Those are host implementations, not Xbox semantics.

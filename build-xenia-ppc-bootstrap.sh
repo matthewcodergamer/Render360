@@ -34,19 +34,17 @@ COMMON=(
   -I"$XENIA/third_party/cxxopts/include"
 )
 
-# Xenia's ContextPromotionPass uses llvm::BitVector. On CI the headers come
-# from llvm-dev, but em++ doesn't automatically search the distro LLVM include
-# directory, so add it explicitly when llvm-config is available.
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   COMMON+=("-I$LLVM_INCLUDE")
   echo "LLVM headers: $LLVM_INCLUDE"
 fi
 
-# Compile real upstream Xenia translation units separately. Render360's include
-# overlays adapt browser host ABI/platform details only; Xbox semantics remain
-# in the upstream Xenia implementation.
+# Real upstream Xenia units required by the browser CPU bootstrap. cvar.cc is
+# included because the first strict link proved PPCHIRBuilder references the
+# real cvar::ConfigVars registry.
 SOURCES=(
+  "src/xenia/base/cvar.cc"
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
   "src/xenia/cpu/hir/instr.cc"

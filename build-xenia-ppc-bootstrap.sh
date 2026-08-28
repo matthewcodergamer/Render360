@@ -132,6 +132,10 @@ compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstr
 # deterministic generated overlay. The overlay script fails if the canonical
 # source contract drifts, so CI cannot silently build against stale semantics.
 compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
+# V35 hot-backend work consumes the same compiler-finalized Xenia HIR and emits
+# a child WebAssembly module. It is intentionally a separate translation unit
+# so its portability/link/runtime state is visible in the compile matrix.
+compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

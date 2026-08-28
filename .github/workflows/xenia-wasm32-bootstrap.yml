@@ -11,6 +11,7 @@ on:
       - 'test-package-xex-foundation.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
+      - 'test-vmx-foundation.mjs'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
       - 'render360_xenia_core.wasm'
@@ -20,6 +21,7 @@ on:
       - 'xenia_port/**'
       - 'prepare-xenia-*-overlay.py'
       - 'prepare-render360-*-overlay.py'
+      - 'prepare-vmx-executor-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'test-xenia-ppc-translation-probe.mjs'
@@ -70,6 +72,7 @@ jobs:
             node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi

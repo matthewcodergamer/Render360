@@ -12,7 +12,9 @@ if [ ! -d "$OUT" ]; then echo "ERROR: compile output missing. Run build-xenia-pp
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 
 OBJECTS=(
+  "$OUT/third_party_fmt_src_format.cc.o"
   "$OUT/src_xenia_base_cvar.cc.o"
+  "$OUT/src_xenia_base_utf8.cc.o"
   "$OUT/src_xenia_memory.cc.o"
   "$OUT/src_xenia_cpu_processor.cc.o"
   "$OUT/src_xenia_cpu_backend_backend.cc.o"
@@ -63,7 +65,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=The real translation driver linked with Xenia Memory and Processor. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
+    echo "note=The live Xenia Memory/Processor translation driver linked with its portable UTF8/fmt runtime. Runtime PPC-to-HIR still must be executed and verified before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -71,9 +73,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict translation-driver link exposed the next real Xenia dependency boundary after Memory and Processor were included."
+  echo "note=Strict live Memory/Processor link exposed the next real Xenia runtime dependency after UTF8/fmt support."
   echo
   echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 160 || true
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 200 || true
 } | tee "$REPORT"
 exit 0

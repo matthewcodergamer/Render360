@@ -20,53 +20,57 @@ ProbeBackend* g_probe_backend = nullptr;
 constexpr uint32_t kProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
 
-bool ResolveNestedGuestCall(xe::cpu::Function* function) {
-  if (!g_probe_backend || !g_probe_backend->processor() || !function) {
-    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: backend/processor/function missing\n");
+bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
+  if (!g_probe_backend || !g_probe_backend->processor()) {
+    std::fprintf(stderr,
+                 "R360_CALL_RESOLVE rejected: backend/processor missing\n");
     return false;
   }
-
   auto* frontend = g_probe_backend->processor()->frontend();
   if (!frontend) {
     std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n");
     return false;
   }
-
-  const uint32_t address = function->address();
   std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X\n", address);
   if (address < kProbeGuestBase || address > kProbeGuestEnd) {
-    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target outside probe window\n");
+    std::fprintf(stderr,
+                 "R360_CALL_RESOLVE rejected: target outside probe window\n");
     return false;
   }
 
-  // The standalone correctness driver intentionally isn't backed by a normal
-  // title Module yet. Xenia still gives us the resolved CALL symbol/address,
-  // but module-backed demand resolution cannot own the callee. Create a
-  // temporary GuestFunction only as the container for Xenia's own scanner and
-  // frontend. No PowerPC is decoded here: PPCScanner and PPCFrontend remain the
-  // authority for function extent, translation, HIR generation and compiler
-  // passes.
-  ProbeGuestFunction nested_function(function->module(), address);
-
-  // Do not invent an end address for the callee. PPCScanner is the Xenia code
-  // that discovers the function extent from the actual guest control flow
-  // (normally the first terminal blr/bctr that isn't jumped over).
+  // A temporary GuestFunction is only the container for Xenia's own scanner,
+  // frontend, translator and compiler. Render360 does not decode PPC here.
+  ProbeGuestFunction nested_function(module, address);
   xe::cpu::ppc::PPCScanner scanner(frontend);
   if (!scanner.Scan(&nested_function, nullptr)) {
-    std::fprintf(stderr, "R360_CALL_RESOLVE scan failed target=0x%08X\n", address);
+    std::fprintf(stderr, "R360_CALL_RESOLVE scan failed target=0x%08X\n",
+                 address);
     return false;
   }
-  std::fprintf(stderr, "R360_CALL_RESOLVE scanned target=0x%08X end=0x%08X\n",
+  std::fprintf(stderr,
+               "R360_CALL_RESOLVE scanned target=0x%08X end=0x%08X\n",
                address, nested_function.end_address());
 
-  // ProbeAssembler sees that correctness execution is already active and runs
-  // the nested finalized HIR against the same PPCContext as the caller. A
-  // nested blr therefore returns from this DefineFunction call, after which the
-  // caller's finalized HIR resumes at the instruction following CALL.
   const bool translated = frontend->DefineFunction(&nested_function, 0);
-  std::fprintf(stderr, "R360_CALL_RESOLVE translated target=0x%08X result=%u\n",
+  std::fprintf(stderr,
+               "R360_CALL_RESOLVE translated target=0x%08X result=%u\n",
                address, translated ? 1u : 0u);
   return translated;
+}
+
+bool ResolveNestedGuestCall(xe::cpu::Function* function) {
+  if (!function) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: function missing\n");
+    return false;
+  }
+  return TranslateNestedGuestAddress(function->address(), function->module());
+}
+
+bool ResolveNestedGuestAddress(uint32_t address) {
+  // Indirect CTR/LR calls do not carry a resolved Function symbol in HIR. The
+  // runtime address is still sent through PPCScanner/PPCFrontend exactly like
+  // direct calls. The standalone probe has no title Module yet, so module=null.
+  return TranslateNestedGuestAddress(address, nullptr);
 }
 }  // namespace
 
@@ -119,7 +123,8 @@ bool ProbeAssembler::Assemble(
   const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);
 
   if (!nested_execution) {
-    g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
+    g_probe_telemetry.correctness_instructions =
+        correctness.instructions_executed;
     g_probe_telemetry.correctness_r3 = correctness.r3;
     if (!correctness.supported) {
       g_probe_telemetry.correctness_status = 1;
@@ -131,7 +136,8 @@ bool ProbeAssembler::Assemble(
   }
 
   std::fprintf(stderr,
-               "R360_EXEC%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
+               "R360_EXEC%s status=%u instructions=%u r3=%llu "
+               "return_boundary=%u\n",
                nested_execution ? "_NESTED" : "",
                correctness.supported
                    ? (correctness.reached_return_boundary ? 3u : 2u)
@@ -155,7 +161,10 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
 
   g_probe_backend = this;
   SetHIRCorrectnessCallResolver(&ResolveNestedGuestCall);
+  SetHIRCorrectnessAddressResolver(&ResolveNestedGuestAddress);
 
+  // These are compiler allocator resources only. They intentionally match a
+  // viable Xenia allocation model without claiming native x64 execution.
   machine_info_.supports_extended_load_store = false;
   auto& gprs = machine_info_.register_sets[0];
   gprs.id = 0;

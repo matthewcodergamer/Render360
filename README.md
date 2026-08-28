@@ -30,20 +30,57 @@ No fake framebuffer, fake boot success, fake guest FPS, fake shader translation,
 - WebGPU host surface and dynamic-resolution infrastructure;
 - honest first-frame readiness gate.
 
-## V33 CPU milestone — PPC EXECUTING with memory, architectural state and loops
+## V33 CPU milestone — nested guest calls + first FPR data path
 
-GitHub Actions **run 115** (`33140686990`) is the current measured CPU gate at commit `eea80eaf63131d8c9d39150c8b39c4229b5d5e61`:
+GitHub Actions **run 129** (`33142914018`) is the current measured CPU gate at commit `0b373c648bc343e41b360a5aa01bf092efa0aba4`:
 
 ```text
 wasm32 compile matrix       62 / 62 PASS
 strict full-export link     LINKED
 rooted probe exports        25
-real PPC correctness cases  11 / 11 PASS
+real PPC correctness cases  14 / 14 PASS
 ```
 
 Every case begins as genuine big-endian Xbox 360 PowerPC bytes, passes through the real Xenia PPC frontend/translator/scanner/HIR builder/compiler passes, and executes the **finalized Xenia HIR** against a real `PPCContext` and, for memory cases, the same bounded Xenia `Memory` object owned by `Processor`.
 
-The verified runtime set now includes:
+The verified runtime set now includes integer arithmetic, conditional/multi-block control flow, guest load/store with Xbox byte order, CR/LR/CTR state, repeated CTR-controlled loops, direct guest calls, two-level nested guest calls, and the first FLOAT64 FPR move/data path.
+
+### Real guest calls now execute
+
+A direct PPC `bl` now works across a separate guest function boundary:
+
+```text
+caller: save LR
+        bl callee
+        addi r3,r3,2
+        restore LR
+        blr
+callee: li r3,5
+        blr
+```
+
+Xenia emits `SET_RETURN_ADDRESS`, stores LR and emits `CALL`. Render360 asks the **real Xenia PPCScanner** to discover the callee extent, then sends that guest function back through the real Xenia PPC frontend/translator/compiler. The nested finalized HIR executes against the same live `PPCContext`, returns to the caller, and the measured result is `r3 = 7`.
+
+A stronger two-level call test also passes:
+
+```text
+caller -> function A -> function B -> function A -> caller
+```
+
+Function B returns `r3 = 4`, function A resumes and reaches `r3 = 6`, then the caller resumes and reaches `r3 = 7`. The test assembled **3 independently Xenia-scanned/translated guest functions**. No second PPC decoder or hardcoded callee behavior is used.
+
+### First FPR/FPU data-path gate
+
+Run 129 also passes genuine PPC:
+
+```text
+fmr f1,f2
+blr
+```
+
+It produces **11 finalized HIR instructions** and successfully executes Xenia's FLOAT64 FPR context load/store path plus FPSCR-maintenance HIR. This first FPU gate intentionally uses zero-initialized FPR state, so it proves the **FPR move/data path**, not floating-point arithmetic yet. Non-zero exact-bit FPR seeding plus `fadd` is the active next FPU boundary.
+
+### Existing architectural gates remain green
 
 ```text
 li r3,1 ; blr                                      -> r3 = 1
@@ -60,9 +97,7 @@ cmpwi r4,0; mfcr r3                               -> r3 = 0x20000000 (CR0 EQ)
 mtctr r4; addi loop; bdnz loop, r4=3              -> r3 = 3
 ```
 
-The guest-memory path is now measured through Xenia HIR including `LOAD_OFFSET`, `STORE_OFFSET` and `BYTE_SWAP`. The `stw -> lwz` round trip verifies both architectural state and the underlying guest bytes. This is still the **64 KiB bounded probe memory**, not the final Xbox 360 address space.
-
-CR/LR/CTR state is also now exercised through real Xenia context semantics. The `mfcr` case produced **138 finalized HIR instructions** and completed successfully. The `bdnz` test produced **2 finalized HIR blocks / 21 HIR instructions**, then executed **45 HIR instructions** across repeated loop iterations before CTR reached its termination condition and `r3` reached `3`.
+The guest-memory path is measured through Xenia HIR including `LOAD_OFFSET`, `STORE_OFFSET` and `BYTE_SWAP`. The `stw -> lwz` round trip verifies both architectural state and the underlying guest bytes. This is still the **64 KiB bounded probe memory**, not the final Xbox 360 address space.
 
 **PPC TRANSLATION READY and PPC EXECUTING remain complete for this growing correctness subset.** This still does not mean arbitrary retail PPC, a mapped retail XEX, Kernel/XAM, Xenos rendering, audio, or a playable game.
 
@@ -70,8 +105,8 @@ CR/LR/CTR state is also now exercised through real Xenia context semantics. The 
 
 Measured HIR support now includes:
 
-- context load/store and barriers;
-- assign/cast/zero-extend/sign-extend/truncate;
+- context load/store and barriers, including measured FLOAT64 FPR context movement;
+- assign/cast/zero-extend/sign-extend/truncate for the current integer subset;
 - integer negation/not/truth tests;
 - integer `ADD`, `SUB`, `MUL`;
 - `AND`, `AND_NOT`, `OR`, `XOR`;
@@ -81,7 +116,8 @@ Measured HIR support now includes:
 - repeated backward control-flow through a real CTR-controlled loop;
 - `LOAD`, `STORE`, `LOAD_OFFSET`, `STORE_OFFSET` against Xenia `Memory`;
 - `BYTE_SWAP` for Xbox guest endianness;
-- LR/CTR/CR state through normal Xenia context load/store HIR;
+- LR/CTR/CR state through normal Xenia context HIR;
+- direct `CALL` / conditional-call correctness plumbing with nested Xenia function translation;
 - return and Xenia `CALL_POSSIBLE_RETURN` boundaries;
 - a 4096-instruction guard so unsupported/infinite correctness paths fail instead of hanging CI.
 
@@ -117,13 +153,16 @@ finalized-HIR execution -> real PPCContext                  ✓
 PPC EXECUTING                                               ✓ correctness subset
 runtime integer arithmetic                                  ✓
 conditional + multi-block control flow                      ✓
-guest LOAD/STORE/OFFSET + endian correctness                ✓ run 113
-LR / CTR / CR architectural state                           ✓ run 114
-real backward CTR-controlled bdnz loop                      ✓ run 115
+guest LOAD/STORE/OFFSET + endian correctness                ✓
+LR / CTR / CR architectural state                           ✓
+real backward CTR-controlled bdnz loop                      ✓
+direct bl -> callee -> blr -> caller                        ✓ run 126
+two-level nested guest calls                                ✓ run 127
+FLOAT64 FPR move/data path                                  ✓ run 129
         ↓
-broader calls / returns / integer-control coverage          ACTIVE NEXT
+non-zero FPR state + floating ADD/SUB/MUL/DIV               ACTIVE NEXT
         ↓
-FPU correctness
+FP compare / convert / FPSCR expansion
         ↓
 VMX / VMX128 correctness
         ↓
@@ -154,7 +193,8 @@ LIVE/STFS package
   -> XEX structural inspection             ✓
   -> PPC translation                       ✓
   -> PPC correctness execution             ✓ growing subset
-  -> guest memory semantics                ✓ bounded correctness subset
+  -> calls / nested functions              ✓ first subset
+  -> FPR/FPU path                          ✓ first move path; arithmetic next
   -> full sparse guest memory              FUTURE
   -> map / enter default.xex               FUTURE
   -> Kernel / XAM                          FUTURE

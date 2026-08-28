@@ -1,9 +1,11 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 
 #include "hir_correctness_executor.h"
 #include "probe_backend.h"
+#include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/memory.h"
@@ -13,6 +15,29 @@ namespace {
 constexpr uint32_t kProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeMaxBytes = 64u * 1024u;
 alignas(16) uint8_t g_input_buffer[kProbeMaxBytes] = {};
+
+class ProbeModule final : public xe::cpu::Module {
+ public:
+  explicit ProbeModule(xe::cpu::Processor* processor)
+      : xe::cpu::Module(processor) {}
+
+  const std::string& name() const override {
+    static const std::string kName = "Render360ProbeModule";
+    return kName;
+  }
+
+  bool is_executable() const override { return true; }
+
+  bool ContainsAddress(uint32_t address) override {
+    return address >= kProbeGuestBase &&
+           uint64_t(address) < uint64_t(kProbeGuestBase) + kProbeMaxBytes;
+  }
+
+ protected:
+  std::unique_ptr<xe::cpu::Function> CreateFunction(uint32_t address) override {
+    return std::make_unique<ProbeGuestFunction>(this, address);
+  }
+};
 
 enum ProbeStatus : uint32_t {
   kProbeCold = 0,
@@ -42,6 +67,10 @@ bool EnsureRuntime() {
   auto* processor = new xe::cpu::Processor(memory, nullptr);
   auto backend = std::make_unique<ProbeBackend>();
   if (!processor->Setup(std::move(backend))) {
+    g_status = kProbeErrorProcessor;
+    return false;
+  }
+  if (!processor->AddModule(std::make_unique<ProbeModule>(processor))) {
     g_status = kProbeErrorProcessor;
     return false;
   }
@@ -133,10 +162,15 @@ uint32_t r360_ppc_probe_translate() {
   }
 
   ResetProbeTelemetry();
-  ProbeGuestFunction function(nullptr, kProbeGuestBase);
-  function.set_end_address(kProbeGuestBase + g_loaded_size - 4u);
+  auto* function = g_processor->LookupFunction(kProbeGuestBase);
+  if (!function || !function->is_guest()) {
+    g_status = kProbeErrorTranslate;
+    return 0;
+  }
+  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
+  guest_function->set_end_address(kProbeGuestBase + g_loaded_size - 4u);
 
-  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
+  if (!g_processor->DemandFunction(guest_function)) {
     g_status = kProbeErrorTranslate;
     return 0;
   }

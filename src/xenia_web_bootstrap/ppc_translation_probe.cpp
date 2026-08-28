@@ -25,9 +25,7 @@ class ProbeModule final : public xe::cpu::Module {
     static const std::string kName = "Render360ProbeModule";
     return kName;
   }
-
   bool is_executable() const override { return true; }
-
   bool ContainsAddress(uint32_t address) override {
     return address >= kProbeGuestBase &&
            uint64_t(address) < uint64_t(kProbeGuestBase) + kProbeMaxBytes;
@@ -52,6 +50,7 @@ enum ProbeStatus : uint32_t {
 
 xe::Memory* g_memory = nullptr;
 xe::cpu::Processor* g_processor = nullptr;
+ProbeModule* g_probe_module = nullptr;
 uint32_t g_loaded_size = 0;
 uint32_t g_status = kProbeCold;
 
@@ -70,7 +69,10 @@ bool EnsureRuntime() {
     g_status = kProbeErrorProcessor;
     return false;
   }
-  if (!processor->AddModule(std::make_unique<ProbeModule>(processor))) {
+  auto probe_module = std::make_unique<ProbeModule>(processor);
+  g_probe_module = probe_module.get();
+  if (!processor->AddModule(std::move(probe_module))) {
+    g_probe_module = nullptr;
     g_status = kProbeErrorProcessor;
     return false;
   }
@@ -156,21 +158,18 @@ uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {
 
 uint32_t r360_ppc_probe_translate() {
   using namespace render360::xenia_web;
-  if (!EnsureRuntime() || !g_loaded_size) {
+  if (!EnsureRuntime() || !g_loaded_size || !g_probe_module) {
     if (!g_loaded_size && g_status < 0xE000) g_status = kProbeErrorInput;
     return 0;
   }
 
   ResetProbeTelemetry();
-  auto* function = g_processor->LookupFunction(kProbeGuestBase);
-  if (!function || !function->is_guest()) {
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-  auto* guest_function = static_cast<xe::cpu::GuestFunction*>(function);
-  guest_function->set_end_address(kProbeGuestBase + g_loaded_size - 4u);
-
-  if (!g_processor->DemandFunction(guest_function)) {
+  // Keep the top-level test function fresh because the harness deliberately
+  // replaces the bytes at the same guest base for each correctness case. The
+  // registered module is still used by Xenia to declare/cache real callees.
+  ProbeGuestFunction function(g_probe_module, kProbeGuestBase);
+  function.set_end_address(kProbeGuestBase + g_loaded_size - 4u);
+  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
     g_status = kProbeErrorTranslate;
     return 0;
   }
@@ -182,11 +181,9 @@ uint32_t r360_ppc_probe_translate() {
 uint32_t r360_ppc_probe_status() {
   return render360::xenia_web::g_status;
 }
-
 uint32_t r360_ppc_probe_guest_base() {
   return render360::xenia_web::kProbeGuestBase;
 }
-
 uint32_t r360_ppc_probe_loaded_size() {
   return render360::xenia_web::g_loaded_size;
 }

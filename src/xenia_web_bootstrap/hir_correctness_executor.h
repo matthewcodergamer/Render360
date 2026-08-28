@@ -5,9 +5,12 @@
 
 namespace xe {
 class Memory;
-namespace cpu::hir {
+namespace cpu {
+class Function;
+namespace hir {
 class HIRBuilder;
 }
+}  // namespace cpu
 }  // namespace xe
 
 namespace render360::xenia_web {
@@ -19,14 +22,17 @@ struct HIRCorrectnessResult {
   uint64_t r3 = 0;
 };
 
-// CI/runtime correctness probes can seed architectural input state before the
-// finalized Xenia HIR is executed. This is testing infrastructure only: it does
-// not decode or emulate PowerPC outside Xenia.
+using HIRCorrectnessCallResolver = bool (*)(xe::cpu::Function* function);
+
 void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 
-// Executes finalized Xenia HIR against a real PPCContext and the same Xenia
-// Memory instance owned by Processor. PowerPC has already been decoded by Xenia.
+// ProbeBackend installs a resolver that asks the real Xenia PPCFrontend to
+// define/translate a called guest Function. The nested assembler then executes
+// that finalized HIR against the same active PPCContext as the caller.
+void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver);
+bool IsHIRCorrectnessExecutionActive();
+
 HIRCorrectnessResult ExecuteHIRCorrectnessProbe(xe::cpu::hir::HIRBuilder* builder,
                                                 xe::Memory* memory);
 

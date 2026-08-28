@@ -31,6 +31,13 @@ enum StfsExtractRequestKind : uint32_t {
   kExtractRequestHashL0 = 23,
 };
 
+// STFS block references are 24-bit. A 2 MiB bitset therefore gives exact
+// cycle detection for the entire representable block-number space without
+// allocating a second copy of the extracted title image.
+constexpr uint32_t kStfsBlockNumberLimit = 1u << 24;
+constexpr uint32_t kStfsVisitedBytes = kStfsBlockNumberLimit >> 3;
+static uint8_t extract_visited[kStfsVisitedBytes];
+
 struct StfsExtractState {
   uint32_t status = kExtractIdle;
   uint32_t entry_index = R360_UNKNOWN_U32;
@@ -39,6 +46,9 @@ struct StfsExtractState {
   uint32_t bytes_total = 0;
   uint32_t bytes_done = 0;
   uint32_t blocks_done = 0;
+  uint32_t expected_blocks = 0;
+  uint32_t declared_valid_blocks = 0;
+  uint32_t declared_allocated_blocks = 0;
   uint32_t contiguous = 0;
   uint32_t hash_target_block = 0;
   uint32_t hash_secondary_offset = 0;
@@ -57,6 +67,19 @@ static void extract_fail(uint32_t status) {
   extract_clear_request();
 }
 
+static void extract_clear_visited() {
+  for (uint32_t i = 0; i < kStfsVisitedBytes; ++i) extract_visited[i] = 0u;
+}
+
+static bool extract_mark_block(uint32_t block) {
+  if (block >= kStfsBlockNumberLimit) return false;
+  const uint32_t byte_index = block >> 3;
+  const uint8_t mask = static_cast<uint8_t>(1u << (block & 7u));
+  if (extract_visited[byte_index] & mask) return false;
+  extract_visited[byte_index] |= mask;
+  return true;
+}
+
 static bool extract_schedule(uint64_t offset, uint32_t size, uint32_t kind) {
   if (!size || size > R360_IO_CAPACITY || offset > stfs_state.file_size ||
       uint64_t(size) > stfs_state.file_size - offset) {
@@ -73,6 +96,11 @@ static bool extract_schedule(uint64_t offset, uint32_t size, uint32_t kind) {
 
 static bool extract_schedule_data() {
   if (extract_state.bytes_done >= extract_state.bytes_total) {
+    if (extract_state.bytes_done != extract_state.bytes_total ||
+        extract_state.blocks_done != extract_state.expected_blocks) {
+      extract_fail(kExtractErrorChain);
+      return false;
+    }
     extract_state.status = kExtractComplete;
     extract_clear_request();
     return true;
@@ -155,7 +183,8 @@ static void extract_parse_hash_l0(uint32_t length) {
   if (!ok) return extract_fail(kExtractErrorChain);
   const uint32_t next_block = info & 0xFFFFFFu;
   if (next_block == stfs::kEndOfChain ||
-      (stfs_state.total_block_count && next_block >= stfs_state.total_block_count)) {
+      (stfs_state.total_block_count && next_block >= stfs_state.total_block_count) ||
+      !extract_mark_block(next_block)) {
     return extract_fail(kExtractErrorChain);
   }
   extract_state.current_block = next_block;
@@ -164,18 +193,29 @@ static void extract_parse_hash_l0(uint32_t length) {
 
 static void extract_accept_data(uint32_t length, uint32_t expected) {
   if (length < expected) return extract_fail(kExtractErrorShortRead);
+  if (expected > extract_state.bytes_total - extract_state.bytes_done) {
+    return extract_fail(kExtractErrorChain);
+  }
   extract_state.bytes_done += expected;
   extract_state.logical_offset = extract_state.bytes_done;
   ++extract_state.blocks_done;
+  if (extract_state.blocks_done > extract_state.expected_blocks) {
+    return extract_fail(kExtractErrorChain);
+  }
   if (extract_state.bytes_done >= extract_state.bytes_total) {
+    if (extract_state.bytes_done != extract_state.bytes_total ||
+        extract_state.blocks_done != extract_state.expected_blocks) {
+      return extract_fail(kExtractErrorChain);
+    }
     extract_state.status = kExtractComplete;
     extract_clear_request();
     return;
   }
   if (extract_state.contiguous) {
     ++extract_state.current_block;
-    if (stfs_state.total_block_count &&
-        extract_state.current_block >= stfs_state.total_block_count) {
+    if ((stfs_state.total_block_count &&
+         extract_state.current_block >= stfs_state.total_block_count) ||
+        !extract_mark_block(extract_state.current_block)) {
       return extract_fail(kExtractErrorChain);
     }
     extract_schedule_data();
@@ -194,6 +234,7 @@ uint32_t r360_build_version() { return 32u; }
 __attribute__((visibility("default")))
 void r360_stfs_extract_reset() {
   extract_state = StfsExtractState{};
+  extract_clear_visited();
   if (stfs_state.request_kind >= kExtractRequestData &&
       stfs_state.request_kind <= kExtractRequestHashL0) {
     extract_clear_request();
@@ -215,17 +256,38 @@ uint32_t r360_stfs_extract_begin(uint32_t entry_index) {
   extract_state.entry_index = entry_index;
   extract_state.current_block = entry.start_block;
   extract_state.bytes_total = entry.length;
+  extract_state.declared_valid_blocks = entry.valid_data_blocks;
+  extract_state.declared_allocated_blocks = entry.allocated_data_blocks;
   extract_state.contiguous = (entry.flags & 0x40u) ? 1u : 0u;
+  extract_state.expected_blocks = static_cast<uint32_t>(
+      (uint64_t(entry.length) + stfs::kBlockSize - 1u) / stfs::kBlockSize);
+
   if (entry.length == 0u) {
     extract_state.status = kExtractComplete;
     return extract_state.status;
   }
-  if (stfs_state.total_block_count && entry.start_block >= stfs_state.total_block_count) {
+  if ((stfs_state.total_block_count && entry.start_block >= stfs_state.total_block_count) ||
+      (entry.valid_data_blocks && extract_state.expected_blocks > entry.valid_data_blocks) ||
+      (entry.allocated_data_blocks &&
+       extract_state.expected_blocks > entry.allocated_data_blocks) ||
+      (stfs_state.total_block_count &&
+       extract_state.expected_blocks > stfs_state.total_block_count) ||
+      !extract_mark_block(entry.start_block)) {
     extract_state.status = kExtractErrorChain;
     return extract_state.status;
   }
   extract_schedule_data();
   return extract_state.status;
+}
+
+__attribute__((visibility("default")))
+uint32_t r360_stfs_extract_default_xex() {
+  if (stfs_state.default_xex_index == R360_UNKNOWN_U32) {
+    r360_stfs_extract_reset();
+    extract_state.status = kExtractErrorEntry;
+    return extract_state.status;
+  }
+  return r360_stfs_extract_begin(stfs_state.default_xex_index);
 }
 
 __attribute__((visibility("default")))
@@ -260,13 +322,18 @@ R360_EXTRACT_GETTER(r360_stfs_extract_logical_offset, logical_offset)
 R360_EXTRACT_GETTER(r360_stfs_extract_bytes_total, bytes_total)
 R360_EXTRACT_GETTER(r360_stfs_extract_bytes_done, bytes_done)
 R360_EXTRACT_GETTER(r360_stfs_extract_blocks_done, blocks_done)
+R360_EXTRACT_GETTER(r360_stfs_extract_expected_blocks, expected_blocks)
+R360_EXTRACT_GETTER(r360_stfs_extract_declared_valid_blocks, declared_valid_blocks)
+R360_EXTRACT_GETTER(r360_stfs_extract_declared_allocated_blocks, declared_allocated_blocks)
 R360_EXTRACT_GETTER(r360_stfs_extract_is_contiguous, contiguous)
 #undef R360_EXTRACT_GETTER
 
 __attribute__((visibility("default")))
 uint32_t r360_feature_bits() {
   // V30 bits 0..10 + V32 bit 11: complete native STFS entry extraction.
-  return r360_feature_bits_v30() | (1u << 11);
+  // Bit 12 closes strict chain validation: declared-block accounting plus
+  // exact 24-bit cycle detection with fail-closed early-EOC behavior.
+  return r360_feature_bits_v30() | (1u << 11) | (1u << 12);
 }
 
 }  // extern "C"

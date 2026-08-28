@@ -11,17 +11,17 @@ The eight CPU/browser foundations remain closed by **Xenia WASM32 Bootstrap Run 
 
 `3b39da31b6fc3e296e356f7143574951f7fc8861`
 
-Run title: **Gate sparse executable content generations**
-
-Run 254 supersedes the old Run 216 / ~55% WasmBackend board and all earlier partial-WasmBackend estimates.
-
-The V36 strict XEX guest-mapper contract is separately closed by **Xenia WASM32 Bootstrap run 261** (Actions run ID `33212297082`) on implementation commit:
+The V36 strict XEX guest mapper is separately closed by **run 261** (Actions run ID `33212297082`) on implementation commit:
 
 `f602d889293440a4840c3310a8e5fbf07ddc7756`
 
-That run completed successfully. It closes the mapper/entry-validation **component contract**; it does not claim that a genuine extracted title entry has executed yet.
+The full pull-driven STFS `default.xex` extraction contract is closed by **run 265** (Actions run ID `33218179582`) on implementation commit:
 
-## Foundation status
+`0ba0587bc335ad8391f43cdc8c750da36d149005`
+
+Run 265 completed successfully after rebuilding the package/XEX WASM core, passing the strengthened STFS extraction critic, compiling/linking the Xenia PPC/HIR bootstrap, and re-running the locked foundations plus the V36 mapper regression.
+
+## Foundation and bring-up status
 
 ```text
 PACKAGE / XEX FOUNDATION
@@ -44,93 +44,84 @@ VMX / VMX128 FOUNDATION
 
 HOT WASMBACKEND FOUNDATION
 ████████████████████  100% ✓
-  generated scalar / FPU / VMX
-  types / compares / shifts
-  CFG + loops
-  endian guest memory
-  direct / nested / bctrl guest calls
-  generated-WASM equivalence critics
-  compiled-function cache
-  guest-address dispatch
-  code-content invalidation
-  permission invalidation
-  unmap invalidation
-  stale-target fail-closed behavior
 
 SPARSE XBOX MEMORY FOUNDATION
 ████████████████████  100% ✓
-  arbitrary sparse 32-bit guest mappings
-  range I/O
-  shared backing + aliases
-  cross-page big-endian access
-  R / W / X protection
-  page state + partial unmap
-  executable-content generations
-  writable-alias code invalidation
-  execute-permission invalidation
-  executable-unmap cleanup
-  holes / wraparound fail closed
 
 V36 STRICT XEX GUEST MAPPER
 ████████████████████  100% ✓
-  RX code mapping
-  R rodata mapping
-  RW data mapping
-  bounded chunk loading
-  final permission sealing
-  overlap rejection
-  32-bit wraparound rejection
-  executable-entry validation
-  post-finalize mutation rejection
-  XEX_GUEST_MAPPING=PASS
-  XEX_ENTRY_VALIDATION=PASS
+
+FULL default.xex STFS EXTRACTION
+████████████████████  100% ✓
+  root default.xex discovery
+  fragmented block-chain extraction
+  exact byte-for-byte reconstruction
+  extracted bytes == declared file length
+  expected block accounting
+  valid/allocated block validation
+  24-bit cycle/repeated-block detection
+  truncated/early chain fail closed
+  out-of-range source request fail closed
+  STFS_DEFAULT_XEX_EXTRACT=PASS
 ```
 
-## Executable-content / invalidation contract
+## What run 265 added
 
-Run 254 locks the distinction between **actual executable-byte mutation** and ordinary mapping/protection changes:
+The older V32 package core already had a pull-driven fragmented entry extractor. V36 hardens that path rather than replacing it.
 
 ```text
-code-byte write
-  → executable content generation changes
-  → compiled Wasm invalidated
-
-write through writable alias
-  → executable alias located
-  → executable content generation changes
-  → compiled Wasm invalidated
-
-remove execute permission
-  → compiled Wasm invalidated
-  → executable content generation unchanged
-
-unmap executable memory
-  → compiled Wasm invalidated
-  → executable content generation unchanged
-  → stale dispatch fails closed
+STFS file entry
+   ↓
+validate declared length / valid blocks / allocated blocks
+   ↓
+mark first 24-bit data block
+   ↓
+request one bounded package range
+   ↓
+copy only that chunk through WASM staging memory
+   ↓
+resolve next STFS hash-chain block
+   ↓
+reject repeated/cyclic block
+   ↓
+continue until exact declared byte length
+   ↓
+require blocks_done == expected_blocks
+   ↓
+COMPLETE
 ```
 
-This prevents protection/mapping churn from masquerading as self-modifying code while guaranteeing stale compiled WebAssembly cannot continue executing.
+The cycle detector is a compact bitset covering the STFS 24-bit block-number space. This keeps extraction exact without buffering another whole package in WebAssembly memory.
 
-## Active milestone — genuine `default.xex` bring-up
+Verified critic lines include:
 
-Synthetic CPU probes remain regression locks, but they are no longer the primary roadmap driver. The active implementation path is now:
+```text
+PACKAGE_XEX_FOUNDATION=PASS
+STFS_DEFAULT_XEX_EXTRACT=PASS
+STFS_CHAIN_CYCLE_FAIL_CLOSED=PASS
+STFS_DECLARED_BLOCK_TRUNCATION_FAIL_CLOSED=PASS
+```
+
+## Active milestone — XEX2 image decode / real title metadata
+
+Synthetic CPU expansion and STFS extraction are no longer the roadmap driver. The active implementation path is now:
 
 ```text
 STFS package
        ↓
-locate root default.xex
+complete default.xex extraction             ✓
        ↓
-extract COMPLETE default.xex block chain
+XEX2 header / optional-header decode        ← ACTIVE
        ↓
-XEX2 image decode / decompression / metadata
+security + file-format metadata
        ↓
-real XEX guest sections
-       ├── RX code
-       ├── R  rodata
-       └── RW data
+supported decrypt/decompress path
        ↓
-V36 XEX guest mapper
+real image base / entry / page descriptors
+       ↓
+derive real RX / R / RW guest sections
+       ↓
+V36 XEX guest mapper                        ✓ component
        ↓
 validate genuine XEX entry address
        ↓
@@ -147,33 +138,63 @@ EXECUTE FIRST TITLE INSTRUCTIONS
 FAIL CLOSED on first missing import / kernel / runtime service
 ```
 
-The immediate prerequisite is **complete STFS extraction of the real `default.xex`**, followed by XEX2 decode into real section metadata and bytes. The existing native package path can locate `default.xex`, but real-title execution is not considered reached until the complete file flows through decode, mapping, entry validation, and PPC dispatch.
+The next gate is `XEX_IMAGE_DECODE=PASS`. It must consume the exact extracted XEX bytes and validate real XEX-derived metadata rather than feeding hard-coded addresses into the mapper.
+
+## Next decode contract
+
+```text
+XEX2 magic/header                     PASS
+header table bounds                   PASS
+security-info bounds                  PASS
+image base                            VALID
+entry point                           VALID
+page/section descriptors              VALID
+loader/security metadata              VALID
+file-format metadata                  VALID
+supported compression/decode          PASS
+unsupported encryption/compression    FAIL CLOSED
+section ranges non-overlapping         PASS
+32-bit range/wrap validation           PASS
+XEX_IMAGE_DECODE                       PASS
+```
+
+Prefer Xenia's existing XEX/XEX2 structures and semantics wherever practical instead of creating a second incompatible parser.
+
+## After XEX image decode
+
+```text
+XEX-derived sections
+       ↓
+V36 mapper integration critic
+       ↓
+real entry PC validation
+       ↓
+PPCContext
+       ↓
+Xenia scanner / frontend / HIR
+       ↓
+Hot WasmBackend
+       ↓
+first genuine title instruction
+       ↓
+first genuine unresolved dependency
+```
+
+That first real failure chooses the next subsystem automatically: minimum required `xboxkrnl`, XAM, TLS, guest threading, memory services, browser-backed VFS, or Xenos GPU initialization. Broad unknown-import “return success” stubs are not used to fake progress.
 
 ## Public board
 
 ```text
-PACKAGE / XEX FOUNDATION
-████████████████████  100% ✓
-PPC TRANSLATION FOUNDATION
-████████████████████  100% ✓
-SCALAR PPC FOUNDATION
-████████████████████  100% ✓
-GUEST CONTROL FOUNDATION
-████████████████████  100% ✓
-FPU FOUNDATION
-████████████████████  100% ✓
-VMX / VMX128 FOUNDATION
-████████████████████  100% ✓
-HOT WASMBACKEND FOUNDATION
-████████████████████  100% ✓
-SPARSE XBOX MEMORY FOUNDATION
+8 CPU/browser foundations
 ████████████████████  100% ✓
 V36 STRICT XEX GUEST MAPPER
 ████████████████████  100% ✓
-
 FULL default.xex STFS EXTRACTION
-██░░░░░░░░░░░░░░░░░░  ← ACTIVE NEXT
+████████████████████  100% ✓
+
 XEX2 IMAGE DECODE / REAL METADATA
+██░░░░░░░░░░░░░░░░░░  ← ACTIVE
+REAL XEX MAPPER INTEGRATION
 ░░░░░░░░░░░░░░░░░░░░
 REAL XEX ENTRY EXECUTION
 ░░░░░░░░░░░░░░░░░░░░
@@ -189,45 +210,13 @@ FIRST GENUINE FRAME
 ░░░░░░░░░░░░░░░░░░░░
 ```
 
-## Bring-up order
-
-```text
-full default.xex extraction
-       ↓
-XEX2 decode / real metadata
-       ↓
-real section mapping
-       ↓
-real entry PC
-       ↓
-execute until first genuine failure
-       ↓
-minimum required xboxkrnl / XAM
-       ↓
-guest threads / TLS / runtime
-       ↓
-Xenos ringbuffer / command processing
-       ↓
-WebGPU / WGSL / EDRAM
-       ↓
-WebGL2 fallback where feasible
-       ↓
-first genuine guest-produced frame
-       ↓
-small XBLA / Braid-class title
-       ↓
-Portal-class software
-```
-
-The first real title failure becomes the next implementation target automatically. No broad unknown-import “return success” stubs should be used to fake progress.
-
 ## Repository organization
 
-Current maintained ownership is intentionally incremental:
+Current maintained ownership remains intentionally incremental:
 
 - `src/xenia_web_bootstrap/` — browser-native Xenia/PPC bring-up, SparseGuestMemory, Hot WasmBackend probes, and V36 XEX guest mapper.
 - `src/xenia_web_shims/` — browser/WASM portability shims.
-- `xenia_port/` — older imported/ported Xenia-facing surface retained until references can be migrated safely.
+- `xenia_port/` — older imported/ported Xenia-facing source retained until references can be migrated safely.
 - `docs/` — maintained project organization and release documentation.
 - `.github/workflows/` — aggregate regression gates.
 
@@ -235,12 +224,12 @@ Working root tests and historical documents are not mass-moved merely for cosmet
 
 ## Current engineering rule
 
-A subsystem reaches **100%** only when its defined aggregate CI gate proves that exact contract. A synthetic component critic may close that component, but it cannot be used to claim genuine title execution, a guest frame, playability, or FPS.
+A subsystem reaches **100%** only when its defined CI gate proves that exact contract. A component critic cannot be used to claim genuine title execution, a guest frame, playability, or FPS.
 
 ## Documentation
 
 - [`ROADMAP.md`](ROADMAP.md) — V36 real-title implementation order and gates
-- [`docs/releases/V36_BRINGUP.md`](docs/releases/V36_BRINGUP.md) — V36 mapper closure and title bring-up boundary
+- [`docs/releases/V36_BRINGUP.md`](docs/releases/V36_BRINGUP.md) — V36 mapper/STFS closures and title bring-up boundary
 - [`docs/PROJECT_LAYOUT.md`](docs/PROJECT_LAYOUT.md) — stable repository ownership/layout policy
 - [`XENIA_WEB_BOOTSTRAP.md`](XENIA_WEB_BOOTSTRAP.md) — Xenia/WebAssembly bootstrap details
 - [`WASM_BACKEND_FOUNDATION.md`](WASM_BACKEND_FOUNDATION.md) — WasmBackend implementation history and probes

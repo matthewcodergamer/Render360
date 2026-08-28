@@ -12,7 +12,6 @@ const module = await WebAssembly.compile(bytes);
 const wasi = new WASI({ version: 'preview1', args: [], env: {}, preopens: {}, returnOnExit: true });
 const imports = wasi.getImportObject(module);
 
-// Emscripten standalone modules may request this harmless host notification.
 for (const entry of WebAssembly.Module.imports(module)) {
   if (entry.module === 'env' && entry.name === 'emscripten_notify_memory_growth') {
     imports.env ||= {};
@@ -29,13 +28,11 @@ if (unresolved.length) {
   process.exit(3);
 }
 
-// WebAssembly.instantiate returns an Instance directly when passed an already
-// compiled WebAssembly.Module (the {module, instance} pair is for byte input).
 const instance = await WebAssembly.instantiate(module, imports);
-if (typeof instance.exports._initialize === 'function') {
-  wasi.initialize(instance);
-}
+if (typeof instance.exports._initialize === 'function') wasi.initialize(instance);
 
+const exportedNames = Object.keys(instance.exports).sort();
+console.log(`wasm_exports=${exportedNames.join(',')}`);
 const pick = (name) => instance.exports[name] ?? instance.exports[`_${name}`];
 const required = [
   'r360_ppc_probe_reset',
@@ -54,6 +51,7 @@ const required = [
 for (const name of required) {
   if (typeof pick(name) !== 'function') {
     console.error(`Missing required probe export: ${name}`);
+    console.error(`Available exports: ${exportedNames.join(', ')}`);
     process.exit(4);
   }
 }

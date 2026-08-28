@@ -121,6 +121,33 @@ const faddMemoryProgram = wordBytes(
   0x4E800020, // blr
 );
 
+const fsubMemoryProgram = wordBytes(
+  0xC8240000, // lfd  f1,0(r4)
+  0xC8440008, // lfd  f2,8(r4)
+  0xFC611028, // fsub f3,f1,f2
+  0xD8640010, // stfd f3,16(r4)
+  0x80640010, // lwz  r3,16(r4)
+  0x4E800020, // blr
+);
+
+const fmulMemoryProgram = wordBytes(
+  0xC8240000, // lfd  f1,0(r4)
+  0xC8440008, // lfd  f2,8(r4)
+  0xFC6100B2, // fmul f3,f1,f2
+  0xD8640010, // stfd f3,16(r4)
+  0x80640010, // lwz  r3,16(r4)
+  0x4E800020, // blr
+);
+
+const vmxAddBytesProgram = wordBytes(
+  0x7C2020CE, // lvx      v1,0,r4
+  0x7C4028CE, // lvx      v2,0,r5
+  0x10611000, // vaddubm  v3,v1,v2
+  0x7C6039CE, // stvx     v3,0,r7
+  0x80670000, // lwz      r3,0(r7)
+  0x4E800020, // blr
+);
+
 const tests = [
   { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], memorySeeds: [], expectedR3: 1n },
   { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], memorySeeds: [], expectedR3: 12n },
@@ -201,9 +228,52 @@ const tests = [
       [guestDataAddress + 16, 0x00000000], [guestDataAddress + 20, 0x00000000],
     ],
     expectedR3: 0x40080000n,
+    expectedMemory: [[guestDataAddress + 16, 0x40080000], [guestDataAddress + 20, 0x00000000]],
+  },
+  {
+    name: 'fpu-lfd-fsub-stfd-three',
+    ppc: fsubMemoryProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [
+      [guestDataAddress + 0, 0x40140000], [guestDataAddress + 4, 0x00000000],
+      [guestDataAddress + 8, 0x40000000], [guestDataAddress + 12, 0x00000000],
+      [guestDataAddress + 16, 0], [guestDataAddress + 20, 0],
+    ],
+    expectedR3: 0x40080000n,
+    expectedMemory: [[guestDataAddress + 16, 0x40080000], [guestDataAddress + 20, 0x00000000]],
+  },
+  {
+    name: 'fpu-lfd-fmul-stfd-three',
+    ppc: fmulMemoryProgram,
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [
+      [guestDataAddress + 0, 0x3FF80000], [guestDataAddress + 4, 0x00000000],
+      [guestDataAddress + 8, 0x40000000], [guestDataAddress + 12, 0x00000000],
+      [guestDataAddress + 16, 0], [guestDataAddress + 20, 0],
+    ],
+    expectedR3: 0x40080000n,
+    expectedMemory: [[guestDataAddress + 16, 0x40080000], [guestDataAddress + 20, 0x00000000]],
+  },
+  {
+    name: 'vmx-lvx-vaddubm-stvx-bytes',
+    ppc: vmxAddBytesProgram,
+    initialGprs: [
+      [4, BigInt(guestDataAddress + 0x40)],
+      [5, BigInt(guestDataAddress + 0x50)],
+      [7, BigInt(guestDataAddress + 0x60)],
+    ],
+    memorySeeds: [
+      [guestDataAddress + 0x40, 0x01010101], [guestDataAddress + 0x44, 0x01010101],
+      [guestDataAddress + 0x48, 0x01010101], [guestDataAddress + 0x4C, 0x01010101],
+      [guestDataAddress + 0x50, 0x02020202], [guestDataAddress + 0x54, 0x02020202],
+      [guestDataAddress + 0x58, 0x02020202], [guestDataAddress + 0x5C, 0x02020202],
+      [guestDataAddress + 0x60, 0], [guestDataAddress + 0x64, 0],
+      [guestDataAddress + 0x68, 0], [guestDataAddress + 0x6C, 0],
+    ],
+    expectedR3: 0x03030303n,
     expectedMemory: [
-      [guestDataAddress + 16, 0x40080000],
-      [guestDataAddress + 20, 0x00000000],
+      [guestDataAddress + 0x60, 0x03030303], [guestDataAddress + 0x64, 0x03030303],
+      [guestDataAddress + 0x68, 0x03030303], [guestDataAddress + 0x6C, 0x03030303],
     ],
   },
 ];
@@ -277,4 +347,5 @@ console.log(`PASS: ${tests.length} real PPC correctness programs translated and 
 console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');
 console.log('PASS: LR/CTR/CR state and a real CTR-controlled bdnz loop are verified through Xenia PPCContext semantics.');
 console.log('PASS: direct and two-level nested bl/callee/blr guest call chains use independently Xenia-scanned and translated callees.');
-console.log('PASS: FPU correctness includes real lfd/fadd/stfd guest-memory flow with raw IEEE-754 result verification.');
+console.log('PASS: FPU correctness includes real lfd/fadd/fsub/fmul/stfd guest-memory flow with raw IEEE-754 result verification.');
+console.log('PASS: VMX correctness includes real lvx/vaddubm/stvx byte-lane vector execution with 128-bit guest-memory readback.');

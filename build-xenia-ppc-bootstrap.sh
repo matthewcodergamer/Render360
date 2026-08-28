@@ -23,7 +23,6 @@ COMMON=(
   -std=c++20
   -O0
   -g0
-  -fno-rtti
   -I"$OVERLAY"
   -I"$ROOT/src/xenia_web_shims"
   -I"$XENIA/src"
@@ -74,9 +73,9 @@ classify_failure() {
     echo HOST_ARCH_DEPENDENCY
   elif grep -Eqi 'windows\.h|win32|CreateFile|VirtualAlloc|pthread|unistd|mach/|sys/mman|mmap' "$log"; then
     echo HOST_OS_OR_MEMORY_DEPENDENCY
-  elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore' "$log"; then
+  elif grep -Eqi 'mutex|thread|condition_variable|atomic_wait|semaphore|threading\.h|chrono\.h' "$log"; then
     echo THREADING_DEPENDENCY
-  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party|not found|file not found|no such file' "$log"; then
+  elif grep -Eqi 'fmt/|utf8|capstone|cpptoml|cxxopts|third_party/date|third_party|not found|file not found|no such file' "$log"; then
     echo PORTABLE_OR_THIRD_PARTY_DEPENDENCY
   else
     echo CXX_OR_PORTABILITY_DEPENDENCY

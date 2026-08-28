@@ -36,6 +36,7 @@ console.log(`wasm_exports=${exportedNames.join(',')}`);
 const pick = (name) => instance.exports[name] ?? instance.exports[`_${name}`];
 const required = [
   'r360_ppc_probe_reset', 'r360_ppc_probe_set_initial_gpr',
+  'r360_ppc_probe_write_guest_u32_be', 'r360_ppc_probe_read_guest_u32_be',
   'r360_ppc_probe_input_buffer', 'r360_ppc_probe_input_capacity',
   'r360_ppc_probe_load', 'r360_ppc_probe_translate', 'r360_ppc_probe_status',
   'r360_ppc_probe_guest_base', 'r360_ppc_probe_loaded_size',
@@ -58,6 +59,7 @@ if (!(instance.exports.memory instanceof WebAssembly.Memory)) {
 
 const inputPtr = pick('r360_ppc_probe_input_buffer')() >>> 0;
 const capacity = pick('r360_ppc_probe_input_capacity')() >>> 0;
+const guestDataAddress = 0x80000100;
 const wordBytes = (...words) => Uint8Array.from(words.flatMap((word) => [
   (word >>> 24) & 0xFF, (word >>> 16) & 0xFF, (word >>> 8) & 0xFF, word & 0xFF,
 ]));
@@ -72,11 +74,26 @@ const conditionalProgram = wordBytes(
 );
 
 const tests = [
-  { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], expectedR3: 1n },
-  { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], expectedR3: 12n },
-  { name: 'runtime-ori-r4-f0', ppc: wordBytes(0x608300F0, 0x4E800020), initialGprs: [[4, 0x0F00n]], expectedR3: 0x0FF0n },
-  { name: 'branch-equal-taken', ppc: conditionalProgram, initialGprs: [[4, 0n]], expectedR3: 2n },
-  { name: 'branch-equal-not-taken', ppc: conditionalProgram, initialGprs: [[4, 5n]], expectedR3: 1n },
+  { name: 'li-r3-1', ppc: wordBytes(0x38600001, 0x4E800020), initialGprs: [], memorySeeds: [], expectedR3: 1n },
+  { name: 'runtime-addi-r4-plus-5', ppc: wordBytes(0x38640005, 0x4E800020), initialGprs: [[4, 7n]], memorySeeds: [], expectedR3: 12n },
+  { name: 'runtime-ori-r4-f0', ppc: wordBytes(0x608300F0, 0x4E800020), initialGprs: [[4, 0x0F00n]], memorySeeds: [], expectedR3: 0x0FF0n },
+  { name: 'branch-equal-taken', ppc: conditionalProgram, initialGprs: [[4, 0n]], memorySeeds: [], expectedR3: 2n },
+  { name: 'branch-equal-not-taken', ppc: conditionalProgram, initialGprs: [[4, 5n]], memorySeeds: [], expectedR3: 1n },
+  {
+    name: 'lwz-from-xenia-memory',
+    ppc: wordBytes(0x80640000, 0x4E800020), // lwz r3,0(r4); blr
+    initialGprs: [[4, BigInt(guestDataAddress)]],
+    memorySeeds: [[guestDataAddress, 0x89ABCDEF]],
+    expectedR3: 0x89ABCDEFn,
+  },
+  {
+    name: 'stw-lwz-xenia-memory-roundtrip',
+    ppc: wordBytes(0x90A40000, 0x80640000, 0x4E800020), // stw r5,0(r4); lwz r3,0(r4); blr
+    initialGprs: [[4, BigInt(guestDataAddress)], [5, 0x12345678n]],
+    memorySeeds: [[guestDataAddress, 0]],
+    expectedR3: 0x12345678n,
+    expectedMemory: [[guestDataAddress, 0x12345678]],
+  },
 ];
 
 function fail(message, code) {
@@ -91,11 +108,15 @@ for (const test of tests) {
     const accepted = pick('r360_ppc_probe_set_initial_gpr')(index, value) >>> 0;
     if (accepted !== 1) fail(`Failed to seed GPR r${index} for ${test.name}`, 7);
   }
+  for (const [address, value] of test.memorySeeds) {
+    const accepted = pick('r360_ppc_probe_write_guest_u32_be')(address, value) >>> 0;
+    if (accepted !== 1) fail(`Failed to seed guest memory 0x${address.toString(16)} for ${test.name}`, 8);
+  }
 
   new Uint8Array(instance.exports.memory.buffer, inputPtr, test.ppc.length).set(test.ppc);
   const loaded = pick('r360_ppc_probe_load')(inputPtr, test.ppc.length) >>> 0;
   if (loaded !== test.ppc.length) {
-    fail(`Probe load failed for ${test.name}: loaded=${loaded} status=0x${(pick('r360_ppc_probe_status')() >>> 0).toString(16)}`, 8);
+    fail(`Probe load failed for ${test.name}: loaded=${loaded} status=0x${(pick('r360_ppc_probe_status')() >>> 0).toString(16)}`, 9);
   }
 
   const translatedCount = pick('r360_ppc_probe_translate')() >>> 0;
@@ -125,12 +146,20 @@ for (const test of tests) {
 
   if (status !== 3 || loadedSize !== test.ppc.length || assembled === 0 || blocks === 0 ||
       hir === 0 || translatedCount === 0 || lastGuest !== guestBase) {
-    fail(`FAIL ${test.name}: real PPC bytes did not complete Xenia PPC -> finalized HIR.`, 9);
+    fail(`FAIL ${test.name}: real PPC bytes did not complete Xenia PPC -> finalized HIR.`, 10);
   }
   if (correctnessStatus !== 3 || correctnessInstructions === 0 || correctnessR3 !== test.expectedR3) {
-    fail(`FAIL ${test.name}: finalized Xenia HIR produced r3=${correctnessR3}, expected ${test.expectedR3}.`, 10);
+    fail(`FAIL ${test.name}: finalized Xenia HIR produced r3=${correctnessR3}, expected ${test.expectedR3}.`, 11);
+  }
+  for (const [address, expected] of test.expectedMemory ?? []) {
+    const actual = pick('r360_ppc_probe_read_guest_u32_be')(address) >>> 0;
+    console.log(`guest_memory[0x${address.toString(16)}]=0x${actual.toString(16).padStart(8, '0')}`);
+    if (actual !== (expected >>> 0)) {
+      fail(`FAIL ${test.name}: guest memory at 0x${address.toString(16)} = 0x${actual.toString(16)}, expected 0x${(expected >>> 0).toString(16)}.`, 12);
+    }
   }
   console.log(`PASS: ${test.name} -> r3=${correctnessR3}`);
 }
 
 console.log(`PASS: ${tests.length} real PPC correctness programs translated and executed through finalized Xenia HIR.`);
+console.log('PASS: guest lwz/stw correctness uses the same bounded Xenia Memory object as the Processor.');

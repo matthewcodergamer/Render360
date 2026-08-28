@@ -12,7 +12,7 @@ Hot WasmBackend and Sparse Xbox Memory remain regression-locked foundations; V36
 
 ## V36 strict mapper closure
 
-`src/xenia_web_bootstrap/xex_guest_mapper.{h,cpp}` is now a verified closed component layer on top of `SparseGuestMemory`.
+`src/xenia_web_bootstrap/xex_guest_mapper.{h,cpp}` is a verified closed component layer on top of `SparseGuestMemory`.
 
 The authoritative mapper gate is **Xenia WASM32 Bootstrap run 261** (Actions run ID `33212297082`) on implementation commit:
 
@@ -20,62 +20,57 @@ The authoritative mapper gate is **Xenia WASM32 Bootstrap run 261** (Actions run
 
 Conclusion: **SUCCESS**.
 
-Contract:
+The mapper proves RX/R/RW section mapping, bounded loading, final permission sealing, overlap and wraparound rejection, executable-entry validation, and post-finalize fail-closed behavior. It closes the mapper component only; it does not claim genuine title execution.
+
+## V36 strict STFS extraction closure
+
+The complete pull-driven `default.xex` STFS extraction path is now verified by **Xenia WASM32 Bootstrap run 265** (Actions run ID `33218179582`) on implementation commit:
+
+`0ba0587bc335ad8391f43cdc8c750da36d149005`
+
+Conclusion: **SUCCESS**.
+
+The run rebuilt `render360_xenia_core.wasm`, passed the strengthened STFS/XEX package critic, then passed the complete Xenia PPC/HIR bootstrap, locked foundation matrix, SparseGuestMemory gate, and V36 XEX mapper gate.
+
+The extractor contract now includes:
 
 ```text
-reset
-map_section(address, virtual_size, final RX/R/RW protection)
-load(address, bytes) in bounded chunks
-set_entry(real guest PC)
-finalize
-status / entry_address / section_count / mapped_bytes
+root default.xex discovery                    PASS
+fragmented block-chain extraction             PASS
+byte-for-byte complete reconstruction         PASS
+extracted bytes == declared file length       PASS
+expected block count == consumed blocks       PASS
+declared valid/allocated block validation     PASS
+exact 24-bit repeated/cyclic block detection  FAIL CLOSED
+early/truncated chain                         FAIL CLOSED
+out-of-range package request                  FAIL CLOSED
+STFS_DEFAULT_XEX_EXTRACT                      PASS
+STFS_CHAIN_CYCLE_FAIL_CLOSED                  PASS
+STFS_DECLARED_BLOCK_TRUNCATION_FAIL_CLOSED    PASS
 ```
 
-Sections are writable only while loading. `finalize` validates that the entry PC lies inside an executable section and then seals each section to its requested final permissions. Overlap, 32-bit wraparound, invalid entry, post-finalize mutation, or underlying sparse-memory failure fails closed.
+Cycle detection uses a compact bitset over the STFS 24-bit block-number space. The source package is still consumed through bounded pull requests, so the browser does not need to duplicate the entire package inside WebAssembly memory.
 
-The bounded WASM staging buffer is deliberate: real section payloads should stream through it rather than requiring another complete in-memory copy of the title image.
+## Current boundary
 
-## Verified V36 critic
+A complete synthetic `default.xex` file is now proven through the real STFS block-chain machinery. What is **not** complete yet is full XEX2 image preparation suitable for genuine title execution.
 
-The green run gates:
-
-```text
-RX code mapping                     PASS
-R rodata mapping                    PASS
-RW data mapping                     PASS
-section byte loading                PASS
-RX write rejection                  PASS
-R write rejection                   PASS
-RW write/read                        PASS
-overlapping section rejection       PASS
-32-bit wraparound rejection         PASS
-entry outside executable mapping    FAIL CLOSED
-entry inside executable mapping     PASS
-post-finalize mutation              FAIL CLOSED
-XEX_GUEST_MAPPING                   PASS
-XEX_ENTRY_VALIDATION                PASS
-```
-
-The mapper contract is therefore **100% for its defined V36 scope**.
-
-## Boundary: what is not complete yet
-
-The successful mapper critic does **not** mean a genuine title entry has executed. The legacy native STFS path can locate root `default.xex` and inspect initial package data, but the project still needs a proven complete `default.xex` file extraction path and full XEX2 image decode before real sections can feed the mapper.
-
-The active real-title sequence is:
+The active real-title sequence is now:
 
 ```text
 STFS root default.xex
         ↓
-walk complete file block chain
+complete file extraction                    ✓
         ↓
-produce exact complete default.xex bytes
+XEX2 header/security/file-format decode     ← ACTIVE
         ↓
-XEX2 decode / decompression / metadata
+supported decrypt/decompress path
+        ↓
+real image base / entry / page descriptors
         ↓
 real section addresses + permissions
         ↓
-V36 XEX guest mapper
+V36 XEX guest mapper                        ✓ component
         ↓
 real RX / R / RW mappings
         ↓
@@ -90,43 +85,47 @@ first genuine title instruction
 first genuine missing kernel/runtime service
 ```
 
-## Next CI gate: complete STFS `default.xex` extraction
+## Next CI gate: XEX2 image decode
 
-The next critic should prove the file rather than assume it:
-
-```text
-root default.xex located             PASS
-reported file size validated         PASS
-first data block validated           PASS
-complete block chain walked          PASS
-all file blocks read exactly once    PASS
-short/truncated chain                FAIL CLOSED
-out-of-range block                   FAIL CLOSED
-cycle/repeated block                 FAIL CLOSED
-extracted byte count == file size    PASS
-STFS_DEFAULT_XEX_EXTRACT             PASS
-```
-
-The extractor should expose streaming/random-access reads suitable for browser `Blob`/`File` slices and future OPFS-backed sources. Do not require the full package plus another full package-sized buffer in memory.
-
-## Following gate: XEX2 image decode
-
-Once complete `default.xex` bytes are proven, decode real XEX2 metadata using Xenia structures/semantics wherever possible:
+The next critic must consume the exact reconstructed XEX bytes and prove image metadata rather than relying on synthetic mapper constants:
 
 ```text
 XEX2 header / magic                    PASS
+header table bounds                    PASS
+security-info bounds                   PASS
 image base                             VALID
 entry point                            VALID
-section/page descriptors               VALID
+page/section descriptors               VALID
 loader/security metadata               VALID
+file-format metadata                   VALID
 supported decode/decompression         PASS
-unsupported format                     FAIL CLOSED
+unsupported encryption/compression     FAIL CLOSED
 section ranges non-overlapping         PASS
 32-bit range/wrap validation           PASS
 XEX_IMAGE_DECODE                       PASS
 ```
 
-Then feed those decoded values into the already-closed mapper. The integration critic must consume XEX-derived metadata rather than hard-coded synthetic mappings.
+Prefer Xenia's existing XEX/XEX2 structures and semantics wherever practical. After decode is green, feed those decoded values directly into the already-closed mapper and prove the integration without hard-coded section addresses.
+
+## Following gate: real entry execution
+
+After decoded XEX sections are mapped and the genuine entry PC is validated:
+
+```text
+construct PPCContext
+        ↓
+set genuine title entry
+        ↓
+Xenia PPCScanner / frontend
+        ↓
+finalized HIR
+        ↓
+Hot WasmBackend dispatch
+        ↓
+execute until first genuine unresolved dependency
+```
+
+That first failure chooses the next subsystem: xboxkrnl, XAM, TLS, threading, memory services, filesystem, or GPU initialization.
 
 ## Promotion rule
 

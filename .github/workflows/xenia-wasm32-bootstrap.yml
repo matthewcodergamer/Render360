@@ -10,6 +10,7 @@ on:
       - 'xenia_translation_foundation_check.py'
       - 'test-package-xex-foundation.mjs'
       - 'test-xex-image-decode.mjs'
+      - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
@@ -69,6 +70,9 @@ jobs:
 
       - name: Verify strict XEX2 image metadata decode
         run: node ./test-xex-image-decode.mjs
+
+      - name: Verify streaming unencrypted/uncompressed XEX preparation
+        run: node ./test-xex-image-prepare-none.mjs
 
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh

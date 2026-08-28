@@ -2,9 +2,9 @@
 
 The WasmBackend is **not yet foundation-complete**. It consumes the exact compiler-finalized HIR produced by upstream Xenia and lowers supported slices into generated WebAssembly. The correctness executor remains the independent architectural oracle while unsupported HIR fails closed.
 
-## Authoritative current gate — run 196
+## Authoritative current gate — run 206
 
-GitHub Actions run **196** (`33157075912`) completed successfully at implementation commit `d084d034cc4cb88ed9ae9b0f6c8994e4ddf359c5`.
+GitHub Actions run **206** (`33157972327`) completed successfully at implementation commit `6728006d854ee3e2958861d38ac8bb57beb73af6`.
 
 ```text
 PACKAGE_XEX_FOUNDATION                    PASS
@@ -13,29 +13,28 @@ SCALAR_PPC_CORRECTNESS_FOUNDATION         PASS
 GUEST_CONTROL_FOUNDATION                  PASS
 FPU_FOUNDATION                            PASS
 VMX_FOUNDATION                            PASS (12 / 12)
-wasm32 compile matrix                     66 / 66 PASS
+wasm32 compile matrix                     67 / 67 PASS
 strict full-export link                   LINKED
-rooted exports                            35
+rooted exports                            40
 real PPC/FPU/VMX correctness suite        24 / 24 PASS
 WASM_BACKEND_SCALAR_DATAFLOW              PASS
 WASM_BACKEND_SCALAR_TYPES_COMPARE_SHIFT   PASS
 WASM_BACKEND_CFG_BRANCH                   PASS
 WASM_BACKEND_CFG_LOOP                     PASS
-WASM_BACKEND_STAGE                        CFG_BRANCH_LOOP_PASS
+WASM_BACKEND_MEMORY_ENDIAN                PASS
 ```
 
-## Green stage 1 — scalar generated WASM
+## Green workstream 1 — scalar generated WASM
 
-Run 183 first proved genuine finalized-Xenia-HIR -> generated-WebAssembly execution with real PPC `addi r3,r4,5 ; blr`. The generated child module imports the parent WebAssembly.Memory, reads/writes the real Xenia `PPCContext`, and was reused with two different runtime inputs:
+Run 183 first proved genuine finalized-Xenia-HIR -> generated-WebAssembly execution with real PPC `addi r3,r4,5 ; blr`. The generated child module imports the parent `WebAssembly.Memory`, reads/writes the real Xenia `PPCContext`, and was reused with two different runtime inputs:
 
 ```text
 r4=7    -> generated r3=12
 r4=100  -> generated r3=105
+WASM_BACKEND_SCALAR_DATAFLOW=PASS
 ```
 
-## Green stage 2 — scalar type / compare / shift parity
-
-Run 187 added a deliberately strict real-PPC `cmpwi r4,0 ; mfcr r3 ; blr` equivalence gate. It exercises finalized HIR truncation, signed comparisons, boolean results, zero extension, shifts, OR chains and context stores.
+The scalar critic now also passes the deliberately strict real-PPC `cmpwi r4,0 ; mfcr r3 ; blr` chain, including truncation, signed comparisons, boolean results, zero/sign extension, shifts, OR chains and context stores:
 
 ```text
 negative input  -> CR0 LT -> 0x80000000
@@ -44,20 +43,11 @@ positive input  -> CR0 GT -> 0x40000000
 WASM_BACKEND_SCALAR_TYPES_COMPARE_SHIFT=PASS
 ```
 
-## Green stage 3 — generated-WASM CFG branch and loop parity
+## Green workstream 2 — generated-WASM CFG branch and loop parity
 
-The independent CFG workstream deliberately failed before it was promoted. Run 195 exposed a semantic bug where the not-taken side of a finalized-HIR conditional branch incorrectly jumped to the taken label. The cause was assuming every Xenia `BRANCH_TRUE` terminated its C++ HIR `Block`.
+The CFG workstream deliberately failed before promotion when an earlier run exposed wrong not-taken semantics. The hardened backend follows Xenia's instruction-level branch contract rather than assuming every conditional branch terminates its C++ HIR block.
 
-Xenia may keep the conditional branch and the not-taken instruction stream in the same finalized HIR block. Commit `d084d034cc4cb88ed9ae9b0f6c8994e4ddf359c5` fixed the generated CFG rule:
-
-```text
-condition true   -> dispatch to Xenia label target
-condition false  -> continue with the next finalized HIR instruction
-unconditional b  -> dispatch to its label target
-blr boundary     -> terminate generated function
-```
-
-Run 196 then proved both directions and a backward CTR loop:
+Run 206 re-verifies both branch directions and a backward CTR loop, including reuse of the same generated modules with changed live input:
 
 ```text
 cfg_branch_taken_r3=2
@@ -65,13 +55,40 @@ cfg_branch_not_taken_r3=1
 cfg_ctr_loop_r3=3
 cfg_conditional_reuse_r3=1
 cfg_loop_reuse_r3=5
-
 WASM_BACKEND_CFG_BRANCH=PASS
 WASM_BACKEND_CFG_LOOP=PASS
-WASM_BACKEND_STAGE=CFG_BRANCH_LOOP_PASS
 ```
 
-Dedicated generated modules were 224 bytes for the conditional program and 213 bytes for the CTR loop, with 14 finalized-HIR operations lowered in each gate. A 100,000-dispatch trap budget prevents malformed generated control flow from spinning forever.
+The generated conditional module is 224 bytes and the CTR-loop module is 213 bytes, with 14 finalized-HIR operations lowered in each gate. A bounded dispatcher prevents malformed generated control flow from spinning forever.
+
+## Green workstream 3 — generated-WASM guest memory / endian parity
+
+Run 206 adds an independent memory critic rather than hiding memory behavior inside the scalar backend. It lowers finalized Xenia HIR for scalar guest-memory operations and executes against the same wasm32/Xenia memory environment.
+
+Real `lwz` path:
+
+```text
+module_bytes=160
+lowered=6
+first read   -> r3=0x89ABCDEF
+module reuse -> r3=0x10203040
+```
+
+Real `stw -> lwz` round-trip:
+
+```text
+module_bytes=241
+lowered=10
+first round-trip   -> r3=0x12345678
+module reuse       -> r3=0xA1B2C3D4
+```
+
+The HIR path includes `LOAD_OFFSET`, `STORE_OFFSET`, `TRUNCATE`, `ZERO_EXTEND` and `BYTE_SWAP`, so the test locks the Xbox big-endian scalar-memory behavior rather than comparing only host-native bytes.
+
+```text
+WASM_BACKEND_MEMORY_ENDIAN=PASS
+WASM_BACKEND_STAGE=MEMORY_ENDIAN_PASS
+```
 
 ## Current generated-WASM lowering surface
 
@@ -87,37 +104,40 @@ conditional taken + not-taken semantics             ✓
 unconditional branch / merge                        ✓
 backward CTR-driven loops                           ✓
 CALL_POSSIBLE_RETURN boundary                       ✓
-live-context module reuse                           ✓
+live-context generated-module reuse                 ✓
 dispatch safety budget                              ✓
+scalar guest-memory loads/stores                    ✓
+Xbox scalar byte-swap/endian path                   ✓
+live-memory generated-module reuse                  ✓
 ```
 
 ## What remains before `WASM_BACKEND_FOUNDATION=PASS`
 
-1. guest scalar memory (`LOAD`, `LOAD_OFFSET`, `STORE`, `STORE_OFFSET`) and Xbox byte-swap/endian parity;
-2. direct, nested and CTR-indirect guest calls/returns in generated WASM;
-3. completed FPU-baseline lowering;
-4. completed VMX/VMX128-baseline lowering;
-5. broad generated-WASM vs Xenia correctness-oracle equivalence matrix;
-6. compiled guest-function/block cache keyed by guest address and code version;
-7. executable-page versioning/invalidation;
-8. dedicated final `WASM_BACKEND_FOUNDATION=PASS` gate.
+1. direct, nested and CTR-indirect guest calls/returns in generated WASM;
+2. completed FPU-baseline lowering;
+3. completed VMX/VMX128-baseline lowering;
+4. broad generated-WASM vs Xenia correctness-oracle equivalence matrix;
+5. compiled guest-function/block cache keyed by guest address and code version;
+6. executable-page versioning/invalidation;
+7. dedicated final `WASM_BACKEND_FOUNDATION=PASS` gate.
 
 ## Current scoped progress
 
 ```text
 Hot WasmBackend
-██████░░░░░░░░░░░░░░  ~28%  ACTIVE
+████████░░░░░░░░░░░░  ~38%  ACTIVE
 
 finalized HIR -> generated WASM                     ✓
 scalar integer dataflow                             ✓
 scalar types / compare / shifts                     ✓
 conditional + unconditional CFG                     ✓
 backward loops                                      ✓
-live module reuse                                   ✓
-guest memory + endian                               ○  NEXT
-generated guest calls                               ○
+guest memory + endian                               ✓
+live context/memory module reuse                    ✓
+generated guest calls                               ○  NEXT
 FPU                                                 ○
 VMX / VMX128                                        ○
+broad equivalence matrix                            ○
 compiled-function cache                             ○
 executable-page invalidation                        ○
 foundation gate                                     ○

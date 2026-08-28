@@ -24,7 +24,6 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_hir_opcodes.cc.o"
   "$OUT/src_xenia_cpu_hir_block.cc.o"
   "$OUT/src_xenia_cpu_hir_instr.cc.o"
-  "$OUT/src_xenia_cpu_hir_label.cc.o"
   "$OUT/src_xenia_cpu_hir_value.cc.o"
   "$OUT/src_xenia_cpu_hir_hir_builder.cc.o"
   "$OUT/src_xenia_cpu_compiler_compiler.cc.o"

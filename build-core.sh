@@ -4,6 +4,8 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/render360_xenia_core_v32.cpp"
 DECODER="$ROOT/src/xenia_web_bootstrap/xex_image_decoder.cpp"
 DECODER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_decoder_exports.cpp"
+PREPARER="$ROOT/src/xenia_web_bootstrap/xex_image_preparer.cpp"
+PREPARER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_preparer_exports.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
 
@@ -63,6 +65,11 @@ EXPORTS=(
   r360_xex_decode_mapped_span r360_xex_decode_page_type
   r360_xex_decode_page_count r360_xex_decode_page_address
   r360_xex_decode_page_bytes
+  r360_xex_prepare_reset r360_xex_prepare_none_begin r360_xex_prepare_none_accept
+  r360_xex_prepare_status r360_xex_prepare_source_offset
+  r360_xex_prepare_source_bytes r360_xex_prepare_output_bytes
+  r360_xex_prepare_bytes_done r360_xex_prepare_encryption_type
+  r360_xex_prepare_compression_type
   r360_feature_bits
 )
 
@@ -76,5 +83,6 @@ for symbol in "${EXPORTS[@]}"; do
   ARGS+=("-Wl,--export=$symbol")
 done
 
-"$CXX" "${ARGS[@]}" -o "$OUT" "$SRC" "$DECODER" "$DECODER_EXPORTS"
-printf 'Built %s from V32 package core + V36 XEX image decoder\n' "$OUT"
+"$CXX" "${ARGS[@]}" -o "$OUT" \
+  "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS"
+printf 'Built %s from V32 package core + V36 XEX decode/preparation layers\n' "$OUT"

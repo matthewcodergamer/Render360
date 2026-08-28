@@ -11,8 +11,9 @@
 - **Run 265** (Actions ID `33218179582`) — full pull-driven STFS `default.xex` extraction, commit `0ba0587bc335ad8391f43cdc8c750da36d149005`.
 - **Run 276** (Actions ID `33219831630`) — XEX2 metadata decode plus decoded-metadata → `XexGuestMapper` integration, commit `c9fe8dec88e47b2ded17a0ede461bcf3d44acbe7`.
 - **Run 282** (Actions ID `33220362844`) — streaming unencrypted/uncompressed XEX image preparation, commit `271e169bfe528c3b1b4f2c410e8803481594b6b0`.
+- **Run 288** (Actions ID `33221272140`) — streaming BASIC XEX image preparation, commit `e4e8ade63a56bd165a7490a36c679ff7a11303a3`.
 
-Run 282 completed successfully after rebuilding the package/XEX WASM core, passing STFS extraction, XEX2 metadata decode and the new preparation critic, checking current Xenia contracts, compiling/linking the Xenia PPC/HIR WASM bootstrap, and re-running the complete locked WasmBackend/SparseGuestMemory/XEX-mapper matrix.
+Run 288 completed successfully after rebuilding the package/XEX WASM core, passing STFS extraction, XEX2 metadata decode, NONE/NONE preparation and the BASIC preparation critic, checking current Xenia contracts, compiling/linking the Xenia PPC/HIR WASM bootstrap, and re-running the complete locked WasmBackend/SparseGuestMemory/XEX-mapper matrix.
 
 ## Closed foundations and bring-up layers
 
@@ -43,55 +44,19 @@ XEX REAL MAPPER INTEGRATION
 ████████████████████  100% ✓
 XEX PREPARE NONE/NONE SUB-CONTRACT
 ████████████████████  100% ✓
+XEX PREPARE BASIC SUB-CONTRACT
+████████████████████  100% ✓
 ```
 
 These percentages close defined CI contracts, not universal Xbox 360 compatibility.
 
-## XEX2 metadata and mapping — Run 276
+## XEX image preparation — Runs 282 and 288
 
-The maintained decoder under `src/xenia_web_bootstrap/xex_image_decoder.{h,cpp}` has a dedicated `r360_xex_decode_*` ABI. It validates top-level and optional XEX2 headers, security/file-format metadata, image base/load address/size, entry range, title/media metadata, Xenia page descriptors, 64 KiB/4 KiB image-page layout, and 32-bit arithmetic/range safety.
+`src/xenia_web_bootstrap/xex_image_preparer.{h,cpp}` now has two verified browser-safe preparation routes.
 
-```text
-XEX_IMAGE_DECODE=PASS
-DELTA compression before patch support        FAIL CLOSED
-invalid page descriptor                       FAIL CLOSED
-entry outside image                           FAIL CLOSED
-image wrap / truncated metadata                FAIL CLOSED
-```
+### NONE encryption / NONE compression — Run 282
 
-The mapper integration critic consumes decoder-derived section type/address/size and entry data, seals RX/R/RW permissions, and repeats at a second relocated image base so hard-coded `0x82...` mapping cannot satisfy the gate.
-
-```text
-XEX_DECODED_SECTION_MAPPING=PASS
-XEX_DECODED_PERMISSIONS=PASS
-XEX_DECODED_ENTRY_VALIDATION=PASS
-XEX_METADATA_RELOCATION_REUSE=PASS
-XEX_REAL_MAPPER_INTEGRATION=PASS
-```
-
-## First XEX image-preparation slice — Run 282
-
-The new `src/xenia_web_bootstrap/xex_image_preparer.{h,cpp}` implements the first executable-payload path using Xenia's uncompressed semantics.
-
-Xenia's uncompressed reader treats the source payload as the bytes beginning at XEX `header_size`, with payload length `xex_length - header_size`. Render360 exposes that as a bounded streaming identity path instead of requiring another whole-XEX copy in WASM memory.
-
-```text
-bounded XEX header
-    ↓
-strict XEX2 decode
-    ↓
-require encryption = NONE
-require compression = NONE
-    ↓
-source_offset = header_size
-source_bytes  = xex_length - header_size
-    ↓
-consume payload in bounded chunks
-    ↓
-identity prepared bytes + exact byte accounting
-```
-
-Run 282 proves:
+Xenia's uncompressed reader treats the source payload as the bytes beginning at XEX `header_size`, with payload length `xex_length - header_size`. Render360 exposes that as a bounded streaming identity path rather than requiring another whole-XEX copy in WASM memory.
 
 ```text
 XEX_PREPARE_STREAMING_IDENTITY=PASS
@@ -103,18 +68,42 @@ XEX_PREPARE_CHUNK_OVERFLOW_FAIL_CLOSED=PASS
 XEX_IMAGE_PREPARE_NONE=PASS
 ```
 
-This is deliberately a **sub-contract**. The complete XEX image-preparation layer is not 100% yet because BASIC compression, NORMAL/LZX compression and NORMAL encryption/session-key handling remain.
+### BASIC compression / NONE encryption — Run 288
 
-## Active milestone — BASIC XEX preparation
+BASIC follows Xenia's file-format block table exactly: each big-endian record contributes `data_size` source bytes followed by a synthesized `zero_size` output range. Source data remains identity data for the unencrypted path. The implementation is streaming and emits explicit data/zero output events, so no second complete executable image is required in WASM memory.
+
+Run 288 proves:
+
+```text
+XEX_PREPARE_BASIC_TABLE_BOUNDS=PASS
+XEX_PREPARE_BASIC_SOURCE_ACCOUNTING=PASS
+XEX_PREPARE_BASIC_OUTPUT_ACCOUNTING=PASS
+XEX_PREPARE_BASIC_PAYLOAD_PRESERVED=PASS
+XEX_PREPARE_BASIC_ZERO_FILL=PASS
+XEX_PREPARE_BASIC_STREAMING=PASS
+XEX_PREPARE_BASIC_ENCRYPTION_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_ROUTING_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_FORMAT_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_TRUNCATION_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_OUTPUT_RANGE_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_ORDER_FAIL_CLOSED=PASS
+XEX_PREPARE_BASIC_CHUNK_OVERFLOW_FAIL_CLOSED=PASS
+XEX_IMAGE_PREPARE_BASIC=PASS
+```
+
+The complete XEX image-preparation layer is **not** 100% yet. NORMAL compression/LZX and NORMAL encryption/session-key handling remain. DELTA images continue to fail closed until patch support is genuine.
+
+## Active milestone — NORMAL/LZX XEX preparation
 
 ```text
 STFS default.xex extraction                  ✓
 XEX2 metadata decode                         ✓
 metadata-derived mapper integration          ✓
 NONE encryption / NONE compression prepare  ✓
-BASIC compression                            ← ACTIVE NEXT
-NORMAL compression / LZX                     pending
-NORMAL encryption / session key              pending
+BASIC compression / NONE encryption          ✓
+NORMAL block/hash/chunk framing              ← ACTIVE NEXT
+NORMAL LZX decompression                     pending
+NORMAL encryption / XEX session key          pending
 DELTA patch images                           fail closed / pending
         ↓
 full prepared executable image
@@ -132,7 +121,7 @@ Hot WasmBackend
 FIRST GENUINE TITLE INSTRUCTIONS
 ```
 
-BASIC will follow Xenia's `(data_size, zero_size)` block model exactly: preserve each data region, synthesize the specified zero range, validate all source/output arithmetic, and fail closed on truncation or format mismatch. NORMAL then follows Xenia-compatible LZX framing; NORMAL encryption follows the genuine XEX session-key/AES-CBC behavior. DELTA stays fail closed until patch support is real.
+The NORMAL implementation must follow Xenia's current format: validate the first block metadata from the file-format header, SHA-1-check every compressed block, walk each block by its declared `block_size`, parse the chained next-block size/hash header, collect the big-endian 16-bit compressed chunks until the zero terminator, then feed the exact deblocked stream to an Xenia-compatible LZX decoder using the declared window size. Encryption is a separate layer and remains fail closed until the real XEX session-key/AES-CBC path is implemented.
 
 ## Public board
 
@@ -149,9 +138,11 @@ XEX REAL MAPPER INTEGRATION
 ████████████████████  100% ✓
 XEX PREPARE NONE/NONE
 ████████████████████  100% ✓
+XEX PREPARE BASIC
+████████████████████  100% ✓
 
 FULL XEX IMAGE PREPARATION
-█████░░░░░░░░░░░░░░░  ← ACTIVE; BASIC NEXT
+████████░░░░░░░░░░░░  ← ACTIVE; NORMAL/LZX NEXT
 REAL XEX ENTRY EXECUTION
 ░░░░░░░░░░░░░░░░░░░░
 KERNEL / xboxkrnl / XAM
@@ -166,7 +157,7 @@ FIRST GENUINE FRAME
 ░░░░░░░░░░░░░░░░░░░░
 ```
 
-The partial full-preparation bar is only a work indicator; only the explicitly listed `NONE/NONE` sub-contract is closed.
+The partial full-preparation bar is a work indicator only. Only the explicitly listed NONE/NONE and BASIC preparation sub-contracts are closed.
 
 ## Next execution rule
 

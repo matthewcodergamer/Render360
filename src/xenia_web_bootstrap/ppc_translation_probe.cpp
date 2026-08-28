@@ -88,6 +88,15 @@ uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
   return 1;
 }
 
+uint32_t r360_ppc_probe_read_guest_u32_be(uint32_t address) {
+  using namespace render360::xenia_web;
+  if (!EnsureRuntime() || !IsProbeGuestRange(address, 4)) return 0;
+  const auto* guest = g_memory->TranslateVirtual<const uint8_t*>(address);
+  if (!guest) return 0;
+  return (uint32_t(guest[0]) << 24) | (uint32_t(guest[1]) << 16) |
+         (uint32_t(guest[2]) << 8) | uint32_t(guest[3]);
+}
+
 uint32_t r360_ppc_probe_input_buffer() {
   return static_cast<uint32_t>(
       reinterpret_cast<uintptr_t>(render360::xenia_web::g_input_buffer));

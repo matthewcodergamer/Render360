@@ -16,8 +16,14 @@ OBJECTS=(
   "$OUT/src_xenia_base_cvar.cc.o"
   "$OUT/src_xenia_base_utf8.cc.o"
   "$OUT/src_xenia_base_filesystem_posix.cc.o"
+  "$OUT/src_xenia_base_memory_posix.cc.o"
+  "$OUT/src_xenia_base_mapped_memory_posix.cc.o"
   "$OUT/src_xenia_base_mutex.cc.o"
   "$OUT/src_xenia_memory.cc.o"
+  "$OUT/src_xenia_cpu_mmio_handler.cc.o"
+  "$OUT/src_xenia_cpu_entry_table.cc.o"
+  "$OUT/src_xenia_cpu_module.cc.o"
+  "$OUT/src_xenia_cpu_stack_walker_posix.cc.o"
   "$OUT/src_xenia_cpu_processor.cc.o"
   "$OUT/src_xenia_cpu_backend_backend.cc.o"
   "$OUT/src_xenia_cpu_backend_assembler.cc.o"
@@ -75,7 +81,7 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 
 LINK_ARGS=(
   -O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1
-  -Wl,--no-entry -Wl,--export-memory
+  -Wl,--no-entry -Wl,--export-memory -Wl,--error-limit=0
   -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1
   "-sEXPORTED_FUNCTIONS=$EXPORT_LIST"
 )
@@ -86,7 +92,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
     echo "status=LINKED"
     echo "wasm=$WASM"
     echo "exports=${#EXPORTS[@]}"
-    echo "note=The live Xenia translation driver linked with the complete exported probe ABI, real scanner/compiler/pass pipeline, bounded wasm32 probe memory, browser logging and portable Xenia filesystem/mutex support. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
+    echo "note=The live Xenia translation driver linked with the complete exported probe ABI, real scanner/compiler/pass pipeline, bounded wasm32 probe memory, browser logging, and the currently required portable Xenia POSIX/runtime support. Runtime PPC-to-HIR still must pass the CI gate before PPC TRANSLATION READY."
   } | tee "$REPORT"
   exit 0
 fi
@@ -94,9 +100,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict translation probe exposed the next real dependency after Xenia filesystem utility closure."
+  echo "note=Strict full-export translation probe exposed the next live Xenia dependency closure; unresolved symbols are intentionally not stubbed."
   echo
-  echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 300 || true
+  echo "Unresolved-symbol diagnostics:"
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 500 || true
 } | tee "$REPORT"
 exit 0

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <memory>
 
+#include "hir_correctness_executor.h"
 #include "xenia/cpu/function_debug_info.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -23,8 +24,8 @@ ProbeGuestFunction::ProbeGuestFunction(xe::cpu::Module* module,
 ProbeGuestFunction::~ProbeGuestFunction() = default;
 
 bool ProbeGuestFunction::CallImpl(xe::cpu::ThreadState*, uint32_t) {
-  // Translation-only function. Returning false is intentional: Render360 must
-  // never report this probe backend as an execution backend.
+  // ProbeBackend still owns no native executable code. Phase 4 execution is
+  // performed explicitly from finalized Xenia HIR by HIRCorrectnessExecutor.
   return false;
 }
 
@@ -41,9 +42,6 @@ bool ProbeAssembler::Assemble(
     const uint32_t block_index = block_count++;
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       ++instruction_count;
-      // Phase 4 observability: report the finalized HIR that Xenia itself has
-      // already translated and optimized. The correctness executor will be
-      // implemented against this HIR stream; this is not a second PPC decoder.
       std::fprintf(stderr, "R360_HIR block=%u ordinal=%u opcode=%s(%u)\n",
                    block_index, instr->ordinal,
                    instr->opcode && instr->opcode->name ? instr->opcode->name
@@ -59,6 +57,23 @@ bool ProbeAssembler::Assemble(
   g_probe_telemetry.hir_instructions = instruction_count;
   g_probe_telemetry.last_guest_address = function ? function->address() : 0;
 
+  const auto correctness = ExecuteHIRCorrectnessProbe(builder);
+  g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
+  g_probe_telemetry.correctness_r3 = correctness.r3;
+  if (!correctness.supported) {
+    g_probe_telemetry.correctness_status = 1;
+  } else if (!correctness.reached_return_boundary) {
+    g_probe_telemetry.correctness_status = 2;
+  } else {
+    g_probe_telemetry.correctness_status = 3;
+  }
+  std::fprintf(stderr,
+               "R360_EXEC status=%u instructions=%u r3=%llu return_boundary=%u\n",
+               g_probe_telemetry.correctness_status,
+               g_probe_telemetry.correctness_instructions,
+               static_cast<unsigned long long>(g_probe_telemetry.correctness_r3),
+               correctness.reached_return_boundary ? 1u : 0u);
+
   if (function && debug_info) {
     function->set_debug_info(std::move(debug_info));
   }
@@ -73,12 +88,6 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
     return false;
   }
 
-  // The Xenia compiler's RegisterAllocationPass requires the backend to
-  // describe the host register sets it is translating for. Keep the probe
-  // target aligned with Xenia's mature x64 allocator shape (7 allocatable GPRs
-  // and 12 shared floating/vector registers) without importing the x64 emitter
-  // or claiming that these registers are executable wasm32 machine registers.
-  // They are only the allocation contract consumed while finalizing Xenia HIR.
   machine_info_.supports_extended_load_store = false;
 
   auto& gprs = machine_info_.register_sets[0];
@@ -97,9 +106,7 @@ bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   return true;
 }
 
-void ProbeBackend::CommitExecutableRange(uint32_t, uint32_t) {
-  // No native executable memory exists in this translation-only backend.
-}
+void ProbeBackend::CommitExecutableRange(uint32_t, uint32_t) {}
 
 std::unique_ptr<xe::cpu::backend::Assembler> ProbeBackend::CreateAssembler() {
   return std::make_unique<ProbeAssembler>(this);
@@ -112,7 +119,6 @@ std::unique_ptr<xe::cpu::GuestFunction> ProbeBackend::CreateGuestFunction(
 
 uint64_t ProbeBackend::CalculateNextHostInstruction(
     xe::cpu::ThreadDebugInfo*, uint64_t) {
-  // There is no host machine-code stream to step in this backend.
   return 0;
 }
 
@@ -130,5 +136,14 @@ uint32_t r360_ppc_probe_hir_instruction_count() {
 }
 uint32_t r360_ppc_probe_last_guest_address() {
   return render360::xenia_web::GetProbeTelemetry().last_guest_address;
+}
+uint32_t r360_ppc_probe_correctness_status() {
+  return render360::xenia_web::GetProbeTelemetry().correctness_status;
+}
+uint32_t r360_ppc_probe_correctness_instructions() {
+  return render360::xenia_web::GetProbeTelemetry().correctness_instructions;
+}
+uint64_t r360_ppc_probe_correctness_r3() {
+  return render360::xenia_web::GetProbeTelemetry().correctness_r3;
 }
 }

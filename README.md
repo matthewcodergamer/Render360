@@ -27,14 +27,14 @@ Xbox PPC / FPU / VMX128 bytes
        -> Render360 WasmBackend            active hot path
             -> generated WebAssembly
             -> browser WASM engine
-            -> shared Xenia PPCContext / browser memory
+            -> shared Xenia PPCContext + Xenia Memory backing
 ```
 
 No fake framebuffer, fake boot success, fake guest FPS, fake shader translation, hardcoded PPC decoder output, or second JavaScript/PPC interpreter is accepted as Xbox output.
 
-## Authoritative V35 gate — run 196
+## Authoritative V35 gate — run 206
 
-GitHub Actions **run 196** (`33157075912`) completed successfully at implementation commit `d084d034cc4cb88ed9ae9b0f6c8994e4ddf359c5`.
+GitHub Actions **run 206** (`33157972327`) completed successfully at implementation commit `6728006d854ee3e2958861d38ac8bb57beb73af6`.
 
 ```text
 V32 package/XEX core rebuild                 PASS
@@ -44,15 +44,16 @@ SCALAR_PPC_CORRECTNESS_FOUNDATION            PASS
 GUEST_CONTROL_FOUNDATION                     PASS
 FPU_FOUNDATION                               PASS
 VMX_FOUNDATION                               PASS (12 / 12)
-wasm32 compile matrix                        66 / 66 PASS
+wasm32 compile matrix                        67 / 67 PASS
 strict full-export link                      LINKED
-rooted exports                               35
+rooted exports                               40
 real PPC/FPU/VMX correctness suite           24 / 24 PASS
 WASM_BACKEND_SCALAR_DATAFLOW                 PASS
 WASM_BACKEND_SCALAR_TYPES_COMPARE_SHIFT      PASS
 WASM_BACKEND_CFG_BRANCH                      PASS
 WASM_BACKEND_CFG_LOOP                        PASS
-WASM_BACKEND_STAGE                           CFG_BRANCH_LOOP_PASS
+WASM_BACKEND_MEMORY_ENDIAN                   PASS
+WASM_BACKEND_STAGE                           MEMORY_ENDIAN_PASS
 ```
 
 Detailed foundation/status documents:
@@ -95,7 +96,7 @@ WASM_BACKEND_SCALAR_DATAFLOW=PASS
 
 ### Scalar type / comparison / shift parity
 
-Run 187 uses real `cmpwi r4,0 ; mfcr r3 ; blr` and compares generated-WASM state against the Xenia-HIR oracle:
+Real `cmpwi r4,0 ; mfcr r3 ; blr` is lowered through Xenia-finalized HIR and compared against the oracle:
 
 ```text
 negative -> CR0 LT -> 0x80000000
@@ -110,7 +111,7 @@ This covers truncation, signed comparisons, zero/sign extension, shifts, OR chai
 
 The CFG workstream was deliberately not promoted when run 195 found a wrong not-taken branch. The bug came from treating Xenia `BRANCH_TRUE` as if it always terminated the enclosing C++ HIR `Block`. In real finalized HIR, the not-taken instruction stream may follow that branch in the same block.
 
-Commit `d084d034cc4cb88ed9ae9b0f6c8994e4ddf359c5` preserves Xenia's instruction-level semantics. Run 196 proves:
+The canonical source now preserves Xenia's instruction-level semantics. Run 206 re-verifies:
 
 ```text
 cfg_branch_taken_r3=2
@@ -120,10 +121,39 @@ cfg_conditional_reuse_r3=1
 cfg_loop_reuse_r3=5
 WASM_BACKEND_CFG_BRANCH=PASS
 WASM_BACKEND_CFG_LOOP=PASS
-WASM_BACKEND_STAGE=CFG_BRANCH_LOOP_PASS
 ```
 
 Generated control flow uses a trap-bounded dispatcher, preserves conditional fallthrough, handles unconditional merge branches and executes backward CTR loops. Unsupported HIR still fails closed.
+
+### Generated guest-memory / endian parity
+
+Run 206 adds a separate generated-WASM memory workstream. The child module does **not** reinterpret Xbox virtual addresses as raw WebAssembly pointers. It translates the bounded probe guest address into the real host pointer backing the same Xenia `Memory` object used by the correctness oracle.
+
+Real PPC tests:
+
+```text
+lwz r3,0(r4) ; blr
+stw r5,0(r4) ; lwz r3,0(r4) ; blr
+```
+
+Measured runtime results:
+
+```text
+memory_lwz_module_bytes=160
+memory_lwz_lowered=6
+memory_lwz_r3=0x89abcdef
+memory_lwz_reuse_r3=0x10203040
+
+memory_stw_lwz_module_bytes=241
+memory_stw_lwz_lowered=10
+memory_stw_lwz_r3=0x12345678
+memory_stw_lwz_reuse_r3=0xa1b2c3d4
+
+WASM_BACKEND_MEMORY_ENDIAN=PASS
+WASM_BACKEND_STAGE=MEMORY_ENDIAN_PASS
+```
+
+The same generated modules are reused with changed live memory values, so hardcoded or stale results cannot pass. Register state and guest-memory bytes are compared against Xenia semantics. This is the **bounded V35 probe-memory execution stage**, not the later full sparse/page-backed Xbox guest-memory subsystem.
 
 ## Current WasmBackend surface
 
@@ -141,17 +171,21 @@ backward CTR loops                                 ✓
 likely-return boundary                              ✓
 live generated-module reuse                        ✓
 dispatch safety budget                             ✓
+bounded guest LOAD / LOAD_OFFSET                    ✓
+bounded guest STORE / STORE_OFFSET                  ✓
+Xbox scalar BYTE_SWAP / endian path                 ✓
+same Xenia Memory backing                           ✓
 
-guest RAM loads/stores + endian                     ○ NEXT
-generated direct/nested/CTR calls                   ○
+generated direct/nested/CTR calls                   ○ NEXT
 FPU lowering                                        ○
 VMX / VMX128 lowering                               ○
+broad generated-WASM equivalence matrix             △ partial
 compiled-function cache                             ○
 executable-page invalidation                        ○
 WASM_BACKEND_FOUNDATION=PASS                        ○
 ```
 
-## Current progress after run 196
+## Current progress after run 206
 
 ```text
 Package / XEX foundation
@@ -173,7 +207,7 @@ VMX / VMX128 foundation
 ████████████████████  100% ✓
 
 Hot WasmBackend
-██████░░░░░░░░░░░░░░  ~28%  ← ACTIVE
+████████░░░░░░░░░░░░  ~40%  ← ACTIVE
 
 Full Xbox guest-memory system
 ██░░░░░░░░░░░░░░░░░░  ~10%
@@ -194,32 +228,31 @@ WebGL2 compatibility fallback
 ░░░░░░░░░░░░░░░░░░░░  ~1%
 
 First genuine Xbox title boot
-█████░░░░░░░░░░░░░░░  ~25–26%
+█████░░░░░░░░░░░░░░░  ~26–27%
 
 Small XBLA / Braid-class playable
-████░░░░░░░░░░░░░░░░  ~18–19%
+████░░░░░░░░░░░░░░░░  ~19%
 
 Portal-class playable browser target
-██░░░░░░░░░░░░░░░░░░  ~10–11%
+██░░░░░░░░░░░░░░░░░░  ~11%
 
 OVERALL RENDER360
-██████░░░░░░░░░░░░░░  ~30–31%
+██████░░░░░░░░░░░░░░  ~31–32%
 ```
 
 Percentages are scoped engineering estimates, not literal source-code coverage.
 
 ## Next implementation order
 
-1. **WasmBackend guest-memory/endian critic** — generated `LOAD`, `LOAD_OFFSET`, `STORE`, `STORE_OFFSET`, `BYTE_SWAP`, scalar sizes and exact memory readback against Xenia.
-2. **WasmBackend guest-call critic** — direct, nested and CTR-indirect calls/returns through Xenia-discovered guest functions.
-3. **WasmBackend FPU critic** — lower the already-closed FPU foundation and demand architectural/memory equivalence.
-4. **WasmBackend VMX/VMX128 critic** — lower the closed vector baseline and compare 128-bit state/memory.
-5. **Broad equivalence matrix** — generated WASM vs correctness oracle across representative guest functions.
-6. **Compiled-function cache + executable invalidation** — guest address + code-version cache keys and executable-page invalidation.
-7. Only then emit `WASM_BACKEND_FOUNDATION=PASS` and mark the WasmBackend foundation 100%.
-8. Replace the bounded probe memory with the full sparse/page-backed Xbox guest-memory system.
-9. Map the extracted `default.xex`, initialize CPU/module state and execute its genuine entry point.
-10. Bring up `KernelState`, xboxkrnl/XAM, then Xenos -> WebGPU/WGSL/EDRAM with WebGL2 fallback and WebAudio.
+1. **WasmBackend guest-call critic** — generated direct, nested and CTR-indirect calls/returns through Xenia-discovered guest functions with shared live `PPCContext`.
+2. **WasmBackend FPU critic** — lower the already-closed FPU foundation and demand architectural/memory equivalence.
+3. **WasmBackend VMX/VMX128 critic** — lower the closed vector baseline and compare 128-bit state/memory.
+4. **Broad equivalence matrix** — generated WASM vs correctness oracle across representative guest functions.
+5. **Compiled-function cache + executable invalidation** — guest address + code-version cache keys and executable-page invalidation.
+6. Only then emit `WASM_BACKEND_FOUNDATION=PASS` and mark the WasmBackend foundation 100%.
+7. Replace the bounded probe memory with the full sparse/page-backed Xbox guest-memory system.
+8. Map the extracted `default.xex`, initialize CPU/module state and execute its genuine entry point.
+9. Bring up `KernelState`, xboxkrnl/XAM, then Xenos -> WebGPU/WGSL/EDRAM with WebGL2 fallback and WebAudio.
 
 ## Graphics architecture
 
@@ -242,6 +275,7 @@ node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.was
 node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 node ./test-wasm-backend.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+node ./test-wasm-backend-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 ```
 
 ## Status language

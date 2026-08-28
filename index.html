@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
-  <title>Render360 Xenia-Web · Core V32 · UI V33 · CPU V34</title>
+  <title>Render360 Xenia-Web · Core V32 · UI V33 · CPU V35</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="app.css?v=30">
   <link rel="stylesheet" href="v32.css?v=32">
@@ -21,7 +21,7 @@
   <div id="lookZone" class="look-zone hidden" aria-label="Drag to look around"><span>DRAG TO LOOK</span></div>
 
   <header class="topbar glass">
-    <div class="brand"><span class="orb"></span><div><strong>Render360</strong><span>Xenia-Web · Core V32 · UI V33 · CPU V34</span></div></div>
+    <div class="brand"><span class="orb"></span><div><strong>Render360</strong><span>Xenia-Web · Core V32 · UI V33 · CPU V35</span></div></div>
     <div class="top-actions">
       <button id="arenaButton" class="icon-button" type="button" aria-label="Play test arena">PLAY</button>
       <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
@@ -38,9 +38,9 @@
   <main id="stage" class="stage">
     <section id="emptyState" class="hero glass">
       <div class="hero-mark"><span></span></div>
-      <p class="eyebrow">CORE V32 · UI V33 · CPU V34 · WEBGPU HOST</p>
-      <h1>Render360 V34 foundations are online.</h1>
-      <p class="hero-copy">Stable Core V32 handles the live package/XEX path. The V34 CPU track now has five regression-complete foundations: package/XEX, PPC translation, scalar PPC correctness, guest control, and FPU. VMX/VMX128 is the active next CPU foundation before WasmBackend and full guest-memory bring-up.</p>
+      <p class="eyebrow">CORE V32 · UI V33 · CPU V35 · WEBGPU HOST</p>
+      <h1>Render360 V35 foundations are online.</h1>
+      <p class="hero-copy">Stable Core V32 handles the live package/XEX path. The V35 development track now has six regression-complete foundations: package/XEX, PPC translation, scalar PPC correctness, guest control, FPU, and VMX/VMX128. Hot WasmBackend is now the active CPU architecture target before full guest-memory and real default.xex entry bring-up.</p>
       <div class="status-grid six">
         <div class="status-card"><span>Build</span><b id="buildStatus">V32</b></div>
         <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
@@ -95,7 +95,7 @@
           <div class="ready"><span>1</span><b>STFS mount</b><em>READY</em></div>
           <div id="gateExtract"><span>2</span><b>default.xex stream</b><em>WAIT</em></div>
           <div id="gateXex"><span>3</span><b>XEX image loader</b><em>WAIT</em></div>
-          <div id="gateCpu"><span>4</span><b>V34 CPU → hot WASM</b><em>IN DEV</em></div>
+          <div id="gateCpu"><span>4</span><b>V35 CPU → hot WASM</b><em>IN DEV</em></div>
           <div id="gateKernel"><span>5</span><b>Kernel / XAM</b><em>BLOCKED</em></div>
           <div id="gateGpu"><span>6</span><b>Xenos → WebGPU</b><em>BLOCKED</em></div>
         </div>
@@ -127,14 +127,14 @@
   </section>
 
   <section id="statusSheet" class="sheet glass hidden">
-    <div class="sheet-head"><div><b>Port Status</b><span>Core V32 · UI V33 · CPU V34</span></div><button id="closeStatus" type="button">Done</button></div>
+    <div class="sheet-head"><div><b>Port Status</b><span>Core V32 · UI V33 · CPU V35</span></div><button id="closeStatus" type="button">Done</button></div>
     <div class="port-list">
       <div class="port-row done"><span></span><div><b>Playable browser input test</b><p>Real analog joystick, drag-look camera, keyboard/gamepad polling, jump/sprint/reset and a lightweight Three.js arena are active now.</p></div></div>
       <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core plus native digital and analog input bridge.</p></div></div>
       <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native runtime ticks continuously off the UI thread.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
       <div class="port-row done"><span></span><div><b>STFS / XEX extraction</b><p>LIVE/PIRS/CON mount, native directory traversal, root default.xex lookup, contiguous/hash-chain streaming, and full XEX capture are active.</p></div></div>
       <div class="port-row done"><span></span><div><b>Performance foundation</b><p>WebGPU underlay plus dynamic resolution. The test arena is a host-side input/render test, not the Xbox renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
-      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>The repository V34 CPU track has completed package/XEX, PPC translation, scalar PPC, guest-control and FPU foundations. The deployed Core V32 still needs V34 CPU integration, hot WasmBackend/full guest memory, kernel/XAM and Xenos → WebGPU before retail execution is playable.</p></div></div>
+      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>The V35 development track has completed package/XEX, PPC translation, scalar PPC, guest-control, FPU and VMX/VMX128 foundations. Hot WasmBackend, full guest memory, kernel/XAM and Xenos → WebGPU remain before genuine retail gameplay.</p></div></div>
     </div>
   </section>
 </div>

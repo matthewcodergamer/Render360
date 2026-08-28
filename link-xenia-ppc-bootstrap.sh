@@ -8,17 +8,14 @@ WASM="$OUT/xenia_ppc_bootstrap.wasm"
 LOG="$OUT/link.log"
 REPORT="$OUT/link-report.txt"
 
-if [ ! -d "$OUT" ]; then
-  echo "ERROR: compile output missing. Run build-xenia-ppc-bootstrap.sh first." >&2
-  exit 2
-fi
-if ! command -v "$CXX" >/dev/null 2>&1; then
-  echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2
-  exit 2
-fi
+if [ ! -d "$OUT" ]; then echo "ERROR: compile output missing. Run build-xenia-ppc-bootstrap.sh first." >&2; exit 2; fi
+if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 
 OBJECTS=(
   "$OUT/src_xenia_base_cvar.cc.o"
+  "$OUT/src_xenia_cpu_backend_backend.cc.o"
+  "$OUT/src_xenia_cpu_backend_assembler.cc.o"
+  "$OUT/src_xenia_cpu_function.cc.o"
   "$OUT/src_xenia_cpu_hir_opcodes.cc.o"
   "$OUT/src_xenia_cpu_hir_block.cc.o"
   "$OUT/src_xenia_cpu_hir_instr.cc.o"
@@ -33,19 +30,13 @@ OBJECTS=(
   "$OUT/src_xenia_cpu_ppc_ppc_hir_builder.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_translator.cc.o"
   "$OUT/src_xenia_cpu_ppc_ppc_frontend.cc.o"
+  "$OUT/render360_probe_backend.cpp.o"
   "$OUT/render360_ppc_context_abi_probe.cpp.o"
 )
 
 missing=0
-for obj in "${OBJECTS[@]}"; do
-  if [ ! -f "$obj" ]; then
-    echo "MISSING object: $obj" >&2
-    missing=1
-  fi
-done
-if [ "$missing" -ne 0 ]; then
-  exit 2
-fi
+for obj in "${OBJECTS[@]}"; do if [ ! -f "$obj" ]; then echo "MISSING object: $obj" >&2; missing=1; fi; done
+if [ "$missing" -ne 0 ]; then exit 2; fi
 
 EXPORTS=(
   _r360_ppc_context_size
@@ -55,6 +46,10 @@ EXPORTS=(
   _r360_ppc_context_offset_lr
   _r360_ppc_context_offset_ctr
   _r360_ppc_context_offset_reserved_val
+  _r360_ppc_probe_assembled_functions
+  _r360_ppc_probe_hir_block_count
+  _r360_ppc_probe_hir_instruction_count
+  _r360_ppc_probe_last_guest_address
 )
 
 LINK_ARGS=(
@@ -66,17 +61,14 @@ LINK_ARGS=(
   -sINITIAL_MEMORY=33554432
   -sALLOW_MEMORY_GROWTH=1
 )
-for symbol in "${EXPORTS[@]}"; do
-  LINK_ARGS+=("-sEXPORTED_FUNCTIONS=$symbol")
-done
+for symbol in "${EXPORTS[@]}"; do LINK_ARGS+=("-sEXPORTED_FUNCTIONS=$symbol"); done
 
 rm -f "$WASM" "$LOG" "$REPORT"
-
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   {
     echo "status=LINKED"
     echo "wasm=$WASM"
-    echo "note=Real selected Xenia PPC/HIR objects linked into a standalone wasm module. This still does not mean PPC translation or execution is ready."
+    echo "note=Xenia PPC/HIR plus the translation-only ProbeBackend linked. HIR telemetry exports are live, but no guest translation has been invoked yet."
   } | tee "$REPORT"
   exit 0
 fi
@@ -84,10 +76,9 @@ fi
 {
   echo "status=BLOCKED"
   echo "wasm=$WASM"
-  echo "note=Strict link failed. See link.log for the real unresolved Xenia dependency boundary."
+  echo "note=Strict probe-backend link failed. See link.log for the next real Xenia dependency boundary."
   echo
   echo "First unresolved-symbol diagnostics:"
-  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 80 || true
+  grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 100 || true
 } | tee "$REPORT"
-
 exit 0

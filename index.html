@@ -39,8 +39,8 @@
     <section id="emptyState" class="hero glass">
       <div class="hero-mark"><span></span></div>
       <p class="eyebrow">CORE V32 · UI V33 · CPU V35 · WEBGPU HOST</p>
-      <h1>Render360 V35 foundations are online.</h1>
-      <p class="hero-copy">Stable Core V32 handles the live package/XEX path. The V35 development track now has six regression-complete foundations: package/XEX, PPC translation, scalar PPC correctness, guest control, FPU, and VMX/VMX128. Hot WasmBackend is now the active CPU architecture target before full guest-memory and real default.xex entry bring-up.</p>
+      <h1>Render360 V35 generated WASM is executing.</h1>
+      <p class="hero-copy">Stable Core V32 handles the live package/XEX path. The V35 development track has six regression-complete foundations, and the first real finalized-Xenia-HIR → generated-WebAssembly scalar stage is now green. Hot WasmBackend expansion is active before full guest-memory and real default.xex entry bring-up.</p>
       <div class="status-grid six">
         <div class="status-card"><span>Build</span><b id="buildStatus">V32</b></div>
         <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
@@ -95,7 +95,7 @@
           <div class="ready"><span>1</span><b>STFS mount</b><em>READY</em></div>
           <div id="gateExtract"><span>2</span><b>default.xex stream</b><em>WAIT</em></div>
           <div id="gateXex"><span>3</span><b>XEX image loader</b><em>WAIT</em></div>
-          <div id="gateCpu"><span>4</span><b>V35 CPU → hot WASM</b><em>IN DEV</em></div>
+          <div id="gateCpu"><span>4</span><b>V35 CPU → hot WASM</b><em>SCALAR ✓</em></div>
           <div id="gateKernel"><span>5</span><b>Kernel / XAM</b><em>BLOCKED</em></div>
           <div id="gateGpu"><span>6</span><b>Xenos → WebGPU</b><em>BLOCKED</em></div>
         </div>
@@ -134,7 +134,7 @@
       <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native runtime ticks continuously off the UI thread.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
       <div class="port-row done"><span></span><div><b>STFS / XEX extraction</b><p>LIVE/PIRS/CON mount, native directory traversal, root default.xex lookup, contiguous/hash-chain streaming, and full XEX capture are active.</p></div></div>
       <div class="port-row done"><span></span><div><b>Performance foundation</b><p>WebGPU underlay plus dynamic resolution. The test arena is a host-side input/render test, not the Xbox renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
-      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>The V35 development track has completed package/XEX, PPC translation, scalar PPC, guest-control, FPU and VMX/VMX128 foundations. Hot WasmBackend, full guest memory, kernel/XAM and Xenos → WebGPU remain before genuine retail gameplay.</p></div></div>
+      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>The V35 track has six completed CPU/browser foundations and the first generated-WASM scalar stage is green. WasmBackend control/memory/calls/FPU/VMX expansion, full guest memory, kernel/XAM and Xenos → WebGPU remain before genuine retail gameplay.</p></div></div>
     </div>
   </section>
 </div>

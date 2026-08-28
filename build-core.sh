@@ -66,10 +66,15 @@ EXPORTS=(
   r360_xex_decode_page_count r360_xex_decode_page_address
   r360_xex_decode_page_bytes
   r360_xex_prepare_reset r360_xex_prepare_none_begin r360_xex_prepare_none_accept
+  r360_xex_prepare_basic_begin r360_xex_prepare_basic_accept_data
+  r360_xex_prepare_basic_consume_zero r360_xex_prepare_basic_data_remaining
+  r360_xex_prepare_basic_zero_remaining
   r360_xex_prepare_status r360_xex_prepare_source_offset
   r360_xex_prepare_source_bytes r360_xex_prepare_output_bytes
-  r360_xex_prepare_bytes_done r360_xex_prepare_encryption_type
-  r360_xex_prepare_compression_type
+  r360_xex_prepare_bytes_done r360_xex_prepare_output_done
+  r360_xex_prepare_encryption_type r360_xex_prepare_compression_type
+  r360_xex_prepare_basic_block_count r360_xex_prepare_basic_block_index
+  r360_xex_prepare_last_output_kind r360_xex_prepare_last_output_bytes
   r360_feature_bits
 )
 

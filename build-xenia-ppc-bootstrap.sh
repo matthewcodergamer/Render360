@@ -12,6 +12,7 @@ if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 python3 "$ROOT/prepare-xenia-web-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
+python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 
 COMMON=(
   -std=c++20 -O0 -g0
@@ -26,21 +27,26 @@ if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCL
 
 SOURCES=(
   "third_party/fmt/src/format.cc"
+  "src/xenia/base/arena.cc"
   "src/xenia/base/cvar.cc"
   "src/xenia/base/utf8.cc"
   "src/xenia/base/filesystem_posix.cc"
   "src/xenia/base/memory_posix.cc"
   "src/xenia/base/mapped_memory_posix.cc"
   "src/xenia/base/mutex.cc"
+  "src/xenia/base/string_buffer.cc"
   "src/xenia/memory.cc"
+  "src/xenia/cpu/cpu_flags.cc"
   "src/xenia/cpu/mmio_handler.cc"
   "src/xenia/cpu/entry_table.cc"
   "src/xenia/cpu/module.cc"
   "src/xenia/cpu/stack_walker_posix.cc"
+  "src/xenia/cpu/thread_state.cc"
   "src/xenia/cpu/processor.cc"
   "src/xenia/cpu/backend/backend.cc"
   "src/xenia/cpu/backend/assembler.cc"
   "src/xenia/cpu/function.cc"
+  "src/xenia/cpu/function_debug_info.cc"
   "src/xenia/cpu/hir/opcodes.cc"
   "src/xenia/cpu/hir/block.cc"
   "src/xenia/cpu/hir/instr.cc"
@@ -61,6 +67,8 @@ SOURCES=(
   "src/xenia/cpu/compiler/passes/simplification_pass.cc"
   "src/xenia/cpu/compiler/passes/validation_pass.cc"
   "src/xenia/cpu/ppc/ppc_context.cc"
+  "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc"
+  "src/xenia/cpu/ppc/ppc_opcode_info.cc"
   "src/xenia/cpu/ppc/ppc_emit_alu.cc"
   "src/xenia/cpu/ppc/ppc_emit_control.cc"
   "src/xenia/cpu/ppc/ppc_emit_memory.cc"

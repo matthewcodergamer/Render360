@@ -73,6 +73,7 @@ OBJECTS=(
   "$OUT/render360_browser_logging.cpp.o"
   "$OUT/render360_browser_threading_sleep.cpp.o"
   "$OUT/render360_hir_correctness_executor.cpp.o"
+  "$OUT/render360_wasm_backend_probe.cpp.o"
   "$OUT/render360_probe_backend.cpp.o"
   "$OUT/render360_ppc_translation_probe.cpp.o"
   "$OUT/render360_ppc_context_abi_probe.cpp.o"
@@ -95,6 +96,9 @@ EXPORTS=(
   _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity
   _r360_ppc_probe_load _r360_ppc_probe_translate
   _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
+  _r360_wasm_backend_status _r360_wasm_backend_module_ptr
+  _r360_wasm_backend_module_size _r360_wasm_backend_lowered_instructions
+  _r360_wasm_backend_context_ptr
 )
 EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 
@@ -111,7 +115,7 @@ if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
     echo "status=LINKED"
     echo "wasm=$WASM"
     echo "exports=${#EXPORTS[@]}"
-    echo "note=The real Xenia PPC translation path, complete current compiler-pass source set, finalized-HIR correctness executor, and bounded guest-memory correctness ABI linked strictly. Runtime gates must pass before broader PPC correctness is declared."
+    echo "note=The real Xenia PPC translation path, compiler-finalized HIR correctness executor, bounded guest-memory ABI, and first finalized-HIR to generated-WebAssembly backend slice linked strictly. Runtime gates must pass before WasmBackend progress is promoted."
   } | tee "$REPORT"
   exit 0
 fi

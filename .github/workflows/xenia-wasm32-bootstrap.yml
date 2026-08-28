@@ -9,8 +9,10 @@ on:
       - 'xenia_web_bootstrap_check.py'
       - 'prepare-xenia-web-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
+      - 'link-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_shims/**'
       - 'src/xenia_web_bootstrap/**'
+      - 'README.md'
       - 'XENIA_WEB_BOOTSTRAP.md'
       - '.github/workflows/xenia-wasm32-bootstrap.yml'
   workflow_dispatch:
@@ -34,21 +36,27 @@ jobs:
           python3 ./xenia_contract_check.py
           python3 ./xenia_web_bootstrap_check.py
 
-      - name: Compile real Xenia PPC/HIR translation units for wasm32
+      - name: Compile and link real Xenia PPC/HIR wasm32 bootstrap
         run: |
           docker run --rm \
             -v "$PWD:/src" \
             -w /src \
             emscripten/emsdk:latest \
-            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh'
+            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
 
-      - name: Show compile matrix
+      - name: Show compile and link state
         if: always()
         run: |
           if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then
             cat build/xenia-ppc-bootstrap/report.tsv
           else
             echo 'No compile report generated.'
+          fi
+          echo
+          if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then
+            cat build/xenia-ppc-bootstrap/link-report.txt
+          else
+            echo 'No link report generated.'
           fi
 
       - name: Upload bootstrap report
@@ -58,6 +66,8 @@ jobs:
           name: xenia-wasm32-bootstrap-report
           path: |
             build/xenia-ppc-bootstrap/report.tsv
+            build/xenia-ppc-bootstrap/link-report.txt
             build/xenia-ppc-bootstrap/*.log
+            build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
           if-no-files-found: warn
           retention-days: 14

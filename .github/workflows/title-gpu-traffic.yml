@@ -1,0 +1,42 @@
+name: Extracted XEX GPU Traffic Bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-title-gpu-traffic.mjs'
+      - 'test-extracted-xex-gpu-traffic.mjs'
+      - 'test-extracted-xex-gpu-traffic-critic.mjs'
+      - 'render360-title-controller.mjs'
+      - 'retail-xex-image-pipeline.mjs'
+      - 'src/xenia_web_bootstrap/**'
+      - 'build-xenia-ppc-bootstrap.sh'
+      - 'link-xenia-ppc-bootstrap.sh'
+      - '.github/workflows/title-gpu-traffic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extracted-xex-gpu-traffic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+      - name: Rebuild package and XEX core
+        run: bash ./build-core.sh
+      - name: Fetch upstream Xenia
+        run: bash ./fetch-xenia.sh
+      - name: Compile and strict-link main Xenia wasm
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            emscripten/emsdk:latest \
+            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
+      - name: Verify encrypted XEX pipeline produces Xenos traffic
+        run: node ./test-extracted-xex-gpu-traffic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: "Harsh critic: extracted XEX GPU traffic provenance"
+        run: node ./test-extracted-xex-gpu-traffic-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

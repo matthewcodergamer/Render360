@@ -7,5 +7,5 @@
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#000000",
-  "description": "Render360 is an iOS-style Xbox 360 game library and browser runtime powered by the Xenia-Web/WASM core."
+  "description": "Render360 V41 is a responsive Xbox 360 game library and browser emulator runtime with ISO, XEX and STFS launch adapters, per-game profiles and persistent browser game storage."
 }

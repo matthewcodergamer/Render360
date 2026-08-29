@@ -39,6 +39,7 @@ const contextPtr=session.contextPtr;
 const first=await session.runFunctionSlice(entry);
 const second=await session.runFunctionSlice(entry);
 if(first.r3!==6n||second.r3!==7n)throw new Error(`Persistent PPC state did not survive slices: ${first.r3}/${second.r3}`);
+if(first.yielded||second.yielded||first.guestReturned!==true||second.guestReturned!==true)throw new Error('Complete callable PPC function was incorrectly reported as a CFG yield');
 if(session.contextPtr!==contextPtr||session.sliceCount!==2)throw new Error('Persistent PPC session recreated its architectural context');
 
 // Replace executable bytes with addi r3,r3,2 ; blr. The Xenia executable-page
@@ -54,11 +55,18 @@ if(session.registryRefreshes<=refreshesBefore)throw new Error('Executable genera
 let failedClosed=false;
 try{await session.runFunctionSlice((entry+0x100)>>>0);}catch(error){failedClosed=String(error).includes('FAIL_CLOSED_UNKNOWN_GUEST_TARGET');}
 if(!failedClosed)throw new Error('Persistent PPC session did not fail closed on an unknown guest function');
-if(session.contract.midFunctionPreemption!==false||session.contract.fullXboxThreadScheduler!==false)throw new Error('Session contract overstates current scheduler coverage');
+if(session.contract.midFunctionPreemption!==true||
+   session.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||
+   session.contract.cfgFuelExhaustionYields!==true||
+   session.contract.cfgPerThreadContinuationSlots!==true||
+   session.contract.fullXboxThreadScheduler!==false){
+  throw new Error('Persistent PPC session does not expose the bounded resumable CFG contract exactly');
+}
 
 console.log('PERSISTENT_PPC_CONTEXT_ACROSS_SLICES=PASS');
 console.log('PERSISTENT_PPC_GENERATION_REFRESH=PASS');
 console.log('PERSISTENT_PPC_UNKNOWN_TARGET_FAIL_CLOSED=PASS');
+console.log('PERSISTENT_PPC_CFG_CONTINUATION_CONTRACT=PASS');
 console.log('PERSISTENT_PPC_FUNCTION_BOUNDARY_SESSION=PASS');
 console.log(`persistent_ppc_context_ptr=0x${contextPtr.toString(16)}`);
 console.log(`persistent_ppc_slices=${session.sliceCount}`);

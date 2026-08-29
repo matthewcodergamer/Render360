@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {WASI} from 'node:wasi';
+import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 
 const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
 const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
@@ -8,7 +9,7 @@ const imports=wasi.getImportObject(mod);
 for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);
 const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be'];
+const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be','r360_xenos_ring_capacity','r360_xenos_submit'];
 for(const n of required)if(typeof pick(n)!=='function')throw new Error(`title GPU runtime missing export ${n}`);
 
 const p32be=(a,o,v)=>{a[o]=(v>>>24)&255;a[o+1]=(v>>>16)&255;a[o+2]=(v>>>8)&255;a[o+3]=v&255};
@@ -69,4 +70,11 @@ if((pick('r360_title_gpu_ring_word')(0,scratch)>>>0)!==1)throw new Error('title 
 const bytes=new Uint8Array(e.memory.buffer,scratch,4);const word=(bytes[0]|(bytes[1]<<8)|(bytes[2]<<16)|(bytes[3]<<24))>>>0;
 if(word!==0x80000000)throw new Error(`title ring word mismatch 0x${word.toString(16)}`);
 console.log('TITLE_RUNTIME_REAL_RING_WORD_READ=PASS');
+
+// Finally prove that the captured producer pointer and sparse ring can feed the
+// existing Xenos PM4 decoder without a JS-authored guestAddress/wordCount. A
+// type-2 NOP should be accepted as one genuine captured packet and no frame.
+const traffic=submitCapturedTitleGpuTraffic({bootstrap:instance});
+if(!traffic.ready||!traffic.submitted||traffic.source!=='captured-title-xenos-ring'||traffic.wordCount!==1||traffic.words[0]!==0x80000000||traffic.packets!==1||traffic.draws!==0||traffic.frameGeneration!==0)throw new Error(`captured title ring submission mismatch ${JSON.stringify(traffic)}`);
+console.log('TITLE_RUNTIME_CAPTURED_RING_TO_XENOS=PASS');
 console.log('TITLE_GPU_RUNTIME_BRIDGE=PASS');

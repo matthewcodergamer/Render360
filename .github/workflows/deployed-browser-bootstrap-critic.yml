@@ -6,6 +6,7 @@ on:
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'render360-browser-title-runtime.mjs'
+      - 'render360-browser-wasi.mjs'
       - 'render360-browser-iso-hook.mjs'
       - 'render360-browser-modern-iso-bridge.mjs'
       - 'gpu-web.js'
@@ -23,7 +24,7 @@ jobs:
     steps:
       - name: Checkout deployed Render360 tree
         uses: actions/checkout@v4
-      - name: "Harsh critic: verify deployed bootstrap provenance and exports"
+      - name: "Harsh critic: instantiate exact deployed bootstrap through browser WASI host"
         run: node test-deployed-browser-bootstrap-critic.mjs
       - name: Verify browser ISO input contract still passes
         run: |

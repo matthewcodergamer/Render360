@@ -11,16 +11,25 @@ assert.match(meta.sourceCommit,/^[0-9a-f]{40}$/,'publisher provenance source com
 assert.match(String(meta.sourceRun),/^\d+$/,'publisher provenance source run invalid');
 
 const module=await WebAssembly.compile(wasm);
+const moduleImports=WebAssembly.Module.imports(module);
+assert.deepEqual(moduleImports,[],'deployed browser bootstrap unexpectedly requires host imports; the browser loader instantiates it with an empty import object');
+const instance=await WebAssembly.instantiate(module,{});
+assert.ok(instance?.exports?.memory instanceof WebAssembly.Memory,'exact deployed bootstrap did not instantiate with exported browser memory');
 const exported=new Set(WebAssembly.Module.exports(module).map(e=>e.name));
 const required=[
-  'memory','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
-  'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry',
+  'memory','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
+  'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
-  'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_submit','r360_xenos_frame_generation','r360_xenos_frame_hash'
+  'r360_title_gpu_ring_base','r360_title_gpu_write_pointer','r360_title_gpu_ring_word',
+  'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_submit','r360_xenos_swaps','r360_xenos_real_title_frame_ready',
+  'r360_xenos_shader_dwords','r360_xenos_shader_interpreter_reset','r360_xenos_shader_interpreter_analyze','r360_xenos_shader_interpreter_execute','r360_xenos_shader_interpreter_status',
+  'r360_xenos_frame_generation','r360_xenos_frame_hash'
 ];
 for(const name of required)assert.ok(exported.has(name)||exported.has(`_${name}`),`deployed bootstrap missing ${name}`);
 
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_CRITIC=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_EMPTY_IMPORT_OBJECT=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_TITLE_SHADER_EXPORTS=PASS');
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_BYTES=${wasm.length}`);
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SHA256=${meta.sha256}`);
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SOURCE_RUN=${meta.sourceRun}`);

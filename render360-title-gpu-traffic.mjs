@@ -4,6 +4,35 @@ function requireExport(e,n){const f=pick(e,n);if(typeof f!=='function')throw new
 function optionalExport(e,n){const f=pick(e,n);return typeof f==='function'?f:null;}
 function rangeEnd(address,bytes){if(!Number.isInteger(address)||address<0||address>0xffffffff)throw new RangeError('guest GPU address must be uint32');if(!Number.isInteger(bytes)||bytes<=0||bytes>0xffffffff)throw new RangeError('guest GPU byte count invalid');const end=address+bytes;if(end>0x100000000||end<=address)throw new RangeError('guest GPU range wraps uint32');return end;}
 function hashWords(words){let h=2166136261>>>0;for(const word of words){for(let s=24;s>=0;s-=8){h^=(word>>>s)&255;h=Math.imul(h,16777619)>>>0;}}return h>>>0;}
+function signExtend(value,bits){const shift=32-bits;return (value<<shift)>>shift;}
+
+const TEXTURE_FORMAT_NAMES={0:'1_REVERSE',1:'1',2:'8',3:'1_5_5_5',4:'5_6_5',5:'6_5_5',6:'8_8_8_8',7:'2_10_10_10',8:'8_A',9:'8_B',10:'8_8',11:'Cr_Y1_Cb_Y0_REP',12:'Y1_Cr_Y0_Cb_REP',13:'16_16_EDRAM',14:'8_8_8_8_A',15:'4_4_4_4',16:'10_11_11',17:'11_11_10',18:'DXT1',19:'DXT2_3',20:'DXT4_5',21:'16_16_16_16_EDRAM',22:'24_8',23:'24_8_FLOAT',24:'16',25:'16_16',26:'16_16_16_16',27:'16_EXPAND',28:'16_16_EXPAND',29:'16_16_16_16_EXPAND',30:'16_FLOAT',31:'16_16_FLOAT',32:'16_16_16_16_FLOAT',33:'32',34:'32_32',35:'32_32_32_32',36:'32_FLOAT',37:'32_32_FLOAT',38:'32_32_32_32_FLOAT',39:'32_AS_8',40:'32_AS_8_8',41:'16_MPEG',42:'16_16_MPEG',43:'8_INTERLACED',44:'32_AS_8_INTERLACED',45:'32_AS_8_8_INTERLACED',46:'16_INTERLACED',47:'16_MPEG_INTERLACED',48:'16_16_MPEG_INTERLACED',49:'DXN',50:'8_8_8_8_AS_16_16_16_16',51:'DXT1_AS_16_16_16_16',52:'DXT2_3_AS_16_16_16_16',53:'DXT4_5_AS_16_16_16_16'};
+const DIMENSION_NAMES=['1d','2d-or-stacked','3d','cube'];
+const ENDIAN_NAMES=['none','8in16','8in32','16in32'];
+
+// Exact decode of upstream Xenia xe_gpu_texture_fetch_t. Xenos texture fetch
+// constants are six 32-bit words. Sizes are stored minus one and base/mip
+// addresses omit the low 12 alignment bits.
+export function decodeXenosTextureFetchConstant(words){
+  if(!Array.isArray(words)&&!ArrayBuffer.isView(words))throw new TypeError('texture fetch constant must be six dwords');
+  if(words.length!==6)throw new RangeError(`texture fetch constant requires 6 dwords, got ${words.length}`);
+  const w=Array.from(words,v=>Number(v)>>>0),d0=w[0],d1=w[1],d2=w[2],d3=w[3],d4=w[4],d5=w[5];
+  const type=d0&3,dimension=(d5>>>9)&3,format=d1&0x3f,endianness=(d1>>>6)&3;
+  const baseAddress=((d1>>>12)<<12)>>>0,mipAddress=((d5>>>12)<<12)>>>0;
+  let width=1,height=1,depth=1,stackDepth=1;
+  if(dimension===0){width=(d2&0xffffff)+1;}
+  else if(dimension===1||dimension===3){width=(d2&0x1fff)+1;height=((d2>>>13)&0x1fff)+1;const encodedStack=(d2>>>26)&0x3f;stackDepth=encodedStack+1;depth=dimension===3?6:(d0>>>10&0x7)?stackDepth:1;}
+  else{width=(d2&0x7ff)+1;height=((d2>>>11)&0x7ff)+1;depth=((d2>>>22)&0x3ff)+1;}
+  return {type,isTexture:type===2,dimension,dimensionName:DIMENSION_NAMES[dimension],format,formatName:TEXTURE_FORMAT_NAMES[format]??`format-${format}`,endianness,endiannessName:ENDIAN_NAMES[endianness],requestSize:(d1>>>8)&3,stacked:!!((d1>>>10)&1),nearestClampPolicy:(d1>>>11)&1,baseAddress,mipAddress,width,height,depth,stackDepth,pitchPixels:((d0>>>22)&0x1ff)<<5,tiled:!!(d0>>>31),numFormat:d3&1,swizzle:(d3>>>1)&0xfff,expAdjust:signExtend((d3>>>13)&0x3f,6),magFilter:(d3>>>19)&3,minFilter:(d3>>>21)&3,mipFilter:(d3>>>23)&3,anisoFilter:(d3>>>25)&7,borderSize:(d3>>>31)&1,mipMinLevel:(d4>>>2)&0xf,mipMaxLevel:(d4>>>6)&0xf,lodBias:signExtend((d4>>>12)&0x3ff,10),packedMips:!!((d5>>>11)&1),words:w,wordHash:hashWords(w)};
+}
+
+function probeReadableGuestByte(e,address){
+  if(!address)return false;
+  const read=optionalExport(e,'r360_sparse_guest_memory_read_u8'),fault=optionalExport(e,'r360_sparse_guest_memory_last_fault_code');
+  if(!read||!fault)return null;
+  read(address>>>0);
+  return (fault()>>>0)===0;
+}
 
 function readShaderProvenance(e,type){
   const dwords=optionalExport(e,'r360_xenos_shader_dwords'),hash=optionalExport(e,'r360_xenos_shader_hash'),address=optionalExport(e,'r360_xenos_shader_guest_address'),source=optionalExport(e,'r360_xenos_shader_source'),buffer=optionalExport(e,'r360_xenos_shader_buffer');
@@ -18,7 +47,12 @@ function readFetchConstantGroups(e){
   const groups=[];
   for(let group=0;group<32;group++){
     const words=Array.from({length:6},(_,word)=>read(group,word)>>>0);
-    if(words.some(Boolean))groups.push({group,words,wordHash:hashWords(words)});
+    if(words.some(Boolean)){
+      const texture=decodeXenosTextureFetchConstant(words);
+      const baseMapped=texture.isTexture?probeReadableGuestByte(e,texture.baseAddress):false;
+      const mipMapped=texture.isTexture&&texture.mipAddress?probeReadableGuestByte(e,texture.mipAddress):null;
+      groups.push({group,words,wordHash:hashWords(words),texture:{...texture,baseMapped,mipMapped,resourceBacked:baseMapped===true&&(mipMapped!==false)}});
+    }
   }
   return groups;
 }
@@ -29,8 +63,10 @@ export function readXenosTitleState({bootstrap}){
   const optional=n=>{const fn=optionalExport(e,n);return fn?fn()>>>0:0};
   const indirect=optionalExport(e,'r360_xenos_indirect_buffers'),loads=optionalExport(e,'r360_xenos_shader_loads'),faultDepth=optionalExport(e,'r360_xenos_last_fault_depth'),invalidate=optionalExport(e,'r360_xenos_last_invalidate_mask');
   const vertexShader=readShaderProvenance(e,0),pixelShader=readShaderProvenance(e,1),fetchConstantGroups=readFetchConstantGroups(e);
+  const textureResources=fetchConstantGroups.filter(g=>g.texture?.isTexture).map(g=>({group:g.group,...g.texture}));
+  const backedTextureResources=textureResources.filter(r=>r.resourceBacked);
   const swaps=optional('r360_xenos_swaps'),frontbufferPtr=optional('r360_xenos_frontbuffer_ptr'),frontbufferWidth=optional('r360_xenos_frontbuffer_width'),frontbufferHeight=optional('r360_xenos_frontbuffer_height'),frameProvenance=optional('r360_xenos_frame_provenance'),realTitleFrameReady=optional('r360_xenos_real_title_frame_ready')===1;
-  return {vertexShader,pixelShader,fetchConstantGroups,shaderLoads:loads?loads()>>>0:0,indirectBuffers:indirect?indirect()>>>0:0,memoryWrites:optional('r360_xenos_memory_writes'),interrupts:optional('r360_xenos_interrupts'),lastInterruptMask:optional('r360_xenos_last_interrupt_mask'),lastFaultDepth:faultDepth?faultDepth()>>>0:0,lastInvalidateMask:invalidate?invalidate()>>>0:0,swaps,frontbufferPtr,frontbufferWidth,frontbufferHeight,frameProvenance,realTitleFrameReady,hasRealSwap:swaps>0,hasTitleShaders:vertexShader.dwordCount>0||pixelShader.dwordCount>0,hasBothTitleShaders:vertexShader.dwordCount>0&&pixelShader.dwordCount>0,hasFetchResources:fetchConstantGroups.length>0};
+  return {vertexShader,pixelShader,fetchConstantGroups,textureResources,backedTextureResources,shaderLoads:loads?loads()>>>0:0,indirectBuffers:indirect?indirect()>>>0:0,memoryWrites:optional('r360_xenos_memory_writes'),interrupts:optional('r360_xenos_interrupts'),lastInterruptMask:optional('r360_xenos_last_interrupt_mask'),lastFaultDepth:faultDepth?faultDepth()>>>0:0,lastInvalidateMask:invalidate?invalidate()>>>0:0,swaps,frontbufferPtr,frontbufferWidth,frontbufferHeight,frameProvenance,realTitleFrameReady,hasRealSwap:swaps>0,hasTitleShaders:vertexShader.dwordCount>0||pixelShader.dwordCount>0,hasBothTitleShaders:vertexShader.dwordCount>0&&pixelShader.dwordCount>0,hasFetchResources:fetchConstantGroups.length>0,hasDecodedTextureResources:textureResources.length>0,hasBackedTextureResources:backedTextureResources.length>0};
 }
 
 function currentXenosResult({bootstrap,source,throwOnReject=false}){

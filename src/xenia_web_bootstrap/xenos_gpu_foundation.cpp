@@ -127,24 +127,54 @@ bool Execute() {
   while (i < g_ring_words) {
     const uint32_t header_index = i;
     const uint32_t header = g_ring[i++];
+
+    // Xenia treats an all-zero command word as an empty packet. Real command
+    // buffers may contain zero padding, so don't reinterpret it as a type-0
+    // register write requiring a payload word.
+    if (header == 0) {
+      ++g_packets;
+      continue;
+    }
+
     const uint32_t type = header >> 30;
     ++g_packets;
     if (type == 0) {
       const uint32_t count = ((header >> 16) & 0x3FFFu) + 1u;
       const uint32_t base = header & 0x7FFFu;
+      const bool write_one_reg = ((header >> 15) & 1u) != 0;
       if (count > g_ring_words - i || base >= kRegisterCount ||
-          count > kRegisterCount - base) {
+          (!write_one_reg && count > kRegisterCount - base)) {
         g_last_fault_word = header_index;
         g_status = kStatusInvalid;
         return false;
       }
       for (uint32_t n = 0; n < count; ++n) {
-        if (!WriteRegister(base + n, g_ring[i + n])) {
+        const uint32_t target = write_one_reg ? base : base + n;
+        if (!WriteRegister(target, g_ring[i + n])) {
           g_last_fault_word = header_index;
           return false;
         }
       }
       i += count;
+      continue;
+    }
+    if (type == 1) {
+      // Xenos type-1 packets write exactly two independently-addressed
+      // registers. This is uncommon compared with type-0 but appears in real
+      // command streams and must preserve both register indices.
+      if (g_ring_words - i < 2u) {
+        g_last_fault_word = header_index;
+        g_status = kStatusInvalid;
+        return false;
+      }
+      const uint32_t reg1 = header & 0x7FFu;
+      const uint32_t reg2 = (header >> 11) & 0x7FFu;
+      if (!WriteRegister(reg1, g_ring[i]) ||
+          !WriteRegister(reg2, g_ring[i + 1])) {
+        g_last_fault_word = header_index;
+        return false;
+      }
+      i += 2u;
       continue;
     }
     if (type == 2) {

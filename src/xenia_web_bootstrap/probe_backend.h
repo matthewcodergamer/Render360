@@ -11,6 +11,7 @@
 
 namespace render360::xenia_web {
 
+// Commercial-title diagnostics preserve the first exact finalized-HIR blocker.
 struct ProbeTelemetry {
   uint32_t assembled_functions = 0;
   uint32_t hir_blocks = 0;

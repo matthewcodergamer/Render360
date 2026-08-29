@@ -1,0 +1,23 @@
+name: XDVDFS Title Input
+on:
+  push:
+    paths:
+      - 'render360-xdvdfs.mjs'
+      - 'render360-iso-title-controller.mjs'
+      - 'test-xdvdfs-virtual-mount*.mjs'
+      - '.github/workflows/xdvdfs-title-input.yml'
+  workflow_dispatch:
+
+jobs:
+  xdvdfs-title-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+      - name: Run XDVDFS virtual mount implementation gate
+        run: node test-xdvdfs-virtual-mount.mjs
+      - name: Run independent XDVDFS harsh critic
+        run: node test-xdvdfs-virtual-mount-critic.mjs
+      - name: Verify ISO title controller imports cleanly
+        run: node -e "import('./render360-iso-title-controller.mjs').then(m=>{if(typeof m.handoffXboxIso!=='function')process.exit(1);console.log('XDVDFS_TITLE_CONTROLLER=PASS')})"

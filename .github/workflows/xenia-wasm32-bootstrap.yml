@@ -136,7 +136,7 @@ jobs:
         run: node ./test-title-runtime-boundary.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify PPC to kernel HLE dispatch bridge
         run: node ./test-kernel-hle-bridge.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-      - name: Harsh critic: verify minimum kernel ABI contract
+      - name: "Harsh critic: verify minimum kernel ABI contract"
         run: node ./test-kernel-abi-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify automatic XEX import to kernel execution bridge
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

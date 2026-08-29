@@ -1,5 +1,6 @@
 import {Render360Core} from './wasm-core-v32.js';
 import {handoffXboxIsoBrowser, loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
 const $=id=>document.getElementById(id);
@@ -14,9 +15,9 @@ function setText(id,value){const el=$(id);if(el)el.textContent=String(value)}
 function setGate(id,state,label){const el=$(id);if(!el)return;el.classList.remove('ready','blocked');if(state)el.classList.add(state);const em=el.querySelector('em');if(em)em.textContent=label}
 function refreshModernStaticCopy(){
   const support=document.querySelector('.support-note');
-  if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters the PPC/kernel runtime without copying the whole disc into WASM memory.';
+  if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters PPC/kernel/Xenos without copying the whole disc into WASM memory.';
   const active=document.querySelector('#statusSheet .port-row.active p');
-  if(active)active.textContent='The modern browser bootstrap now has XDVDFS ISO input, retail XEX preparation/PE mapping, translated guest PPC, live kernel-import ABI routing and Xenos ring initialization capture. Commercial gameplay is still gated by title-specific kernel services plus the real ring producer/write pointer and unsupported PM4/shader/resource work.';
+  if(active)active.textContent='The modern browser bootstrap now has XDVDFS ISO input, retail XEX preparation/PE mapping, translated guest PPC, live kernel-import ABI routing, sparse guest RAM, Xenos MMIO, CP_RB_WPTR capture and fail-closed submission of the title-produced PM4 range. Commercial gameplay still depends on the next title-specific kernel/CPU/PM4/shader/resource blockers exposed by a real title.';
 }
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
@@ -38,8 +39,28 @@ function showFailure(error){
 async function getCore(){if(!corePromise)corePromise=(async()=>{const core=new Render360Core();await core.init();return core})();return corePromise}
 async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();return bootstrapPromise}
 
-function summarizeResult(result){
-  const hle=result.browserHleTelemetry;
+function summarizeGpuTraffic(gpu){
+  if(!gpu)return false;
+  if(gpu.submitted){
+    setGate('gateGpu','ready',gpu.presents?'FRAME TRAFFIC':'PM4 ACCEPTED');
+    setText('frameGateState',gpu.presents?'TITLE GPU FRAME':'TITLE PM4 ACCEPTED');
+    setText('boundaryTitle',gpu.presents?'Real title GPU traffic reached a present':'Real title PM4 reached the Xenos decoder');
+    setText('boundaryText',`Submitted ${gpu.wordCount} genuinely produced ring words from ${fmtHex(gpu.guestAddress)} (CP_RB_WPTR ${gpu.writePointer}). Xenos accepted ${gpu.packets} packets, draws ${gpu.draws}, presents ${gpu.presents}, frame generation ${gpu.frameGeneration}. ${gpu.presents?'The next gate is real shader/resource fidelity and continued title execution.':'Continue guest execution until the next write pointer update or a concrete GPU/kernel blocker appears.'}`);
+    hostLog('ok',`Real title PM4 accepted · ${gpu.wordCount} words · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.presents} presents`);
+    return true;
+  }
+  if(gpu.ready&&gpu.lastFaultWord!==undefined){
+    setGate('gateGpu','blocked',`PM4 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);setText('frameGateState','REAL PM4 BLOCKER');
+    setText('boundaryTitle',`First real Xenos blocker: PM4 opcode 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);
+    setText('boundaryText',`The title produced ${gpu.wordCount} ring words and CP_RB_WPTR bounded the submission. Xenos stopped at word ${gpu.lastFaultWord} with status ${gpu.xenosStatus}; ${gpu.packets} packets were accepted first. This is now the exact GPU implementation target—no synthetic trace and no guessed command count.`);
+    hostLog('warn',`Real PM4 blocker · opcode 0x${(gpu.lastOpcode>>>0).toString(16)} · word ${gpu.lastFaultWord} · status ${gpu.xenosStatus}`);
+    return true;
+  }
+  return false;
+}
+
+function summarizeResult(result,gpuTraffic=null){
+  const gpu=result.titleGpuTelemetry||result.browserHleTelemetry;
   setGate('gateExtract','ready','XDVDFS READY');setGate('gateXex','ready','PE MAPPED');
   setGate('gateCpu',result.executionStatus?'ready':'blocked',result.executionStatus?`${result.executionInstructions||0} INSNS`:'NO EXEC');
 
@@ -54,12 +75,14 @@ function summarizeResult(result){
   }
 
   setGate('gateKernel','ready',result.kernelCalls?`${result.kernelCalls} CALLS`:'ENTERED');
-  if(hle?.ringInitialized){
-    setGate('gateGpu','ready','RING CAPTURED');setText('frameGateState','REAL XENOS RING');
-    const range=hle.ringInActiveWindow?'inside active guest window':'outside current 64 KiB guest window';
-    setText('boundaryTitle','Real title initialized a Xenos command ring');
-    setText('boundaryText',`Captured VdInitializeRingBuffer from live PPC ABI: base ${fmtHex(hle.ringBase)}, size ${fmtBytes(hle.ringBytes)} (${hle.ringWordCapacity.toLocaleString()} words), ${range}. The next non-fake gate is the title's live producer/write pointer so only genuinely written PM4 words are submitted.`);
-    hostLog('ok',`Xenos ring captured · base ${fmtHex(hle.ringBase)} · ${fmtBytes(hle.ringBytes)} · rptr writeback ${fmtHex(hle.rptrWriteback||0)}`);
+  if(summarizeGpuTraffic(gpuTraffic))return;
+  if(gpu?.ringInitialized){
+    const producer=gpu.writePointer??0;
+    setGate('gateGpu','ready',producer?'WPTR CAPTURED':'RING CAPTURED');setText('frameGateState',producer?'REAL XENOS WPTR':'REAL XENOS RING');
+    const range=gpu.ringInActiveWindow?'inside active guest window':'in sparse guest memory';
+    setText('boundaryTitle',producer?'Real title wrote the Xenos producer pointer':'Real title initialized a Xenos command ring');
+    setText('boundaryText',producer?`Captured ring ${fmtHex(gpu.ringBase)}, ${fmtBytes(gpu.ringBytes)}, CP_RB_WPTR ${producer}. Automatic PM4 submission did not run because: ${gpuTraffic?.reason||'the produced range was not readable/decodable yet'}.`:`Captured VdInitializeRingBuffer from live PPC ABI: base ${fmtHex(gpu.ringBase)}, size ${fmtBytes(gpu.ringBytes)} (${gpu.ringWordCapacity.toLocaleString()} words), ${range}. Waiting for the title's genuine CP_RB_WPTR write before submitting PM4.`);
+    hostLog('ok',`Xenos ring captured · base ${fmtHex(gpu.ringBase)} · ${fmtBytes(gpu.ringBytes)} · WPtr ${producer}`);
   }else{
     setGate('gateGpu','','WAIT');setText('frameGateState',String(result.runtimeBoundary||'TITLE EXECUTION').toUpperCase());
     setText('boundaryTitle','Real default.xex is executing in the browser runtime');
@@ -77,13 +100,15 @@ export async function runModernXboxIso(file){
     const [core,bootstrap]=await Promise.all([getCore(),getBootstrap()]);if(run!==activeRun)return null;
     setGate('gateExtract','','DEFAULT.XEX');setText('boundaryTitle','default.xex found — preparing retail image…');setText('boundaryText',`Decrypting/decompressing and mapping the real title image, then translating up to ${fmtBytes(ENTRY_WINDOW_BYTES)} from its entry window.`);
     const {result}=await handoffXboxIsoBrowser({core,file,bootstrap,entryBytes:ENTRY_WINDOW_BYTES});if(run!==activeRun)return result;
-    summarizeResult(result);
-    globalThis.render360ModernTitle={fileName:file.name||'',result,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
-    return result;
+    let gpuTraffic=null;
+    if(result.titleGpuTelemetry){try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};hostLog('warn',`Captured PM4 submission unavailable: ${gpuTraffic.reason}`)}}
+    summarizeResult(result,gpuTraffic);
+    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
+    return {...result,gpuTraffic};
   }catch(error){if(run===activeRun)showFailure(error);throw error}
 }
 
-export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryWindowBytes:ENTRY_WINDOW_BYTES,usesRealTitleHleTelemetry:true,requiresProducerWritePointerBeforePm4Submit:true};}
+export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,submitsOnlyCapturedProducerRange:true,failClosedOnUnsupportedPm4:true};}
 
 refreshModernStaticCopy();
 const input=$('gameInput');

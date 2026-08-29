@@ -15,6 +15,7 @@ on:
       - 'test-xex-image-prepare-normal-frame.mjs'
       - 'test-xex-pe-image.mjs'
       - 'test-xex-pe-guest-loader.mjs'
+      - 'test-xex-prepared-entry-handoff.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -118,6 +119,9 @@ jobs:
 
       - name: Verify prepared PE image maps from decoded metadata into guest memory
         run: node ./test-xex-pe-guest-loader.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify prepared PE entry handoff into Xenia PPC/HIR
+        run: node ./test-xex-prepared-entry-handoff.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify locked foundations and V36 XEX bring-up
         run: |

@@ -4,8 +4,8 @@ installRender360Buffer();
 const REQUIRED_BOOTSTRAP_EXPORTS=[
   'memory','r360_ppc_probe_load_at','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
   'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
-  'r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
-  'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry',
+  'r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
+  'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
   'r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_word_capacity',
   'r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_ring_word',
@@ -41,12 +41,12 @@ export async function mountXboxIsoBrowser(file){
   return {volume,defaultXex:node,layout:volume.layout,partitionOffset:volume.partitionOffset,telemetry:volume.telemetry};
 }
 
-export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapUrl='./xenia_ppc_bootstrap.wasm',...options}){
+export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapUrl='./xenia_ppc_bootstrap.wasm',scanEntryFunction=true,...options}){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
   const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs');
-  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,...options});
+  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,...options});
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleEntryExecution:'Xenia-scanned executable PE function',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}

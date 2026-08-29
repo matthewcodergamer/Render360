@@ -48,16 +48,30 @@ bool IsValidSectionRange(uint32_t address, uint32_t size) {
   return end <= (uint64_t{1} << 32);
 }
 
-bool SpanInsideMappedSection(uint32_t address, uint32_t size) {
+bool SpanInsideMappedSections(uint32_t address, uint32_t size) {
   if (!size) return true;
   const uint64_t end = uint64_t(address) + uint64_t(size);
   if (end > (uint64_t{1} << 32)) return false;
-  for (const auto& section : g_sections) {
-    const uint64_t section_end =
-        uint64_t(section.address) + uint64_t(section.virtual_size);
-    if (uint64_t(address) >= section.address && end <= section_end) return true;
+
+  // A PE section may cross multiple mapper ranges after page-level permission
+  // coalescing. Validate continuous coverage rather than requiring the whole
+  // copy to fit inside one original mapping record.
+  uint64_t current = address;
+  while (current < end) {
+    uint64_t covered_until = current;
+    for (const auto& section : g_sections) {
+      const uint64_t section_start = section.address;
+      const uint64_t section_end =
+          section_start + uint64_t(section.virtual_size);
+      if (current >= section_start && current < section_end &&
+          section_end > covered_until) {
+        covered_until = section_end;
+      }
+    }
+    if (covered_until == current) return false;
+    current = covered_until < end ? covered_until : end;
   }
-  return false;
+  return true;
 }
 
 bool EntryInsideExecutableSection() {
@@ -153,7 +167,7 @@ bool MapXexGuestSection(uint32_t virtual_address, uint32_t virtual_size,
 bool LoadXexGuestSectionData(uint32_t virtual_address, const void* data,
                              uint32_t size) {
   if (g_status == kXexMapperFinalized) return Fail(kXexMapperInvalidArgument);
-  if ((size && !data) || !SpanInsideMappedSection(virtual_address, size)) {
+  if ((size && !data) || !SpanInsideMappedSections(virtual_address, size)) {
     return Fail(kXexMapperInvalidArgument);
   }
   if (!WriteSparseGuestMemory(virtual_address, data, size)) {

@@ -15,8 +15,23 @@ let bootstrapPromise=null;
 let activeRun=0;
 let activeScheduler=null;
 
-async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();return bootstrapPromise;}
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
+async function getBootstrap(onStage=null){
+  const wasCached=Boolean(bootstrapPromise);
+  stage(onStage,'runtime',wasCached?'Checking generated WASM CPU runtime…':'Loading generated WASM CPU runtime…');
+  if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();
+  try{
+    const bootstrap=await bootstrapPromise;
+    stage(onStage,'runtime','Generated WASM CPU runtime ready');
+    return bootstrap;
+  }catch(error){
+    // A rejected singleton used to poison every later Play attempt for the life
+    // of the Safari tab. Clear it so a transient fetch/compile/ABI failure can
+    // be retried cleanly after the published browser bootstrap changes.
+    bootstrapPromise=null;
+    throw error;
+  }
+}
 function stopActive(){try{activeScheduler?.stop?.();}catch{}activeScheduler=null;hideTitleFrontbuffer();}
 
 async function readDirectXex(file,onStage){
@@ -152,7 +167,7 @@ export async function runModernXboxContent({core,file,type,onStage=null,config={
   if(!['xex','con','live','pirs'].includes(kind))throw new Error(`Modern content bridge does not support ${kind||'unknown'} input`);
   const run=++activeRun;stopActive();
   stage(onStage,'launch',`Starting ${file.name||'Xbox 360 title'}…`);
-  const bootstrap=await getBootstrap();if(run!==activeRun)return null;
+  const bootstrap=await getBootstrap(onStage);if(run!==activeRun)return null;
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
   const result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
   const threaded=await attachScheduler({bootstrap,result,onStage,config});if(run!==activeRun)return null;

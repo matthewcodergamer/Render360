@@ -1,7 +1,7 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
 import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
-import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs';
-import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs';
+import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=43';
+import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=43';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[

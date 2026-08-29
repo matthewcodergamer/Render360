@@ -1,4 +1,4 @@
-import {listGames,putGame,putCover} from './library/game-library.js';
+import {listGames,putGame,putCover} from './library/game-library.js?v=43';
 import {resolveTitleCover} from './library/cover-resolver.js?v=43';
 
 const $=id=>document.getElementById(id);

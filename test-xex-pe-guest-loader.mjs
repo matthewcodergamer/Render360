@@ -15,7 +15,7 @@ const instance=await WebAssembly.instantiate(module,imports);wasi.initialize(ins
 const pick=n=>instance.exports[n]??instance.exports[`_${n}`];
 const required=[
   'r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity',
-  'r360_pe_guest_reset','r360_pe_guest_load','r360_pe_guest_status',
+  'r360_xex_guest_mapper_status','r360_pe_guest_reset','r360_pe_guest_load','r360_pe_guest_status',
   'r360_pe_guest_entry_address','r360_pe_guest_section_count','r360_pe_guest_raw_bytes',
   'r360_xex_guest_mapper_mapped_bytes','r360_sparse_guest_memory_read_u8',
   'r360_sparse_guest_memory_write_u8','r360_sparse_guest_memory_last_fault_code'
@@ -45,7 +45,12 @@ const cap=pick('r360_xex_guest_mapper_input_capacity')()>>>0;
 const pe=makePE();if(!input||pe.length>cap)throw new Error('staging buffer too small');
 new Uint8Array(instance.exports.memory.buffer,input,pe.length).set(pe);
 pick('r360_pe_guest_reset')();
-ok(pick('r360_pe_guest_load')(input,pe.length),'prepared PE guest load failed');
+const loaded=pick('r360_pe_guest_load')(input,pe.length)>>>0;
+if(loaded!==1){
+  const loader=pick('r360_pe_guest_status')()>>>0;
+  const mapper=pick('r360_xex_guest_mapper_status')()>>>0;
+  throw new Error(`prepared PE guest load failed loader=0x${loader.toString(16)} mapper=0x${mapper.toString(16)}`);
+}
 eq(pick('r360_pe_guest_status')(),1,'loader status');
 eq(pick('r360_pe_guest_entry_address')(),0x82001000,'decoder-derived entry');
 eq(pick('r360_pe_guest_section_count')(),2,'mapped section count');

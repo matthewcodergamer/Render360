@@ -1,0 +1,29 @@
+name: Deployed Browser Bootstrap Critic
+
+on:
+  push:
+    paths:
+      - 'xenia_ppc_bootstrap.wasm'
+      - 'xenia_ppc_bootstrap.meta.json'
+      - 'render360-browser-title-runtime.mjs'
+      - 'render360-browser-iso-hook.mjs'
+      - 'render360-iso-title-controller.mjs'
+      - 'render360-xdvdfs.mjs'
+      - 'test-deployed-browser-bootstrap-critic.mjs'
+      - '.github/workflows/deployed-browser-bootstrap-critic.yml'
+  workflow_dispatch:
+
+jobs:
+  deployed-bootstrap-critic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout deployed Render360 tree
+        uses: actions/checkout@v4
+      - name: "Harsh critic: verify deployed bootstrap provenance and exports"
+        run: node test-deployed-browser-bootstrap-critic.mjs
+      - name: Verify browser ISO input contract still passes
+        run: |
+          node test-xdvdfs-virtual-mount.mjs
+          node test-xdvdfs-virtual-mount-critic.mjs
+          node test-browser-title-runtime.mjs

@@ -23,3 +23,6 @@ const c=pick('r360_guest_thread_create')(0x82003000,0,0x4000,0)>>>0;if(!c||c===a
 console.log('GUEST_RUNTIME_STALE_HANDLE_FAIL_CLOSED=PASS');console.log('GUEST_RUNTIME_THREAD_STACK_REUSE=PASS');
 const next=pick('r360_guest_thread_next_runnable')()>>>0;if(!next)throw new Error('scheduler found no runnable thread');
 console.log('GUEST_RUNTIME_COOPERATIVE_SCHEDULER=PASS');console.log('GUEST_THREADS_TLS_RUNTIME_HARSH_CRITIC=PASS');
+// The browser scheduler gets a fresh WASM instance so the native thread registry,
+// translated-function cache and PPCContext start from a production-clean state.
+await import('./test-browser-thread-scheduler.mjs');

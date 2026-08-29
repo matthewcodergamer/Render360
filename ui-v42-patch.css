@@ -1,4 +1,4 @@
-/* Render360 V42 interaction and iOS theme polish. */
+/* Render360 V43 interaction and iOS theme polish. */
 
 /* The placeholder is absolutely positioned. Make the detail cover its containing block
    so a missing cover can never expand over the whole Game Details view. */
@@ -10,7 +10,22 @@ html,body,#app{background-color:var(--bg)!important}
 :root[data-theme="light"],:root[data-theme="light"] body,:root[data-theme="light"] #app,:root[data-theme="light"] .view:not(.runtime-view){background-color:#f2f2f7!important}
 :root[data-theme="dark"],:root[data-theme="dark"] body,:root[data-theme="dark"] #app{background-color:#000!important}
 
-/* Library = launch surface in V42. */
+/* Library is an app-owned gesture surface. Safari normally treats a long press on an
+   IMG as an image/Live Text/subject-selection gesture. The cover remains visible and
+   accessible through the tile label, but the image itself is not a gesture target. */
+.game-tile,.game-tile .cover-shell,.game-tile .cover-shell img{
+  -webkit-touch-callout:none!important;
+  -webkit-user-select:none!important;
+  user-select:none!important;
+}
+.game-tile .cover-shell img{
+  pointer-events:none!important;
+  -webkit-user-drag:none!important;
+  user-drag:none!important;
+}
+.game-tile{-webkit-user-drag:none!important;touch-action:pan-y}
+
+/* Library = launch surface. */
 .game-tile .cover-shell{transition:transform .14s ease,box-shadow .18s ease,outline-color .18s ease}
 .game-tile:active .cover-shell{transform:scale(.985)}
 .game-tile.v42-holding .cover-shell{transform:scale(.975);outline:3px solid color-mix(in srgb,var(--blue) 72%,transparent);outline-offset:2px}

@@ -17,8 +17,10 @@ on:
       - 'test-xex-pe-guest-loader.mjs'
       - 'test-xex-prepared-entry-handoff.mjs'
       - 'test-xex-retail-normal-end-to-end.mjs'
+      - 'test-default-xex-title-controller.mjs'
       - 'retail-xex-normal-pipeline.mjs'
       - 'retail-xex-image-pipeline.mjs'
+      - 'render360-title-controller.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -112,6 +114,8 @@ jobs:
         run: node ./test-xex-pe-guest-loader.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify prepared PE entry handoff into Xenia PPC/HIR
         run: node ./test-xex-prepared-entry-handoff.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify one-call default.xex preparation to Xenia handoff
+        run: node ./test-default-xex-title-controller.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then

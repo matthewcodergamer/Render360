@@ -4,6 +4,7 @@
 #include <string>
 
 #include "hir_correctness_executor.h"
+#include "ppc_translation_probe_runtime.h"
 #include "probe_backend.h"
 #include "sparse_guest_memory.h"
 #include "wasm_backend_call_probe.h"
@@ -180,6 +181,12 @@ uint32_t PageSparseCodeWindow(uint32_t target_address) {
   return loaded;
 }
 }  // namespace
+
+xe::Memory* ActiveProbeMemory() {
+  if (!EnsureRuntime()) return nullptr;
+  return g_memory;
+}
+
 }  // namespace render360::xenia_web
 
 extern "C" {

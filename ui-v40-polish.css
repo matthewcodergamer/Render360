@@ -1,0 +1,33 @@
+/* V40.1 presentation refinements kept separate from the base layout. */
+.settings-note{margin:-8px 0 18px;color:#8e8e93;font-size:12px;line-height:1.45;max-width:560px}
+.setting-tail{margin-left:auto;min-width:0;display:flex;flex-direction:column;align-items:flex-end;gap:3px;text-align:right}
+.setting-tail .settings-select{max-width:100%}
+.settings-select:disabled{opacity:1;color:#74747a;-webkit-text-fill-color:#74747a}
+.switch input:disabled+span{opacity:.52}
+.unsupported{display:block;margin:0;font-size:9.5px;color:#5d5d62;line-height:1.2;white-space:nowrap}
+
+/* The controller and performance graph belong to gameplay, not the boot screen. */
+body[data-state="BOOTING_GAME"] .controller-layer,
+body[data-state="BOOTING_GAME"] .performance-hud,
+body[data-state="BOOTING_GAME"] .runtime-back{opacity:0;pointer-events:none}
+body[data-state="RUNNING"] .controller-layer,
+body[data-state="RUNNING"] .performance-hud,
+body[data-state="RUNNING"] .runtime-back{opacity:1}
+
+/* Match the reference controller: large left movement pad and ABXY-only right cluster. */
+.right-controls{width:230px}
+.right-controls .face-grid{right:0;bottom:0}
+.face{background:linear-gradient(150deg,rgba(255,255,255,.115),rgba(255,255,255,.038));-webkit-backdrop-filter:blur(20px) saturate(145%);backdrop-filter:blur(20px) saturate(145%)}
+.stick{background:rgba(255,255,255,.075)}
+.top-control,.trigger{background:linear-gradient(150deg,rgba(255,255,255,.11),rgba(255,255,255,.035))}
+
+/* Don't let the HUD steal the RB/LB lane on smaller landscape phones. */
+@media(orientation:landscape) and (max-width:900px){
+  .top-controls>div:last-child{padding-right:188px;gap:9px}
+  .top-control{min-width:82px;padding:0 15px}
+  .performance-hud{width:174px}
+}
+@media(max-width:520px){
+  .setting-tail{max-width:55%}
+  .unsupported{white-space:normal}
+}

@@ -26,16 +26,21 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = workflow_run ]; then
-            echo "run_id=$EVENT_RUN_ID" >> "$GITHUB_OUTPUT"
+            run_id="$EVENT_RUN_ID"
+            source_sha="$EVENT_HEAD_SHA"
           else
             run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/xenia-wasm32-bootstrap.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].id')"
             test -n "$run_id"
-            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.head_sha')"
           fi
+          test -n "$source_sha"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
       - name: Download verified Xenia bootstrap
         uses: actions/download-artifact@v4
         with:
@@ -52,36 +57,51 @@ jobs:
             build/spirv-wgsl/render360_spirv_wgsl.js \
             build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
       - name: Publish verified converter
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          SOURCE_RUN: ${{ steps.source.outputs.run_id }}
         run: |
           set -euo pipefail
-          cp build/spirv-wgsl/render360_spirv_wgsl.js render360_spirv_wgsl.js
-          cp build/spirv-wgsl/render360_spirv_wgsl_bg.wasm render360_spirv_wgsl_bg.wasm
-          sha="$(sha256sum render360_spirv_wgsl_bg.wasm | awk '{print $1}')"
-          bytes="$(wc -c < render360_spirv_wgsl_bg.wasm | tr -d ' ')"
-          printf '{\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s,\n  "translator": "Naga SPIR-V -> WGSL"\n}\n' '${{ steps.source.outputs.run_id }}' "$sha" "$bytes" > render360_spirv_wgsl.meta.json
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add render360_spirv_wgsl.js render360_spirv_wgsl_bg.wasm render360_spirv_wgsl.meta.json
-          if git diff --cached --quiet; then
-            echo 'Published WGSL converter already matches verified output.'
-            exit 0
-          fi
-          git commit -m 'build: publish verified SPIR-V WGSL converter'
 
-          # The Xenia bootstrap publisher and this converter are both triggered
-          # by the same successful Xenia run, so they may race to advance main.
-          # Rebase this generated-only commit onto the latest remote main and
-          # retry rather than failing a verified converter on a non-fast-forward.
+          # The Xenia bootstrap publisher and this converter publisher can race
+          # after the same verified source run. Retry only across generated
+          # artifact commits. If any real source/runtime file changed after the
+          # Xenia run, this converter is stale and must never be published.
           for attempt in 1 2 3; do
             git fetch origin main
-            git rebase origin/main
+            remote_head="$(git rev-parse origin/main)"
+            if ! git merge-base --is-ancestor "$SOURCE_SHA" "$remote_head"; then
+              echo "Refusing publish: source $SOURCE_SHA is not an ancestor of current main $remote_head" >&2
+              exit 1
+            fi
+            unsafe="$(git diff --name-only "$SOURCE_SHA..$remote_head" | grep -Ev '^(xenia_ppc_bootstrap\.wasm|xenia_ppc_bootstrap\.meta\.json|render360_spirv_wgsl\.js|render360_spirv_wgsl_bg\.wasm|render360_spirv_wgsl\.meta\.json)$' || true)"
+            if [ -n "$unsafe" ]; then
+              echo 'Refusing stale converter publish; newer non-generated files changed:' >&2
+              printf '%s\n' "$unsafe" >&2
+              exit 1
+            fi
+
+            git reset --hard "$remote_head"
+            cp build/spirv-wgsl/render360_spirv_wgsl.js render360_spirv_wgsl.js
+            cp build/spirv-wgsl/render360_spirv_wgsl_bg.wasm render360_spirv_wgsl_bg.wasm
+            sha="$(sha256sum render360_spirv_wgsl_bg.wasm | awk '{print $1}')"
+            bytes="$(wc -c < render360_spirv_wgsl_bg.wasm | tr -d ' ')"
+            printf '{\n  "sourceCommit": "%s",\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s,\n  "translator": "Naga SPIR-V -> WGSL"\n}\n' "$SOURCE_SHA" "$SOURCE_RUN" "$sha" "$bytes" > render360_spirv_wgsl.meta.json
+            git add render360_spirv_wgsl.js render360_spirv_wgsl_bg.wasm render360_spirv_wgsl.meta.json
+            if git diff --cached --quiet; then
+              echo 'Published WGSL converter already matches verified output.'
+              exit 0
+            fi
+            git commit -m 'build: publish verified SPIR-V WGSL converter'
             if git push origin HEAD:main; then
               exit 0
             fi
-            echo "Converter publish raced with another main update (attempt ${attempt}/3); retrying."
+            echo "Generated-artifact publish race on attempt ${attempt}/3; retrying."
             sleep $((attempt * 2))
           done
-          echo 'Failed to publish verified converter after 3 race-safe retries.' >&2
+          echo 'Failed to publish verified converter after 3 generated-artifact retries.' >&2
           exit 1
       - name: Upload converter artifact
         uses: actions/upload-artifact@v4

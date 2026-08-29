@@ -11,7 +11,10 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_ring_word',
   'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit',
   'r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents',
-  'r360_xenos_last_opcode','r360_xenos_last_fault_word','r360_xenos_frame_generation','r360_xenos_frame_hash'
+  'r360_xenos_last_opcode','r360_xenos_last_fault_word','r360_xenos_frame_generation','r360_xenos_frame_hash',
+  'r360_xenos_shader_dwords','r360_xenos_shader_interpreter_reset','r360_xenos_shader_interpreter_analyze',
+  'r360_xenos_shader_interpreter_execute','r360_xenos_shader_interpreter_status','r360_xenos_shader_interpreter_ucode_dwords',
+  'r360_xenos_shader_interpreter_uses_texture_fetch','r360_xenos_shader_interpreter_execution_count'
 ];
 const pick=(e,n)=>e[n]??e[`_${n}`];
 
@@ -49,4 +52,4 @@ export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapU
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleEntryExecution:'Xenia-scanned executable PE function',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleEntryExecution:'Xenia-scanned executable PE function',titleGpu:'native circular PM4 ring + upstream Xenia shader interpreter',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}

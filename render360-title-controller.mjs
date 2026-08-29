@@ -24,7 +24,15 @@ function registerKernelImportPlan(bootstrap,kernelImports){
   return {registered,available:true};
 }
 
-export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,implementedKernelExports={}}){
+function applyInitialGprs(bootstrap,initialGprs){
+  const entries=initialGprs instanceof Map?[...initialGprs.entries()]:Array.isArray(initialGprs)?initialGprs.map((v,i)=>[i,v]):Object.entries(initialGprs??{});
+  if(!entries.length)return 0;
+  const set=maybe(bootstrap,'r360_ppc_probe_set_initial_gpr');if(!set)throw new Error('missing startup GPR export');let applied=0;
+  for(const [rawIndex,rawValue] of entries){if(rawValue===undefined||rawValue===null)continue;const index=Number(rawIndex);if(!Number.isInteger(index)||index<0||index>=32)throw new RangeError(`invalid startup GPR index ${rawIndex}`);const value=BigInt.asUintN(64,BigInt(rawValue));if((set(index,value)>>>0)!==1)throw new Error(`failed to set startup GPR r${index}`);applied++;}
+  return applied;
+}
+
+export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,implementedKernelExports={},initialGprs={}}){
   const xex=Buffer.from(defaultXex);
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
   const headerSize=be32(xex,8);
@@ -42,6 +50,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   if((pick(bootstrap,'r360_pe_guest_load')(input,prepared.length)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
   pick(bootstrap,'r360_title_handoff_reset')();
+  const startupGprCount=applyInitialGprs(bootstrap,initialGprs);
   const hir=pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0;
   if(!hir)throw new Error(`title entry handoff failed 0x${(pick(bootstrap,'r360_title_handoff_status')()>>>0).toString(16)}`);
 
@@ -70,5 +79,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
   const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
 
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker};
+  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker};
 }

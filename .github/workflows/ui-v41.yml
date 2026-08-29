@@ -1,5 +1,7 @@
 name: UI V43 Integration
 
+# V43 release gate: validates the cache-busted iOS shell against the exact
+# verified browser bootstrap published by Xenia Browser Bootstrap Fastlane.
 on:
   push:
     paths:

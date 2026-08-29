@@ -4,6 +4,7 @@ const read=path=>fs.readFileSync(new URL(path,import.meta.url),'utf8');
 const html=read('./index.html');
 const app=read('./app-v41.js');
 const patch=read('./app-v42-patch.js');
+const developerConsole=read('./developer-console-v44.js');
 const css=read('./ui-v41.css');
 const patchCss=read('./ui-v42-patch.css');
 const runtime=read('./runtime/render360-runtime.js');
@@ -42,6 +43,7 @@ must(has(app,'APP_SETTINGS')&&has(app,'GAME_SETTINGS'),'base shell must use dedi
 must(has(app,'workerHz')&&has(app,'swaps')&&has(app,'hudPm4')&&has(app,'hudDraws'),'HUD must display real runtime counters rather than a decorative FPS-only value');
 must(has(app,'await a.action?.()')&&has(app,"showAlert('Action Failed'"),'iOS alerts must await asynchronous destructive actions and surface failures');
 
+must(has(patch,"import './developer-console-v44.js?v=44'"),'active V44 patch must load the live developer console');
 must(has(patch,'scheduleAutoPlay')&&has(patch,"$('playGameButton')?.click()"),'library tap must launch through the existing Play path');
 must(has(patch,'state.held=true')&&has(patch,'500'),'press-and-hold must remain reserved for details');
 must(has(patch,'coverSurface(')&&has(patch,'convertNativeCoverImages')&&has(patch,'img.replaceWith(coverSurface'),'V44 must replace native cover IMG elements with app-owned surfaces on iOS interaction views');
@@ -49,6 +51,13 @@ must(has(patch,"grid.addEventListener('dragstart'")&&has(patch,"grid.addEventLis
 must(has(patch,'hydrateMissingArtwork')&&has(patch,'resolveTitleCover'),'artwork backfill must remain active for existing library entries');
 must(has(patch,'syncThemeChrome')&&has(patch,'apple-mobile-web-app-status-bar-style'),'patch must synchronize iOS outer chrome with appearance');
 must(has(patch,'Render360 V44')&&has(patch,'clearGameCopiesV44')&&has(patch,'clearGamesDirectory'),'V44 patch must identify the release and own reliable game-copy deletion');
+
+must(PIPELINE_NAMES.every(name=>has(developerConsole,name)),'developer console must expose every commercial-title boot boundary');
+must(has(developerConsole,'render360:runtimeBlocker')&&has(developerConsole,'render360:fatalError')&&has(developerConsole,'render360:telemetry'),'developer console must subscribe to blocker, fatal and telemetry events');
+must(has(developerConsole,'unhandledrejection')&&has(developerConsole,"globalThis.addEventListener('error'"),'developer console must capture browser errors and unhandled promise failures');
+must(has(developerConsole,'firstKernelBlocker')&&has(developerConsole,'reachedKernelBlocker')&&has(developerConsole,'lastOpcode'),'developer console must expose Xenia kernel-import and Xenos PM4 blockers');
+must(has(developerConsole,'navigator.clipboard.writeText')&&has(developerConsole,'navigator.share'),'developer console must support copying/sharing an actionable report from iPhone');
+must(has(developerConsole,'render360DeveloperConsole')&&has(developerConsole,'Developer Console'),'developer console must expose both an in-app UI and a programmatic debug handle');
 
 must(has(library,"if(/^[0-9a-f]{32,64}$/.test(base))return 'con';"),'V44 must recognize extensionless hash-named STFS content such as the Braid package selected from iOS Files');
 
@@ -62,6 +71,7 @@ must(has(runtime,'runModernXboxContent'),'runtime must use the modern XEX/STFS c
 must(!has(runtime,"if(type!=='iso')"),'runtime must not reject all non-ISO inputs');
 must(has(runtime,'REQUIRED_CORE_BUILD=30')&&has(runtime,'REQUIRED_ABI=0x00030002'),'frontend/backend version contract must be explicit');
 must(has(runtime,'coreSource')&&has(runtime,'stfsExtraction'),'runtime diagnostics must expose which core and extraction path Safari actually loaded');
+must(has(runtime,'render360:${type}')&&has(runtime,'globalThis.dispatchEvent'),'runtime must mirror structured emulator events onto the global developer-console bus');
 
 const networkPos=coreLoader.indexOf('const response=await fetch(this.url');
 const embeddedPos=coreLoader.indexOf('if(!result&&CORE_WASM_GZIP_BASE64)');
@@ -88,3 +98,5 @@ must(has(patchCss,'.cover-art-surface')&&has(patchCss,'background-size:cover')&&
 must(has(patchCss,'.tile-play-badge'),'library tiles must visibly advertise Play');
 
 if(failures.length){console.error('UI_V44_CONTRACT FAIL');for(const f of failures)console.error(` - ${f}`);process.exit(1);}console.log('UI_V44_CONTRACT PASS');
+
+function PIPELINE_NAMES(){return ['Source / Core','Disc / Package','XEX2 / Security','PE / Guest Memory','PPC / Scheduler','xboxkrnl / XAM','Xenos / Frame'];}

@@ -1,13 +1,13 @@
-import {Render360Core,containerName} from '../wasm-core-v32.js?v=43';
+import {Render360Core,containerName} from '../wasm-core-v32.js?v=44';
 import {RuntimeHost} from '../runtime-host-v32.js';
-import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
-import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=43';
+import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs?v=44';
+import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=44';
 import {mountXdvdfs} from '../render360-xdvdfs.mjs';
 import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
-const RENDER360_RELEASE=43;
+const RENDER360_RELEASE=44;
 const REQUIRED_CORE_BUILD=30;
 const REQUIRED_ABI=0x00030002;
 

@@ -11,7 +11,7 @@ const wordsToBytes=(...words)=>Uint8Array.from(words.flatMap(w=>[(w>>>24)&255,(w
 // Guest PPC program: stw r5..r11 into 7 consecutive command words at r4, then blr.
 const ppc=wordsToBytes(0x90A40000,0x90C40004,0x90E40008,0x9104000C,0x91240010,0x91440014,0x91640018,0x4E800020);
 const guestCommandAddress=0x80000400;
-const pm4=[(1<<16)|0x2000,64,0,(0<<16)|0x2104,0xF,(3<<30)|(0x36<<8),4];
+const pm4=[(1<<16)|0x2000,64,0,(0<<16)|0x2104,0xF,((3<<30)|(0x36<<8))>>>0,4];
 function executeGuestProducer(commandWords){
   f('r360_ppc_probe_reset')();
   const input=f('r360_ppc_probe_input_buffer')()>>>0,cap=f('r360_ppc_probe_input_capacity')()>>>0;
@@ -33,7 +33,7 @@ function submitProduced(produced){
   return f('r360_xenos_submit')(produced.length)>>>0;
 }
 const produced=executeGuestProducer(pm4);
-for(let n=0;n<pm4.length;n++)if(produced[n]!==pm4[n])throw new Error(`translated PPC command mismatch word ${n}: got=0x${produced[n].toString(16)} expected=0x${pm4[n].toString(16)}`);
+for(let n=0;n<pm4.length;n++){const expected=pm4[n]>>>0;if(produced[n]!==expected)throw new Error(`translated PPC command mismatch word ${n}: got=0x${produced[n].toString(16)} expected=0x${expected.toString(16)}`);}
 console.log('TRANSLATED_PPC_GPU_COMMAND_PRODUCTION=PASS');
 if(!submitProduced(produced))throw new Error('guest-produced Xenos stream rejected');
 if((f('r360_xenos_draws')()>>>0)!==1||(f('r360_xenos_presents')()>>>0)!==1)throw new Error('guest-produced stream did not draw/present');

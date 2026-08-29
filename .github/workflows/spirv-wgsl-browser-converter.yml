@@ -1,0 +1,80 @@
+name: SPIR-V WGSL Browser Converter
+
+on:
+  workflow_run:
+    workflows: ['Xenia WASM32 Bootstrap']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  converter:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Resolve source Xenia run
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            echo "run_id=$EVENT_RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/xenia-wasm32-bootstrap.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].id')"
+            test -n "$run_id"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download verified Xenia bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: xenia-wasm32-bootstrap-report
+          path: verified-bootstrap
+          run-id: ${{ steps.source.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Naga SPIR-V to WGSL browser WASM
+        run: bash ./build-spirv-wgsl.sh
+      - name: Verify Xenos to SPIR-V to WGSL end to end
+        run: |
+          node ./test-xenos-wgsl-conversion.mjs \
+            verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm \
+            build/spirv-wgsl/render360_spirv_wgsl.js \
+            build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
+      - name: Publish verified converter
+        run: |
+          set -euo pipefail
+          cp build/spirv-wgsl/render360_spirv_wgsl.js render360_spirv_wgsl.js
+          cp build/spirv-wgsl/render360_spirv_wgsl_bg.wasm render360_spirv_wgsl_bg.wasm
+          sha="$(sha256sum render360_spirv_wgsl_bg.wasm | awk '{print $1}')"
+          bytes="$(wc -c < render360_spirv_wgsl_bg.wasm | tr -d ' ')"
+          printf '{\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s,\n  "translator": "Naga SPIR-V -> WGSL"\n}\n' '${{ steps.source.outputs.run_id }}' "$sha" "$bytes" > render360_spirv_wgsl.meta.json
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add render360_spirv_wgsl.js render360_spirv_wgsl_bg.wasm render360_spirv_wgsl.meta.json
+          if git diff --cached --quiet; then
+            echo 'Published WGSL converter already matches verified output.'
+            exit 0
+          fi
+          git commit -m 'build: publish verified SPIR-V WGSL converter'
+          git push origin HEAD:main
+      - name: Upload converter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: render360-spirv-wgsl-converter
+          path: |
+            build/spirv-wgsl/render360_spirv_wgsl.js
+            build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
+          if-no-files-found: error
+          retention-days: 14

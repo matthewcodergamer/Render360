@@ -2,6 +2,7 @@ import { prepareRetailXexImage } from './retail-xex-image-pipeline.mjs';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
+const maybe=(bootstrap,n)=>typeof pick(bootstrap,n)==='function'?pick(bootstrap,n):null;
 
 export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8}){
   const xex=Buffer.from(defaultXex);
@@ -20,5 +21,18 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   pick(bootstrap,'r360_title_handoff_reset')();
   const hir=pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0;
   if(!hir)throw new Error(`title entry handoff failed 0x${(pick(bootstrap,'r360_title_handoff_status')()>>>0).toString(16)}`);
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0};
+
+  const execStatusFn=maybe(bootstrap,'r360_ppc_probe_correctness_status');
+  const execInstructionsFn=maybe(bootstrap,'r360_ppc_probe_correctness_instructions');
+  const execR3Fn=maybe(bootstrap,'r360_ppc_probe_correctness_r3');
+  const callCountFn=maybe(bootstrap,'r360_wasm_backend_call_function_count');
+  const callAddressFn=maybe(bootstrap,'r360_wasm_backend_call_function_address');
+  const executionStatus=execStatusFn?(execStatusFn()>>>0):0;
+  const executionInstructions=execInstructionsFn?(execInstructionsFn()>>>0):0;
+  const executionR3Hex=execR3Fn?`0x${BigInt.asUintN(64,execR3Fn()).toString(16)}`:'0x0';
+  const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
+  const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
+  const runtimeBoundary=executionStatus===3?'guest-return':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
+
+  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary};
 }

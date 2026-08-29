@@ -2,6 +2,7 @@ import {Render360Core} from './wasm-core-v32.js';
 import {handoffXboxIsoBrowser, loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
+import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
 const $=id=>document.getElementById(id);
@@ -18,7 +19,7 @@ function refreshModernStaticCopy(){
   const support=document.querySelector('.support-note');
   if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters PPC/kernel/Xenos without copying the whole disc into WASM memory.';
   const active=document.querySelector('#statusSheet .port-row.active p');
-  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries and upstream Xenia shader analysis/execution. A commercial frame is still fail-closed until title-produced pixels replace the bounded bring-up raster.';
+  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries, upstream Xenia shader analysis/translation and a fail-closed VdSwap frontbuffer snapshot path. A real title frame is promoted only when mapped title-produced frontbuffer pixels are decoded and displayed.';
 }
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
@@ -28,6 +29,7 @@ function hostLog(level,message){
   const count=$('logCount');if(count)count.textContent=String(body.children.length);
 }
 function showGame(file){
+  hideTitleFrontbuffer();
   setText('gameName',file.name||'Xbox 360 ISO');setText('gameChipName',file.name||'Xbox 360 ISO');setText('gameType','Xbox ISO / XDVDFS');setText('gameSize',fmtBytes(file.size));setText('gameCore','Modern Xenia WASM');
   $('emptyState')?.classList.add('hidden');$('gameState')?.classList.remove('hidden');$('firstFrameGate')?.classList.remove('hidden');
   const inputGate=document.querySelector('.frame-gate-grid > div:first-child');if(inputGate){const b=inputGate.querySelector('b');const em=inputGate.querySelector('em');if(b)b.textContent='XDVDFS ISO input';if(em)em.textContent='READY';inputGate.classList.add('ready')}
@@ -43,24 +45,36 @@ async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender36
 function shaderSummary(shaderRuntime){
   if(!shaderRuntime?.available||!shaderRuntime.capturedShaders)return '';
   const one=(name,s)=>!s?.captured?`${name} not captured`:s.executed?`${name} executed by upstream Xenia`:s.reason?`${name} ${s.reason}`:`${name} status 0x${(s.status>>>0).toString(16)}`;
+  if(shaderRuntime.bothSpirvTranslated)return ` Both captured title shaders translated through Xenia to SPIR-V.${shaderRuntime.bothExecuted?` Interpreter fallback also executed both stages.`:''}`;
   if(shaderRuntime.bothExecuted)return ` Both captured title shaders executed through upstream Xenia (${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}).`;
-  if(shaderRuntime.textureFetchBlocker)return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}. Texture sampling is now the concrete shader blocker.`;
+  if(shaderRuntime.textureFetchBlocker)return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.`;
   return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.`;
 }
 
-function summarizeGpuTraffic(gpu,shaderRuntime=null){
+function summarizeGpuTraffic(gpu,shaderRuntime=null,frontbufferFrame=null){
   if(!gpu)return false;
   if(gpu.submitted){
-    const realFrame=gpu.realTitleFrameReady===true;
+    const snapshotFrame=frontbufferFrame?.realTitleFrameReady===true;
+    const coreFrame=gpu.realTitleFrameReady===true;
+    const realFrame=snapshotFrame||coreFrame;
     const realSwap=(gpu.swaps||0)>0;
-    setGate('gateGpu','ready',realFrame?'REAL FRAME':realSwap?'XE_SWAP SEEN':'PM4 ACCEPTED');
+    setGate('gateGpu','ready',snapshotFrame?'REAL FRONTBUFFER':realFrame?'REAL FRAME':realSwap?'XE_SWAP SEEN':'PM4 ACCEPTED');
     setText('frameGateState',realFrame?'FIRST EXTRACTED-TITLE FRAME':realSwap?'REAL TITLE SWAP':'TITLE PM4 ACCEPTED');
-    setText('boundaryTitle',realFrame?'A title-produced frame reached a real swap':realSwap?'Real title command traffic reached XE_SWAP':'Real title PM4 reached the Xenos decoder');
+    setText('boundaryTitle',snapshotFrame?'A real title VdSwap frontbuffer is on screen':realFrame?'A title-produced frame reached a real swap':realSwap?'Real title command traffic reached XE_SWAP':'Real title PM4 reached the Xenos decoder');
     const state=`Xenos accepted ${gpu.packets} packets, draws ${gpu.draws}, swaps ${gpu.swaps||0}, shader loads ${gpu.shaderLoads||0}, fetch groups ${gpu.fetchConstantGroups?.length||0}, backed textures ${gpu.backedTextureResources?.length||0}, memory writes ${gpu.memoryWrites||0}.`;
     const shaders=shaderSummary(shaderRuntime);
-    const frame=realFrame?'The first extracted-title frame gate is genuinely satisfied from title-produced pixels.':realSwap?`Swap frontbuffer ${fmtHex(gpu.frontbufferPtr||0)} ${gpu.frontbufferWidth||0}×${gpu.frontbufferHeight||0} was produced by the title. The exported pixels are still the bounded bring-up raster, so the real frame gate remains closed.${shaders}`:`Continue guest execution until XE_SWAP or a concrete GPU/kernel blocker appears.${shaders}`;
+    let frame='';
+    if(snapshotFrame){
+      frame=`Real frontbuffer ${frontbufferFrame.width}×${frontbufferFrame.height}, format ${frontbufferFrame.format}, ${frontbufferFrame.tiled?'Xenos tiled':'linear'}, pitch ${frontbufferFrame.pitchPixels}, source ${fmtHex(frontbufferFrame.sourceAddress)}, hash ${fmtHex(frontbufferFrame.hash)}. These pixels came from the mapped VdSwap frontbuffer, not the bounded software triangle.${shaders}`;
+    }else if(realFrame){
+      frame=`The first extracted-title frame gate is genuinely satisfied from title-produced pixels.${shaders}`;
+    }else if(realSwap){
+      frame=`Swap frontbuffer ${fmtHex(gpu.frontbufferPtr||0)} ${gpu.frontbufferWidth||0}×${gpu.frontbufferHeight||0} was produced by the title. Real frontbuffer capture did not promote because: ${frontbufferFrame?.reason||'the current bootstrap has no supported mapped frontbuffer snapshot yet'}.${shaders}`;
+    }else{
+      frame=`Continue guest execution until XE_SWAP or a concrete GPU/kernel blocker appears.${shaders}`;
+    }
     setText('boundaryText',`${gpu.nativeDrained?'Native circular ring consumption is active.':`Submitted ${gpu.wordCount} genuinely produced ring words from ${fmtHex(gpu.guestAddress)} (CP_RB_WPTR ${gpu.writePointer}).`} ${state} ${frame}`);
-    hostLog('ok',`Real title PM4 accepted · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.swaps||0} swaps · ${shaderRuntime?.executedShaders||0} shaders executed`);
+    hostLog('ok',`Real title PM4 accepted · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.swaps||0} swaps · ${shaderRuntime?.translatedSpirvShaders||shaderRuntime?.executedShaders||0} shaders advanced${snapshotFrame?' · REAL FRONTBUFFER PRESENTED':''}`);
     return true;
   }
   if(gpu.ready&&gpu.lastFaultWord!==undefined){
@@ -73,7 +87,7 @@ function summarizeGpuTraffic(gpu,shaderRuntime=null){
   return false;
 }
 
-function summarizeResult(result,gpuTraffic=null,shaderRuntime=null){
+function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFrame=null){
   const gpu=result.titleGpuTelemetry||result.browserHleTelemetry;
   setGate('gateExtract','ready','XDVDFS READY');setGate('gateXex','ready','PE MAPPED');
   setGate('gateCpu',result.executionStatus?'ready':'blocked',result.executionStatus?`${result.executionInstructions||0} INSNS`:'NO EXEC');
@@ -89,7 +103,7 @@ function summarizeResult(result,gpuTraffic=null,shaderRuntime=null){
   }
 
   setGate('gateKernel','ready',result.kernelCalls?`${result.kernelCalls} CALLS`:'ENTERED');
-  if(summarizeGpuTraffic(gpuTraffic,shaderRuntime))return;
+  if(summarizeGpuTraffic(gpuTraffic,shaderRuntime,frontbufferFrame))return;
   if(gpu?.ringInitialized){
     const producer=gpu.writePointer??0;
     setGate('gateGpu','ready',producer?'WPTR CAPTURED':'RING CAPTURED');setText('frameGateState',producer?'REAL XENOS WPTR':'REAL XENOS RING');
@@ -117,14 +131,26 @@ export async function runModernXboxIso(file){
     let gpuTraffic=null;
     if(result.titleGpuTelemetry){try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};hostLog('warn',`Captured PM4 state unavailable: ${gpuTraffic.reason}`)}}
     let shaderRuntime=null;
-    try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};hostLog('warn',`Xenia shader interpreter stopped: ${shaderRuntime.error}`)}
-    summarizeResult(result,gpuTraffic,shaderRuntime);
-    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,shaderRuntime,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
-    return {...result,gpuTraffic,shaderRuntime};
+    try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};hostLog('warn',`Xenia shader runtime stopped: ${shaderRuntime.error}`)}
+    let frontbufferFrame=null,presentation=null;
+    if((gpuTraffic?.swaps||0)>0){
+      try{
+        frontbufferFrame=captureTitleFrontbuffer({bootstrap});
+        if(frontbufferFrame.captured){
+          presentation=presentTitleFrontbuffer(frontbufferFrame);
+          hostLog('ok',`Real VdSwap frontbuffer displayed · ${frontbufferFrame.width}×${frontbufferFrame.height} · hash ${fmtHex(frontbufferFrame.hash)}`);
+        }else{
+          hostLog('warn',`VdSwap frontbuffer not displayable yet: ${frontbufferFrame.reason}`);
+        }
+      }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};hostLog('warn',`Real frontbuffer capture stopped: ${frontbufferFrame.reason}`)}
+    }
+    summarizeResult(result,gpuTraffic,shaderRuntime,frontbufferFrame);
+    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,shaderRuntime,frontbufferFrame,presentation,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
+    return {...result,gpuTraffic,shaderRuntime,frontbufferFrame,presentation};
   }catch(error){if(run===activeRun)showFailure(error);throw error}
 }
 
-export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,requiresTitleProducedPixelsForRealFrame:true,failClosedOnUnsupportedPm4:true};}
+export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,usesXeniaSpirvTranslation:true,realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],requiresTitleProducedPixelsForRealFrame:true,syntheticRasterAcceptedForRealFrame:false,failClosedOnUnsupportedPm4:true};}
 
 refreshModernStaticCopy();
 const input=$('gameInput');

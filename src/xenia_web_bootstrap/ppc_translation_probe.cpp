@@ -98,8 +98,13 @@ uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
     g_status = kProbeErrorInput;
     return 0;
   }
-  if (!EnsureRuntime()) return 0;
+
+  // Publish the decoder-derived guest base before Memory / Processor setup.
+  // The wasm32 Xenia overlay deliberately owns only one bounded 64 KiB backing
+  // window; its guest-visible address follows this value rather than reserving
+  // a fake desktop-size Xbox address space.
   g_active_guest_base = address;
+  if (!EnsureRuntime()) return 0;
   if (!IsProbeGuestRange(address, length)) {
     g_status = kProbeErrorInput;
     return 0;

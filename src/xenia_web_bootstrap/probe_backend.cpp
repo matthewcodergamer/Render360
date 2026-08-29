@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "hir_correctness_executor.h"
+#include "kernel_import_probe.h"
 #include "wasm_backend_call_probe.h"
 #include "wasm_backend_cfg_probe.h"
 #include "wasm_backend_fpu_probe.h"
@@ -29,6 +30,20 @@ constexpr uint32_t kProbeGuestSize = 64u * 1024u;
 constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
 
 bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
+  // Registered kernel/XAM import thunks are resolved before the bounded probe
+  // memory check. Real XEX thunks may live outside the entry's 64 KiB staging
+  // window, but a known HLE import is an external call boundary, not guest code
+  // that should be scanned from the probe window.
+  if (ResolveKernelImportThunk(address)) {
+    std::fprintf(stderr, "R360_KERNEL_IMPORT resolved target=0x%08X module=%u ordinal=0x%X\n",
+                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal());
+    return true;
+  }
+  if (KernelImportProbeLastThunk() == address && KernelImportProbeLastStatus() == 2) {
+    std::fprintf(stderr, "R360_KERNEL_IMPORT unresolved target=0x%08X module=%u ordinal=0x%X\n",
+                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal());
+    return false;
+  }
   if (!g_probe_backend || !g_probe_backend->processor()) {
     std::fprintf(stderr, "R360_CALL_RESOLVE rejected: backend/processor missing\n"); return false;
   }

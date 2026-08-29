@@ -48,3 +48,8 @@ f('r360_xenos_spirv_reset')();
 if((f('r360_xenos_spirv_translate')(2)>>>0)!==0||(f('r360_xenos_spirv_status')()>>>0)!==0xE2000002)throw new Error('invalid shader type did not fail closed');
 console.log('XENOS_SPIRV_INVALID_TYPE_FAIL_CLOSED=PASS');
 console.log('XENOS_SPIRV_TRANSLATION_FOUNDATION=PASS');
+
+// The same published bootstrap must also prove that Xenia's VdSwap frontbuffer
+// fetch can be decoded from real sparse title memory without falling back to
+// the bounded software triangle.
+await import('./test-xenos-frontbuffer-snapshot.mjs');

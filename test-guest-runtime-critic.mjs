@@ -1,0 +1,22 @@
+import fs from 'node:fs';
+import { WASI } from 'node:wasi';
+const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
+const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
+const req=['r360_kernel_runtime_reset','r360_guest_thread_create','r360_guest_thread_current','r360_guest_thread_set_current','r360_guest_thread_suspend','r360_guest_thread_resume','r360_guest_thread_terminate','r360_guest_thread_next_runnable','r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_stack_size','r360_guest_runtime_status','r360_guest_tls_alloc','r360_guest_tls_free','r360_guest_tls_set','r360_guest_tls_get'];for(const n of req)if(typeof pick(n)!=='function')throw new Error(`missing runtime critic export ${n}`);
+pick('r360_kernel_runtime_reset')();
+const a=pick('r360_guest_thread_create')(0x82001000,0x1111,1,0)>>>0;const b=pick('r360_guest_thread_create')(0x82002000,0x2222,0x5000,0)>>>0;if(!a||!b||a===b)throw new Error('thread creation/identity failed');if((pick('r360_guest_thread_stack_size')(a)>>>0)!==0x4000||(pick('r360_guest_thread_stack_size')(b)>>>0)!==0x8000)throw new Error('stack alignment failed');
+console.log('GUEST_RUNTIME_THREAD_CREATE=PASS');
+const slot=pick('r360_guest_tls_alloc')()>>>0;if(slot===0xFFFFFFFF)throw new Error('tls alloc failed');if(!(pick('r360_guest_tls_set')(a,slot,0x11112222)>>>0)||!(pick('r360_guest_tls_set')(b,slot,0x33334444)>>>0))throw new Error('tls set failed');if((pick('r360_guest_tls_get')(a,slot)>>>0)!==0x11112222||(pick('r360_guest_tls_get')(b,slot)>>>0)!==0x33334444)throw new Error('TLS isolation failed');
+console.log('GUEST_RUNTIME_TLS_ISOLATION=PASS');
+if((pick('r360_guest_thread_suspend')(b)>>>0)!==0)throw new Error('first suspend count wrong');if((pick('r360_guest_thread_state')(b)>>>0)!==3)throw new Error('suspended state wrong');if((pick('r360_guest_thread_set_current')(b)>>>0)!==0)throw new Error('suspended thread became current');if((pick('r360_guest_thread_resume')(b)>>>0)!==1||(pick('r360_guest_thread_state')(b)>>>0)!==1)throw new Error('resume failed');if(!(pick('r360_guest_thread_set_current')(b)>>>0)||(pick('r360_guest_thread_current')()>>>0)!==b)throw new Error('current switch failed');
+console.log('GUEST_RUNTIME_SUSPEND_RESUME=PASS');
+if(!(pick('r360_guest_thread_terminate')(a,0xDEAD)>>>0))throw new Error('terminate failed');if((pick('r360_guest_thread_state')(a)>>>0)!==4||(pick('r360_guest_thread_exit_code')(a)>>>0)!==0xDEAD)throw new Error('termination telemetry wrong');if((pick('r360_guest_tls_set')(a,slot,7)>>>0)!==0)throw new Error('terminated thread accepted TLS mutation');
+console.log('GUEST_RUNTIME_TERMINATION_FAIL_CLOSED=PASS');
+if(!(pick('r360_guest_tls_free')(slot)>>>0))throw new Error('tls free failed');if((pick('r360_guest_tls_get')(b,slot)>>>0)!==0||(pick('r360_guest_runtime_status')()>>>0)!==3)throw new Error('freed TLS slot remained accessible');
+const slots=[];for(let i=0;i<64;i++){const s=pick('r360_guest_tls_alloc')()>>>0;if(s===0xFFFFFFFF)throw new Error(`premature TLS exhaustion at ${i}`);slots.push(s);}if((pick('r360_guest_tls_alloc')()>>>0)!==0xFFFFFFFF)throw new Error('TLS exhaustion did not fail closed');
+console.log('GUEST_RUNTIME_TLS_EXHAUSTION=PASS');
+// Reuse a terminated slot and ensure the old generation-tagged handle stays stale.
+const c=pick('r360_guest_thread_create')(0x82003000,0,0x4000,0)>>>0;if(!c||c===a)throw new Error('generation handle reuse failed');if((pick('r360_guest_thread_set_current')(a)>>>0)!==0)throw new Error('stale handle was accepted');if((pick('r360_guest_thread_set_current')(c)>>>0)!==1)throw new Error('replacement thread invalid');
+console.log('GUEST_RUNTIME_STALE_HANDLE_FAIL_CLOSED=PASS');
+const next=pick('r360_guest_thread_next_runnable')()>>>0;if(!next)throw new Error('scheduler found no runnable thread');
+console.log('GUEST_RUNTIME_COOPERATIVE_SCHEDULER=PASS');console.log('GUEST_THREADS_TLS_RUNTIME_HARSH_CRITIC=PASS');

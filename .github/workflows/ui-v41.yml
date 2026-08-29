@@ -1,7 +1,7 @@
 name: UI V43 Integration
 
-# V43 release gate: validates the cache-busted iOS shell against the exact
-# verified browser bootstrap published by Xenia Browser Bootstrap Fastlane.
+# V43 release gate: validates the iOS shell, storage/import layers and exact
+# browser package/runtime compatibility paths used by commercial title launch.
 on:
   push:
     paths:
@@ -10,6 +10,8 @@ on:
       - 'ui-v42-patch.css'
       - 'app-v41.js'
       - 'app-v42-patch.js'
+      - 'wasm-core-v32.js'
+      - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
       - 'import/**'
       - 'profiles/**'
@@ -30,6 +32,7 @@ on:
       - 'manifest.webmanifest'
       - 'VERSION'
       - 'test-ui-v41-contract.mjs'
+      - 'test-stfs-browser-extractor.mjs'
       - '.github/workflows/ui-v41.yml'
   pull_request:
     paths:
@@ -38,6 +41,8 @@ on:
       - 'ui-v42-patch.css'
       - 'app-v41.js'
       - 'app-v42-patch.js'
+      - 'wasm-core-v32.js'
+      - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
       - 'import/**'
       - 'profiles/**'
@@ -58,6 +63,7 @@ on:
       - 'manifest.webmanifest'
       - 'VERSION'
       - 'test-ui-v41-contract.mjs'
+      - 'test-stfs-browser-extractor.mjs'
 
 permissions:
   contents: read
@@ -75,6 +81,8 @@ jobs:
         run: |
           node --check app-v41.js
           node --check app-v42-patch.js
+          node --check wasm-core-v32.js
+          node --check render360-stfs-browser-extractor.mjs
           node --check runtime/render360-runtime.js
           node --check runtime/title-controls.js
           node --check render360-browser-modern-content-bridge.mjs
@@ -87,6 +95,8 @@ jobs:
           node --check profiles/title-profile-store.js
       - name: Enforce V43 deployed integration contract
         run: node test-ui-v41-contract.mjs
+      - name: Regress legacy-core STFS extraction compatibility
+        run: node test-stfs-browser-extractor.mjs
       - name: Stage published bootstrap for scheduler test
         run: |
           mkdir -p build/xenia-ppc-bootstrap

@@ -2,166 +2,108 @@
 
 V36 is the transition from closed CPU/browser foundations to genuine title-image bring-up.
 
-## Verified gates
+## Authoritative V36 gates
 
 ```text
 Run 254  eight CPU/browser foundations
-         commit 3b39da31b6fc3e296e356f7143574951f7fc8861
-
 Run 261  strict XEX guest mapper
-         Actions ID 33212297082
-         commit f602d889293440a4840c3310a8e5fbf07ddc7756
-
-Run 265  full pull-driven default.xex STFS extraction
-         Actions ID 33218179582
-         commit 0ba0587bc335ad8391f43cdc8c750da36d149005
-
-Run 276  XEX2 metadata decode + decoded mapper integration
-         Actions ID 33219831630
-         commit c9fe8dec88e47b2ded17a0ede461bcf3d44acbe7
-
-Run 282  streaming NONE/NONE XEX image preparation
-         Actions ID 33220362844
-         commit 271e169bfe528c3b1b4f2c410e8803481594b6b0
-
-Run 288  streaming BASIC XEX image preparation
-         Actions ID 33221272140
-         commit e4e8ade63a56bd165a7490a36c679ff7a11303a3
+Run 265  full default.xex STFS extraction
+Run 276  XEX2 metadata + mapper integration
+Run 282  NONE/NONE image preparation
+Run 288  BASIC image preparation
+Run 294  NORMAL framing/deblocking
+Run 299  upstream Xenia LZX/libmspack in wasm32
+Run 315  prepared NORMAL image → relocated entry → Xenia PPC/HIR
 ```
 
-All listed aggregate gates completed successfully.
+Run 315 is Actions ID `33224960329`, implementation commit `4ad739c56d2c4032dbc8329b5c5594e17def8ce7`, and completed successfully.
 
-## Image preparation status
+## Run 315 closure
 
-Maintained preparation files:
+Run 312 exposed a real relocation bug: the end-to-end prepared-image critic reached the decoder-derived entry but `r360_ppc_probe_load_at` returned zero. The fix publishes the decoder-derived 64 KiB guest window before the Xenia wasm32 Memory/Processor bootstrap is initialized. The same unchanged critic then passed in Run 315.
+
+The verified chain is:
 
 ```text
-src/xenia_web_bootstrap/xex_image_preparer.h
-src/xenia_web_bootstrap/xex_image_preparer.cpp
-src/xenia_web_bootstrap/xex_image_preparer_exports.cpp
-test-xex-image-prepare-none.mjs
-test-xex-image-prepare-basic.mjs
+XEX-style metadata
+  → NORMAL SHA-1/chunk framing
+  → upstream Xenia LZX
+  → exact prepared image
+  → decoder-derived mapping
+  → relocated guest entry
+  → Xenia PPC scanner/frontend/HIR
+  → prepared entry PPC execution
 ```
 
-### Run 282 — NONE/NONE
+Run 315 also replayed the XEX session-key/AES-CBC semantic critic and all earlier locked foundations. The wasm32 compile matrix was 77/77 with strict linking.
 
-The uncompressed path follows Xenia's source rule: payload begins at XEX `header_size`, contains `xex_length - header_size` bytes, remains identity data and is consumed in bounded chunks.
+## Closed V36 contracts
 
 ```text
-XEX_PREPARE_STREAMING_IDENTITY=PASS
-XEX_PREPARE_EXACT_BYTE_ACCOUNTING=PASS
-XEX_PREPARE_FILE_BOUNDS_FAIL_CLOSED=PASS
-XEX_PREPARE_ENCRYPTION_FAIL_CLOSED=PASS
-XEX_PREPARE_COMPRESSION_FAIL_CLOSED=PASS
-XEX_PREPARE_CHUNK_OVERFLOW_FAIL_CLOSED=PASS
-XEX_IMAGE_PREPARE_NONE=PASS
+PACKAGE / XEX                                100% ✓
+PPC TRANSLATION                              100% ✓
+SCALAR PPC                                   100% ✓
+GUEST CONTROL                                100% ✓
+FPU                                          100% ✓
+VMX / VMX128                                 100% ✓
+HOT WASMBACKEND                              100% ✓
+SPARSE XBOX MEMORY                           100% ✓
+STRICT XEX GUEST MAPPER                      100% ✓
+FULL STFS default.xex EXTRACTION             100% ✓
+XEX2 METADATA                                100% ✓
+DECODED METADATA → MAPPER                    100% ✓
+NONE/NONE PREPARATION                        100% ✓
+BASIC PREPARATION                            100% ✓
+NORMAL FRAMING                               100% ✓
+UPSTREAM XENIA LZX WASM                      100% ✓
+SESSION-KEY / AES-CBC FOUNDATION             100% ✓
+UNENCRYPTED NORMAL PREPARED ENTRY PIPELINE   100% ✓
 ```
 
-### Run 288 — BASIC/NONE
+These are contract closures, not universal game compatibility.
 
-BASIC follows Xenia's big-endian `(data_size, zero_size)` records. The source XEX payload contains only the concatenated data portions. Render360 consumes those data bytes unchanged and emits each zero region as a separate output event, allowing the final sparse image to be built without a second whole-image allocation.
+## Remaining image-preparation boundary
 
-The implementation validates the complete BASIC table before streaming, uses 64-bit intermediates for source/output sums, rejects tables or payloads that exceed the decoded image span, requires exact source length, and enforces the data-then-zero ordering of every block.
+The complete retail preparation layer is not yet universally closed. Combined encrypted retail `decrypt → framing → LZX` integration and DELTA/patch images remain separate work. Unsupported paths must fail closed.
 
-Run 288 proves:
+That remaining edge does not change the next main bring-up target: genuine user-supplied title handoff.
+
+## Active next milestone — real extracted title
 
 ```text
-XEX_PREPARE_BASIC_TABLE_BOUNDS=PASS
-XEX_PREPARE_BASIC_SOURCE_ACCOUNTING=PASS
-XEX_PREPARE_BASIC_OUTPUT_ACCOUNTING=PASS
-XEX_PREPARE_BASIC_PAYLOAD_PRESERVED=PASS
-XEX_PREPARE_BASIC_ZERO_FILL=PASS
-XEX_PREPARE_BASIC_STREAMING=PASS
-XEX_PREPARE_BASIC_ENCRYPTION_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_ROUTING_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_FORMAT_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_TRUNCATION_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_OUTPUT_RANGE_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_ORDER_FAIL_CLOSED=PASS
-XEX_PREPARE_BASIC_CHUNK_OVERFLOW_FAIL_CLOSED=PASS
-XEX_IMAGE_PREPARE_BASIC=PASS
+user-supplied STFS/title content
+  → extract default.xex
+  → decode XEX metadata
+  → prepare image
+  → decode executable/PE section layout
+  → stream real section bytes into SparseGuestMemory
+  → seal RX / R / RW permissions
+  → validate genuine entry PC
+  → construct PPCContext
+  → Xenia scanner/frontend/finalized HIR
+  → Hot WasmBackend
+  → execute
+  → report first unresolved runtime dependency
 ```
 
-The same run recompiled/relinked the real Xenia PPC/HIR WASM bootstrap and re-ran the locked CPU, WasmBackend, SparseGuestMemory and XEX mapper/integration critics successfully.
+No copyrighted title binary should be stored in the repository. The real-title gate consumes runtime input.
 
-## Current boundary
+The first actual failure chooses the next subsystem: xboxkrnl, XAM, TLS, threads, memory services, browser VFS, or Xenos initialization. Broad success stubs are not acceptable.
+
+## First-frame path
 
 ```text
-STFS default.xex extraction                   ✓
-XEX2 metadata decode                          ✓
-decoded metadata → mapper                     ✓
-NONE encryption / NONE compression prepare   ✓
-BASIC compression / NONE encryption           ✓
-NORMAL block/hash/chunk framing               ← ACTIVE NEXT
-NORMAL LZX decompression                      pending
-NORMAL encryption / session key               pending
-DELTA patch image                              fail closed / pending
+real title execution
+  → minimum runtime services
+  → Xenos ringbuffer / command processor
+  → shared Xenos semantics
+  → shader/register/resource handling
+  → EDRAM/render targets
+  → WebGPU/WGSL
+  → WebGL2 fallback where feasible
+  → first genuine guest framebuffer
 ```
-
-NONE/NONE and BASIC are closed sub-contracts. The overall image-preparation layer is **not** 100% yet.
-
-## Next implementation — NORMAL framing and LZX
-
-Current upstream Xenia's `ReadImageCompressed` defines the required behavior. For an unencrypted NORMAL image:
-
-```text
-source payload begins at header_size
-        ↓
-file-format NORMAL window_size
-first block_size + SHA-1 digest
-        ↓
-for each block
-  verify block_size is inside remaining payload
-  verify SHA-1 over the entire declared block
-  read the next block's size/hash header from block start
-  skip that 24-byte chained metadata
-  parse repeated big-endian 16-bit chunk lengths
-  copy each compressed chunk to the deblocked LZX stream
-  zero chunk length terminates the block
-        ↓
-advance exactly by current block_size
-        ↓
-Xenia-compatible LZX decompression
-        ↓
-decoded image_size / mapped span
-```
-
-The first NORMAL critic may close framing/deblocking as an explicit sub-contract, but NORMAL image preparation is not complete until the resulting stream is decompressed with compatible LZX using the declared `window_size`.
-
-Required fail-closed cases include block overrun, hash mismatch, truncated chained block metadata, chunk overrun, missing chunk terminator, arithmetic overflow and wrong format/encryption routing.
-
-Xenia currently wraps bundled mspack LZX in `src/xenia/cpu/lzx.cc`. Prefer porting that proven implementation or the smallest browser-compatible subset rather than creating an unrelated decompressor.
-
-## Following implementation — NORMAL encryption
-
-Once unencrypted NORMAL/LZX is proven, implement Xenia's real XEX session-key derivation and AES-CBC rules. Cryptographic state should remain in native/WASM code, and encrypted BASIC/NORMAL routes must continue to fail closed until verified.
-
-DELTA remains fail closed until a genuine patch-image path exists.
-
-## After full image preparation
-
-Prepared bytes are streamed into decoder-derived RX/R/RW guest mappings, permissions are sealed, and the genuine entry PC becomes initial PPC state:
-
-```text
-prepared XEX image
-    ↓
-decoder-derived SparseGuestMemory mappings
-    ↓
-genuine entry PC
-    ↓
-PPCContext
-    ↓
-Xenia PPCScanner / frontend / finalized HIR
-    ↓
-Hot WasmBackend
-    ↓
-execute first genuine title instructions
-    ↓
-first genuine missing runtime/kernel dependency
-```
-
-That first real failure chooses the next implementation target: xboxkrnl, XAM, TLS, threading, memory services, VFS or Xenos initialization.
 
 ## Promotion rule
 
-Metadata decode is not image preparation. A preparation sub-format is not the full preparation layer. Mapper integration is not title execution. Do not mark real entry execution, kernel/GPU bring-up, a guest frame, playability or FPS complete until the corresponding event comes from genuine title execution.
+Metadata decode is not title execution. A synthetic prepared-entry critic is not a commercial-title boot. Never mark `REAL TITLE ENTRY`, `FIRST DRAW`, `FIRST PRESENT`, `PLAYABLE` or title FPS complete until the corresponding event comes from genuine title execution.

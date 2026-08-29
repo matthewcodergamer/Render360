@@ -40,6 +40,20 @@ function makePE(){
   return a;
 }
 
+function makeSharedPagePE(){
+  const a=new Uint8Array(0x600),nt=0x80,opt=nt+24,sections=opt+224;
+  p16(a,0,0x5A4D);p32(a,0x3c,nt);p32(a,nt,0x00004550);
+  p16(a,nt+4,0x01F2);p16(a,nt+6,2);p16(a,nt+20,224);p16(a,nt+22,0x0102);
+  p16(a,opt,0x10B);p32(a,opt+16,0x1000);p32(a,opt+28,0x82000000);
+  // Valid PE alignment smaller than the sparse guest-memory 4 KiB page.
+  p32(a,opt+32,0x200);p32(a,opt+36,0x200);p32(a,opt+56,0x2000);p32(a,opt+60,0x200);p16(a,opt+68,14);
+  a.set(Buffer.from('.text\0\0\0','ascii'),sections);p32(a,sections+8,0x200);p32(a,sections+12,0x1000);p32(a,sections+16,0x200);p32(a,sections+20,0x200);p32(a,sections+36,0x60000020);
+  const d=sections+40;a.set(Buffer.from('.data\0\0\0','ascii'),d);p32(a,d+8,0x200);p32(a,d+12,0x1200);p32(a,d+16,0x200);p32(a,d+20,0x400);p32(a,d+36,0xC0000040);
+  for(let i=0x200;i<0x400;i++)a[i]=(i*7+11)&255;
+  for(let i=0x400;i<0x600;i++)a[i]=(i*9+5)&255;
+  return a;
+}
+
 const input=pick('r360_xex_guest_mapper_input_buffer')()>>>0;
 const cap=pick('r360_xex_guest_mapper_input_capacity')()>>>0;
 const pe=makePE();if(!input||pe.length>cap)throw new Error('staging buffer too small');
@@ -71,6 +85,21 @@ console.log('PREPARED_PE_RX_PERMISSION=PASS');
 console.log('PREPARED_PE_RW_PERMISSION=PASS');
 console.log('PREPARED_PE_ENTRY=PASS');
 console.log('PREPARED_IMAGE_TO_GUEST_MAPPING=PASS');
+
+// Regression for real-title layouts: two valid PE sections may share one 4 KiB
+// guest-memory page when PE SectionAlignment is smaller than our mapper page.
+// The page must be mapped once and receive the union of the section permissions.
+const shared=makeSharedPagePE();new Uint8Array(instance.exports.memory.buffer,input,shared.length).set(shared);
+ok(pick('r360_pe_guest_load')(input,shared.length),'shared-page PE must load');
+eq(pick('r360_pe_guest_status')(),1,'shared-page loader status');
+eq(pick('r360_pe_guest_section_count')(),2,'shared-page PE section count');
+eq(pick('r360_xex_guest_mapper_mapped_bytes')(),0x1000,'shared sections map one guest page');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x82001000),(0x200*7+11)&255,'shared-page text copied');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x82001200),(0x400*9+5)&255,'shared-page data copied');
+ok(pick('r360_sparse_guest_memory_write_u8')(0x82001000,0x5a),'shared RX/RW guest page uses unioned permissions');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x82001000),0x5a,'shared-page writeback');
+console.log('PREPARED_PE_SUBPAGE_ALIGNMENT=PASS');
+console.log('PREPARED_PE_SHARED_PAGE_MERGE=PASS');
 
 // Fail closed if the PE section omits the readable permission that the mapper contract requires.
 const bad=makePE();const sh=0x80+24+224;p32(bad,sh+36,0x20000020);new Uint8Array(instance.exports.memory.buffer,input,bad.length).set(bad);

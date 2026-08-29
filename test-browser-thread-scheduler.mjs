@@ -15,7 +15,7 @@ for(const entry of WebAssembly.Module.imports(module)){
 }
 const bootstrap=await WebAssembly.instantiate(module,imports);wasi.initialize(bootstrap);
 const pick=name=>bootstrap.exports[name]??bootstrap.exports[`_${name}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_instructions','r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate','r360_kernel_runtime_reset','r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_stack_mapped'];
+const required=['r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_instructions','r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate','r360_wasm_backend_cfg_status','r360_kernel_runtime_reset','r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_stack_mapped'];
 for(const name of required)if(typeof pick(name)!=='function')throw new Error(`Missing thread scheduler fixture export ${name}`);
 
 const words=(...values)=>Uint8Array.from(values.flatMap(w=>[w>>>24,(w>>>16)&255,(w>>>8)&255,w&255]));
@@ -32,9 +32,10 @@ pick('r360_ppc_probe_reset')();
 pick('r360_kernel_runtime_reset')();
 const entryA=0x80000000;
 const entryB=0x80010000;
+const entryC=0x80020000;
 // Production mode: translation may register/lower the functions, but it must
-// not execute either program or mutate guest architectural state as a side
-// effect of assembly.
+// not execute programs or mutate guest architectural state as an assembly side
+// effect.
 if((pick('r360_ppc_probe_set_execute_on_translate')(0)>>>0)!==0||(pick('r360_ppc_probe_execute_on_translate')()>>>0)!==0)throw new Error('Could not enter side-effect-free PPC translation mode');
 translateAt(entryA,words(0x38630001,0x4E800020));
 if((pick('r360_ppc_probe_correctness_status')()>>>0)!==4||(pick('r360_ppc_probe_correctness_instructions')()>>>0)!==0)throw new Error('Thread A executed during production translation');
@@ -58,13 +59,58 @@ if(resultA.r3!==11n||resultB.r3!==22n)throw new Error(`Per-thread PPCContext iso
 if((pick('r360_guest_thread_state')(a.handle)>>>0)!==4||(pick('r360_guest_thread_state')(b.handle)>>>0)!==4)throw new Error('Returned guest thread entries were not terminated');
 if((pick('r360_guest_thread_exit_code')(a.handle)>>>0)!==11||(pick('r360_guest_thread_exit_code')(b.handle)>>>0)!==22)throw new Error('Thread return values were not propagated to exit codes');
 if((pick('r360_guest_thread_stack_mapped')(a.handle)>>>0)!==0||(pick('r360_guest_thread_stack_mapped')(b.handle)>>>0)!==0)throw new Error('Completed scheduler threads retained sparse stacks');
+
+// Translate a deliberately long integer CFG loop after the scheduler already
+// exists. r3 is the native Xbox thread context argument; mtctr copies the live
+// value, then the function counts r3 upward from zero. 10,000 trips exceed the
+// 4096-dispatch browser quantum and therefore must exercise continuation state.
+if((pick('r360_ppc_probe_set_execute_on_translate')(0)>>>0)!==0)throw new Error('Could not re-enter side-effect-free translation mode');
+translateAt(entryC,words(
+  0x7C6903A6, // mtctr r3
+  0x38600000, // li    r3,0
+  0x38630001, // loop: addi r3,r3,1
+  0x4200FFFC, // bdnz  loop
+  0x4E800020, // blr
+));
+if((pick('r360_wasm_backend_cfg_status')()>>>0)!==2)throw new Error('Long scheduler fixture did not produce the resumable CFG tier');
+if((pick('r360_ppc_probe_set_execute_on_translate')(1)>>>0)!==1)throw new Error('Could not restore correctness mode after long fixture translation');
+
+const c=scheduler.createThread({entry:entryC,context:10000,stackSize:0x10000,flags:0});
+let sawYield=false;
+let finished=false;
+let cSlices=0;
+for(;cSlices<16;cSlices++){
+  const quantum=await scheduler.pumpOnce({maxSlices:1});
+  if(quantum.slices.length!==1||quantum.slices[0].handle!==c.handle)throw new Error('Long-loop scheduler quantum did not execute the expected native thread');
+  const slice=quantum.slices[0];
+  if(slice.yielded){
+    sawYield=true;
+    const state=pick('r360_guest_thread_state')(c.handle)>>>0;
+    if(state===4)throw new Error('CFG fuel yield incorrectly terminated the native Xbox thread');
+    if((pick('r360_guest_thread_stack_mapped')(c.handle)>>>0)!==1)throw new Error('CFG fuel yield unmapped the native thread stack');
+    continue;
+  }
+  if(!slice.terminated||slice.guestReturned===false)throw new Error('Final resumed CFG slice did not terminate at a real guest return');
+  finished=true;
+  cSlices++;
+  break;
+}
+if(!sawYield)throw new Error('Native scheduler long-loop test never observed a CFG fuel yield');
+if(!finished)throw new Error(`Native scheduler long-loop did not finish after ${cSlices} quanta`);
+if((pick('r360_guest_thread_state')(c.handle)>>>0)!==4)throw new Error('Resumed native Xbox thread did not terminate after guest return');
+if((pick('r360_guest_thread_exit_code')(c.handle)>>>0)!==10000)throw new Error(`Resumed native thread exit code was ${pick('r360_guest_thread_exit_code')(c.handle)>>>0}, expected 10000`);
+if((pick('r360_guest_thread_stack_mapped')(c.handle)>>>0)!==0)throw new Error('Resumed native thread retained its sparse stack after completion');
+
 const state=scheduler.inspect();
-if(state.trackedContexts!==2||state.sliceCount!==2||state.completedThreads!==2)throw new Error('Scheduler telemetry did not track independent thread contexts');
-if(state.contract.midFunctionPreemption!==false||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract overstates current preemption coverage');
+if(state.trackedContexts!==3||state.sliceCount<3||state.completedThreads!==3||state.yieldedSlices<1)throw new Error('Scheduler telemetry did not preserve yielded/resumed native thread state');
+if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.productionSlicesPerBrowserYield!==1||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
 
 console.log('BROWSER_THREAD_SCHEDULER_NATIVE_REGISTRY=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_PPC_CONTEXT_ISOLATION=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_SPARSE_STACKS=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_ROUND_ROBIN=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_RETURN_TERMINATION=PASS');
+console.log('BROWSER_THREAD_SCHEDULER_CFG_YIELD_SURVIVES=PASS');
+console.log('BROWSER_THREAD_SCHEDULER_CFG_RESUME_RETURN=PASS');
+console.log(`browser_thread_scheduler_cfg_quanta=${cSlices}`);
 console.log('BROWSER_THREAD_SCHEDULER_FOUNDATION=PASS');

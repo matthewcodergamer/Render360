@@ -1,4 +1,5 @@
-import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js?v=32';
+import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js?v=43';
+import {extractStfsEntryBrowser,browserStfsExtractorContract} from './render360-stfs-browser-extractor.mjs?v=43';
 const U32 = 0x100000000;
 const STFS_STATUS = {
   0:'Idle', 1:'Working', 2:'Mounted', 3:'Mounted (partial)',
@@ -7,36 +8,54 @@ const STFS_STATUS = {
   106:'Directory entry limit reached',107:'Invalid directory entry',108:'Broken STFS hash chain',
 };
 const STFS_EXTRACT_STATUS={0:'Idle',1:'Working',2:'Complete',100:'Bad entry index',101:'Entry is a directory',102:'Broken file block chain',103:'Short extraction read'};
+const BASE_EXPORTS=['memory','r360_build_version','r360_abi_version','r360_feature_bits','r360_io_capacity','r360_io_ptr','r360_probe_container','r360_stfs_mount_begin','r360_stfs_submit_read','r360_stfs_request_pending','r360_stfs_request_offset_lo','r360_stfs_request_offset_hi','r360_stfs_request_size','r360_stfs_mount_status','r360_stfs_entry_count','r360_stfs_default_xex_index'];
 function decodeBase64(s){const bin=globalThis.atob(s),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 async function gunzip(bytes){
   if(typeof DecompressionStream!=='function')throw new Error('Browser DecompressionStream is unavailable');
   const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
+function validateInstance(instance,label){
+  const e=instance?.exports||{};
+  const missing=BASE_EXPORTS.filter(name=>name==='memory'?!e.memory:typeof e[name]!=='function');
+  if(missing.length)throw new Error(`${label} core is missing required ABI exports: ${missing.join(', ')}`);
+  return instance;
+}
 
 export class Render360Core {
-  constructor(url='./render360_xenia_core.wasm') { this.url=url; this.instance=null; this.exports=null; }
+  constructor(url='./render360_xenia_core.wasm?v=43') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
 
   async init() {
-    let result=null,embeddedError=null;
-    if(CORE_WASM_GZIP_BASE64){
-      try{result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});}
-      catch(error){embeddedError=error;}
-    }
-    if(!result){
+    // Network first. The old loader preferred the embedded fallback, allowing a
+    // stale V30 binary to shadow a newer checked-in core forever on Safari.
+    // The embedded core is now strictly an offline/fetch-failure fallback.
+    let result=null,networkError=null,embeddedError=null;
+    try{
       const response=await fetch(this.url,{cache:'no-store'});
-      if(!response.ok) throw new Error(`WASM fetch failed: HTTP ${response.status}${embeddedError?` · embedded core failed: ${embeddedError.message}`:''}`);
+      if(!response.ok)throw new Error(`HTTP ${response.status}`);
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}
       catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
+      validateInstance(result.instance,'Network');
+      this.source='network';
+    }catch(error){networkError=error;result=null;}
+    if(!result&&CORE_WASM_GZIP_BASE64){
+      try{
+        result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});
+        validateInstance(result.instance,'Embedded');
+        this.source='embedded';
+      }catch(error){embeddedError=error;result=null;}
     }
-    this.instance=result.instance;this.exports=this.instance.exports;
-    if(!this.exports.memory) throw new Error('WASM memory export is missing');
+    if(!result)throw new Error(`Render360 core could not start${networkError?` · network: ${networkError.message}`:''}${embeddedError?` · embedded: ${embeddedError.message}`:''}`);
+    this.networkError=networkError;this.instance=result.instance;this.exports=this.instance.exports;
     return this;
   }
 
   get buildVersion(){return this.exports.r360_build_version()>>>0}
   get abiVersion(){return this.exports.r360_abi_version()>>>0}
   get featureBits(){return this.exports.r360_feature_bits()>>>0}
+  get nativeStfsExtraction(){return typeof this.exports?.r360_stfs_extract_begin==='function'}
+  get stfsExtractionMode(){return this.nativeStfsExtraction?'native-v32':'browser-v32-fallback'}
+  get extractionContract(){return this.nativeStfsExtraction?{native:true,version:this.buildVersion}:{native:false,...browserStfsExtractorContract()}}
   ioCapacity(){return this.exports.r360_io_capacity()>>>0}
   ioPtr(){return this.exports.r360_io_ptr()>>>0}
 
@@ -137,15 +156,21 @@ export class Render360Core {
   }
 
   readStfsExtractSnapshot(){
-    const e=this.exports,status=e.r360_stfs_extract_status?.()>>>0;
-    return {status,statusName:STFS_EXTRACT_STATUS[status]||`Status ${status}`,entryIndex:e.r360_stfs_extract_entry_index?.()>>>0,
-      currentBlock:e.r360_stfs_extract_current_block?.()>>>0,logicalOffset:e.r360_stfs_extract_logical_offset?.()>>>0,
-      bytesTotal:e.r360_stfs_extract_bytes_total?.()>>>0,bytesDone:e.r360_stfs_extract_bytes_done?.()>>>0,
-      blocksDone:e.r360_stfs_extract_blocks_done?.()>>>0,contiguous:!!(e.r360_stfs_extract_is_contiguous?.()>>>0)};
+    const e=this.exports;if(typeof e.r360_stfs_extract_status!=='function')return null;
+    const status=e.r360_stfs_extract_status()>>>0;
+    return {status,statusName:STFS_EXTRACT_STATUS[status]||`Status ${status}`,entryIndex:e.r360_stfs_extract_entry_index()>>>0,
+      currentBlock:e.r360_stfs_extract_current_block()>>>0,logicalOffset:e.r360_stfs_extract_logical_offset()>>>0,
+      bytesTotal:e.r360_stfs_extract_bytes_total()>>>0,bytesDone:e.r360_stfs_extract_bytes_done()>>>0,
+      blocksDone:e.r360_stfs_extract_blocks_done()>>>0,contiguous:!!(e.r360_stfs_extract_is_contiguous()>>>0)};
   }
 
   async extractStfsEntry(file,entryIndex,{maxRequests=65536,captureLimit=32*1024*1024,onProgress=null}={}){
-    const e=this.exports;if(!e.r360_stfs_extract_begin)throw new Error('WASM core does not expose the V32 STFS extraction ABI');
+    const e=this.exports;
+    if(typeof e.r360_stfs_extract_begin!=='function'){
+      const entries=this.readStfsEntries(),entry=entries[entryIndex>>>0];
+      if(!entry)throw new Error(`STFS entry ${entryIndex>>>0} is unavailable after mount`);
+      return extractStfsEntryBrowser(file,{entry,stfs:this.readStfsSnapshot(),captureLimit,maxRequests,onProgress});
+    }
     e.r360_stfs_extract_begin(entryIndex>>>0);
     let snap=this.readStfsExtractSnapshot(),requestCount=0,totalBytesRead=0;
     const captureBytes=Math.min(snap.bytesTotal,Math.max(0,Number(captureLimit)||0));
@@ -161,7 +186,7 @@ export class Render360Core {
       e.r360_stfs_submit_read(staged.bytesRead);snap=this.readStfsExtractSnapshot();onProgress?.(snap);
     }
     snap=this.readStfsExtractSnapshot();
-    return {...snap,complete:snap.status===2,requestCount,totalBytesRead,captured,fullyCaptured:captured.length===snap.bytesTotal};
+    return {...snap,complete:snap.status===2,requestCount,totalBytesRead,captured,fullyCaptured:captured.length===snap.bytesTotal,fallback:null};
   }
 
   async mountStfs(file,{maxRequests=4096,extractDefaultXex=true,onExtractProgress=null}={}){
@@ -183,8 +208,8 @@ export class Render360Core {
     let defaultXex=null;
     if(stfs.defaultXexIndex!==0xFFFFFFFF&&stfs.defaultXexIndex<entries.length)defaultXex=entries[stfs.defaultXexIndex];
     const result={mounted,partial:stfs.status===3,stfs,entries,defaultXex,defaultXexKind:stfs.defaultXexKind,
-      requestCount,totalBytesRead,chainComplete:stfs.status===2,defaultXexExtract:null,defaultXexInspection:null};
-    if(mounted&&extractDefaultXex&&defaultXex&&this.exports.r360_stfs_extract_begin){
+      requestCount,totalBytesRead,chainComplete:stfs.status===2,defaultXexExtract:null,defaultXexInspection:null,extractionMode:this.stfsExtractionMode};
+    if(mounted&&extractDefaultXex&&defaultXex){
       result.defaultXexExtract=await this.extractStfsEntry(file,defaultXex.index,{onProgress:onExtractProgress});
       if(result.defaultXexExtract.captured?.byteLength>=24){
         try{result.defaultXexInspection=this.inspectXexBytes(result.defaultXexExtract.captured)}catch{}

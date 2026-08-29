@@ -7,7 +7,11 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
   'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
-  'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_submit','r360_xenos_frame_generation','r360_xenos_frame_hash'
+  'r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_word_capacity',
+  'r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_ring_word',
+  'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit',
+  'r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents',
+  'r360_xenos_last_opcode','r360_xenos_last_fault_word','r360_xenos_frame_generation','r360_xenos_frame_hash'
 ];
 const pick=(e,n)=>e[n]??e[`_${n}`];
 
@@ -45,4 +49,4 @@ export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapU
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleHle:'relocated PPC ABI shims'};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}

@@ -6,6 +6,16 @@
 
 The root `README.md` is the authoritative public status board.
 
+## Promotion rule
+
+No subsystem reaches 100% from its implementation test alone. Promotion requires all three:
+
+1. the implementation gate is green;
+2. an independent adversarial critic proves the exact contract and fail-closed cases;
+3. the full locked regression replay remains green.
+
+A red critic or red aggregate replay blocks promotion even when the happy path passes.
+
 ## Verified closure ladder
 
 ```text
@@ -25,11 +35,12 @@ Run 335  prepared PE entry → mapped guest bytes → Xenia PPC/HIR
 Run 338  encrypted retail NONE/BASIC/NORMAL → exact prepared image
 Run 348  entry execution + first runtime-boundary telemetry
 Run 369  XEX imports → real PE RVA mapping → kernel HLE execution bridge
+Run 373  independent harsh critic → PPC/kernel ABI + guest state + continuation
 ```
 
-**Run 369** is Actions ID `33232933395` on aggregate commit `2c190baaa129b97f66ddfcbf6a4b4e3c75d8f8ed`. It is fully green and closes the controlled **kernel execution foundation**.
+**Run 373** is Actions ID `33235084799` on aggregate commit `2a860d2aacc0e21a1d9fcda39d46d8df99c79e8a`. It is fully green and closes the controlled **minimum PPC↔kernel ABI contract**.
 
-The aggregate critic proves XEX import-library decoding, guest VA→RVA→PE section→raw-offset mapping, import descriptor/function-thunk pairing, automatic kernel-thunk registration, PPC→kernel HLE dispatch, implemented-return continuation, exact unimplemented module/ordinal blocker telemetry and fail-closed behavior.
+The independent critic proves PPC argument registers, guest-visible memory mutation, `r3` return semantics, continuation after HLE return, cross-boundary range rejection, 32-bit wraparound rejection, recursive-target rejection, exact unsupported-import telemetry and no blanket-success behavior. The same run then replays every previously locked Xenia/Wasm foundation successfully.
 
 ## Closed V36 contracts
 
@@ -52,6 +63,8 @@ KERNEL IMPORT DESCRIPTOR / THUNK PAIRING         100% ✓
 PPC → KERNEL HLE DISPATCH                        100% ✓
 AUTOMATIC XEX IMPORT → KERNEL EXECUTION          100% ✓
 KERNEL EXECUTION FOUNDATION                      100% ✓
+MINIMUM PPC ↔ KERNEL ABI                         100% ✓
+INDEPENDENT KERNEL ABI HARSH CRITIC              100% ✓
 ```
 
 These are defined CI contracts, not universal title-compatibility claims and not complete xboxkrnl/XAM API coverage.
@@ -103,51 +116,69 @@ unimplemented export → exact fail-closed blocker
 
 No blanket success stubs.
 
-## Gate D2B — minimum kernel ABI + services — ACTIVE
-
-The next work is no longer import discovery. It is real ABI behavior and the minimum service surface required by execution:
+## Gate D2B — minimum PPC ↔ kernel ABI — CLOSED
 
 ```text
-PPC argument registers / guest pointers
+PPC r3/r4 arguments
         ↓
-HLE export implementation
+registered HLE thunk
         ↓
-r3 / NTSTATUS / return-value semantics
+nested service on the same live PPCContext
         ↓
-validated guest memory reads/writes
+validated guest memory access
+        ↓
+guest-visible state mutation
+        ↓
+r3 return value
         ↓
 return to translated guest PPC
         ↓
-continue until next exact blocker
+caller continues
 ```
 
-### D2B closure requirements
+The independent harsh critic separately verifies boundary crossing, 32-bit address wraparound, recursive ABI targets and unsupported imports all fail closed. D2B is promoted only because Run 373 passed both that critic and the complete regression replay.
 
-- integer/status return values flow back through the PPC ABI rather than a side channel;
-- arguments are read from the correct PPC GPR/FPR/vector ABI locations for the implemented export;
-- guest pointers and lengths are validated against mapped sparse memory before access;
-- unsupported exports remain exact module/ordinal blockers;
-- implemented exports must not bypass or replace the normal guest return path;
-- the critic must prove at least one implemented export mutates/returns guest-visible state and execution continues afterward.
+## Gate D2C — first real xboxkrnl / XAM services — ACTIVE
 
-After this ABI gate, implement only what genuine execution reaches:
+Do not pre-build a giant guessed API catalog. Genuine execution chooses the order. For each reached import:
 
 ```text
-xboxkrnl import       → minimum required HLE/export
-XAM import            → minimum required XAM surface
-TLS                    → TLS initialization
-thread creation       → KernelState / guest threads
-heap / virtual memory → required memory services
-filesystem            → browser-backed VFS
-GPU initialization    → Xenos command/ringbuffer path
+exact module + ordinal blocker
+        ↓
+identify corresponding Xenia kernel/XAM semantic source
+        ↓
+implement minimum browser-portable behavior
+        ↓
+validate all guest pointers/ranges
+        ↓
+return exact r3 / NTSTATUS / guest-visible state
+        ↓
+continue real guest execution
+        ↓
+record next blocker
+        ↓
+independent critic + full replay before 100%
 ```
+
+Expected runtime classes, only when demanded by execution:
+
+```text
+thread/TLS             → KernelState / guest thread startup
+heap / virtual memory  → required memory APIs
+synchronization/time   → events, waits, timers as reached
+filesystem             → browser-backed VFS
+XAM startup            → minimum XAM exports actually imported
+GPU initialization     → handoff into Xenos command/ringbuffer path
+```
+
+A service family does not become 100% merely because one export works. Its critic must define and prove the exact promoted scope.
 
 ## Gate D3 — Xenos to first frame
 
 ```text
 guest PPC execution
         ↓
-minimum kernel/runtime services
+minimum real kernel/runtime services
         ↓
 Xenos packets / ringbuffer
         ↓
@@ -166,7 +197,7 @@ WebGL2 fallback where practical
 FIRST GENUINE GUEST-PRODUCED FRAMEBUFFER
 ```
 
-`FIRST GENUINE FRAME` is promoted only when a frame originates from guest GPU work.
+`FIRST GENUINE FRAME` is promoted only when a frame originates from guest GPU work. The first-frame critic should compare deterministic guest-produced output/state and remain permanently in CI.
 
 ## Gate D4 — performance after correctness
 
@@ -184,8 +215,9 @@ one-call extracted-title controller             ✓ LOCKED
 entry execution/runtime boundary                ✓ LOCKED
 XEX import discovery + thunk pairing            ✓ LOCKED
 PPC → kernel HLE execution bridge               ✓ LOCKED
-minimum kernel ABI / first services             ← ACTIVE
-actual extracted title → first real blocker
+minimum PPC ↔ kernel ABI                        ✓ LOCKED BY HARSH CRITIC
+first real xboxkrnl/XAM services                ← ACTIVE
+actual extracted title → next real blocker
 TLS / threads / heap / VFS as required
 first Xenos packets
 first guest shader / draw

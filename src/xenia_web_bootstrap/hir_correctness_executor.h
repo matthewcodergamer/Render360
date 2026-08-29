@@ -11,7 +11,7 @@ namespace hir {
 class HIRBuilder;
 }
 namespace ppc {
-struct PPCContext;
+typedef struct PPCContext_s PPCContext;
 }
 }  // namespace cpu
 }  // namespace xe

@@ -8,16 +8,25 @@ const BLR=0x4E800020;
 const OPCODE_ADDI=14;
 const OPCODE_ADDIS=15;
 const OPCODE_ORI=24;
+const OPCODE_ORIS=25;
 const OPCODE_STW=36;
 const dform=(opcode,rt,ra,imm)=>((opcode<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;
 const lis=(rt,imm)=>dform(OPCODE_ADDIS,rt,0,imm);
 const li=(rt,imm)=>dform(OPCODE_ADDI,rt,0,imm);
 const ori=(ra,rs,imm)=>dform(OPCODE_ORI,rs,ra,imm);
+const oris=(ra,rs,imm)=>dform(OPCODE_ORIS,rs,ra,imm);
 const stw=(rs,ra,d)=>dform(OPCODE_STW,rs,ra,d);
 
 function requireExport(e,n){const f=pick(e,n);if(typeof f!=='function')throw new Error(`missing browser title HLE export ${n}`);return f;}
 function add32(a,b){const v=BigInt(a>>>0)+BigInt(b>>>0);if(v>0xffffffffn)throw new RangeError('browser title HLE address wraps uint32');return Number(v)>>>0;}
-function addressWords(reg,address){return [lis(reg,(address>>>16)&0xffff),ori(reg,reg,address&0xffff)];}
+function addressWords(reg,address){
+  // Xbox 360 guest pointers are 32-bit values carried in 64-bit PPC GPRs.
+  // `lis reg, 0x8xxx..0xffff` sign-extends on PPC64, producing
+  // 0xffffffffXXXXXXXX and making otherwise valid high guest addresses fail
+  // the sparse-memory uint32 boundary. Build the address from zero with
+  // OR-immediate-shifted instead, which preserves the required zero extension.
+  return [li(reg,0),oris(reg,reg,(address>>>16)&0xffff),ori(reg,reg,address&0xffff)];
+}
 function constantReturn(value){value>>>=0;return [...addressWords(3,value),BLR];}
 function capturePair(destination){return [...addressWords(11,destination),stw(3,11,0),stw(4,11,4),BLR];}
 

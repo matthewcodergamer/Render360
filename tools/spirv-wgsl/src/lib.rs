@@ -9,6 +9,15 @@ fn js_error(prefix: &str, error: impl core::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{prefix}: {error}"))
 }
 
+fn js_debug_error(prefix: &str, error: impl core::fmt::Debug) -> JsValue {
+    // Naga's Display form intentionally stays terse (for example, only
+    // "Type [29] is invalid"). The Debug form includes the nested validation
+    // reason and source span, which is required here because Render360 treats
+    // every SPIR-V -> WebGPU incompatibility as an explicit implementation
+    // boundary rather than weakening validation.
+    JsValue::from_str(&format!("{prefix}: {error:#?}"))
+}
+
 /// Convert a complete SPIR-V binary module to WebGPU WGSL.
 ///
 /// Render360 intentionally keeps this as a separate small WASM module from the
@@ -35,9 +44,9 @@ pub fn spirv_to_wgsl(bytes: &[u8]) -> Result<String, JsValue> {
         .map_err(|e| js_error("Naga SPIR-V parse failed", e))?;
     let info = Validator::new(ValidationFlags::all(), Capabilities::all())
         .validate(&module)
-        .map_err(|e| js_error("Naga validation failed", e))?;
+        .map_err(|e| js_debug_error("Naga validation failed", e))?;
     let source = wgsl::write_string(&module, &info, WriterFlags::empty())
-        .map_err(|e| js_error("Naga WGSL write failed", e))?;
+        .map_err(|e| js_debug_error("Naga WGSL write failed", e))?;
     if source.trim().is_empty() {
         return Err(JsValue::from_str("Naga produced empty WGSL"));
     }

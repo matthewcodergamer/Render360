@@ -15,11 +15,22 @@ class HIRBuilder;
 
 namespace render360::xenia_web {
 
+enum HIRCorrectnessBlockerKind : uint32_t {
+  kHIRBlockerNone = 0,
+  kHIRBlockerUnsupportedOpcode = 1,
+  kHIRBlockerUnresolvedCall = 2,
+  kHIRBlockerInstructionLimit = 3,
+  kHIRBlockerNoReturnBoundary = 4,
+};
+
 struct HIRCorrectnessResult {
   bool supported = false;
   bool reached_return_boundary = false;
   uint32_t instructions_executed = 0;
   uint64_t r3 = 0;
+  uint32_t blocker_kind = kHIRBlockerNone;
+  uint32_t blocker_opcode = 0;
+  uint32_t blocker_address = 0;
 };
 
 using HIRCorrectnessCallResolver = bool (*)(xe::cpu::Function* function);

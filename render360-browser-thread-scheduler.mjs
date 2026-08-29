@@ -8,13 +8,14 @@ const need=(bootstrap,name)=>{const fn=pick(bootstrap,name);if(typeof fn!=='func
  *
  * Every Xbox thread gets an independent byte-for-byte PPCContext snapshot.
  * The live WasmBackend context is restored immediately before a thread runs and
- * saved immediately after it returns. r1 is seeded from the native sparse
- * stack top and r3 from the Xbox thread context argument on first dispatch.
+ * saved immediately after it yields or returns. r1 is seeded from the native
+ * sparse stack top and r3 from the Xbox thread context argument on first
+ * dispatch.
  *
- * This scheduler is deliberately cooperative at generated guest-function
- * return boundaries. It does not claim arbitrary mid-function preemption yet;
- * a generated function that cannot be lowered/run fails closed and is surfaced
- * as the exact compatibility blocker instead of being silently skipped.
+ * Complete callable guest functions preempt at return boundaries. The admitted
+ * integer CFG fallback can additionally preempt at a generated CFG block
+ * boundary when its fuel quantum expires: its dispatcher PC and live HIR locals
+ * are stored in a continuation slot keyed by the native Xbox thread handle.
  */
 export async function createGuestThreadScheduler({
   bootstrap,
@@ -44,8 +45,10 @@ export async function createGuestThreadScheduler({
 
   const snapshots=new Map();
   const dispatchCounts=new Map();
+  const yieldCounts=new Map();
   let pumpCount=0;
   let sliceCount=0;
+  let yieldedSlices=0;
   let completedThreads=0;
   let running=false;
   let lastBlocker=null;
@@ -66,6 +69,7 @@ export async function createGuestThreadScheduler({
       stackTop:stackTopOf(handle)>>>0,
       stackMapped:Boolean(stackMappedOf(handle)>>>0),
       dispatches:dispatchCounts.get(handle)??0,
+      yields:yieldCounts.get(handle)??0,
       hasPpcSnapshot:snapshots.has(handle),
     };
   }
@@ -114,7 +118,7 @@ export async function createGuestThreadScheduler({
     restoreThreadContext(handle);
     let result;
     try{
-      result=await ppc.runFunctionSlice(thread.entry);
+      result=await ppc.runFunctionSlice(thread.entry,{continuationKey:handle});
     }catch(error){
       saveThreadContext(handle);
       lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};
@@ -123,8 +127,12 @@ export async function createGuestThreadScheduler({
     saveThreadContext(handle);
     sliceCount++;
     dispatchCounts.set(handle,(dispatchCounts.get(handle)??0)+1);
+    if(result.yielded){
+      yieldedSlices++;
+      yieldCounts.set(handle,(yieldCounts.get(handle)??0)+1);
+    }
     let terminated=false;
-    if(terminateOnReturn){
+    if(terminateOnReturn&&!result.yielded&&result.guestReturned!==false){
       const exitCode=Number(BigInt.asUintN(32,result.r3));
       if((terminateThread(handle,exitCode)>>>0)!==1)throw new Error(`FAIL_CLOSED_THREAD_${handle.toString(16)}_TERMINATE`);
       terminated=true;
@@ -147,7 +155,7 @@ export async function createGuestThreadScheduler({
     }
     pumpCount++;
     await ppc.yieldToBrowser();
-    return {pumpCount,slices:results,totalSlices:sliceCount,completedThreads,lastBlocker};
+    return {pumpCount,slices:results,totalSlices:sliceCount,yieldedSlices,completedThreads,lastBlocker};
   }
 
   async function runLoop({onPump=null,onSlice=null,onError=null}={}){
@@ -156,7 +164,10 @@ export async function createGuestThreadScheduler({
     loopPromise=(async()=>{
       while(running){
         try{
-          const report=await pumpOnce({onSlice});
+          // Production loop intentionally executes one guest quantum before
+          // yielding back to Safari. Explicit pumpOnce callers may request more
+          // slices for tests or non-interactive batch work.
+          const report=await pumpOnce({maxSlices:1,onSlice});
           if(typeof onPump==='function')await onPump(report);
           if(!report.slices.length)running=false;
         }catch(error){
@@ -178,19 +189,23 @@ export async function createGuestThreadScheduler({
       running,
       pumpCount,
       sliceCount,
+      yieldedSlices,
       completedThreads,
       trackedContexts:snapshots.size,
       lastBlocker,
-      ppcSession:{kind:ppc.kind,functionCount:ppc.functionCount,sliceCount:ppc.sliceCount,kernelDispatches:ppc.kernelDispatches,nestedDispatches:ppc.nestedDispatches},
+      ppcSession:{kind:ppc.kind,functionCount:ppc.functionCount,sliceCount:ppc.sliceCount,yieldedSliceCount:ppc.yieldedSliceCount,kernelDispatches:ppc.kernelDispatches,nestedDispatches:ppc.nestedDispatches},
       contract:{
         nativeXboxThreadRegistry:true,
         perThreadPpcContextSnapshots:true,
+        perThreadCfgContinuation:true,
         sparseGuardedGuestStacks:true,
         cooperativeRoundRobin:true,
         generatedWasmExecution:true,
         browserYieldBetweenPumps:true,
-        preemptionBoundary:'guest-function-return',
-        midFunctionPreemption:false,
+        productionSlicesPerBrowserYield:1,
+        preemptionBoundary:'cfg-block-boundary-or-guest-function-return',
+        midFunctionPreemption:true,
+        midFunctionPreemptionTier:'integer-cfg-fallback',
         fullXboxThreadScheduler:false,
       },
     };
@@ -218,12 +233,15 @@ export function guestThreadSchedulerContract(){
   return {
     nativeXboxThreadRegistry:true,
     perThreadPpcContextSnapshots:true,
+    perThreadCfgContinuation:true,
     sparseGuardedGuestStacks:true,
     cooperativeRoundRobin:true,
     generatedWasmExecution:true,
     browserYieldBetweenPumps:true,
-    preemptionBoundary:'guest-function-return',
-    midFunctionPreemption:false,
+    productionSlicesPerBrowserYield:1,
+    preemptionBoundary:'cfg-block-boundary-or-guest-function-return',
+    midFunctionPreemption:true,
+    midFunctionPreemptionTier:'integer-cfg-fallback',
     fullXboxThreadScheduler:false,
   };
 }

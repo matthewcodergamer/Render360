@@ -1,6 +1,7 @@
 #include "kernel_import_probe.h"
 
 #include <array>
+#include <cstdint>
 
 #include "hir_correctness_executor.h"
 #include "title_gpu_runtime.h"
@@ -33,12 +34,15 @@ std::array<KernelImportEntry, kMaxKernelImports> g_entries{};
 uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
          g_last_ordinal = 0, g_last_status = 0, g_last_abi_target = 0;
 
-bool TryBuiltInKernelService(const KernelImportEntry& entry) {
+bool TryBuiltInKernelService(const KernelImportEntry& entry,
+                             xe::cpu::ppc::PPCContext* context) {
   if (entry.module_id != kModuleXboxkrnl && entry.module_id != kModuleXam) {
     return false;
   }
-  auto* context = GetHIRCorrectnessActiveContext();
-  if (!context) return false;
+  if (!context) {
+    g_last_status = kServiceStatusInvalid;
+    return false;
+  }
 
   uint32_t title_gpu_result = 0;
   if (TryTitleGpuKernelService(
@@ -52,7 +56,7 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry) {
           static_cast<uint32_t>(context->r[9]),
           static_cast<uint32_t>(context->r[10]), &title_gpu_result)) {
     context->r[3] = title_gpu_result;
-    g_last_status = 1;
+    g_last_status = kServiceStatusSuccess;
     return true;
   }
 
@@ -71,13 +75,28 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry) {
     // Keep unsupported services as the exact title blocker. Invalid service
     // state (for example TLS without a current guest thread) is distinguished
     // as an ABI/runtime failure rather than silently becoming success.
-    if (service_status == kServiceStatusInvalid) g_last_status = 3;
+    if (service_status == kServiceStatusInvalid) g_last_status = kServiceStatusInvalid;
     return false;
   }
 
   context->r[3] = result;
-  g_last_status = 1;
+  g_last_status = kServiceStatusSuccess;
   return true;
+}
+
+const KernelImportEntry* FindKernelImport(uint32_t thunk_address) {
+  for (const auto& entry : g_entries) {
+    if (entry.used && entry.thunk_address == thunk_address) return &entry;
+  }
+  return nullptr;
+}
+
+void RecordKernelImportCall(const KernelImportEntry& entry) {
+  ++g_calls;
+  g_last_thunk = entry.thunk_address;
+  g_last_module = entry.module_id;
+  g_last_ordinal = entry.ordinal;
+  g_last_abi_target = entry.abi_target;
 }
 }  // namespace
 
@@ -107,26 +126,46 @@ bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
   return false;
 }
 bool ResolveKernelImportThunk(uint32_t thunk_address) {
-  for (const auto& entry : g_entries) {
-    if (!entry.used || entry.thunk_address != thunk_address) continue;
-    ++g_calls; g_last_thunk = entry.thunk_address; g_last_module = entry.module_id;
-    g_last_ordinal = entry.ordinal; g_last_abi_target = entry.abi_target;
-    if (!entry.implemented) {
-      // Real title imports are registered from decoded XEX metadata. Before
-      // declaring one unimplemented, let the bounded built-in xboxkrnl/XAM
-      // service layer consume the live PPC r3..r10 ABI. Unsupported ordinals
-      // still fail closed and remain the next genuine title blocker.
-      g_last_status = 2;
-      return TryBuiltInKernelService(entry);
-    }
-    // A zero ABI target preserves the locked control-flow-only bridge. A
-    // non-zero target asks ProbeBackend to execute a bounded ABI critic through
-    // the same active PPCContext as the translated caller. This lets CI prove
-    // argument registers, guest-memory access, r3 return state and continuation
-    // without introducing blanket-success kernel stubs.
-    g_last_status = 1; return true;
+  const auto* entry = FindKernelImport(thunk_address);
+  if (!entry) return false;
+  RecordKernelImportCall(*entry);
+  if (!entry->implemented) {
+    // Real title imports are registered from decoded XEX metadata. Before
+    // declaring one unimplemented, let the bounded built-in xboxkrnl/XAM
+    // service layer consume the live PPC r3..r10 ABI. Unsupported ordinals
+    // still fail closed and remain the next genuine title blocker.
+    g_last_status = 2;
+    return TryBuiltInKernelService(*entry, GetHIRCorrectnessActiveContext());
   }
-  return false;
+  // A zero ABI target preserves the locked control-flow-only bridge. A
+  // non-zero target asks ProbeBackend to execute a bounded ABI critic through
+  // the same active PPCContext as the translated caller. This lets CI prove
+  // argument registers, guest-memory access, r3 return state and continuation
+  // without introducing blanket-success kernel stubs.
+  g_last_status = 1; return true;
+}
+
+bool DispatchKernelImportThunkFromContext(
+    uint32_t thunk_address, xe::cpu::ppc::PPCContext* context) {
+  const auto* entry = FindKernelImport(thunk_address);
+  if (!entry || !context) {
+    g_last_status = kServiceStatusInvalid;
+    return false;
+  }
+  RecordKernelImportCall(*entry);
+
+  // Generated-Wasm execution can directly use the native built-in service
+  // layer because it passes the real live PPCContext pointer. Explicit
+  // test-only/legacy implemented targets are not blanket-successed here: a
+  // non-zero ABI target needs the ProbeBackend HIR execution path and therefore
+  // remains fail-closed in the generated runtime until that target is compiled
+  // as a normal guest function.
+  if (entry->implemented) {
+    g_last_status = entry->abi_target ? kServiceStatusInvalid : 2u;
+    return false;
+  }
+  g_last_status = 2;
+  return TryBuiltInKernelService(*entry, context);
 }
 uint32_t KernelImportProbeCount() { return g_count; }
 uint32_t KernelImportProbeCalls() { return g_calls; }
@@ -141,6 +180,19 @@ void MarkKernelImportProbeAbiFailure() { g_last_status = 3; }
 extern "C" {
 void r360_kernel_import_reset(){render360::xenia_web::ResetKernelImportProbe();}
 uint32_t r360_kernel_import_register(uint32_t a,uint32_t m,uint32_t o,uint32_t i,uint32_t r){return render360::xenia_web::RegisterKernelImportThunk(a,m,o,i!=0,r)?1u:0u;}
+uint32_t r360_kernel_import_dispatch_context(uint32_t thunk_address,
+                                             uint32_t context_ptr) {
+  if (!context_ptr ||
+      (context_ptr & (alignof(xe::cpu::ppc::PPCContext) - 1u)) != 0u) {
+    return 0;
+  }
+  auto* context = reinterpret_cast<xe::cpu::ppc::PPCContext*>(
+      static_cast<uintptr_t>(context_ptr));
+  return render360::xenia_web::DispatchKernelImportThunkFromContext(
+             thunk_address, context)
+             ? 1u
+             : 0u;
+}
 uint32_t r360_kernel_import_count(){return render360::xenia_web::KernelImportProbeCount();}
 uint32_t r360_kernel_import_calls(){return render360::xenia_web::KernelImportProbeCalls();}
 uint32_t r360_kernel_import_last_thunk(){return render360::xenia_web::KernelImportProbeLastThunk();}

@@ -5,6 +5,7 @@ on:
     paths:
       - 'index.html'
       - 'ui-v40.css'
+      - 'ui-v40-polish.css'
       - 'app-v40.js'
       - 'library/**'
       - 'import/**'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'index.html'
       - 'ui-v40.css'
+      - 'ui-v40-polish.css'
       - 'app-v40.js'
       - 'library/**'
       - 'import/**'

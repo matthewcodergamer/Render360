@@ -45,8 +45,10 @@ assert.equal(contract.version,44);
 assert.equal(contract.nativePreferred,true);
 assert.equal(contract.failClosed,true);
 
+// Give the package enough total blocks so this specifically exercises the
+// entry-declared valid-block guard rather than the earlier package-size guard.
 await assert.rejects(
-  extractStfsEntryBrowser(file,{entry:{...entry,length:9000,validBlocks:1},stfs,captureLimit:9000}),
+  extractStfsEntryBrowser(file,{entry:{...entry,length:9000,validBlocks:1},stfs:{...stfs,totalBlockCount:10},captureLimit:9000}),
   /valid block count/
 );
 

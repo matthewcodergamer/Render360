@@ -1,0 +1,83 @@
+import {Render360Core,containerName} from '../wasm-core-v32.js';
+import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
+
+const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
+const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
+
+export class Render360Runtime extends EventTarget{
+  constructor(){super();this.core=new Render360Core();this.ready=false;this.sources=new Map();this.currentGame=null;this.telemetryTimer=0;this.frameTimes=[];this.lastGeneration=null;this.lastFrameAt=0;this.backend='WASM';}
+  emit(type,detail={}){this.dispatchEvent(new CustomEvent(type,{detail}));}
+  async init(){
+    this.emit('bootStage',{stage:'core',message:'Starting Render360…'});
+    await this.core.init();this.ready=true;
+    this.emit('ready',{buildVersion:this.core.buildVersion,abiVersion:this.core.abiVersion,featureBits:this.core.featureBits});
+    this.startTelemetry();return this;
+  }
+  bindSource(gameId,file){if(gameId&&file)this.sources.set(gameId,file);}
+  getSource(gameId){return this.sources.get(gameId)||null;}
+  async inspectFile(file){
+    if(!this.ready)throw new Error('Render360 core is not ready');
+    const lower=String(file.name||'').toLowerCase();
+    if(lower.endsWith('.iso'))return {sourceType:'iso',displayType:'Xbox 360 Disc / XDVDFS',name:stripExtension(file.name),titleId:0,mediaId:0,probe:null};
+    const probe=await this.core.probeFile(file);
+    let titleId=probe.xex?.titleId||probe.stfs?.titleId||0,mediaId=probe.stfs?.mediaId||0,name=stripExtension(file.name),displayType=containerName(probe.kind);
+    if(probe.kind>=10&&probe.kind<=12){
+      try{
+        const mount=await this.core.mountStfs(file,{onExtractProgress:s=>this.emit('importProgress',{phase:'inspect',done:s.bytesDone||0,total:s.bytesTotal||0,name:'default.xex'})});
+        name=mount?.stfs?.displayName||probe.stfs?.displayName||name;
+        titleId=mount?.stfs?.titleId||titleId;mediaId=mount?.stfs?.mediaId||mediaId;
+        return {sourceType:lower.endsWith('.live')?'live':lower.endsWith('.pirs')?'pirs':'con',displayType,name,titleId,mediaId,probe,mount};
+      }catch(error){return {sourceType:ext(file.name),displayType,name,titleId,mediaId,probe,inspectionWarning:error.message};}
+    }
+    return {sourceType:lower.endsWith('.xex')?'xex':ext(file.name),displayType,name,titleId,mediaId,probe};
+  }
+  async play(game,file=this.getSource(game.id)){
+    if(!file)throw new Error('The original game file is not linked in this browser session. Choose the file again to play.');
+    this.currentGame=game;this.bindSource(game.id,file);
+    this.emit('bootStage',{stage:'launch',message:`Starting ${game.name}…`});
+    const type=game.sourceType||ext(file.name);
+    if(type!=='iso'){
+      this.emit('fatalError',{message:`${String(type).toUpperCase()} execution is not yet wired into the modern browser launch adapter. ISO/XDVDFS uses the current real-title runtime.`});
+      throw new Error('This launch type is not yet wired into the modern browser runtime');
+    }
+    try{
+      const result=await runModernXboxIso(file);
+      this.emit('titleStarted',{game,result});
+      return result;
+    }catch(error){this.emit('fatalError',{message:error?.message||String(error),error});throw error;}
+  }
+  startTelemetry(){
+    clearInterval(this.telemetryTimer);
+    this.telemetryTimer=setInterval(()=>this.sampleTelemetry(),250);
+  }
+  sampleTelemetry(){
+    const state=globalThis.render360ModernTitle||null;
+    const canvas=document.getElementById('titleFrameCanvas');
+    const generation=canvas?.dataset?.render360Generation??null;
+    const now=performance.now();
+    if(generation!==null&&generation!==this.lastGeneration){
+      if(this.lastFrameAt){this.frameTimes.push(now-this.lastFrameAt);if(this.frameTimes.length>90)this.frameTimes.shift();}
+      this.lastFrameAt=now;this.lastGeneration=generation;
+      this.emit('framePresented',{generation:Number(generation)||0,hash:canvas?.dataset?.render360Hash||'',at:now});
+    }
+    const avg=this.frameTimes.length?this.frameTimes.reduce((a,b)=>a+b,0)/this.frameTimes.length:0;
+    const fps=avg?1000/avg:0;
+    const gpu=state?.gpuTraffic||{};
+    const cpu=state?.persistentCpu||{};
+    const shaders=state?.shaderRuntime||{};
+    const detail={
+      fps,frameMs:avg||0,cpuMs:null,gpuMs:null,scale:1,
+      ramBytes:state?.bootstrap?.exports?.memory?.buffer?.byteLength||0,
+      pm4Packets:Number(gpu.packets||0),draws:Number(gpu.draws||0),swaps:Number(gpu.swaps||0),
+      shaderLoads:Number(gpu.shaderLoads||0),threadSlices:Number(cpu.totalSlices||cpu.firstPumpSlices||0),
+      shaderStatus:shaders?.bothExecuted?'executed':shaders?.bothSpirvTranslated?'translated':shaders?.available?'captured':'waiting',
+      blocker:state?.schedulerBlocker||state?.result?.reachedKernelBlocker||(!gpu.submitted&&gpu.ready?gpu:null),
+      realFrame:state?.frontbufferFrame?.realTitleFrameReady===true||gpu.realTitleFrameReady===true,
+      state,
+    };
+    this.emit('telemetry',detail);
+  }
+}
+
+function stripExtension(name='Xbox 360 Game'){return String(name).replace(/\.(zip|iso|xex|live|pirs|con)$/i,'').replace(/[._-]+/g,' ').trim()||'Xbox 360 Game';}
+export {fmtHex,stripExtension};

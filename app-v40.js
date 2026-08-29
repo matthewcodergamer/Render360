@@ -1,5 +1,6 @@
 import {Render360Runtime,fmtHex,stripExtension} from './runtime/render360-runtime.js';
 import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js';
+import {resolveTitleCover} from './library/cover-resolver.js';
 import {prepareZipGame} from './import/zip-importer.js';
 import {loadTitleProfile,saveTitleProfile,resetTitleProfile} from './profiles/title-profile-store.js';
 
@@ -38,12 +39,12 @@ async function coverUrl(game){
   const blob=await getCover(game.coverKey);if(!blob)return null;
   const url=URL.createObjectURL(blob);coverUrls.set(game.coverKey,url);return url;
 }
-function coverMarkup(game,url,detail=false){
+function coverMarkup(game,url){
   if(url)return`<img src="${url}" alt="${escapeHtml(game.name)} cover">`;
   return `<div class="cover-placeholder"><div><b>${escapeHtml(game.name)}</b><span>XBOX 360</span></div></div>`;
 }
 
-async function refreshLibrary(){games=await listGames();renderLibrary();}
+async function refreshLibrary(){games=await listGames();await renderLibrary();}
 async function renderLibrary(){
   const query=($('librarySearch')?.value||'').trim().toLowerCase();
   const filtered=games.filter(g=>!query||g.name.toLowerCase().includes(query)||titleIdText(g).toLowerCase().includes(query));
@@ -56,16 +57,41 @@ async function renderLibrary(){
   }
 }
 
+async function restorePersistentSources(){
+  if(!navigator.storage?.getDirectory)return 0;
+  let root;try{root=await navigator.storage.getDirectory();}catch{return 0;}
+  let restored=0;
+  for(const game of games){
+    if(!game.persistentSource||!game.opfsPath||runtime.getSource(game.id))continue;
+    try{
+      const parts=String(game.opfsPath).split('/').filter(Boolean);if(!parts.length)continue;
+      let dir=root;for(const part of parts.slice(0,-1))dir=await dir.getDirectoryHandle(part);
+      const handle=await dir.getFileHandle(parts.at(-1));const stored=await handle.getFile();
+      const file=new File([stored],game.sourceName||stored.name,{type:stored.type||'application/octet-stream',lastModified:stored.lastModified||Date.now()});
+      runtime.bindSource(game.id,file);restored++;
+    }catch(error){log('warn',`Persistent source unavailable for ${game.name}: ${error.message}`);}
+  }
+  if(restored)await renderLibrary();
+  return restored;
+}
+
 async function openGame(id){currentGame=await getGame(id);if(!currentGame)return;await renderDetail();setState('GAME_DETAILS');}
 async function renderDetail(){
   const game=currentGame;if(!game)return;const url=await coverUrl(game);
-  $('detailCover').innerHTML=coverMarkup(game,url,true);$('detailName').textContent=game.name;$('detailTitleId').textContent=titleIdText(game);
+  $('detailCover').innerHTML=coverMarkup(game,url);$('detailName').textContent=game.name;$('detailTitleId').textContent=titleIdText(game);
   $('detailType').textContent=String(game.sourceType||'Unknown').toUpperCase();$('detailSize').textContent=formatBytes(game.size||0);
   $('detailCompatibility').textContent=game.compatibility||'Testing';$('detailSource').textContent=game.archiveName||game.sourceName||'Imported game';
   $('playGameButton').textContent=runtime.getSource(game.id)?'Play':'Choose File & Play';
 }
 
 function openImport(){const input=$('importInput');input.value='';input.click();}
+async function resolveImportCover(info,coverFile){
+  if(coverFile)return {coverFile,name:null};
+  if(!info?.titleId)return {coverFile:null,name:null};
+  setImportProgress('Finding game artwork…',98,`Title ID ${(Number(info.titleId)>>>0).toString(16).toUpperCase().padStart(8,'0')}`);
+  const resolved=await resolveTitleCover({titleId:info.titleId});
+  return {coverFile:resolved?.blob?new File([resolved.blob],`cover-${Number(info.titleId).toString(16)}.jpg`,{type:resolved.blob.type}):null,name:resolved?.name||null};
+}
 async function importSelectedFile(file){
   if(!file)return;setImportProgress('Preparing game…',0,`Indexing ${file.name}`);showSheet('importSheet');
   let gameFile=file,coverFile=null,archiveName=null,storage=null;
@@ -79,22 +105,24 @@ async function importSelectedFile(file){
     }
     setImportProgress('Reading Xbox metadata…',96,gameFile.name);
     const info=await runtime.inspectFile(gameFile);
+    const resolved=await resolveImportCover(info,coverFile);coverFile=resolved.coverFile||coverFile;
     const id=makeGameId();let coverKey=null;if(coverFile)coverKey=await putCover(coverFile);
     const game={
-      id,name:info.name||stripExtension(gameFile.name),titleId:Number(info.titleId||0)>>>0,mediaId:Number(info.mediaId||0)>>>0,
+      id,name:resolved.name||info.name||stripExtension(gameFile.name),titleId:Number(info.titleId||0)>>>0,mediaId:Number(info.mediaId||0)>>>0,
       contentType:info.displayType||'Xbox 360 Game',sourceType:info.sourceType||sourceKindFromName(gameFile.name),sourceName:gameFile.name,
       archiveName,size:gameFile.size,coverKey,compatibility:'Testing',profileId:`title-${Number(info.titleId||0).toString(16)}`,
       importedAt:Date.now(),lastPlayed:0,opfsPath:storage?.opfsPath||null,persistentSource:Boolean(storage?.persistent),needsRelink:!storage?.persistent,
       inspectionWarning:info.inspectionWarning||null,
     };
     runtime.bindSource(id,gameFile);await putGame(game);games.unshift(game);currentGame=game;
-    setImportProgress('Added to Library',100,`${game.name} is ready`);setTimeout(()=>{closeSheets();renderLibrary();renderDetail();setState('GAME_DETAILS');},450);
+    setImportProgress('Added to Library',100,`${game.name} is ready`);
+    setTimeout(async()=>{closeSheets();await renderLibrary();await renderDetail();setState('GAME_DETAILS');},450);
   }catch(error){log('error',error.message);closeSheets();showAlert('Import Failed',error.message,[{label:'OK'}]);}
 }
 function setImportProgress(title,percent,meta=''){$('importTitle').textContent=title;$('importProgressFill').style.width=`${Math.max(0,Math.min(100,percent||0))}%`;$('importProgressPercent').textContent=`${Math.round(percent||0)}%`;$('importProgressMeta').textContent=meta;}
 
 async function playCurrent(){
-  if(!currentGame)return;let source=runtime.getSource(currentGame.id);
+  if(!currentGame)return;const source=runtime.getSource(currentGame.id);
   if(!source){relinkTarget=currentGame;$('relinkInput').value='';$('relinkInput').click();return;}
   closeSheets();setState('BOOTING_GAME');$('bootOverlay').classList.remove('frame-live');$('bootTitle').textContent=currentGame.name;$('bootMessage').textContent='Mounting Xbox 360 title…';
   try{await markPlayed(currentGame.id);await runtime.play(currentGame,source);$('bootMessage').textContent='Guest execution is running. Waiting for real title pixels…';setState('RUNNING');}
@@ -102,9 +130,17 @@ async function playCurrent(){
 }
 async function handleRelink(file){
   if(!relinkTarget||!file)return;
-  const expected=relinkTarget.sourceType,actual=sourceKindFromName(file.name);
-  if(expected&&expected!=='unknown'&&actual!==expected){showAlert('Wrong File',`This library entry expects a ${expected.toUpperCase()} source.`,[{label:'OK'}]);return;}
-  runtime.bindSource(relinkTarget.id,file);currentGame=relinkTarget;relinkTarget=null;await renderLibrary();await playCurrent();
+  let source=file,actual=sourceKindFromName(file.name);
+  try{
+    if(actual==='zip'&&relinkTarget.archiveName){
+      setImportProgress('Preparing game…',0,`Indexing ${file.name}`);showSheet('importSheet');
+      const prepared=await prepareZipGame(file,{onProgress:p=>setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,p.percent||0,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…')});
+      source=prepared.gameFile;actual=sourceKindFromName(source.name);closeSheets();
+    }
+    const expected=relinkTarget.sourceType;
+    if(expected&&expected!=='unknown'&&actual!==expected){showAlert('Wrong File',`This library entry expects a ${expected.toUpperCase()} source.`,[{label:'OK'}]);return;}
+    runtime.bindSource(relinkTarget.id,source);currentGame=relinkTarget;relinkTarget=null;await renderLibrary();await playCurrent();
+  }catch(error){closeSheets();showAlert('File Could Not Be Opened',error.message,[{label:'OK'}]);}
 }
 
 function renderSettings(){
@@ -144,6 +180,7 @@ function wireDigitalControls(){
   });
 }
 function wireStick(element,knob,side='left'){
+  if(!element||!knob)return;
   let pointer=null;const reset=()=>{pointer=null;knob.style.transform='translate(0,0)';if(side==='left'){stickState.lx=0;stickState.ly=0}else{stickState.rx=0;stickState.ry=0}runtime.setAnalog(stickState.lx,stickState.ly,stickState.rx,stickState.ry);};
   element.addEventListener('pointerdown',e=>{pointer=e.pointerId;element.setPointerCapture(pointer);move(e);});element.addEventListener('pointermove',e=>{if(e.pointerId===pointer)move(e);});element.addEventListener('pointerup',reset);element.addEventListener('pointercancel',reset);
   function move(e){const r=element.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,max=r.width*.30;let dx=e.clientX-cx,dy=e.clientY-cy;const len=Math.hypot(dx,dy);if(len>max){dx=dx/len*max;dy=dy/len*max;}knob.style.transform=`translate(${dx}px,${dy}px)`;const x=dx/max,y=-dy/max;if(side==='left'){stickState.lx=x;stickState.ly=y}else{stickState.rx=x;stickState.ry=y}runtime.setAnalog(stickState.lx,stickState.ly,stickState.rx,stickState.ry);}
@@ -154,17 +191,18 @@ function resumeGame(){runtime.resume();$('controllerLayer').classList.remove('pa
 function leaveGame(){runtime.resetInput();$('controllerLayer').classList.remove('paused');closeSheets();setState('GAME_DETAILS');renderDetail();}
 
 async function boot(){
-  setState('LIBRARY');$('libraryBootStatus').textContent='Starting emulator…';await refreshLibrary();
+  setState('LIBRARY');$('libraryBootStatus').textContent='Starting emulator…';$('importButton').disabled=true;$('emptyImportButton').disabled=true;await refreshLibrary();
   runtime.addEventListener('log',e=>log(e.detail.level,e.detail.message));runtime.addEventListener('telemetry',e=>updateHud(e.detail));runtime.addEventListener('framePresented',()=>{$('bootOverlay').classList.add('frame-live');if(appState==='BOOTING_GAME')setState('RUNNING');});runtime.addEventListener('bootStage',e=>{if($('bootMessage'))$('bootMessage').textContent=e.detail.message;});runtime.addEventListener('fatalError',e=>log('error',e.detail.message));
-  try{await runtime.init();$('libraryBootStatus').textContent='Xenia-Web ready';log('ok',`Core V${runtime.core.buildVersion} ready`);}catch(error){$('libraryBootStatus').textContent='Emulator core unavailable';log('error',error.message);}
+  try{await runtime.init();await restorePersistentSources();$('libraryBootStatus').textContent='Xenia-Web ready';$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Core V${runtime.core.buildVersion} ready`);}catch(error){$('libraryBootStatus').textContent='Emulator core unavailable';log('error',error.message);}
 }
 
 $('importButton').addEventListener('click',openImport);$('emptyImportButton').addEventListener('click',openImport);$('importInput').addEventListener('change',e=>importSelectedFile(e.target.files?.[0]));$('librarySearch').addEventListener('input',renderLibrary);
 $('detailBack').addEventListener('click',()=>{setState('LIBRARY');renderLibrary();});$('playGameButton').addEventListener('click',playCurrent);$('gameSettingsButton').addEventListener('click',()=>{renderSettings();setState('SETTINGS');});$('settingsBack').addEventListener('click',()=>setState('GAME_DETAILS'));$('saveSettings').addEventListener('click',saveSettings);$('resetSettings').addEventListener('click',()=>{resetTitleProfile(currentGame);renderSettings();});
 $('chooseCoverButton').addEventListener('click',()=>{$('coverInput').value='';$('coverInput').click();});$('coverInput').addEventListener('change',e=>chooseCover(e.target.files?.[0]));$('deleteGameButton').addEventListener('click',()=>showAlert('Delete Game?',`Remove ${currentGame?.name||'this game'} from the Render360 library? The original game file is not modified.`,[{label:'Cancel'},{label:'Delete',action:removeCurrentGame}]));
-$('relinkInput').addEventListener('change',e=>handleRelink(e.target.files?.[0]));$('pauseButton').addEventListener('click',pauseGame);$('resumeButton').addEventListener('click',resumeGame);$('leaveGameButton').addEventListener('click',leaveGame);$('runtimeBack').addEventListener('click',pauseGame);$('diagnosticsButton').addEventListener('click',showDiagnostics);$('settingsButton').addEventListener('click',()=>showDiagnostics());
+$('relinkInput').addEventListener('change',e=>handleRelink(e.target.files?.[0]));$('pauseButton').addEventListener('click',pauseGame);$('resumeButton').addEventListener('click',resumeGame);$('leaveGameButton').addEventListener('click',leaveGame);$('runtimeBack').addEventListener('click',pauseGame);$('diagnosticsButton').addEventListener('click',showDiagnostics);
+$('settingsButton').addEventListener('click',()=>showSheet('appSettingsSheet'));$('appDiagnosticsButton').addEventListener('click',()=>{closeSheets();showDiagnostics();});
 $('scrim').addEventListener('click',()=>{if(appState==='PAUSED')return;closeSheets();});document.querySelectorAll('[data-close-sheet]').forEach(b=>b.addEventListener('click',closeSheets));
-wireDigitalControls();wireStick($('leftStick'),$('leftStickKnob'),'left');wireStick($('rightStick'),$('rightStickKnob'),'right');
+wireDigitalControls();wireStick($('leftStick'),$('leftStickKnob'),'left');if($('rightStick'))wireStick($('rightStick'),$('rightStickKnob'),'right');
 window.addEventListener('keydown',e=>{const map={Enter:'START',Escape:'BACK',q:'LB',e:'RB',z:'LT',c:'RT',x:'X',y:'Y',a:'A',b:'B'};const k=map[e.key]||map[e.key.toLowerCase?.()];if(k)runtime.setKey(k,true);});window.addEventListener('keyup',e=>{const map={Enter:'START',Escape:'BACK',q:'LB',e:'RB',z:'LT',c:'RT',x:'X',y:'Y',a:'A',b:'B'};const k=map[e.key]||map[e.key.toLowerCase?.()];if(k)runtime.setKey(k,false);});
 
 boot();

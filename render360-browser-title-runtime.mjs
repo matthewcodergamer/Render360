@@ -1,4 +1,5 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
+import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
@@ -10,7 +11,7 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_word_capacity',
   'r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_ring_word',
   'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit',
-  'r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents',
+  'r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_real_title_frame_ready',
   'r360_xenos_last_opcode','r360_xenos_last_fault_word','r360_xenos_frame_generation','r360_xenos_frame_hash',
   'r360_xenos_shader_dwords','r360_xenos_shader_interpreter_reset','r360_xenos_shader_interpreter_analyze',
   'r360_xenos_shader_interpreter_execute','r360_xenos_shader_interpreter_status','r360_xenos_shader_interpreter_ucode_dwords',
@@ -25,15 +26,25 @@ export function validateBrowserBootstrap(instance){
   return {ok:true,exports:REQUIRED_BOOTSTRAP_EXPORTS.length,memoryBytes:instance.exports.memory.buffer.byteLength};
 }
 
-export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm',fetchImpl=globalThis.fetch}={}){
+export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
   const response=await fetchImpl(url,{cache:'no-store'});
   if(!response?.ok)throw new Error(`Render360 bootstrap fetch failed: HTTP ${response?.status??0}`);
-  let result;
-  try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
-  validateBrowserBootstrap(result.instance);
-  return result.instance;
+  const host=createRender360BrowserImports({onStdout,onStderr});
+  let module,instance;
+  try{
+    const result=await WebAssembly.instantiateStreaming(response.clone(),host.imports);
+    module=result.module;instance=result.instance;
+  }catch(streamError){
+    const bytes=await response.arrayBuffer();
+    module=await WebAssembly.compile(bytes);
+    try{instance=await WebAssembly.instantiate(module,host.imports);}catch(error){throw new Error(`Render360 bootstrap instantiate failed: ${error?.message||error}; streaming error: ${streamError?.message||streamError}`);}
+  }
+  validateRender360BrowserImports(module);
+  attachRender360BrowserInstance(host,instance);
+  validateBrowserBootstrap(instance);
+  return instance;
 }
 
 export async function mountXboxIsoBrowser(file){
@@ -52,4 +63,4 @@ export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapU
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleEntryExecution:'Xenia-scanned executable PE function',titleGpu:'native circular PM4 ring + upstream Xenia shader interpreter',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,browserWasiHost:true,titleEntryExecution:'Xenia-scanned executable PE function',titleGpu:'native circular PM4 ring + upstream Xenia shader interpreter',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}

@@ -18,6 +18,17 @@ if((f('r360_xenos_draws')()>>>0)!==1||(f('r360_xenos_presents')()>>>0)!==1||(f('
 const gen=f('r360_xenos_frame_generation')()>>>0,hash=f('r360_xenos_frame_hash')()>>>0;if(gen!==1||!hash)throw new Error('frame generation/hash missing');
 const framePtr=f('r360_xenos_frame_buffer')()>>>0,size=f('r360_xenos_frame_size')()>>>0;if(size!==64*64*4)throw new Error('frame size mismatch');const frame=new Uint8Array(e.memory.buffer,framePtr,size);let nonBg=0;for(let i=0;i<size;i+=4)if(frame[i]!==0x10||frame[i+1]!==0x10||frame[i+2]!==0x18)nonBg++;if(nonBg<100)throw new Error('draw produced no visible raster');
 console.log('XENOS_PM4_RINGBUFFER=PASS');console.log('XENOS_REGISTER_SEMANTICS=PASS');console.log('XENOS_DRAW_TO_EDRAM=PASS');console.log('XENOS_EDRAM_RESOLVE=PASS');
+// Match Xenia command-processor semantics that matter for real title setup:
+// type-0 may repeatedly target one register, and type-1 writes two independent
+// register indices. Also accept all-zero padding as an empty packet.
+f('r360_xenos_reset')();const r1=new Uint32Array(e.memory.buffer,f('r360_xenos_ring_buffer')()>>>0,cap);
+r1[0]=(1<<16)|(1<<15)|0x1234;r1[1]=0x11111111;r1[2]=0x22222222;
+const regA=0x321,regB=0x456;r1[3]=(1<<30)|(regB<<11)|regA;r1[4]=0xA1B2C3D4;r1[5]=0x10203040;r1[6]=0;
+if(!(f('r360_xenos_submit')(7)>>>0))throw new Error(`type0/type1 submit failed status=${f('r360_xenos_status')()>>>0}`);
+if((f('r360_xenos_register')(0x1234)>>>0)!==0x22222222)throw new Error('type0 write-one-register semantics missing');
+if((f('r360_xenos_register')(regA)>>>0)!==0xA1B2C3D4||(f('r360_xenos_register')(regB)>>>0)!==0x10203040)throw new Error('type1 dual-register semantics missing');
+if((f('r360_xenos_register_writes')()>>>0)!==4)throw new Error('type0/type1 register write telemetry mismatch');
+console.log('XENOS_TYPE0_REPEAT_REGISTER=PASS');console.log('XENOS_TYPE1_DUAL_REGISTER=PASS');console.log('XENOS_ZERO_PADDING_PACKET=PASS');
 // 2048-tile circular EDRAM addressing, based on Xenia's documented Xenos layout.
 if((f('r360_xenos_edram_tile_address')(2047,80,80,0)>>>0)!==0)throw new Error('EDRAM wraparound failed');if((f('r360_xenos_edram_tile_address')(3,0,0,0)>>>0)!==0xFFFFFFFF)throw new Error('zero pitch did not fail closed');
 console.log('XENOS_EDRAM_TILE_WRAP=PASS');

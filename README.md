@@ -8,22 +8,22 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-█████████░░░░░░░░░░░  ~44%
+█████████░░░░░░░░░░░  ~46%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package, sparse-memory and the controlled XEX/PE loading pipeline are substantially closed; genuine extracted-title execution, kernel/XAM/runtime behavior, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package, sparse-memory, ordinary retail XEX preparation, strict PE loading and the controlled PE-entry handoff are closed CI contracts. Genuine extracted-title execution, kernel/XAM/runtime behavior, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
 
 ## Latest authoritative gate
 
-**Run 328 — Actions ID `33227084124` — SUCCESS**
+**Run 338 — Actions ID `33227956792` — SUCCESS**
 
-Aggregate commit: `7383622e60d77c16b3fb6435411ce03847cc0aec`
+Aggregate commit: `ffee353216d248618d6bb30781a0dbe724046cfa`
 
-Run 328 closes the prepared-PE-to-guest-memory boundary. The strict PE decoder now feeds a real loader that derives guest section addresses from `image_base + section RVA`, copies section bytes from the prepared executable, preserves zero-filled virtual tails, converts PE characteristics into final RX/RW guest permissions, and validates the decoder-derived entry before finalization.
+Run 338 closes ordinary retail XEX image preparation across encrypted **NONE, BASIC and NORMAL** paths. The reusable `retail-xex-image-pipeline.mjs` validates XEX metadata, derives the title session key with Xenia-compatible retail/devkit AES semantics, decrypts the executable body with streaming AES-128-CBC, then routes the post-decryption bytes through the existing NONE, BASIC or NORMAL preparation path. NORMAL continues through the upstream Xenia LZX wasm32 decoder and is checked against the exact expected prepared image.
 
-The first attempt, Run 326, correctly failed because mapper reset erased the caller-facing staging buffer before the PE decoder consumed it. Commit `01f081fd5b72c48ab24d94c9525e71b6505da644` fixes the contract: mapper reset clears mapping state without destroying staged prepared-image bytes. The critic was not weakened.
+The same aggregate gate also replays the PE loader and the Run-335 prepared-PE entry handoff: bytes are loaded through strict PE section metadata into SparseGuestMemory, read back at the PE-derived executable entry, and fed into the relocated Xenia PPC scanner/frontend/HIR path. The handoff critic repeats at multiple Xbox guest bases so a hard-coded entry cannot pass.
 
-Run 328 also replayed the complete existing stack successfully: **79/79 wasm32 translation/bootstrap units**, strict link, upstream Xenia LZX, XEX session-key/AES-CBC semantics, prepared-entry PPC/HIR execution, WasmBackend, SparseGuestMemory and the V36 XEX mapper.
+DELTA compression remains a distinct patch-image feature and is intentionally fail-closed. It is not counted as ordinary retail executable preparation.
 
 ## Closed foundations and bring-up contracts
 
@@ -45,38 +45,41 @@ XEX PREPARE BASIC                                100% ✓
 XEX NORMAL FRAMING                               100% ✓
 XENIA LZX WASM FOUNDATION                        100% ✓
 XEX SESSION-KEY / AES-CBC FOUNDATION             100% ✓
-UNENCRYPTED NORMAL → PREPARED ENTRY PIPELINE     100% ✓
+FULL RETAIL XEX IMAGE PREPARATION                100% ✓
 STRICT XBOX PE IMAGE DECODER                     100% ✓
 PREPARED PE IMAGE → GUEST MEMORY                 100% ✓
+PREPARED PE ENTRY → XENIA PPC / HIR              100% ✓
 ```
 
 These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
 
-## What Run 328 proves
+## What Run 338 proves
 
 ```text
-prepared Xbox PE image
-        ↓
-strict MZ / PE32 / PPC-BE / Xbox validation
-        ↓
-real PE section table
-        ↓
-image_base + section RVA
-        ↓
-raw section bytes copied from prepared image
-        ↓
-zero-filled virtual tails preserved
-        ↓
-PE characteristics → RX / RW guest permissions
-        ↓
-SparseGuestMemory mappings
-        ↓
-image_base + entry RVA
-        ↓
-validated executable guest entry
+XEX2 metadata
+   ↓
+encryption/compression routing
+   ↓
+retail/devkit session-key derivation
+   ↓
+streaming AES-128-CBC executable-body decryption
+   ↓
+NONE ───────────────→ exact prepared image
+BASIC ──────────────→ data + zero-fill prepared image
+NORMAL → framing → upstream Xenia LZX → exact prepared image
+   ↓
+strict Xbox PE decode
+   ↓
+PE section bytes → SparseGuestMemory RX / R / RW mappings
+   ↓
+PE-derived executable entry
+   ↓
+bytes read back from mapped guest memory
+   ↓
+Xenia PPC scanner / frontend / finalized HIR
 ```
 
-The critic verifies that `.text` bytes really originate in PE raw data, `.data` bytes really originate in PE raw data, RX rejects writes, RW remains writable, virtual tails are zero-filled, and malformed non-readable executable mappings fail closed.
+The retail critic changes session keys, ciphertext and guest bases to prevent a fixed-vector or fixed-address implementation from passing. Corrupt or unsupported formats remain fail closed.
 
 This is still controlled test content. It is **not yet a claim that an extracted commercial `default.xex` has booted**.
 
@@ -84,25 +87,23 @@ This is still controlled test content. It is **not yet a claim that an extracted
 
 ```text
 OVERALL RENDER360
-█████████░░░░░░░░░░░  ~44%  weighted engineering estimate
+█████████░░░░░░░░░░░  ~46%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
 PACKAGE + STFS + XEX METADATA
 ████████████████████  100% ✓
-XEX PREPARATION / LZX / CRYPTO FOUNDATIONS
+FULL RETAIL XEX IMAGE PREPARATION
 ████████████████████  100% ✓
 STRICT XBOX PE IMAGE DECODE
 ████████████████████  100% ✓
 PREPARED IMAGE → REAL GUEST SECTION MAPPING
 ████████████████████  100% ✓
-UNENCRYPTED NORMAL PREPARED-ENTRY PIPELINE
+PREPARED PE ENTRY → XENIA PPC / HIR
 ████████████████████  100% ✓
 
-FULL RETAIL XEX IMAGE PREPARATION
-█████████████████░░░  ~85%  planning estimate; combined encrypted path + DELTA remain
 REAL EXTRACTED TITLE HANDOFF / ENTRY
-██████░░░░░░░░░░░░░░  ← ACTIVE NEXT
+████████░░░░░░░░░░░░  ← ACTIVE NEXT
 KERNEL / xboxkrnl / XAM
 ░░░░░░░░░░░░░░░░░░░░
 GUEST THREADS / TLS / RUNTIME
@@ -119,15 +120,16 @@ FIRST GENUINE GUEST FRAME
 
 Partial bars are planning indicators only. A subsystem reaches 100% only when its exact aggregate critic is green.
 
-## Active implementation — genuine extracted-title handoff
+## Active implementation — one-call genuine extracted-title handoff
 
-The next milestone combines the already-verified pieces around title content supplied by the user at runtime:
+The next milestone replaces manual test-to-test wiring with one runtime controller around user-supplied title content:
 
 ```text
 user-supplied STFS package / default.xex
   → full STFS extraction
   → XEX2 decode
-  → image preparation
+  → choose NONE / BASIC / NORMAL preparation
+  → decrypt retail body when required
   → strict PE decode
   → prepared PE section loader
   → SparseGuestMemory RX / R / RW mappings
@@ -136,7 +138,7 @@ user-supplied STFS package / default.xex
   → Xenia PPCScanner / frontend / finalized HIR
   → Hot WasmBackend cache / dispatch
   → execute genuine title instructions
-  → report FIRST_RUNTIME_BLOCKER=<exact dependency>
+  → FIRST_RUNTIME_BLOCKER=<exact dependency>
 ```
 
 No copyrighted title binary belongs in this repository. The genuine-title gate consumes legally obtained content supplied at runtime and must report the first actual blocker instead of hiding it behind broad success stubs.
@@ -170,6 +172,7 @@ Portal and Portal 2 remain later compatibility targets. The immediate target is 
 
 - `src/xenia_web_bootstrap/` — active browser-native title bring-up and verified integration layers.
 - `src/xenia_web_shims/` — browser/WASM portability shims.
+- `retail-xex-image-pipeline.mjs` — unified retail NONE/BASIC/NORMAL preparation adapter.
 - `xenia_port/` — older port surface retained until migration is safe.
 - `docs/` — maintained project/release documentation.
 - `.github/workflows/` — aggregate regression gates.

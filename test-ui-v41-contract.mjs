@@ -54,7 +54,7 @@ must(has(patch,'syncThemeChrome')&&has(patch,'apple-mobile-web-app-status-bar-st
 must(has(patch,'Render360 V44')&&has(patch,'clearGameCopiesV44')&&has(patch,'clearGamesDirectory'),'V44 patch must identify the release and own reliable game-copy deletion');
 
 must(PIPELINE_NAMES.every(name=>has(developerConsole,name)),'developer console must expose every commercial-title boot boundary');
-must(has(developerConsole,'render360:runtimeBlocker')&&has(developerConsole,'render360:fatalError')&&has(developerConsole,'render360:telemetry'),'developer console must subscribe to blocker, fatal and telemetry events');
+must(has(developerConsole,"'runtimeBlocker'")&&has(developerConsole,"'fatalError'")&&has(developerConsole,"'telemetry'")&&has(developerConsole,'render360:${type}'),'developer console must subscribe to blocker, fatal and telemetry events through the generic runtime bus');
 must(has(developerConsole,'unhandledrejection')&&has(developerConsole,"globalThis.addEventListener('error'"),'developer console must capture browser errors and unhandled promise failures');
 must(has(developerConsole,'firstKernelBlocker')&&has(developerConsole,'reachedKernelBlocker')&&has(developerConsole,'lastOpcode'),'developer console must expose Xenia kernel-import and Xenos PM4 blockers');
 must(has(developerConsole,'navigator.clipboard.writeText')&&has(developerConsole,'navigator.share'),'developer console must support copying/sharing an actionable report from iPhone');

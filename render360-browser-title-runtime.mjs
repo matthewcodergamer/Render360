@@ -15,7 +15,13 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_xenos_last_opcode','r360_xenos_last_fault_word','r360_xenos_frame_generation','r360_xenos_frame_hash',
   'r360_xenos_shader_dwords','r360_xenos_shader_interpreter_reset','r360_xenos_shader_interpreter_analyze',
   'r360_xenos_shader_interpreter_execute','r360_xenos_shader_interpreter_status','r360_xenos_shader_interpreter_ucode_dwords',
-  'r360_xenos_shader_interpreter_uses_texture_fetch','r360_xenos_shader_interpreter_execution_count'
+  'r360_xenos_shader_interpreter_uses_texture_fetch','r360_xenos_shader_interpreter_execution_count',
+  'r360_xenos_spirv_reset','r360_xenos_spirv_translate','r360_xenos_spirv_status','r360_xenos_spirv_buffer','r360_xenos_spirv_size','r360_xenos_spirv_word',
+  'r360_xenos_frontbuffer_snapshot_capture','r360_xenos_frontbuffer_snapshot_status','r360_xenos_frontbuffer_snapshot_buffer',
+  'r360_xenos_frontbuffer_snapshot_size','r360_xenos_frontbuffer_snapshot_width','r360_xenos_frontbuffer_snapshot_height',
+  'r360_xenos_frontbuffer_snapshot_hash','r360_xenos_frontbuffer_snapshot_generation','r360_xenos_frontbuffer_snapshot_format',
+  'r360_xenos_frontbuffer_snapshot_tiled','r360_xenos_frontbuffer_snapshot_pitch','r360_xenos_frontbuffer_snapshot_source_address',
+  'r360_xenos_frontbuffer_snapshot_source_bytes'
 ];
 const pick=(e,n)=>e[n]??e[`_${n}`];
 
@@ -63,4 +69,4 @@ export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapU
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,browserWasiHost:true,titleEntryExecution:'Xenia-scanned executable PE function',titleGpu:'native circular PM4 ring + upstream Xenia shader interpreter',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,browserWasiHost:true,titleEntryExecution:'Xenia-scanned executable PE function',titleGpu:'native circular PM4 ring + upstream Xenia interpreter + Xenos-to-SPIR-V accelerator',realFrontbuffer:'VdSwap fetch constant + mapped sparse Xbox memory',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -81,3 +82,11 @@ void FatalError(const std::string_view str) {
 }
 
 }  // namespace xe
+
+// Xenia's vendored libmspack LZX decoder is C code and uses this diagnostic
+// callback directly. Keep the ABI, but avoid native stderr/filesystem/thread
+// dependencies in the browser bootstrap. Decoder success/failure is surfaced
+// through explicit Render360 status exports and CI critics.
+extern "C" void xenia_log(const char* format, ...) {
+  (void)format;
+}

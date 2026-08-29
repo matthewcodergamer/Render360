@@ -1,0 +1,70 @@
+name: Render360 sparse memory alias hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-sparse-memory-alias-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-sparse-memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Index executable aliases instead of scanning every mapping
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/xenia_web_bootstrap/sparse_guest_memory.cpp')
+          s=p.read_text()
+
+          old='''std::map<uint32_t, Mapping> g_pages;\n// This is the authoritative executable-byte content generation.'''
+          new='''std::map<uint32_t, Mapping> g_pages;\n// Number of executable virtual aliases for each physical sparse backing page.\n// Guest RAM writes are extremely hot; they must not scan the entire virtual\n// mapping tree just to discover that an ordinary RW data/stack page has no\n// executable alias.\nstd::map<std::pair<uint32_t, uint32_t>, uint32_t> g_executable_alias_counts;\n// This is the authoritative executable-byte content generation.'''
+          if old in s:s=s.replace(old,new,1)
+          elif 'g_executable_alias_counts' not in s:raise SystemExit('globals marker missing')
+
+          old='''void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {\n  for (const auto& [virtual_page, mapping] : g_pages) {'''
+          new='''void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {\n  const auto alias_key = std::make_pair(backing_id, backing_page);\n  const auto count_it = g_executable_alias_counts.find(alias_key);\n  if (count_it == g_executable_alias_counts.end() || !count_it->second) return;\n  for (const auto& [virtual_page, mapping] : g_pages) {'''
+          if old in s:s=s.replace(old,new,1)
+          elif 'const auto count_it = g_executable_alias_counts.find(alias_key);' not in s:raise SystemExit('invalidate marker missing')
+
+          old='''  g_backings.clear();\n  g_pages.clear();\n  g_executable_content_generations.clear();'''
+          new='''  g_backings.clear();\n  g_pages.clear();\n  g_executable_alias_counts.clear();\n  g_executable_content_generations.clear();'''
+          if old in s:s=s.replace(old,new,1)
+          elif 'g_executable_alias_counts.clear();' not in s:raise SystemExit('reset marker missing')
+
+          old='''  for (uint32_t i = 0; i < page_count; ++i) {\n    g_pages.emplace(first_page + i,\n                    Mapping{backing_id, backing_page_offset + i, protection});\n  }\n  return true;\n}\n\nbool ProtectSparseGuestMemory'''
+          new='''  for (uint32_t i = 0; i < page_count; ++i) {\n    const Mapping mapping{backing_id, backing_page_offset + i, protection};\n    g_pages.emplace(first_page + i, mapping);\n    if (protection & kGuestExecute) {\n      ++g_executable_alias_counts[\n          std::make_pair(mapping.backing_id, mapping.backing_page)];\n    }\n  }\n  return true;\n}\n\nbool ProtectSparseGuestMemory'''
+          if old in s:s=s.replace(old,new,1)
+          elif '++g_executable_alias_counts[' not in s:raise SystemExit('map marker missing')
+
+          old='''    const bool was_executable = (mapping.protection & kGuestExecute) != 0;\n    const bool now_executable = (protection & kGuestExecute) != 0;\n    mapping.protection = protection;\n    if (was_executable != now_executable) {\n      InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,\n                                           kPageSize);\n    }'''
+          new='''    const bool was_executable = (mapping.protection & kGuestExecute) != 0;\n    const bool now_executable = (protection & kGuestExecute) != 0;\n    if (was_executable != now_executable) {\n      const auto alias_key =\n          std::make_pair(mapping.backing_id, mapping.backing_page);\n      if (now_executable) {\n        ++g_executable_alias_counts[alias_key];\n      } else {\n        auto alias_it = g_executable_alias_counts.find(alias_key);\n        if (alias_it != g_executable_alias_counts.end()) {\n          if (alias_it->second > 1) --alias_it->second;\n          else g_executable_alias_counts.erase(alias_it);\n        }\n      }\n    }\n    mapping.protection = protection;\n    if (was_executable != now_executable) {\n      InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,\n                                           kPageSize);\n    }'''
+          if old in s:s=s.replace(old,new,1)
+          elif 'if (now_executable) {' not in s:raise SystemExit('protect marker missing')
+
+          old='''  for (uint32_t i = 0; i < page_count; ++i) {\n    auto it = g_pages.find(first_page + i);\n    if (it->second.protection & kGuestExecute) {\n      InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,\n                                           kPageSize);\n    }\n    g_pages.erase(it);\n  }'''
+          new='''  for (uint32_t i = 0; i < page_count; ++i) {\n    auto it = g_pages.find(first_page + i);\n    if (it->second.protection & kGuestExecute) {\n      const auto alias_key =\n          std::make_pair(it->second.backing_id, it->second.backing_page);\n      auto alias_it = g_executable_alias_counts.find(alias_key);\n      if (alias_it != g_executable_alias_counts.end()) {\n        if (alias_it->second > 1) --alias_it->second;\n        else g_executable_alias_counts.erase(alias_it);\n      }\n      InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,\n                                           kPageSize);\n    }\n    g_pages.erase(it);\n  }'''
+          if old in s:s=s.replace(old,new,1)
+          elif 'std::make_pair(it->second.backing_id, it->second.backing_page)' not in s:raise SystemExit('unmap marker missing')
+
+          p.write_text(s)
+          text=p.read_text()
+          for needle in ['g_executable_alias_counts','count_it == g_executable_alias_counts.end()','g_executable_alias_counts.clear()']:
+            if needle not in text:raise SystemExit(f'missing {needle}')
+          print('SPARSE_GUEST_WRITE_EXEC_ALIAS_INDEX=PATCHED')
+          PY
+          git diff --check
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/sparse_guest_memory.cpp
+          git diff --cached --check
+          git commit -m 'fix: make sparse guest data writes constant-time' || exit 0
+          git push origin HEAD:main

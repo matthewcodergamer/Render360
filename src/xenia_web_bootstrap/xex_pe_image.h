@@ -15,6 +15,7 @@ enum PEStatus : uint32_t {
   kPEErrorSubsystem = 106,
   kPEErrorSectionTable = 107,
   kPEErrorSectionRange = 108,
+  kPEErrorEntry = 109,
 };
 
 constexpr uint32_t kMaxPESections = 96;

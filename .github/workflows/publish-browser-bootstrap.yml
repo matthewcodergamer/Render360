@@ -27,9 +27,9 @@ jobs:
           set -euo pipefail
           git cat-file -e "$SOURCE_SHA^{commit}"
           git merge-base --is-ancestor "$SOURCE_SHA" HEAD
-          # Browser/UI-only commits made while the long build runs are fine.
-          # Any change to the actual Xenia/WASM runtime closure means this
-          # artifact is stale and must never overwrite a later verified build.
+          # Browser/UI/workflow/docs-only commits made while the long build runs are fine.
+          # Any change to the actual Xenia/WASM runtime closure means this artifact is
+          # stale and must never overwrite a later verified build.
           if ! git diff --quiet "$SOURCE_SHA"..HEAD -- \
             build-xenia-ppc-bootstrap.sh \
             link-xenia-ppc-bootstrap.sh \
@@ -43,31 +43,43 @@ jobs:
             echo "Refusing stale bootstrap: runtime source changed after $SOURCE_SHA"
             exit 78
           fi
-      - name: Download verified bootstrap artifact
+      - name: Download verified runtime artifact
         uses: actions/download-artifact@v4
         with:
           name: xenia-wasm32-bootstrap-report
           path: verified-bootstrap
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish bootstrap binary and provenance
+      - name: Publish synchronized browser runtime binaries and provenance
         env:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           SOURCE_RUN: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          src='verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'
-          test -s "$src"
-          cp "$src" xenia_ppc_bootstrap.wasm
-          sha="$(sha256sum xenia_ppc_bootstrap.wasm | awk '{print $1}')"
-          bytes="$(wc -c < xenia_ppc_bootstrap.wasm | tr -d ' ')"
-          printf '{\n  "sourceCommit": "%s",\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s\n}\n' "$SOURCE_SHA" "$SOURCE_RUN" "$sha" "$bytes" > xenia_ppc_bootstrap.meta.json
+          bootstrap_src='verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'
+          core_src='verified-bootstrap/render360_xenia_core.wasm'
+          test -s "$bootstrap_src"
+          test -s "$core_src"
+
+          cp "$bootstrap_src" xenia_ppc_bootstrap.wasm
+          cp "$core_src" render360_xenia_core.wasm
+
+          bootstrap_sha="$(sha256sum xenia_ppc_bootstrap.wasm | awk '{print $1}')"
+          bootstrap_bytes="$(wc -c < xenia_ppc_bootstrap.wasm | tr -d ' ')"
+          core_sha="$(sha256sum render360_xenia_core.wasm | awk '{print $1}')"
+          core_bytes="$(wc -c < render360_xenia_core.wasm | tr -d ' ')"
+
+          printf '{\n  "sourceCommit": "%s",\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s\n}\n' \
+            "$SOURCE_SHA" "$SOURCE_RUN" "$bootstrap_sha" "$bootstrap_bytes" > xenia_ppc_bootstrap.meta.json
+          printf '{\n  "sourceCommit": "%s",\n  "sourceRun": "%s",\n  "sha256": "%s",\n  "bytes": %s\n}\n' \
+            "$SOURCE_SHA" "$SOURCE_RUN" "$core_sha" "$core_bytes" > render360_xenia_core.meta.json
+
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
+          git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json render360_xenia_core.wasm render360_xenia_core.meta.json
           if git diff --cached --quiet; then
-            echo 'Browser bootstrap already matches verified artifact.'
+            echo 'Browser runtime binaries already match the verified artifact.'
             exit 0
           fi
-          git commit -m 'build: publish verified Xenia browser bootstrap'
+          git commit -m 'build: publish synchronized verified browser runtime'
           git push origin HEAD:main

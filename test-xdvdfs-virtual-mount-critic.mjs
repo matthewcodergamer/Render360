@@ -14,7 +14,7 @@ const v=await mountXdvdfs(source);const head=await v.readFileRange('/default.xex
 // Corrupt root size must fail before an unsafe read.
 {const bad=make();w32(bad,32*S+0x18,0xffffffff);await assert.rejects(()=>mountXdvdfs(bad),/size unreasonable|outside image/);}
 // Missing default.xex must be exact, not guessed by file position.
-{const bad=make();bad.fill(0,40*S+14,40*S+14+'default.xex'.length);const q=await mountXdvdfs(bad);await assert.rejects(()=>q.stat('/default.xex'),/path not found/);}
+{const bad=make();put(bad,40*S+14,'notgame.xex');const q=await mountXdvdfs(bad);await assert.rejects(()=>q.stat('/default.xex'),/path not found/);}
 
 console.log('XDVDFS_HARSH_CRITIC=PASS');
 console.log('XDVDFS_NO_WHOLE_ISO_COPY=PASS');

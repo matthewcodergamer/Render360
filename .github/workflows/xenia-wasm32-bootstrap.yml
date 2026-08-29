@@ -19,6 +19,7 @@ on:
       - 'test-xex-retail-normal-end-to-end.mjs'
       - 'test-default-xex-title-controller.mjs'
       - 'test-stfs-package-title-controller.mjs'
+      - 'test-title-runtime-boundary.mjs'
       - 'retail-xex-normal-pipeline.mjs'
       - 'retail-xex-image-pipeline.mjs'
       - 'render360-title-controller.mjs'
@@ -120,6 +121,8 @@ jobs:
         run: node ./test-default-xex-title-controller.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify one-call STFS package to Xenia title handoff
         run: node ./test-stfs-package-title-controller.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify first runtime boundary telemetry
+        run: node ./test-title-runtime-boundary.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then

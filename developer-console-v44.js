@@ -26,6 +26,7 @@ let lastBlocker=null;
 let runSerial=0;
 let lastLogFingerprint='';
 let lastLogAt=0;
+let lastBlockerFingerprint='';
 
 function safeJson(value,space=2){
   const seen=new WeakSet();
@@ -61,7 +62,7 @@ function completeBefore(key){
 function resetPipeline(reason='New title launch'){
   runSerial++;
   for(const [key] of PIPELINE){const item=stageState.get(key);item.state='wait';item.detail='Waiting';delete item.at;}
-  lastStageKey='source';lastBlocker=null;
+  lastStageKey='source';lastBlocker=null;lastBlockerFingerprint='';
   setStage('source','active',reason);
   addLog('info',`──────── Run ${runSerial} · ${reason} ────────`,{source:'console',force:true});
   updateBlockerCard();setBlockedBadge(false);
@@ -89,8 +90,10 @@ function blockerStage(blocker){
   return 'ppc';
 }
 function markBlocked(blocker,source='runtime'){
-  const summary=blockerSummary(blocker),stage=blockerStage(blocker);lastBlocker={at:Date.now(),stage,summary,raw:blocker};
-  completeBefore(stage);setStage(stage,'blocked',summary);addLog('error',`BLOCKED · ${summary}`,{source,stage,data:blocker,force:true});updateBlockerCard();setBlockedBadge(true);
+  const summary=blockerSummary(blocker),stage=blockerStage(blocker),fingerprint=`${stage}|${summary}`;
+  const changed=fingerprint!==lastBlockerFingerprint;lastBlockerFingerprint=fingerprint;
+  lastBlocker={at:Date.now(),stage,summary,raw:blocker};
+  completeBefore(stage);setStage(stage,'blocked',summary);if(changed)addLog('error',`BLOCKED · ${summary}`,{source,stage,data:blocker,force:true});updateBlockerCard();setBlockedBadge(true);
 }
 function mapBootStage(detail={}){
   const stage=String(detail.stage||'').toLowerCase(),message=detail.message||stage||'Runtime update';
@@ -133,7 +136,7 @@ function inspectTelemetry(detail={}){
   if(detail.blocker){markBlocked(detail.blocker,'telemetry');return;}
   const pm4=Number(detail.pm4Packets||0),draws=Number(detail.draws||0),swaps=Number(detail.swaps||0);
   if(pm4||draws||swaps){completeBefore('gpu');setStage('gpu',detail.realFrame?'ok':'active',`${pm4.toLocaleString()} PM4 · ${draws.toLocaleString()} draws · ${swaps.toLocaleString()} swaps${detail.realFrame?' · real frame':''}`);}
-  if(detail.realFrame){lastBlocker=null;setBlockedBadge(false);}
+  if(detail.realFrame){lastBlocker=null;lastBlockerFingerprint='';setBlockedBadge(false);}
 }
 function captureRuntimeEvent(type,detail){
   if(type==='bootStage')return mapBootStage(detail);
@@ -143,7 +146,7 @@ function captureRuntimeEvent(type,detail){
   if(type==='telemetry')return inspectTelemetry(detail);
   if(type==='ready'){const c=detail.contract||{};setStage('source','ok',`Core V${c.loadedCoreBuild??detail.buildVersion??'?'} · ABI ${c.loadedAbi!==undefined?fmtHex(c.loadedAbi):'?'} · ${c.coreSource||'core'} · STFS ${c.stfsExtraction||'unknown'}`);addLog('ok',stageState.get('source').detail,{source:'runtime',stage:'source',data:c,force:true});return;}
   if(type==='log')return addLog(detail.level,detail.message,{source:'runtime-log',stage:lastStageKey,data:detail});
-  if(type==='framePresented'){setStage('gpu','ok',`Real title frame presented · generation ${detail.generation??'?'}`);lastBlocker=null;setBlockedBadge(false);addLog('ok',`Frame presented · generation ${detail.generation??'?'}${detail.hash?` · hash ${detail.hash}`:''}`,{source:'frame',stage:'gpu'});}
+  if(type==='framePresented'){setStage('gpu','ok',`Real title frame presented · generation ${detail.generation??'?'}`);lastBlocker=null;lastBlockerFingerprint='';setBlockedBadge(false);addLog('ok',`Frame presented · generation ${detail.generation??'?'}${detail.hash?` · hash ${detail.hash}`:''}`,{source:'frame',stage:'gpu'});}
 }
 function installRuntimeListeners(){
   for(const type of ['bootStage','runtimeBlocker','fatalError','titleStarted','telemetry','ready','log','framePresented','workerTelemetry'])globalThis.addEventListener(`render360:${type}`,event=>captureRuntimeEvent(type,event.detail||{}));

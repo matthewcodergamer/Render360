@@ -16,7 +16,7 @@ export class RuntimeHost {
     return new Promise((resolve, reject) => {
       try { this.worker = new Worker(new URL('./runtime-worker-v32.js', import.meta.url), {type:'module', name:'Render360Runtime'}); }
       catch (error) { reject(error); return; }
-      const timeout = setTimeout(() => reject(new Error('Runtime worker startup timed out')), 8000);
+      const timeout = setTimeout(() => reject(new Error('Runtime worker startup timed out after 30 seconds')), 30000);
       this.worker.onmessage = (event) => {
         const msg = event.data || {};
         if (msg.type === 'ready') {clearTimeout(timeout);this.ready=true;this.log('ok',`WASM runtime worker active · V${msg.build} · ABI 0x${(msg.abi>>>0).toString(16).padStart(8,'0')}`);resolve(msg);}

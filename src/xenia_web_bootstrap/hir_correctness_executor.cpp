@@ -197,6 +197,38 @@ uint64_t ByteSwapUnsigned(uint64_t value, TypeName type) {
   }
 }
 
+bool ByteSwapRuntimeValue(RuntimeValue* value) {
+  if (!value) return false;
+  if (IsIntegerType(value->type)) {
+    uint64_t raw = 0;
+    if (!GetUnsigned(*value, &raw)) return false;
+    SetUnsigned(value, value->type, ByteSwapUnsigned(raw, value->type));
+    return true;
+  }
+  if (value->type == xe::cpu::hir::FLOAT32_TYPE) {
+    uint32_t raw = 0;
+    std::memcpy(&raw, &value->value.f32, sizeof(raw));
+    raw = static_cast<uint32_t>(ByteSwapUnsigned(raw, xe::cpu::hir::INT32_TYPE));
+    std::memcpy(&value->value.f32, &raw, sizeof(raw));
+    return true;
+  }
+  if (value->type == xe::cpu::hir::FLOAT64_TYPE) {
+    uint64_t raw = 0;
+    std::memcpy(&raw, &value->value.f64, sizeof(raw));
+    raw = ByteSwapUnsigned(raw, xe::cpu::hir::INT64_TYPE);
+    std::memcpy(&value->value.f64, &raw, sizeof(raw));
+    return true;
+  }
+  if (value->type == xe::cpu::hir::VEC128_TYPE) {
+    for (size_t i = 0; i < 4; ++i) {
+      value->value.v128.u32[i] = static_cast<uint32_t>(
+          ByteSwapUnsigned(value->value.v128.u32[i], xe::cpu::hir::INT32_TYPE));
+    }
+    return true;
+  }
+  return false;
+}
+
 double RoundFloating(double value, uint32_t round_mode) {
   switch (round_mode) {
     case xe::cpu::hir::ROUND_TO_ZERO:
@@ -641,7 +673,7 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
                     const Value* address, const Value* offset,
                     const RuntimeValues& values, RuntimeValues& out_values,
                     uint32_t flags) {
-  if (flags != 0 || !destination) return false;
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !destination) return false;
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
@@ -650,6 +682,10 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
   RuntimeValue loaded;
   loaded.type = destination->type;
   std::memcpy(&loaded.value, host, size);
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&loaded)) {
+    return false;
+  }
   out_values[destination] = loaded;
   return true;
 }
@@ -657,13 +693,22 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
 bool StoreGuestValue(xe::Memory* memory, const Value* address,
                      const Value* offset, const Value* source,
                      const RuntimeValues& values, uint32_t flags) {
-  if (flags != 0 || !source) return false;
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !source) return false;
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(source->type);
   uint8_t* host = nullptr;
   if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
-  return StoreResolvedValue(source, values, host, size);
+  RuntimeValue stored;
+  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
+    return false;
+  }
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&stored)) {
+    return false;
+  }
+  std::memcpy(host, &stored.value, size);
+  return true;
 }
 
 bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,

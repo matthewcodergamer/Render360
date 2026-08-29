@@ -13,6 +13,7 @@ on:
       - 'test-xex-import-libraries.mjs'
       - 'test-kernel-import-plan.mjs'
       - 'test-kernel-hle-bridge.mjs'
+      - 'test-title-kernel-import-integration.mjs'
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
@@ -134,6 +135,8 @@ jobs:
         run: node ./test-title-runtime-boundary.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify PPC to kernel HLE dispatch bridge
         run: node ./test-kernel-hle-bridge.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify automatic XEX import to kernel execution bridge
+        run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then

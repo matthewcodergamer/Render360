@@ -79,20 +79,20 @@
   <section id="settingsView" class="view hidden">
     <div class="detail-nav"><button id="settingsBack" class="text-button" type="button">‹ Game</button><button id="saveSettings" class="text-button" type="button">Save</button></div>
     <div class="settings-body">
-      <div class="settings-header"><div style="color:#8e8e93;font-size:12px" id="settingsGameName"></div><h1>Game Settings</h1></div>
+      <div class="settings-header"><div style="color:#8e8e93;font-size:12px" id="settingsGameName"></div><h1>Game Settings</h1><p class="settings-note">Settings stay disabled until the matching emulator backend hook is implemented. Render360 never pretends a workaround is active when it is not.</p></div>
       <div class="group-title">Display</div>
       <div class="group">
-        <div class="row"><span>Resolution</span><select id="settingResolution" class="settings-select"><option value="auto">Auto</option><option value="640x480">640×480</option><option value="720x480">720×480</option><option value="720x576">720×576</option><option value="800x600">800×600</option><option value="854x480">854×480</option><option value="960x540">960×540</option><option value="1280x720">1280×720</option></select></div>
-        <div class="row"><span>Renderer</span><select id="settingRenderer" class="settings-select"><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="webgl2">WebGL2 fallback</option></select></div>
-        <div class="row"><span>Dynamic Resolution</span><label class="switch"><input id="settingDynamic" type="checkbox"><span></span></label></div>
-        <div class="row"><span>Target FPS</span><select id="settingTargetFps" class="settings-select"><option>30</option><option>60</option></select></div>
+        <div class="row"><span>Resolution</span><div class="setting-tail"><select id="settingResolution" class="settings-select" disabled><option value="auto">Auto</option><option value="640x480">640×480</option><option value="720x480">720×480</option><option value="720x576">720×576</option><option value="800x600">800×600</option><option value="854x480">854×480</option><option value="960x540">960×540</option><option value="1280x720">1280×720</option></select><span class="unsupported">Coming with renderer profiles</span></div></div>
+        <div class="row"><span>Renderer</span><div class="setting-tail"><select id="settingRenderer" class="settings-select" disabled><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="webgl2">WebGL2 fallback</option></select><span class="unsupported">Runtime locked</span></div></div>
+        <div class="row"><span>Dynamic Resolution</span><div class="setting-tail"><label class="switch"><input id="settingDynamic" type="checkbox" disabled><span></span></label><span class="unsupported">Not wired yet</span></div></div>
+        <div class="row"><span>Target FPS</span><div class="setting-tail"><select id="settingTargetFps" class="settings-select" disabled><option>30</option><option>60</option></select><span class="unsupported">Not wired yet</span></div></div>
       </div>
       <div class="group-title">Graphics Workarounds</div>
       <div class="group">
-        <div class="row"><span>Half-Pixel Offset</span><label class="switch"><input id="settingHalfPixel" type="checkbox"><span></span></label></div>
-        <div class="row"><span>Treat 3D Textures as 2D</span><label class="switch"><input id="setting3DTextures" type="checkbox"><span></span></label></div>
-        <div class="row"><span>Allow Invalid Fetch Constants</span><label class="switch"><input id="settingInvalidFetch" type="checkbox"><span></span></label></div>
-        <div class="row"><span>Readback Resolves</span><label class="switch"><input id="settingReadback" type="checkbox"><span></span></label></div>
+        <div class="row"><span>Half-Pixel Offset</span><div class="setting-tail"><label class="switch"><input id="settingHalfPixel" type="checkbox" disabled><span></span></label><span class="unsupported">Not wired yet</span></div></div>
+        <div class="row"><span>Treat 3D Textures as 2D</span><div class="setting-tail"><label class="switch"><input id="setting3DTextures" type="checkbox" disabled><span></span></label><span class="unsupported">Not wired yet</span></div></div>
+        <div class="row"><span>Allow Invalid Fetch Constants</span><div class="setting-tail"><label class="switch"><input id="settingInvalidFetch" type="checkbox" disabled><span></span></label><span class="unsupported">Not wired yet</span></div></div>
+        <div class="row"><span>Readback Resolves</span><div class="setting-tail"><label class="switch"><input id="settingReadback" type="checkbox" disabled><span></span></label><span class="unsupported">Not wired yet</span></div></div>
       </div>
       <div class="group-title">Advanced</div>
       <div class="group">
@@ -134,7 +134,6 @@
         </div>
         <div class="right-controls">
           <button class="control trigger" data-key="RT" type="button">RT</button>
-          <div id="rightStick" class="stick" role="slider" aria-label="Look stick" style="right:0;left:auto"><div id="rightStickKnob" class="stick-knob"></div><div class="stick-label">Look</div></div>
           <div class="face-grid"><button class="control face y" data-key="Y" type="button">Y</button><button class="control face x" data-key="X" type="button">X</button><button class="control face b" data-key="B" type="button">B</button><button class="control face a" data-key="A" type="button">A</button></div>
         </div>
       </div>
@@ -142,7 +141,7 @@
   </section>
 
   <input id="importInput" type="file" accept=".zip,.iso,.xex,.live,.pirs,.con,application/zip,application/octet-stream" hidden>
-  <input id="relinkInput" type="file" accept=".iso,.xex,.live,.pirs,.con,application/octet-stream" hidden>
+  <input id="relinkInput" type="file" accept=".zip,.iso,.xex,.live,.pirs,.con,application/zip,application/octet-stream" hidden>
   <input id="coverInput" type="file" accept="image/png,image/jpeg" hidden>
 
   <div id="scrim" class="scrim hidden"></div>

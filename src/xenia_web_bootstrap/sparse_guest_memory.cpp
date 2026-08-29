@@ -37,6 +37,11 @@ struct Mapping {
 
 std::vector<Backing> g_backings;
 std::map<uint32_t, Mapping> g_pages;
+// Number of executable virtual aliases for each physical sparse backing page.
+// Guest RAM writes are extremely hot; they must not scan the entire virtual
+// mapping tree just to discover that an ordinary RW data/stack page has no
+// executable alias.
+std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_executable_alias_counts;
 // This is the authoritative executable-byte content generation. It is sparse
 // across the full 32-bit Xbox virtual address space and is intentionally
 // independent of permission/mapping invalidation and the legacy backend epoch.
@@ -101,6 +106,9 @@ uint8_t* ResolveBackingByte(const Mapping& mapping, uint32_t address) {
 }
 
 void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {
+  const auto alias_key = std::make_pair(backing_id, backing_page);
+  const auto count_it = g_executable_alias_counts.find(alias_key);
+  if (count_it == g_executable_alias_counts.end() || !count_it->second) return;
   for (const auto& [virtual_page, mapping] : g_pages) {
     if (mapping.backing_id == backing_id &&
         mapping.backing_page == backing_page &&
@@ -150,6 +158,7 @@ uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address) {
 void ResetSparseGuestMemory() {
   g_backings.clear();
   g_pages.clear();
+  g_executable_alias_counts.clear();
   g_executable_content_generations.clear();
   ClearFault();
 }
@@ -187,8 +196,12 @@ bool MapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
     }
   }
   for (uint32_t i = 0; i < page_count; ++i) {
-    g_pages.emplace(first_page + i,
-                    Mapping{backing_id, backing_page_offset + i, protection});
+    const Mapping mapping{backing_id, backing_page_offset + i, protection};
+    g_pages.emplace(first_page + i, mapping);
+    if (protection & kGuestExecute) {
+      ++g_executable_alias_counts[
+          std::make_pair(mapping.backing_id, mapping.backing_page)];
+    }
   }
   return true;
 }
@@ -210,6 +223,19 @@ bool ProtectSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
     Mapping& mapping = g_pages[first_page + i];
     const bool was_executable = (mapping.protection & kGuestExecute) != 0;
     const bool now_executable = (protection & kGuestExecute) != 0;
+    if (was_executable != now_executable) {
+      const auto alias_key =
+          std::make_pair(mapping.backing_id, mapping.backing_page);
+      if (now_executable) {
+        ++g_executable_alias_counts[alias_key];
+      } else {
+        auto alias_it = g_executable_alias_counts.find(alias_key);
+        if (alias_it != g_executable_alias_counts.end()) {
+          if (alias_it->second > 1) --alias_it->second;
+          else g_executable_alias_counts.erase(alias_it);
+        }
+      }
+    }
     mapping.protection = protection;
     if (was_executable != now_executable) {
       InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,
@@ -233,6 +259,13 @@ bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
   for (uint32_t i = 0; i < page_count; ++i) {
     auto it = g_pages.find(first_page + i);
     if (it->second.protection & kGuestExecute) {
+      const auto alias_key =
+          std::make_pair(it->second.backing_id, it->second.backing_page);
+      auto alias_it = g_executable_alias_counts.find(alias_key);
+      if (alias_it != g_executable_alias_counts.end()) {
+        if (alias_it->second > 1) --alias_it->second;
+        else g_executable_alias_counts.erase(alias_it);
+      }
       InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,
                                            kPageSize);
     }

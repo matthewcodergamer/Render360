@@ -19,110 +19,92 @@ jobs:
       - name: Patch modern content execution path
         shell: bash
         run: |
-          python3 - <<'PY'
+          cat > /tmp/patch.py <<'PY'
           from pathlib import Path
+          import textwrap
 
           bridge = Path('render360-browser-modern-content-bridge.mjs')
           s = bridge.read_text()
-
-          # Make every dependency in this launch chain a fresh Safari module URL.
-          s = s.replace('?v=44\';', '?v=44.3\';')
+          s = s.replace("?v=44';", "?v=44.3';")
 
           marker = 'async function attachScheduler({bootstrap,result,onStage,config={}}){'
           if 'async function executeNativeHirCompatibility' not in s:
-              fallback = r'''async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
-  stage(onStage,'execute','Generated-WASM entry is not callable; entering native HIR compatibility executor…');
-  let securityKey=null;
-  try{securityKey=extractXex2EncryptedImageKey(bytes);}catch(error){throw new Error(`XEX security metadata could not be read: ${error.message}`);}
-  const setExecute=pick(bootstrap,'r360_ppc_probe_set_execute_on_translate');
-  const getExecute=pick(bootstrap,'r360_ppc_probe_execute_on_translate');
-  if(typeof setExecute!=='function'||typeof getExecute!=='function')throw new Error('Published browser bootstrap does not support native HIR compatibility execution');
-  const resetKernel=pick(bootstrap,'r360_kernel_runtime_reset');
-  if(typeof resetKernel==='function')resetKernel();
-  const previous=getExecute()>>>0;
-  if((setExecute(1)>>>0)!==1)throw new Error('Unable to enable native HIR compatibility execution');
-  let result;
-  try{
-    result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});
-  }finally{
-    setExecute(previous?1:0);
-  }
-  const status=result.executionStatus>>>0;
-  result.compatibilityExecution={
-    used:true,
-    reason:'generated-wasm-entry-not-callable',
-    entry:result.entry>>>0,
-    executionStatus:status,
-    executionInstructions:result.executionInstructions>>>0,
-    runtimeBoundary:result.runtimeBoundary,
-    reachedKernelBlocker:result.reachedKernelBlocker??null,
-  };
-  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}`);
-  return result;
-}
+              fallback = textwrap.dedent('''\
+              async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
+                stage(onStage,'execute','Generated-WASM entry is not callable; entering native HIR compatibility executor…');
+                let securityKey=null;
+                try{securityKey=extractXex2EncryptedImageKey(bytes);}catch(error){throw new Error(`XEX security metadata could not be read: ${error.message}`);}
+                const setExecute=pick(bootstrap,'r360_ppc_probe_set_execute_on_translate');
+                const getExecute=pick(bootstrap,'r360_ppc_probe_execute_on_translate');
+                if(typeof setExecute!=='function'||typeof getExecute!=='function')throw new Error('Published browser bootstrap does not support native HIR compatibility execution');
+                const resetKernel=pick(bootstrap,'r360_kernel_runtime_reset');
+                if(typeof resetKernel==='function')resetKernel();
+                const previous=getExecute()>>>0;
+                if((setExecute(1)>>>0)!==1)throw new Error('Unable to enable native HIR compatibility execution');
+                let result;
+                try{
+                  result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});
+                }finally{
+                  setExecute(previous?1:0);
+                }
+                const status=result.executionStatus>>>0;
+                result.compatibilityExecution={used:true,reason:'generated-wasm-entry-not-callable',entry:result.entry>>>0,executionStatus:status,executionInstructions:result.executionInstructions>>>0,runtimeBoundary:result.runtimeBoundary,reachedKernelBlocker:result.reachedKernelBlocker??null};
+                stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}`);
+                return result;
+              }
 
-'''
+              ''')
               if marker not in s:
                   raise SystemExit('attachScheduler marker not found')
               s = s.replace(marker, fallback + marker, 1)
 
-          old_update = """function updatePersistentCpu(state){
-  const inspect=state.threadScheduler?.inspect?.()??null;
-  state.persistentCpu={ready:Boolean(state.ppcSession)&&!state.schedulerBlocker,schedulerReady:Boolean(state.threadScheduler),functionCount:state.ppcSession?.functionCount??0,pumpCount:inspect?.pumpCount??state.schedulerReport?.pumpCount??0,totalSlices:inspect?.sliceCount??state.schedulerReport?.totalSlices??0,completedThreads:inspect?.completedThreads??state.schedulerReport?.completedThreads??0,paused:Boolean(inspect?.paused),blocker:state.schedulerBlocker||inspect?.lastBlocker||null};
-  return state.persistentCpu;
-}"""
-          new_update = """function updatePersistentCpu(state){
-  if(state.result?.compatibilityExecution?.used){
-    const status=state.result.executionStatus>>>0;
-    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:'native-hir-unsupported-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:null));
-    state.schedulerBlocker=compatibilityBlocker;
-    state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
-    return state.persistentCpu;
-  }
-  const inspect=state.threadScheduler?.inspect?.()??null;
-  state.persistentCpu={ready:Boolean(state.ppcSession)&&!state.schedulerBlocker,schedulerReady:Boolean(state.threadScheduler),functionCount:state.ppcSession?.functionCount??0,pumpCount:inspect?.pumpCount??state.schedulerReport?.pumpCount??0,totalSlices:inspect?.sliceCount??state.schedulerReport?.totalSlices??0,completedThreads:inspect?.completedThreads??state.schedulerReport?.completedThreads??0,paused:Boolean(inspect?.paused),blocker:state.schedulerBlocker||inspect?.lastBlocker||null};
-  return state.persistentCpu;
-}"""
+          old_update = "function updatePersistentCpu(state){\n  const inspect=state.threadScheduler?.inspect?.()??null;\n  state.persistentCpu={ready:Boolean(state.ppcSession)&&!state.schedulerBlocker,schedulerReady:Boolean(state.threadScheduler),functionCount:state.ppcSession?.functionCount??0,pumpCount:inspect?.pumpCount??state.schedulerReport?.pumpCount??0,totalSlices:inspect?.sliceCount??state.schedulerReport?.totalSlices??0,completedThreads:inspect?.completedThreads??state.schedulerReport?.completedThreads??0,paused:Boolean(inspect?.paused),blocker:state.schedulerBlocker||inspect?.lastBlocker||null};\n  return state.persistentCpu;\n}"
+          new_update = textwrap.dedent('''\
+          function updatePersistentCpu(state){
+            if(state.result?.compatibilityExecution?.used){
+              const status=state.result.executionStatus>>>0;
+              const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:'native-hir-unsupported-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:null));
+              state.schedulerBlocker=compatibilityBlocker;
+              state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
+              return state.persistentCpu;
+            }
+            const inspect=state.threadScheduler?.inspect?.()??null;
+            state.persistentCpu={ready:Boolean(state.ppcSession)&&!state.schedulerBlocker,schedulerReady:Boolean(state.threadScheduler),functionCount:state.ppcSession?.functionCount??0,pumpCount:inspect?.pumpCount??state.schedulerReport?.pumpCount??0,totalSlices:inspect?.sliceCount??state.schedulerReport?.totalSlices??0,completedThreads:inspect?.completedThreads??state.schedulerReport?.completedThreads??0,paused:Boolean(inspect?.paused),blocker:state.schedulerBlocker||inspect?.lastBlocker||null};
+            return state.persistentCpu;
+          }''')
           if old_update not in s:
               raise SystemExit('updatePersistentCpu block not found')
           s = s.replace(old_update, new_update, 1)
 
-          old_run = """  const result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
-  const threaded=await attachScheduler({bootstrap,result,onStage,config});if(run!==activeRun)return null;
-  const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded.ppcSession,threadScheduler:threaded.scheduler,primaryThread:threaded.primaryThread,schedulerReport:threaded.schedulerReport,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
-  updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);driveScheduler(run,state,onStage);
-  return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};"""
-          new_run = """  let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
-  let threaded=null;
-  if(Number(result.translatedFunctionCount||0)>0){
-    threaded=await attachScheduler({bootstrap,result,onStage,config});
-  }else{
-    console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
-    result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
-  }
-  if(run!==activeRun)return null;
-  const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
-  updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
-  else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
-  return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};"""
+          old_run = "  const result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;\n  const threaded=await attachScheduler({bootstrap,result,onStage,config});if(run!==activeRun)return null;\n  const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded.ppcSession,threadScheduler:threaded.scheduler,primaryThread:threaded.primaryThread,schedulerReport:threaded.schedulerReport,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};\n  updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);driveScheduler(run,state,onStage);\n  return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};"
+          new_run = textwrap.dedent('''\
+            let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
+            let threaded=null;
+            if(Number(result.translatedFunctionCount||0)>0){
+              threaded=await attachScheduler({bootstrap,result,onStage,config});
+            }else{
+              console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
+              result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
+            }
+            if(run!==activeRun)return null;
+            const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
+            updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
+            else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
+            return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};''')
           if old_run not in s:
               raise SystemExit('runModernXboxContent block not found')
           s = s.replace(old_run, new_run, 1)
-          s = s.replace("pauseResume:true};}", "pauseResume:true,nativeHirCompatibilityFallback:true};}", 1)
+          s = s.replace('pauseResume:true};}', 'pauseResume:true,nativeHirCompatibilityFallback:true};}', 1)
           bridge.write_text(s)
 
           runtime = Path('runtime/render360-runtime.js')
-          r = runtime.read_text().replace("render360-browser-modern-content-bridge.mjs?v=44.2", "render360-browser-modern-content-bridge.mjs?v=44.3")
-          runtime.write_text(r)
-
+          runtime.write_text(runtime.read_text().replace('render360-browser-modern-content-bridge.mjs?v=44.2','render360-browser-modern-content-bridge.mjs?v=44.3'))
           app = Path('app-v41.js')
-          a = app.read_text().replace("runtime/render360-runtime.js?v=44.2", "runtime/render360-runtime.js?v=44.3")
-          app.write_text(a)
-
+          app.write_text(app.read_text().replace('runtime/render360-runtime.js?v=44.2','runtime/render360-runtime.js?v=44.3'))
           index = Path('index.html')
-          h = index.read_text().replace("app-v41.js?v=44.2", "app-v41.js?v=44.3").replace("app-v42-patch.js?v=44.2", "app-v42-patch.js?v=44.3")
-          index.write_text(h)
+          index.write_text(index.read_text().replace('app-v41.js?v=44.2','app-v41.js?v=44.3').replace('app-v42-patch.js?v=44.2','app-v42-patch.js?v=44.3'))
           PY
+          python3 /tmp/patch.py
 
       - name: Validate patched modules
         shell: bash

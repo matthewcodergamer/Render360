@@ -1,339 +1,228 @@
-# Render360 Xenia-Web — V36
+# Render360 — Xenia-Web
 
-**Browser-native Xbox 360 emulation research project built around Xenia-derived PPC translation and WebAssembly execution.**
+**Experimental browser-native Xbox 360 emulator built around real Xenia architecture, WebAssembly and WebGPU.**
 
-> **This root `README.md` is the authoritative public status board.** Historical release notes and foundation documents are supporting evidence only.
+> Render360 is an emulator research project. It is **not yet claiming commercial-game playability**. The repository deliberately keeps the commercial-frame gate closed until pixels produced by a real extracted title pass through the real GPU path and are presented without the bounded bring-up raster.
 
-## Overall project completion
+This `README.md` is the authoritative public status page. Old percentages in historical notes are not compatibility scores and should not be used to claim that a title is playable.
 
-```text
-OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-███████████████░░░░░  ~76%
-```
-
-The overall percentage is a weighted engineering estimate, not a title-compatibility score. CPU/WASM execution, sparse Xbox memory, STFS/XEX extraction and preparation, strict PE loading, real entry handoff, kernel import dispatch, starter xboxkrnl/XAM services, guest threads/TLS/runtime, bounded Xenos command semantics, EDRAM resolve, WebGPU/WGSL presentation, WebGL2 framebuffer presentation fallback, the first translated-guest-PPC-produced framebuffer, the bounded encrypted-XEX-title-pipeline → Xenos traffic bridge, browser-native XDVDFS virtual disc mounting, and deployment of the verified modern PPC/kernel/Xenos bootstrap are closed CI contracts.
-
-The major remaining work is **genuine extracted-title GPU traffic and compatibility expansion**: execute a user-supplied title far enough to capture its actual GPU MMIO/ringbuffer stream, broaden Xenos packet/register behavior from the first real blocker, translate real shader microcode/resources/textures, expand EDRAM/resolve formats as titles request them, implement additional title-requested kernel/XAM/VFS/audio/input behavior, and optimize real title traces.
-
-## Latest authoritative browser ISO / deployed-runtime gate
-
-**Deployed Browser Bootstrap Critic Run 1 — Actions ID `33242318128` — SUCCESS**
-
-Critic/workflow head: `805ced2d238d0aacd2f4e4c030aa0ae48185615c`
-
-The exact browser bootstrap now published on `main` is provenance-locked to:
+## Current status — August 29, 2026
 
 ```text
-source full Xenia/WASM run: 33240071351
-source commit:             1296c26eaabf85f0dd034321743c813626cc3a43
-bytes:                     1,884,209
-sha256:                    e8de2628d0f9ed5ddd435ddd1418cf71b521391356151a06ffa68b9c35eff38c
+DISC / PACKAGE INPUT                         VERIFIED FOUNDATION
+RETAIL XEX PREP + PE MAPPING                VERIFIED FOUNDATION
+XENIA PPC/HIR + SPARSE GUEST MEMORY         VERIFIED FOUNDATION
+KERNEL / XAM IMPORT EXECUTION               VERIFIED FOUNDATION
+REAL TITLE RING + CP_RB_WPTR CONSUMPTION    CI-PROVEN FOUNDATION
+VdSwap -> REAL RING -> XE_SWAP               CI-PROVEN FOUNDATION
+TITLE SHADER / TEXTURE / RESOURCE CAPTURE   CI-PROVEN FOUNDATION
+UPSTREAM XENIA SHADER INTERPRETER           CI-PROVEN FOUNDATION
+XENIA XENOS -> SPIR-V                       IN STRICT CI INTEGRATION
+SPIR-V -> NAGA -> WGSL                      IMPLEMENTED; CI INTEGRATION
+WGSL -> WEBGPU SHADER MODULE                IMPLEMENTED; CONVERTER-DEPENDENT
+TITLE-PRODUCED RASTER / EDRAM RESOLVE       NOT YET VERIFIED
+FIRST COMMERCIAL-TITLE FRAME                NOT YET VERIFIED
+COMMERCIAL GAMEPLAY                         NOT YET VERIFIED
 ```
 
-The independent deployed-binary critic hashes the actual `xenia_ppc_bootstrap.wasm`, compares it with `xenia_ppc_bootstrap.meta.json`, compiles that exact binary, and verifies the required PPC, PE/title-handoff, kernel/runtime and Xenos exports. It also replays the XDVDFS implementation gate, XDVDFS harsh critic and browser-title-runtime contract.
+There is intentionally no new overall percentage here. A browser emulator can have many individually complete foundations while still being blocked from commercial gameplay by one missing execution or rendering boundary. Render360 now reports those boundaries directly.
 
-**XDVDFS Title Input Run 6 — Actions ID `33242096411` — SUCCESS** closes the bounded browser ISO input path. The browser can keep an Xbox disc image as a `File`/`Blob`, detect XISO/XGD1/XGD2/XGD3 layouts with bounded reads, traverse XDVDFS, locate the real `default.xex`, derive the encrypted retail XEX2 image key from security info, and pass that title into the existing retail XEX/PE/PPC/kernel pipeline without copying the entire disc into Wasm memory.
+## What is real today
 
-The verified modern bootstrap is automatically published from a successful full Xenia/WASM artifact by **Publish Browser Bootstrap Run 1 — Actions ID `33242129180` — SUCCESS**. The Pages deployment containing the browser ISO hook also completed successfully in Actions `33242190224`.
+### Browser ISO / executable path
 
-**Scope warning:** this closes **virtual disc input + browser runtime deployment**, not commercial-title gameplay. A real title must still execute far enough to produce its own GPU MMIO/ringbuffer traffic before `EXTRACTED-TITLE → REAL GPU TRAFFIC` or `FIRST EXTRACTED-TITLE FRAME` can be promoted.
-
-## Latest authoritative title-to-GPU bridge gate
-
-**Extracted XEX GPU Traffic Bridge Run 10 — Actions ID `33239833760` — SUCCESS**
-
-Code/critic head: `a87495e4d6fe72660cf0d8287c30c8bfddd7dead`
-
-The bounded bridge proves this chain using a structurally valid encrypted retail-style XEX2 fixture:
+The browser path is no longer a mock loader:
 
 ```text
-encrypted XEX2 image
-        ↓
-retail session-key / AES preparation
-        ↓
-PE decode + decoder-derived relocated guest mapping
-        ↓
-translated Xenia PPC/HIR title entry
-        ↓
-startup PPC GPR state preserved through title handoff
-        ↓
-PPC stw instructions produce PM4 words in relocated guest memory
-        ↓
-exact guest-produced words are read with provenance telemetry
-        ↓
-closed Xenos PM4 / register / EDRAM path
-        ↓
-draw + present + nonzero frame hash
+lawfully obtained Xbox 360 .iso
+  -> File / Blob-backed virtual disc
+  -> XISO / XGD XDVDFS mount
+  -> real default.xex discovery
+  -> XEX2 security metadata
+  -> AES / LZX / retail XEX preparation
+  -> strict Xbox PE decode and section mapping
+  -> sparse Xbox guest memory
+  -> Xenia-scanned PPC entry execution
+  -> imported xboxkrnl / XAM service dispatch
+  -> title GPU initialization and command production
 ```
 
-The independent critic mutates the title-produced primitive, truncates the stream, injects an unsupported PM4 opcode and tests a wrapping 32-bit guest range. Each bad case fails closed and cannot generate a frame.
+The whole ISO does not need to be copied into Wasm memory. XDVDFS performs bounded reads from the selected browser `File` / `Blob`.
 
-The title-handoff startup-state change replayed the complete previously locked Xenia/WASM stack in **Xenia WASM32 Bootstrap Run 395 — Actions ID `33239701901` — SUCCESS** on commit `31dca3ef29d7d7bb616377ee58b66eb908656876`.
+### PPC / runtime path
 
-**Scope warning:** this closes the encrypted-XEX **pipeline-to-Xenos integration contract**. The fixture is not a commercial game. `EXTRACTED-TITLE → REAL GPU TRAFFIC` remains active until genuine game execution itself reaches GPU MMIO/ringbuffer traffic.
+Render360 uses Xenia's PPC scanner/HIR frontend rather than treating two staged PPC instructions as a game runtime. Executable pages can be paged from sparse guest memory outside the active 64 KiB decoder window, with execute permissions enforced. Non-executable title data is not accepted as PPC code.
 
-## Latest authoritative first-frame gate
+High 32-bit Xbox guest pointers are zero-extended in the relocated browser HLE path. This matters on PPC64: constructing addresses such as `0x9100FF00` with a sign-extending `lis` produces an invalid `0xFFFFFFFF9100FF00` host-side value. The browser HLE shims now build those addresses from zero with `oris` / `ori`.
 
-**Xenia WASM32 Bootstrap Run 389 — Actions ID `33238490587` — SUCCESS**
+### Real Xenos ring path
 
-Aggregate commit: `b5c540e7a5dd44eeca8cc3e277bd2a01a3f153ae`
-
-Run 389 closes the bounded **FIRST GENUINE GUEST FRAME** contract after the earlier Run 387 failure exposed a JavaScript signed/unsigned comparison at PM4 word `0xC0003600`. The comparison was corrected by normalizing the expected PM4 word to uint32, not by weakening the GPU implementation or critic.
-
-The verified provenance chain is:
+Render360 now models the title's command ring as a producer/consumer stream rather than a guessed one-shot PM4 buffer:
 
 ```text
-translated PPC program executes
-        ↓
-PPC stw instructions write PM4 words into Xbox guest memory
-        ↓
-exact guest-produced PM4 words are read back
-        ↓
-Xenos PM4 parser consumes the guest-produced stream
-        ↓
-register state + DRAW_INDX_2
-        ↓
-bounded Xenos raster semantics
-        ↓
-circular EDRAM target changes
-        ↓
-nonzero RGBA framebuffer + generation + hash
-        ↓
-frame becomes available to the browser presentation bridges
+VdInitializeRingBuffer
+  -> real ring base + size captured
+  -> sparse guest-memory ring backing
+  -> translated PPC writes CP_RB_WPTR
+  -> native circular ring drain
+  -> read-pointer progress / wrap handling
+  -> PM4 decode
+  -> persistent Xenos register / shader / resource state
 ```
 
-The separate harsh provenance critic also proves that corrupting the guest-produced primitive or truncating the PM4 stream prevents the frame. A browser-side fake present therefore cannot satisfy this gate.
+Only title-produced words inside the producer-visible ring range are consumed. Unsupported commands fail closed and expose the exact opcode / fault word instead of being blanket-success stubs.
 
-**Scope warning:** this is a genuine **translated guest PPC → Xenos → EDRAM framebuffer** closure, but it is not yet a frame produced by an extracted commercial title.
+### Real Xbox `VdSwap` presentation mechanism
 
-## WebGL2 fallback closure
+Native `xboxkrnl!VdSwap` (`0x25B`) is implemented using the Xbox/Xenia presentation contract: it writes the frontbuffer texture fetch state into the command ring, appends `XE_SWAP`, and pads the reserved ring region with Type-2 NOPs. A translated PPC test reaches this service through the kernel-import boundary, advances `CP_RB_WPTR`, and causes Xenos to consume the resulting real ring packet.
 
-**WebGL2 Xenos Fallback Run 1 — Actions ID `33238538315` — SUCCESS**
-
-Aggregate commit: `f1bbbd9acb9c0f74f191958628211ecec4fdcc13`
-
-The fallback consumes the same Xenos-resolved RGBA framebuffer as WebGPU. It does not synthesize substitute pixels. The implementation creates a WebGL2 fullscreen-triangle presenter, uploads only when the Xenos frame generation changes, uses nearest/clamp sampling, preserves framebuffer dimensions, and fails closed when WebGL2 is unavailable or the Xenos frame contract is invalid.
-
-## Closed foundations and bring-up contracts
+The authoritative title-runtime test has already reported:
 
 ```text
-PACKAGE / XEX FOUNDATION                         100% ✓
-PPC TRANSLATION FOUNDATION                       100% ✓
-SCALAR PPC FOUNDATION                            100% ✓
-GUEST CONTROL FOUNDATION                         100% ✓
-FPU FOUNDATION                                   100% ✓
-VMX / VMX128 FOUNDATION                          100% ✓
-HOT WASMBACKEND FOUNDATION                       100% ✓
-SPARSE XBOX MEMORY FOUNDATION                    100% ✓
-V36 STRICT XEX GUEST MAPPER                      100% ✓
-FULL default.xex STFS EXTRACTION                 100% ✓
-XEX2 IMAGE METADATA DECODE                       100% ✓
-XEX DECODED-METADATA → MAPPER INTEGRATION       100% ✓
-XEX PREPARE NONE/NONE                            100% ✓
-XEX PREPARE BASIC                                100% ✓
-XEX NORMAL FRAMING                               100% ✓
-XENIA LZX WASM FOUNDATION                        100% ✓
-XEX SESSION-KEY / AES-CBC FOUNDATION             100% ✓
-FULL RETAIL XEX IMAGE PREPARATION                100% ✓
-STRICT XBOX PE IMAGE DECODER                     100% ✓
-PREPARED PE IMAGE → GUEST MEMORY                 100% ✓
-PREPARED PE ENTRY → XENIA PPC / HIR              100% ✓
-ONE-CALL default.xex → XENIA ENTRY HANDOFF       100% ✓
-ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF      100% ✓
-ENTRY EXECUTION / RUNTIME BOUNDARY TELEMETRY     100% ✓
-XEX IMPORT LIBRARY / KERNEL DEPENDENCY DISCOVERY 100% ✓
-KERNEL IMPORT DESCRIPTOR / THUNK PAIRING         100% ✓
-PPC → KERNEL HLE DISPATCH BRIDGE                 100% ✓
-AUTOMATIC XEX IMPORT → KERNEL EXECUTION BRIDGE   100% ✓
-KERNEL EXECUTION FOUNDATION                      100% ✓
-MINIMUM PPC ↔ KERNEL ABI CONTRACT                100% ✓
-INDEPENDENT KERNEL ABI HARSH CRITIC              100% ✓
-REAL xboxkrnl / XAM STARTER SERVICES             100% ✓
-INDEPENDENT KERNEL SERVICES HARSH CRITIC         100% ✓
-GUEST THREADS / TLS / RUNTIME FOUNDATION         100% ✓
-INDEPENDENT GUEST RUNTIME HARSH CRITIC           100% ✓
-XENOS FIRST-FRAME SEMANTIC FOUNDATION            100% ✓
-INDEPENDENT XENOS HARSH CRITIC                   100% ✓
-WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION    100% ✓
-GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE       100% ✓
-FIRST GENUINE GUEST FRAME                        100% ✓
-INDEPENDENT FIRST-FRAME PROVENANCE CRITIC        100% ✓
-WEBGL2 XENOS FRAMEBUFFER FALLBACK                100% ✓
-INDEPENDENT WEBGL2 FALLBACK HARSH CRITIC         100% ✓
-ENCRYPTED XEX PIPELINE → XENOS TRAFFIC BRIDGE    100% ✓
-INDEPENDENT XEX→GPU TRAFFIC HARSH CRITIC         100% ✓
-XDVDFS VIRTUAL ISO INPUT FOUNDATION              100% ✓
-INDEPENDENT XDVDFS HARSH CRITIC                  100% ✓
-BROWSER-NATIVE TITLE RUNTIME CONTRACT            100% ✓
-VERIFIED MODERN BOOTSTRAP → PAGES DEPLOYMENT    100% ✓
-DEPLOYED BOOTSTRAP PROVENANCE/EXPORT CRITIC      100% ✓
+TITLE_RUNTIME_REAL_VD_SWAP_ABI=PASS
+TITLE_RUNTIME_REAL_VD_SWAP_TO_XE_SWAP=PASS
+TITLE_RUNTIME_COMMERCIAL_PRESENT_PATH=PASS
+TITLE_RUNTIME_CAPTURED_RING_TO_XENOS=PASS
 ```
 
-These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
+This proves the **commercial presentation mechanism**, not a commercial game's rendered pixels.
 
-## Critic promotion rule
+## Real shader and resource work
 
-A subsystem is promoted to 100% only when:
+Render360 no longer treats shader bytes as opaque telemetry only.
 
-1. the implementation is finished for a bounded, written contract;
-2. its implementation test is green;
-3. an independent adversarial critic proves the contract and fail-closed cases;
-4. the complete locked regression matrix remains green where the subsystem touches the aggregate execution stack.
+The Xenos state layer captures:
 
-The critic is the final judge, not the main development loop. Build first, then let the critic try to break the finished bounded implementation.
+- vertex and pixel shader microcode;
+- inline and pointer-backed shader uploads;
+- fetch constants;
+- texture backing addresses and dimensions;
+- indirect command buffers;
+- register RMW state;
+- title memory writes and resource provenance.
 
-## Public progress board
+The correctness path uses upstream Xenia's shader analysis / interpreter. The browser adaptation also includes a fail-closed 2D RGBA8 point-sampling tier backed by real sparse guest memory, including Xenos tiled addressing. CI deliberately unmaps the texture after a successful shader execution and requires the shader to fail; a fake zero-texture implementation cannot satisfy that gate.
+
+## GPU acceleration path: Xenos -> SPIR-V -> WGSL -> WebGPU
+
+The intended commercial-game path is GPU translation, not CPU interpretation of every pixel.
 
 ```text
-OVERALL RENDER360
-███████████████░░░░░  ~76%  weighted engineering estimate
-
-CPU / WASM / MEMORY FOUNDATIONS
-████████████████████  100% ✓
-PACKAGE + STFS + XEX METADATA
-████████████████████  100% ✓
-FULL RETAIL XEX IMAGE PREPARATION
-████████████████████  100% ✓
-STRICT XBOX PE IMAGE DECODE
-████████████████████  100% ✓
-PREPARED IMAGE → REAL GUEST SECTION MAPPING
-████████████████████  100% ✓
-PREPARED PE ENTRY → XENIA PPC / HIR
-████████████████████  100% ✓
-ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF
-████████████████████  100% ✓
-ENTRY EXECUTION / RUNTIME BOUNDARY TELEMETRY
-████████████████████  100% ✓
-KERNEL EXECUTION + PPC ABI FOUNDATION
-████████████████████  100% ✓
-REAL xboxkrnl / XAM STARTER SERVICES
-████████████████████  100% ✓
-GUEST THREADS / TLS / RUNTIME FOUNDATION
-████████████████████  100% ✓
-XENOS FIRST-FRAME SEMANTIC FOUNDATION
-████████████████████  100% ✓
-WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION
-████████████████████  100% ✓
-GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE
-████████████████████  100% ✓
-FIRST GENUINE GUEST FRAME
-████████████████████  100% ✓
-WEBGL2 FALLBACK
-████████████████████  100% ✓
-ENCRYPTED XEX PIPELINE → XENOS TRAFFIC BRIDGE
-████████████████████  100% ✓
-XDVDFS VIRTUAL ISO INPUT + default.xex DISCOVERY
-████████████████████  100% ✓
-BROWSER MODERN PPC/KERNEL/XENOS BOOTSTRAP DEPLOYMENT
-████████████████████  100% ✓
-
-EXTRACTED-TITLE → REAL GPU TRAFFIC
-██░░░░░░░░░░░░░░░░░░  ← ACTIVE: requires genuine user-supplied title trace
-REAL TITLE SHADERS / TEXTURES / RESOURCES
-░░░░░░░░░░░░░░░░░░░░
-FIRST EXTRACTED-TITLE FRAME
-░░░░░░░░░░░░░░░░░░░░
+captured Xenos vertex / pixel microcode
+  -> upstream Xenia Shader::AnalyzeUcode
+  -> upstream Xenia SpirvShaderTranslator
+  -> SPIR-V binary
+  -> Naga SPIR-V frontend
+  -> Naga validation
+  -> Naga WGSL backend
+  -> GPUDevice.createShaderModule
+  -> WebGPU pipeline cache
+  -> title draw / render-target / EDRAM work
 ```
 
-## Current verified browser title path
+### Xenia SPIR-V bridge
+
+`src/xenia_web_bootstrap/xenos_spirv_translation_probe.cpp` exposes the real upstream Xenia translator from the standalone browser WASM. It validates the emitted SPIR-V magic and exports the translated binary. The strict bootstrap build includes Xenia's SPIR-V builder, shader object and full split translator semantics for ALU, vertex/texture fetch, memory export and render-backend/EDRAM lowering.
+
+`test-xenos-spirv-translation.mjs` requires both captured vertex and pixel Xenos shaders to produce real SPIR-V and verifies invalid input fails closed.
+
+### Naga browser converter
+
+`tools/spirv-wgsl/` contains a dedicated Rust/WASM converter using Naga's real `spv-in` and `wgsl-out` backends. It:
+
+1. validates SPIR-V alignment and magic;
+2. parses the complete module with Naga;
+3. runs Naga validation;
+4. emits non-empty WGSL;
+5. returns an error instead of inventing shader output when conversion fails.
+
+`build-spirv-wgsl.sh` produces a browser `wasm-bindgen` module. `SPIR-V WGSL Browser Converter` CI builds it only against a verified Xenia bootstrap, runs Xenos -> SPIR-V -> WGSL end to end, and publishes the generated converter beside the browser runtime only after the test is green.
+
+### Browser WebGPU shader validation
+
+`render360-webgpu-title-shaders.mjs` takes a captured title shader through Xenia SPIR-V and Naga WGSL, passes the source to `GPUDevice.createShaderModule`, inspects WebGPU compilation messages and caches successful modules by Xenos shader identity.
+
+A successfully translated or compiled shader **does not count as a frame**. The first-commercial-frame gate still requires title-produced pixels.
+
+## Why the commercial-frame gate is still closed
+
+The current low-level Xenos bring-up draw path contains a deliberately bounded software triangle rasterizer. It is useful for proving command flow, EDRAM storage, frame hashes and browser presentation plumbing, but it is not a commercial game's raster output.
+
+Render360 tracks frame provenance. `r360_xenos_real_title_frame_ready()` explicitly rejects the bounded-raster provenance bit. Therefore:
 
 ```text
-user selects Xbox 360 .iso in browser
-  → File/Blob remains virtual; no whole-disc Wasm copy
-  → XISO/XGD1/XGD2/XGD3 XDVDFS detection
-  → bounded directory traversal + real default.xex discovery
-  → XEX2 encrypted image key read from security info
-  → retail AES/LZX/XEX preparation
-  → strict PE mapping
-  → translated Xenia PPC/HIR title entry
-  → kernel/runtime blocker telemetry
-  → existing Xenos/WebGPU/WebGL2 pipeline when genuine title traffic reaches it
+real PM4 + real shader bytes + real XE_SWAP
+                        !=
+              real commercial frame
 ```
 
-The deployed site now contains the verified modern `xenia_ppc_bootstrap.wasm` rather than requiring the PPC/kernel/Xenos bootstrap to remain trapped in an Actions artifact.
+The remaining rendering boundary is to bind the title's actual vertex/index buffers, translated VS/PS, constants, textures, render targets, depth/blend state and EDRAM/resolve behavior into the WebGPU draw path, then present the resulting title pixels at `VdSwap` / `XE_SWAP`.
 
-## Current verified GPU path
+A second useful fast path is possible when a game has already resolved a supported frontbuffer into guest memory: decode the real frontbuffer fetch at `VdSwap`, read/de-tile the backed title pixels, and present those directly. That path must also remain fail-closed for unsupported formats/layouts.
+
+## Authoritative CI rules
+
+Render360 does not promote a subsystem because code exists. A bounded contract is considered closed only when its implementation and regression/critic gates are green.
+
+The full `Xenia WASM32 Bootstrap` gate currently covers package/XEX preparation, LZX/AES, PE mapping, PPC/HIR, kernel imports/services, guest runtime, sparse memory, Xenos PM4, title shader/resources, shader interpreter, EDRAM/frame foundations, title ring/MMIO and captured ring submission.
+
+The dedicated `Extracted XEX GPU Traffic Bridge` gate isolates the title-to-GPU path. The `SPIR-V WGSL Browser Converter` gate is responsible for the new accelerated shader bridge.
+
+Strict Wasm linking uses `ERROR_ON_UNDEFINED_SYMBOLS=1`. Missing Xenia shader semantics are added from the real pinned upstream source; they are not hidden with success stubs.
+
+## Important implementation files
+
+- `render360-xdvdfs.mjs` — browser-native XDVDFS virtual disc reader.
+- `render360-iso-title-controller.mjs` — ISO -> retail XEX title handoff.
+- `render360-browser-title-runtime.mjs` — modern bootstrap loader and browser title runtime.
+- `render360-browser-modern-iso-bridge.mjs` — public ISO UI integration and exact blocker reporting.
+- `render360-browser-title-hle.mjs` — relocated browser HLE fallback shims.
+- `src/xenia_web_bootstrap/ppc_translation_probe.cpp` — Xenia PPC/scanned code-window bridge.
+- `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — sparse Xbox guest memory.
+- `src/xenia_web_bootstrap/kernel_import_probe.cpp` — real imported-thunk/kernel boundary.
+- `src/xenia_web_bootstrap/title_gpu_runtime.cpp` — native title ring/MMIO and `VdSwap` services.
+- `src/xenia_web_bootstrap/xenos_gpu_foundation.cpp` — PM4/register/resource/EDRAM semantics and strict real-frame provenance gate.
+- `src/xenia_web_bootstrap/xenos_shader_interpreter_probe.cpp` — upstream Xenia shader interpreter bridge.
+- `src/xenia_web_bootstrap/xenos_spirv_translation_probe.cpp` — upstream Xenia Xenos -> SPIR-V bridge.
+- `render360-title-gpu-traffic.mjs` — captured title ring -> Xenos submission/telemetry.
+- `render360-xenos-shader-runtime.mjs` — browser shader analysis, SPIR-V retrieval and WGSL handoff.
+- `tools/spirv-wgsl/` — Naga SPIR-V -> WGSL converter.
+- `render360-spirv-wgsl-runtime.mjs` — browser converter loader.
+- `render360-webgpu-title-shaders.mjs` — WebGPU validation/cache for translated title shaders.
+- `render360-webgpu-xenos.mjs` — browser framebuffer presentation bridge.
+- `render360-webgl2-xenos.mjs` — framebuffer fallback.
+
+## What “playable” will mean
+
+Render360 will not label a commercial title playable merely because it mounts, decrypts, reaches the kernel, initializes the GPU or emits a swap.
+
+A title should only be called playable after a real user-supplied, lawfully obtained game demonstrates at minimum:
+
+- sustained PPC/runtime execution;
+- required kernel/XAM services;
+- continuous real PM4 consumption;
+- title shader/resource translation;
+- title-produced rendered frames;
+- repeated presentation without synthetic frame substitution;
+- working input and timing sufficient to interact with the game.
+
+Audio, save/storage, networking and title-specific compatibility may still affect a fuller compatibility rating after the first playable graphics/input milestone.
+
+## Near-term engineering order
 
 ```text
-encrypted XEX2 fixture / mapped translated guest PPC
-  → relocated guest-memory PM4 command production
-  → exact big-endian guest command words + provenance hash
-  → PM4 parser
-  → Xenos register state
-  → DRAW_INDX / DRAW_INDX_2
-  → bounded raster semantics
-  → circular EDRAM target
-  → RGBA resolve + generation/hash
-  → WebGPU/WGSL presentation
-        or
-  → WebGL2 framebuffer fallback
+1. strict-link and validate full Xenia Xenos -> SPIR-V accelerator
+2. validate Naga SPIR-V -> WGSL browser converter
+3. validate translated title WGSL with Safari/WebGPU
+4. bind real title vertex/index/constants/textures into WebGPU draws
+5. implement/expand EDRAM render-target + resolve behavior from real blockers
+6. present title-produced frontbuffer at VdSwap / XE_SWAP
+7. run a lawfully obtained commercial ISO and implement its first exact blockers
+8. repeat until menu/gameplay/input are sustained
 ```
 
-The next active integration replaces the structurally valid encrypted-XEX fixture with GPU traffic reached while executing a genuine user-supplied title through the now-deployed ISO/XEX/PE/kernel/runtime path.
+The game itself is the final compatibility test. Synthetic fixtures stay useful for regression coverage, but they cannot promote `FIRST COMMERCIAL-TITLE FRAME` or `COMMERCIAL GAMEPLAY`.
 
-## Browser / GPU implementation files
+## Legal / project scope
 
-- `render360-xdvdfs.mjs` — bounded XISO/XGD virtual filesystem reader and `default.xex` discovery.
-- `render360-iso-title-controller.mjs` — XDVDFS → retail XEX title handoff with XEX2 security-key extraction.
-- `render360-byte-buffer.mjs` — browser-native byte-buffer compatibility for the title pipeline.
-- `render360-browser-title-runtime.mjs` — modern bootstrap loader and browser ISO handoff contract.
-- `render360-browser-iso-hook.mjs` — public file-picker → real ISO bring-up hook with exact blocker reporting.
-- `src/xenia_web_bootstrap/xenos_gpu_foundation.cpp` — bounded PM4/register/draw/EDRAM semantic module.
-- `render360-xenos-controller.mjs` — big-endian guest-memory → Xenos command bridge.
-- `render360-title-gpu-traffic.mjs` — relocated mapped-XEX PPC guest-memory → Xenos traffic bridge with provenance telemetry.
-- `render360-webgpu-xenos.mjs` — frame view, WGSL present shader and WebGPU presenter.
-- `render360-webgl2-xenos.mjs` — WebGL2 framebuffer fallback consuming the same Xenos frame.
-- `test-xdvdfs-virtual-mount.mjs` / `test-xdvdfs-virtual-mount-critic.mjs` — ISO implementation and harsh-critic gates.
-- `test-browser-title-runtime.mjs` — browser runtime, Buffer and XEX2 security-key contract.
-- `test-deployed-browser-bootstrap-critic.mjs` — deployed-WASM provenance and required-export critic.
-- `test-extracted-xex-gpu-traffic.mjs` / `test-extracted-xex-gpu-traffic-critic.mjs` — encrypted-XEX → relocated guest PM4 → Xenos gates.
-
-## ISO / GOD input direction
-
-Render360 does **not** require ISO2GOD. The browser input architecture is now:
-
-```text
-Xbox 360 .iso
-  → random-access XDVDFS File/Blob mount             ✓ CLOSED
-  → virtual game filesystem                          ✓ CLOSED
-  → real default.xex discovery                       ✓ CLOSED
-
-GOD / STFS container
-  → STFS/GOD reader                                  ✓ STFS PATH CLOSED
-  → default.xex                                      ✓ CLOSED
-
-both
-  → existing Render360 XEX / PE / PPC pipeline
-```
-
-Large disc images remain virtual and are read in bounded ranges rather than copied wholesale into Wasm memory.
-
-## Road to playable software
-
-```text
-first translated-guest-PPC framebuffer                  ✓ LOCKED
-WebGL2 Xenos framebuffer fallback                       ✓ LOCKED
-encrypted XEX pipeline → relocated Xenos traffic         ✓ LOCKED BY HARSH CRITIC
-ISO/XDVDFS virtual mount + browser title handoff         ✓ LOCKED BY HARSH CRITIC
-verified PPC/kernel/Xenos bootstrap deployed to Pages    ✓ LOCKED BY DEPLOYMENT CRITIC
-genuine extracted title → real GPU ringbuffer/MMIO       ← ACTIVE
-expand Xenos packets/registers from the first blocker
-translate real Xenos shader microcode → WGSL
-textures / vertex fetch / resources / resolves
-first extracted-title-produced framebuffer
-performance work from real traces
-small homebrew / XBLA-class bring-up
-Braid-class target
-Portal-class bring-up
-Portal 2-class bring-up
-```
-
-Now optimization should be driven by measured title traces: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches, and reduced EDRAM copies.
-
-## Engineering rule
-
-Never report `REAL TITLE ENTRY`, `FIRST TITLE DRAW`, `FIRST TITLE PRESENT`, `FIRST EXTRACTED-TITLE FRAME`, `PLAYABLE`, title FPS or title boot unless that event came from genuine extracted-title execution through the corresponding emulator subsystem.
-
-## License
-
-Xenia-derived portions remain subject to upstream Xenia licensing terms. See [`LICENSE_XENIA.txt`](LICENSE_XENIA.txt).
+Render360 does not include commercial Xbox 360 games, copyrighted title assets, keys or firmware. Use only content you are legally permitted to use. Xenia-derived portions remain subject to upstream Xenia licensing terms; see `LICENSE_XENIA.txt`.

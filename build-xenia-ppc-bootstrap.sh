@@ -11,6 +11,7 @@ python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
+python3 "$ROOT/prepare-xenia-shader-interpreter-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
 COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include")
 COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
@@ -25,6 +26,7 @@ SOURCES=(
   "src/xenia/cpu/compiler/compiler.cc" "src/xenia/cpu/compiler/compiler_pass.cc"
   "src/xenia/cpu/compiler/passes/conditional_group_pass.cc" "src/xenia/cpu/compiler/passes/conditional_group_subpass.cc" "src/xenia/cpu/compiler/passes/constant_propagation_pass.cc" "src/xenia/cpu/compiler/passes/context_promotion_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_simplification_pass.cc" "src/xenia/cpu/compiler/passes/data_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/dead_code_elimination_pass.cc" "src/xenia/cpu/compiler/passes/finalization_pass.cc" "src/xenia/cpu/compiler/passes/memory_sequence_combination_pass.cc" "src/xenia/cpu/compiler/passes/register_allocation_pass.cc" "src/xenia/cpu/compiler/passes/simplification_pass.cc" "src/xenia/cpu/compiler/passes/validation_pass.cc" "src/xenia/cpu/compiler/passes/value_reduction_pass.cc"
   "src/xenia/cpu/ppc/ppc_context.cc" "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_lookup_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm.cc" "src/xenia/cpu/ppc/ppc_opcode_info.cc" "src/xenia/cpu/ppc/ppc_emit_alu.cc" "src/xenia/cpu/ppc/ppc_emit_control.cc" "src/xenia/cpu/ppc/ppc_emit_memory.cc" "src/xenia/cpu/ppc/ppc_emit_fpu.cc" "src/xenia/cpu/ppc/ppc_emit_altivec.cc" "src/xenia/cpu/ppc/ppc_scanner.cc" "src/xenia/cpu/ppc/ppc_hir_builder.cc" "src/xenia/cpu/ppc/ppc_translator.cc" "src/xenia/cpu/ppc/ppc_frontend.cc"
+  "src/xenia/gpu/register_file.cc" "src/xenia/gpu/ucode.cc" "src/xenia/gpu/shader.cc" "src/xenia/gpu/shader_interpreter.cc"
 )
 
 classify_failure() {
@@ -91,6 +93,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/memory.cc") compile_one "$rel" "$OVERLAY/xenia/memory.cc" ;;
     "src/xenia/cpu/mmio_handler.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/mmio_handler.cc" ;;
     "src/xenia/cpu/processor.cc") compile_one "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
+    "src/xenia/gpu/shader_interpreter.cc") compile_one "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac
 done
@@ -103,6 +106,7 @@ compile_one "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/k
 compile_one "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
 compile_one "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 compile_one "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
+compile_one "render360/xenos_shader_interpreter_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_shader_interpreter_probe.cpp"
 compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
 compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"
 compile_one "render360/wasm_backend_memory_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_memory_probe.cpp"

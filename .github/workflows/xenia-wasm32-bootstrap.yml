@@ -18,6 +18,7 @@ on:
       - 'test-xex-prepared-entry-handoff.mjs'
       - 'test-xex-retail-normal-end-to-end.mjs'
       - 'retail-xex-normal-pipeline.mjs'
+      - 'retail-xex-image-pipeline.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -71,37 +72,27 @@ jobs:
     steps:
       - name: Checkout Render360
         uses: actions/checkout@v4
-
       - name: Rebuild V32 package/XEX WASM core from source
         run: bash ./build-core.sh
-
       - name: Verify STFS/XEX package foundation
         run: node ./test-package-xex-foundation.mjs
-
       - name: Verify strict XEX2 image metadata decode
         run: node ./test-xex-image-decode.mjs
-
       - name: Verify streaming unencrypted/uncompressed XEX preparation
         run: node ./test-xex-image-prepare-none.mjs
-
       - name: Verify streaming BASIC XEX preparation
         run: node ./test-xex-image-prepare-basic.mjs
-
       - name: Verify streaming NORMAL block/hash/chunk framing
         run: node ./test-xex-image-prepare-normal-frame.mjs
-
       - name: Verify strict Xbox PE image metadata
         run: node ./test-xex-pe-image.mjs
-
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh
-
       - name: Audit Xenia contracts and translation foundation
         run: |
           python3 ./xenia_contract_check.py
           python3 ./xenia_web_bootstrap_check.py
           python3 ./xenia_translation_foundation_check.py
-
       - name: Compile and link real Xenia PPC/HIR wasm32 bootstrap
         run: |
           docker run --rm \
@@ -109,25 +100,18 @@ jobs:
             -w /src \
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
-
       - name: Verify upstream Xenia LZX decoder in wasm32
         run: node ./test-xenia-lzx-wasm.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
       - name: Verify NORMAL framing to Xenia LZX end to end
         run: node ./test-xex-normal-lzx-end-to-end.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
       - name: Verify XEX session-key and AES-CBC semantics in wasm32
         run: node ./test-xex-crypto-wasm.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
-      - name: Verify encrypted retail NORMAL preparation end to end
+      - name: Verify encrypted retail NONE BASIC NORMAL preparation end to end
         run: node ./test-xex-retail-normal-end-to-end.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
       - name: Verify prepared PE image maps from decoded metadata into guest memory
         run: node ./test-xex-pe-guest-loader.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
       - name: Verify prepared PE entry handoff into Xenia PPC/HIR
         run: node ./test-xex-prepared-entry-handoff.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-
       - name: Verify locked foundations and V36 XEX bring-up
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then
@@ -150,14 +134,12 @@ jobs:
           else
             echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
           fi
-
       - name: Show compile and link state
         if: always()
         run: |
           if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then cat build/xenia-ppc-bootstrap/report.tsv; else echo 'No compile report generated.'; fi
           echo
           if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then cat build/xenia-ppc-bootstrap/link-report.txt; else echo 'No link report generated.'; fi
-
       - name: Upload bootstrap report
         if: always()
         uses: actions/upload-artifact@v4

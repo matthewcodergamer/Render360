@@ -9,7 +9,7 @@ const imports=wasi.getImportObject(mod);
 for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);
 const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_protect','r360_sparse_guest_memory_write_u32_be','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents'];
+const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_protect','r360_sparse_guest_memory_write_u32_be','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_status','r360_xenos_packets','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frontbuffer_ptr','r360_xenos_frontbuffer_width','r360_xenos_frontbuffer_height'];
 for(const n of required)if(typeof pick(n)!=='function')throw new Error(`title GPU runtime missing export ${n}`);
 
 const p32be=(a,o,v)=>{a[o]=(v>>>24)&255;a[o+1]=(v>>>16)&255;a[o+2]=(v>>>8)&255;a[o+3]=v&255};
@@ -17,7 +17,7 @@ const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;
 const lis=(rt,imm)=>dform(15,rt,0,imm),li=(rt,imm)=>dform(14,rt,0,imm),ori=(ra,rs,imm)=>dform(24,rs,ra,imm),lwz=(rt,ra,d)=>dform(32,rt,ra,d),stw=(rs,ra,d)=>dform(36,rs,ra,d);
 const mtctr11=0x7D6903A6,bctrl=0x4E800421,blr=0x4E800020;
 const codeBase=0x20000000;
-const thunk=0x70004510;
+const thunk=0x70004510,vdSwapThunk=0x70004520;
 
 function stage(words){
   const input=pick('r360_ppc_probe_input_buffer')()>>>0;const mem=new Uint8Array(e.memory.buffer,input,words.length*4);words.forEach((w,i)=>p32be(mem,i*4,w>>>0));
@@ -90,8 +90,8 @@ console.log('TITLE_RUNTIME_NATIVE_WPTR_TO_XENOS=PASS');
 console.log('TITLE_RUNTIME_REAL_CP_RB_RPTR_PROGRESS=PASS');
 
 const scratch=pick('r360_ppc_probe_input_buffer')()>>>0;
-if((pick('r360_title_gpu_ring_word')(0,scratch)>>>0)!==1)throw new Error('title ring sparse word read failed');
-const bytes=new Uint8Array(e.memory.buffer,scratch,4);const word=(bytes[0]|(bytes[1]<<8)|(bytes[2]<<16)|(bytes[3]<<24))>>>0;
+const readRingWord=index=>{if((pick('r360_title_gpu_ring_word')(index,scratch)>>>0)!==1)throw new Error(`title ring sparse word ${index} read failed`);const bytes=new Uint8Array(e.memory.buffer,scratch,4);return(bytes[0]|(bytes[1]<<8)|(bytes[2]<<16)|(bytes[3]<<24))>>>0;};
+const word=readRingWord(0);
 if(word!==0x80000000)throw new Error(`title ring word mismatch 0x${word.toString(16)}`);
 console.log('TITLE_RUNTIME_REAL_RING_WORD_READ=PASS');
 
@@ -111,11 +111,41 @@ if((pick('r360_xenos_packets')()>>>0)!==ringCapacity+1)throw new Error(`Xenos st
 console.log('TITLE_RUNTIME_CIRCULAR_RING_WRAP=PASS');
 console.log('TITLE_RUNTIME_XENOS_STATE_PERSISTS=PASS');
 
+// A commercial title normally presents through xboxkrnl!VdSwap rather than
+// constructing PM4_XE_SWAP itself. Put the service output directly into the
+// already-live title ring, then advance CP_RB_WPTR through translated PPC. This
+// proves live r3-r10 ABI -> VdSwap -> 64-word ring reservation -> Xenos swap.
+const metaBase=0x10002000,metaBacking=pick('r360_sparse_guest_memory_alloc')(1)>>>0;if(!metaBacking)throw new Error('VdSwap metadata backing allocation failed');
+if((pick('r360_sparse_guest_memory_map')(metaBase,1,metaBacking,0,3)>>>0)!==1)throw new Error('VdSwap metadata mapping failed');
+const fetchPtr=metaBase,frontbufferPtrPtr=metaBase+0x40,formatPtr=metaBase+0x44,colorSpacePtr=metaBase+0x48;
+const frontbuffer=0x14000000,width=1280,height=720,format=6;
+const rgbaSwizzle=(0|(1<<3)|(2<<6)|(3<<9))>>>0;
+const fetchWords=[(0x80000000|(40<<22)|2)>>>0,(frontbuffer|format|(2<<6))>>>0,((width-1)|((height-1)<<13))>>>0,(rgbaSwizzle<<1)>>>0,0,(1<<9)>>>0];
+for(let i=0;i<fetchWords.length;i++)if((pick('r360_sparse_guest_memory_write_u32_be')(fetchPtr+i*4,fetchWords[i])>>>0)!==1)throw new Error(`VdSwap fetch seed ${i} failed`);
+for(const [address,value] of [[frontbufferPtrPtr,frontbuffer],[formatPtr,format],[colorSpacePtr,0]])if((pick('r360_sparse_guest_memory_write_u32_be')(address,value)>>>0)!==1)throw new Error(`VdSwap metadata seed @${address.toString(16)} failed`);
+if((pick('r360_kernel_import_register')(vdSwapThunk,1,0x025B,0,0)>>>0)!==1)throw new Error('VdSwap registration failed');
+const vdHi=(vdSwapThunk>>>16)&0xffff,vdLo=vdSwapThunk&0xffff;
+const vdResult=run([lis(11,vdHi),ori(11,11,vdLo),mtctr11,bctrl,blr],{3:ringBase+4,4:fetchPtr,5:0,6:0,7:0,8:frontbufferPtrPtr,9:formatPtr,10:colorSpacePtr});
+if(vdResult!==0)throw new Error(`VdSwap return mismatch 0x${vdResult.toString(16)}`);
+if(readRingWord(1)!==0x00054800)throw new Error(`VdSwap did not emit fetch Type-0 header 0x${readRingWord(1).toString(16)}`);
+if(readRingWord(8)!==0xC0036400||readRingWord(9)!==0x50415753||readRingWord(10)!==frontbuffer||readRingWord(11)!==width||readRingWord(12)!==height)throw new Error('VdSwap XE_SWAP command payload mismatch');
+if(readRingWord(64)!==0x80000000)throw new Error('VdSwap did not NOP-fill 64-word reservation');
+const packetsBeforeSwap=pick('r360_xenos_packets')()>>>0;
+writeWptr(65);
+if(readRptr()!==65)throw new Error('VdSwap ring reservation was not consumed');
+if((pick('r360_xenos_swaps')()>>>0)!==1||(pick('r360_xenos_presents')()>>>0)!==1)throw new Error('VdSwap did not reach Xenos XE_SWAP');
+if((pick('r360_xenos_frontbuffer_ptr')()>>>0)!==frontbuffer||(pick('r360_xenos_frontbuffer_width')()>>>0)!==width||(pick('r360_xenos_frontbuffer_height')()>>>0)!==height)throw new Error('VdSwap frontbuffer metadata did not reach Xenos');
+if((pick('r360_xenos_packets')()>>>0)!==packetsBeforeSwap+54)throw new Error(`VdSwap packet accounting mismatch ${pick('r360_xenos_packets')()>>>0}/${packetsBeforeSwap+54}`);
+console.log('TITLE_RUNTIME_REAL_VD_SWAP_ABI=PASS');
+console.log('TITLE_RUNTIME_REAL_VD_SWAP_TO_XE_SWAP=PASS');
+console.log('TITLE_RUNTIME_COMMERCIAL_PRESENT_PATH=PASS');
+
 // Modern JS must observe the already-drained native state without resetting or
 // replaying it. This protects title shaders/registers accumulated over multiple
 // producer updates.
+const expectedPackets=pick('r360_xenos_packets')()>>>0;
 const traffic=submitCapturedTitleGpuTraffic({bootstrap:instance});
-if(!traffic.ready||!traffic.submitted||traffic.source!=='native-cp-rb-wptr-drain'||!traffic.nativeDrained||traffic.packets!==ringCapacity+1||traffic.draws!==0||traffic.frameGeneration!==0)throw new Error(`native captured title traffic mismatch ${JSON.stringify(traffic)}`);
+if(!traffic.ready||!traffic.submitted||traffic.source!=='native-cp-rb-wptr-drain'||!traffic.nativeDrained||traffic.packets!==expectedPackets||traffic.draws!==0||traffic.frameGeneration!==1)throw new Error(`native captured title traffic mismatch ${JSON.stringify(traffic)}`);
 console.log('TITLE_RUNTIME_JS_PRESERVES_NATIVE_XENOS_STATE=PASS');
 console.log('TITLE_RUNTIME_CAPTURED_RING_TO_XENOS=PASS');
 console.log('TITLE_GPU_RUNTIME_BRIDGE=PASS');

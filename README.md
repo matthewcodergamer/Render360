@@ -8,20 +8,22 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-█████████░░░░░░░░░░░  ~43%
+█████████░░░░░░░░░░░  ~44%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package, sparse-memory and much of the XEX bring-up path are closed; genuine extracted-title execution, kernel/XAM/runtime behavior, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package, sparse-memory and the controlled XEX/PE loading pipeline are substantially closed; genuine extracted-title execution, kernel/XAM/runtime behavior, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
 
 ## Latest authoritative gate
 
-**Run 315 — Actions ID `33224960329` — SUCCESS**
+**Run 328 — Actions ID `33227084124` — SUCCESS**
 
-Implementation commit: `4ad739c56d2c4032dbc8329b5c5594e17def8ce7`
+Aggregate commit: `7383622e60d77c16b3fb6435411ce03847cc0aec`
 
-Run 315 closes the Run-312 `load-at-entry failed 0` regression without weakening the critic. The decoder-derived guest base is published before the bounded Xenia wasm32 Memory/Processor bootstrap is initialized, allowing prepared PPC bytes to be loaded and translated at relocated Xbox addresses.
+Run 328 closes the prepared-PE-to-guest-memory boundary. The strict PE decoder now feeds a real loader that derives guest section addresses from `image_base + section RVA`, copies section bytes from the prepared executable, preserves zero-filled virtual tails, converts PE characteristics into final RX/RW guest permissions, and validates the decoder-derived entry before finalization.
 
-The aggregate gate also replayed the existing foundations successfully, including **77/77 wasm32 translation units**, strict link, upstream Xenia LZX, XEX session-key/AES-CBC semantics, WasmBackend, SparseGuestMemory and the V36 XEX mapper.
+The first attempt, Run 326, correctly failed because mapper reset erased the caller-facing staging buffer before the PE decoder consumed it. Commit `01f081fd5b72c48ab24d94c9525e71b6505da644` fixes the contract: mapper reset clears mapping state without destroying staged prepared-image bytes. The critic was not weakened.
+
+Run 328 also replayed the complete existing stack successfully: **79/79 wasm32 translation/bootstrap units**, strict link, upstream Xenia LZX, XEX session-key/AES-CBC semantics, prepared-entry PPC/HIR execution, WasmBackend, SparseGuestMemory and the V36 XEX mapper.
 
 ## Closed foundations and bring-up contracts
 
@@ -44,55 +46,63 @@ XEX NORMAL FRAMING                               100% ✓
 XENIA LZX WASM FOUNDATION                        100% ✓
 XEX SESSION-KEY / AES-CBC FOUNDATION             100% ✓
 UNENCRYPTED NORMAL → PREPARED ENTRY PIPELINE     100% ✓
+STRICT XBOX PE IMAGE DECODER                     100% ✓
+PREPARED PE IMAGE → GUEST MEMORY                 100% ✓
 ```
 
 These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
 
-## What Run 315 proves
+## What Run 328 proves
 
 ```text
-valid XEX-style metadata
+prepared Xbox PE image
         ↓
-NORMAL block/hash/chunk framing
+strict MZ / PE32 / PPC-BE / Xbox validation
         ↓
-upstream Xenia LZX in wasm32
+real PE section table
         ↓
-exact prepared executable bytes
+image_base + section RVA
         ↓
-decoder-derived guest mapping
+raw section bytes copied from prepared image
         ↓
-relocated Xbox entry address
+zero-filled virtual tails preserved
         ↓
-Xenia PPC scanner / frontend / HIR
+PE characteristics → RX / RW guest permissions
         ↓
-prepared PPC entry translated/executed
+SparseGuestMemory mappings
+        ↓
+image_base + entry RVA
+        ↓
+validated executable guest entry
 ```
 
-The critic exercises more than one relocated guest base and keeps corrupt framing/LZX cases fail closed. This is a real cross-module integration contract, but its test image is still controlled test content; it is **not yet a claim that an extracted commercial `default.xex` has booted**.
+The critic verifies that `.text` bytes really originate in PE raw data, `.data` bytes really originate in PE raw data, RX rejects writes, RW remains writable, virtual tails are zero-filled, and malformed non-readable executable mappings fail closed.
+
+This is still controlled test content. It is **not yet a claim that an extracted commercial `default.xex` has booted**.
 
 ## Public progress board
 
 ```text
 OVERALL RENDER360
-█████████░░░░░░░░░░░  ~43%  weighted engineering estimate
+█████████░░░░░░░░░░░  ~44%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
 PACKAGE + STFS + XEX METADATA
 ████████████████████  100% ✓
-XEX MAPPER / SPARSE-MEMORY INTEGRATION
+XEX PREPARATION / LZX / CRYPTO FOUNDATIONS
 ████████████████████  100% ✓
-NONE / BASIC / NORMAL FRAMING / LZX
+STRICT XBOX PE IMAGE DECODE
 ████████████████████  100% ✓
-XEX SESSION-KEY / AES-CBC FOUNDATION
+PREPARED IMAGE → REAL GUEST SECTION MAPPING
 ████████████████████  100% ✓
 UNENCRYPTED NORMAL PREPARED-ENTRY PIPELINE
 ████████████████████  100% ✓
 
 FULL RETAIL XEX IMAGE PREPARATION
 █████████████████░░░  ~85%  planning estimate; combined encrypted path + DELTA remain
-REAL EXTRACTED TITLE ENTRY EXECUTION
-█████░░░░░░░░░░░░░░░  ← ACTIVE NEXT
+REAL EXTRACTED TITLE HANDOFF / ENTRY
+██████░░░░░░░░░░░░░░  ← ACTIVE NEXT
 KERNEL / xboxkrnl / XAM
 ░░░░░░░░░░░░░░░░░░░░
 GUEST THREADS / TLS / RUNTIME
@@ -111,34 +121,37 @@ Partial bars are planning indicators only. A subsystem reaches 100% only when it
 
 ## Active implementation — genuine extracted-title handoff
 
-The next milestone stops expanding synthetic CPU tests and connects the completed pieces to title content supplied by the user at runtime:
+The next milestone combines the already-verified pieces around title content supplied by the user at runtime:
 
 ```text
-STFS package
-  → extract default.xex
-  → decode XEX2 metadata
-  → prepare executable image
-  → decode PE/section layout as required
-  → stream sections into SparseGuestMemory
-  → apply final RX / R / RW permissions
-  → validate genuine XEX entry PC
-  → construct initial PPCContext
+user-supplied STFS package / default.xex
+  → full STFS extraction
+  → XEX2 decode
+  → image preparation
+  → strict PE decode
+  → prepared PE section loader
+  → SparseGuestMemory RX / R / RW mappings
+  → genuine decoded entry PC
+  → initial PPCContext
   → Xenia PPCScanner / frontend / finalized HIR
-  → Hot WasmBackend
-  → execute until first unresolved runtime dependency
-  → FAIL CLOSED + report exact dependency
+  → Hot WasmBackend cache / dispatch
+  → execute genuine title instructions
+  → report FIRST_RUNTIME_BLOCKER=<exact dependency>
 ```
 
-No copyrighted title binary belongs in this repository. A genuine-title gate must consume legally obtained content supplied at runtime and report the first actual blocker instead of hiding it behind broad success stubs.
+No copyrighted title binary belongs in this repository. The genuine-title gate consumes legally obtained content supplied at runtime and must report the first actual blocker instead of hiding it behind broad success stubs.
 
 ## What comes after the first genuine failure
 
-The failure decides the next implementation: `xboxkrnl` import → minimum required HLE export; XAM → minimum XAM surface; TLS/thread creation → guest runtime; VFS → browser-backed filesystem; GPU initialization → Xenos command/ringbuffer work.
+The failure chooses the implementation order: `xboxkrnl` import → minimum required HLE export; XAM → minimum XAM surface; TLS/thread creation → guest runtime; heap/virtual memory → required memory services; VFS → browser-backed filesystem; GPU initialization → Xenos command/ringbuffer work.
 
 The rendering path remains:
 
 ```text
-Xenos command processor
+Guest PPC title execution
+  → minimum runtime services
+  → Xenos packets / ringbuffer
+  → command processor
   → shared Xenos semantics
   → shaders / registers / resources
   → EDRAM / render targets
@@ -147,9 +160,11 @@ Xenos command processor
   → FIRST GENUINE GUEST FRAME
 ```
 
-Performance optimization follows genuine execution: keep hot loops in Wasm, use Wasm SIMD for VMX, preserve compiled-function caching/invalidation, minimize JS↔Wasm crossings, stream large title data, use workers/shared queues where browser isolation allows, and begin rendering at a low internal resolution before heavier visual features.
+The first-frame milestone should be a tiny guest-generated graphics workload whose PPC/Xenos work reaches the emulator graphics path. A browser-side WebGPU triangle by itself does **not** count as a guest frame.
 
-Portal and Portal 2 remain later compatibility targets. The immediate target is **genuine extracted title instructions → first real runtime failure → Xenos → first guest frame**.
+Once the first genuine frame exists, keep that guest-frame workload permanently in CI and then optimize aggressively: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches and EDRAM traffic optimization.
+
+Portal and Portal 2 remain later compatibility targets. The immediate target is **genuine extracted title instructions → exact first runtime blocker → minimum runtime → Xenos → first guest frame**.
 
 ## Repository organization
 

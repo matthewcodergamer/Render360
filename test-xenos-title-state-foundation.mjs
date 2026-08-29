@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { WASI } from 'node:wasi';
+import { decodeXenosTextureFetchConstant, readXenosTitleState } from './render360-title-gpu-traffic.mjs';
 
 const wasmPath = process.argv[2] || 'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
 const mod = await WebAssembly.compile(fs.readFileSync(wasmPath));
@@ -7,12 +8,25 @@ const wasi = new WASI({ version: 'preview1', args: [], env: {}, preopens: {}, re
 const imports = wasi.getImportObject(mod);
 for (const im of WebAssembly.Module.imports(mod)) if (im.module === 'env' && im.name === 'emscripten_notify_memory_growth') { imports.env ||= {}; imports.env.emscripten_notify_memory_growth = () => {}; }
 const instance = await WebAssembly.instantiate(mod, imports);wasi.initialize(instance);const e=instance.exports;const f=n=>e[n]??e[`_${n}`];
-const required=['r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_status','r360_xenos_register','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frame_provenance','r360_xenos_real_title_frame_ready','r360_xenos_indirect_buffers','r360_xenos_shader_loads','r360_xenos_shader_buffer','r360_xenos_shader_dwords','r360_xenos_shader_hash','r360_xenos_shader_guest_address','r360_xenos_shader_source','r360_xenos_fetch_constant_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be'];for(const n of required)if(typeof f(n)!=='function')throw new Error(`missing export ${n}`);
+const required=['r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_status','r360_xenos_register','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frame_provenance','r360_xenos_real_title_frame_ready','r360_xenos_indirect_buffers','r360_xenos_shader_loads','r360_xenos_shader_buffer','r360_xenos_shader_dwords','r360_xenos_shader_hash','r360_xenos_shader_guest_address','r360_xenos_shader_source','r360_xenos_fetch_constant_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_read_u8','r360_sparse_guest_memory_last_fault_code','r360_sparse_guest_memory_write_u32_be'];for(const n of required)if(typeof f(n)!=='function')throw new Error(`missing export ${n}`);
 const packet3=(opcode,count)=>((3<<30)|(((count-1)&0x3fff)<<16)|((opcode&0x7f)<<8))>>>0;
 const submit=words=>{f('r360_xenos_reset')();const ptr=f('r360_xenos_ring_buffer')()>>>0,cap=f('r360_xenos_ring_capacity')()>>>0;if(!ptr||words.length>cap)throw new Error('Xenos ring unavailable');const ring=new Uint32Array(e.memory.buffer,ptr,cap);ring.fill(0);ring.set(words);const ok=f('r360_xenos_submit')(words.length)>>>0;if(!ok)throw new Error(`Xenos submit failed status=${f('r360_xenos_status')()>>>0}`);};
 
-const fetchWords=[0x00000006,0x12345000,0x00100020,0x0c600000,0,0];
-submit([packet3(0x2d,7),0x00010000,...fetchWords]);for(let i=0;i<6;++i)if((f('r360_xenos_fetch_constant_word')(0,i)>>>0)!==fetchWords[i])throw new Error(`fetch constant ${i} mismatch`);console.log('XENOS_TITLE_FETCH_CONSTANTS=PASS');
+// A real Xenos texture fetch constant: type=texture, pitch=32 pixels, tiled,
+// RGBA8, 8-in-32 endian swap, 4x4 2D, base 0x14000000. The base page is
+// actually mapped in sparse guest RAM, so this validates both bit decoding and
+// resource-address provenance rather than merely checking six non-zero words.
+f('r360_sparse_guest_memory_reset')();
+const textureBase=0x14000000,textureBacking=f('r360_sparse_guest_memory_alloc')(1)>>>0;if(!textureBacking||(f('r360_sparse_guest_memory_map')(textureBase,1,textureBacking,0,3)>>>0)!==1)throw new Error('texture sparse map failed');
+if((f('r360_sparse_guest_memory_write_u32_be')(textureBase,0x10203040)>>>0)!==1)throw new Error('texture seed failed');
+const rgbaSwizzle=(0|(1<<3)|(2<<6)|(3<<9))>>>0;
+const fetchWords=[(0x80000000|(1<<22)|2)>>>0,(textureBase|6|(2<<6))>>>0,(3|(3<<13))>>>0,(rgbaSwizzle<<1)>>>0,0,(1<<9)>>>0];
+const decoded=decodeXenosTextureFetchConstant(fetchWords);if(!decoded.isTexture||decoded.baseAddress!==textureBase||decoded.width!==4||decoded.height!==4||decoded.depth!==1||decoded.pitchPixels!==32||decoded.format!==6||decoded.endianness!==2||!decoded.tiled||decoded.dimension!==1)throw new Error(`texture fetch decode mismatch ${JSON.stringify(decoded)}`);
+submit([packet3(0x2d,7),0x00010000,...fetchWords]);for(let i=0;i<6;++i)if((f('r360_xenos_fetch_constant_word')(0,i)>>>0)!==fetchWords[i])throw new Error(`fetch constant ${i} mismatch`);
+const textureState=readXenosTitleState({bootstrap:instance});if(!textureState.hasDecodedTextureResources||!textureState.hasBackedTextureResources||textureState.backedTextureResources[0]?.baseAddress!==textureBase)throw new Error(`backed texture provenance missing ${JSON.stringify(textureState.textureResources)}`);
+console.log('XENOS_TITLE_FETCH_CONSTANTS=PASS');
+console.log('XENOS_TITLE_TEXTURE_RESOURCE_DECODE=PASS');
+console.log('XENOS_TITLE_TEXTURE_RESOURCE_BACKED=PASS');
 
 const inlineVs=[0x11223344,0x55667788,0x99aabbcc];
 submit([packet3(0x2b,5),0,inlineVs.length,...inlineVs]);if((f('r360_xenos_shader_dwords')(0)>>>0)!==inlineVs.length||(f('r360_xenos_shader_source')(0)>>>0)!==2||!(f('r360_xenos_shader_hash')(0)>>>0))throw new Error('inline VS provenance mismatch');const vsPtr=f('r360_xenos_shader_buffer')(0)>>>0,vsView=new Uint32Array(e.memory.buffer,vsPtr,inlineVs.length);for(let i=0;i<inlineVs.length;i++)if((vsView[i]>>>0)!==inlineVs[i])throw new Error(`inline VS word ${i} mismatch`);console.log('XENOS_TITLE_INLINE_VERTEX_SHADER=PASS');

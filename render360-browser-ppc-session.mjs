@@ -21,8 +21,15 @@ function normalizeGprs(initialGprs){
  * XAM thunks are routed through the native WASM kernel ABI using that exact
  * live PPCContext. Unsupported thunks remain fail-closed.
  *
+ * The lightweight callable emitter is preferred. For the most recently Xenia-
+ * translated top-level function, the verified fuel-bounded CFG module is also
+ * admitted as a fallback when the lightweight emitter couldn't represent a
+ * multi-block integer branch/loop function. That fallback deliberately does
+ * not pretend to cover guest-memory, FPU/VMX or arbitrary calls yet.
+ *
  * This still is not a preemptive Xbox thread VM: safe browser preemption is at
- * completed generated guest-function returns.
+ * completed generated guest-function returns (or an explicit fail-closed CFG
+ * fuel trap until resumable mid-function state is implemented).
  */
 export async function createPersistentPpcSession({bootstrap,initialGprs={},clearContext=true}={}){
   if(!(bootstrap?.exports?.memory instanceof WebAssembly.Memory))throw new Error('Persistent PPC session requires bootstrap WebAssembly memory');
@@ -38,6 +45,12 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const modulePtrFn=requiredFunction(bootstrap,'r360_wasm_backend_call_module_ptr');
   const moduleSizeFn=requiredFunction(bootstrap,'r360_wasm_backend_call_module_size');
   const loweredFn=requiredFunction(bootstrap,'r360_wasm_backend_call_lowered_instructions');
+  const contentGenerationFn=pick(bootstrap,'r360_wasm_backend_executable_content_generation');
+  const cfgStatusFn=pick(bootstrap,'r360_wasm_backend_cfg_status');
+  const cfgPtrFn=pick(bootstrap,'r360_wasm_backend_cfg_module_ptr');
+  const cfgSizeFn=pick(bootstrap,'r360_wasm_backend_cfg_module_size');
+  const cfgLoweredFn=pick(bootstrap,'r360_wasm_backend_cfg_lowered_instructions');
+  const lastGuestAddressFn=pick(bootstrap,'r360_ppc_probe_last_guest_address');
   const kernelDispatch=pick(bootstrap,'r360_kernel_import_dispatch_context');
   const kernelLastStatus=pick(bootstrap,'r360_kernel_import_last_status');
   const kernelLastModule=pick(bootstrap,'r360_kernel_import_last_module');
@@ -58,6 +71,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   let nestedDispatches=0;
   let kernelDispatches=0;
   let registryRefreshes=0;
+  let cfgFallbackLoads=0;
 
   const bytes=()=>new Uint8Array(memory.buffer,contextPtr,contextSize);
   const view=()=>new DataView(memory.buffer);
@@ -85,6 +99,18 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     return `_KERNEL_STATUS_${status}_MODULE_${module}_ORDINAL_0x${ordinal.toString(16).toUpperCase()}_TARGET_0x${target.toString(16).toUpperCase()}`;
   }
 
+  function maybeAppendCfgFallback(descriptors){
+    if(typeof cfgStatusFn!=='function'||typeof cfgPtrFn!=='function'||typeof cfgSizeFn!=='function'||typeof cfgLoweredFn!=='function'||typeof lastGuestAddressFn!=='function')return;
+    if((cfgStatusFn()>>>0)!==2)return;
+    const address=lastGuestAddressFn()>>>0;
+    const ptr=cfgPtrFn()>>>0;
+    const size=cfgSizeFn()>>>0;
+    const lowered=cfgLoweredFn()>>>0;
+    if(!address||!ptr||size<=8||!lowered||descriptors.some(x=>x.address===address))return;
+    const generation=typeof contentGenerationFn==='function'?(contentGenerationFn(address)>>>0)||1:1;
+    descriptors.push({index:-1,address,generation,ptr,size,lowered,tier:'cfg-fallback'});
+  }
+
   async function refreshFunctions({force=false}={}){
     const count=countFn()>>>0;
     const descriptors=[];
@@ -95,9 +121,10 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       const size=moduleSizeFn(index)>>>0;
       const lowered=loweredFn(index)>>>0;
       if(!address||!generation||!ptr||size<=8||!lowered)throw new Error(`Invalid Xenia generated-function record ${index}`);
-      descriptors.push({index,address,generation,ptr,size,lowered});
+      descriptors.push({index,address,generation,ptr,size,lowered,tier:'callable'});
     }
-    const nextKey=descriptors.map(x=>`${x.address.toString(16)}:${x.generation}:${x.ptr}:${x.size}`).join('|');
+    maybeAppendCfgFallback(descriptors);
+    const nextKey=descriptors.map(x=>`${x.address.toString(16)}:${x.generation}:${x.ptr}:${x.size}:${x.tier}`).join('|');
     if(!force&&nextKey===registryKey)return {changed:false,count:records.size,key:registryKey};
 
     const next=new Map();
@@ -105,6 +132,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       const moduleBytes=new Uint8Array(memory.buffer,descriptor.ptr,descriptor.size).slice();
       const module=await WebAssembly.compile(moduleBytes);
       next.set(descriptor.address,{...descriptor,module,instance:null});
+      if(descriptor.tier==='cfg-fallback')cfgFallbackLoads++;
     }
     const guest_call=(target,ctx)=>{
       target>>>=0;ctx>>>=0;
@@ -139,11 +167,20 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     const generationBefore=record.generation;
     const dispatchBefore=nestedDispatches;
     const kernelBefore=kernelDispatches;
-    const result=BigInt.asUintN(64,record.instance.exports.run(contextPtr));
+    let rawResult;
+    try{
+      rawResult=record.instance.exports.run(contextPtr);
+    }catch(error){
+      if(record.tier==='cfg-fallback')throw new Error(`FAIL_CLOSED_CFG_FUNCTION_0x${address.toString(16).toUpperCase()}_TRAP_OR_FUEL_EXHAUSTED: ${error?.message||error}`);
+      throw error;
+    }
+    const result=BigInt.asUintN(64,rawResult);
     sliceCount++;
     return {
       address,
       generation:generationBefore,
+      tier:record.tier,
+      lowered:record.lowered,
       result,
       r3:getGpr(3),
       lr:getLr(),
@@ -185,13 +222,15 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     get nestedDispatches(){return nestedDispatches;},
     get kernelDispatches(){return kernelDispatches;},
     get registryRefreshes(){return registryRefreshes;},
+    get cfgFallbackLoads(){return cfgFallbackLoads;},
     get functionCount(){return records.size;},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',unsupportedKernelImportsFailClosed:true,preemptionBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false},
+    get functionTiers(){return [...records.values()].map(r=>({address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered}));},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionFailsClosed:true,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;
 }
 
 export function persistentPpcSessionContract(){
-  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly',cacheInvalidation:'Xenia executable page generation',browserYield:'between completed guest-function slices',kernelImports:'live PPCContext dispatch when bootstrap export is present',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,midFunctionPreemption:false,fullXboxThreadScheduler:false};
+  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',browserYield:'between completed guest-function slices',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:100000,unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,midFunctionPreemption:false,fullXboxThreadScheduler:false};
 }

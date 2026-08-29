@@ -22,6 +22,15 @@ bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count);
 bool ReadSparseGuestMemory(uint32_t virtual_address, void* out, uint32_t size);
 bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
                             uint32_t size);
+
+// Returns the contiguous readable+executable byte span beginning at
+// virtual_address, capped by max_size. This is intentionally a query rather
+// than a mapping operation: the browser PPC scanner uses it to page only the
+// executable code it is about to translate into the fixed 64 KiB Xenia window.
+// Holes or non-executable pages stop the span immediately.
+uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
+                                   uint32_t max_size);
+
 uint32_t SparseGuestMappedPageCount();
 uint32_t SparseGuestBackingPageCount();
 uint32_t SparseGuestLastFaultAddress();

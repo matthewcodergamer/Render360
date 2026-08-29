@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"; XENIA="$ROOT/upstream/xenia"; OVERLAY="$ROOT/build/xenia-web-overlay"; OUT="$ROOT/build/xenia-ppc-bootstrap"; CXX="${CXX:-em++}"; mkdir -p "$OUT"
+ROOT="$(cd "$(dirname "$0")" && pwd)"; XENIA="$ROOT/upstream/xenia"; OVERLAY="$ROOT/build/xenia-web-overlay"; OUT="$ROOT/build/xenia-ppc-bootstrap"; CXX="${CXX:-em++}"; CC="${CC:-emcc}"; mkdir -p "$OUT"
 if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2; exit 2; fi
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
+if ! command -v "$CC" >/dev/null 2>&1; then echo "ERROR: $CC not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 python3 "$ROOT/prepare-xenia-web-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
-COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include")
+COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include")
+COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
 SOURCES=(
   "third_party/fmt/src/format.cc"
   "src/xenia/base/arena.cc" "src/xenia/base/cvar.cc" "src/xenia/base/utf8.cc" "src/xenia/base/filesystem_posix.cc" "src/xenia/base/memory_posix.cc" "src/xenia/base/mapped_memory_posix.cc" "src/xenia/base/mutex.cc" "src/xenia/base/string.cc" "src/xenia/base/string_buffer.cc"
-  "src/xenia/memory.cc" "src/xenia/cpu/cpu_flags.cc" "src/xenia/cpu/mmio_handler.cc" "src/xenia/cpu/entry_table.cc" "src/xenia/cpu/module.cc" "src/xenia/cpu/stack_walker_posix.cc" "src/xenia/cpu/thread_state.cc" "src/xenia/cpu/processor.cc"
+  "src/xenia/memory.cc" "src/xenia/cpu/cpu_flags.cc" "src/xenia/cpu/mmio_handler.cc" "src/xenia/cpu/entry_table.cc" "src/xenia/cpu/module.cc" "src/xenia/cpu/stack_walker_posix.cc" "src/xenia/cpu/thread_state.cc" "src/xenia/cpu/processor.cc" "src/xenia/cpu/lzx.cc"
   "src/xenia/cpu/backend/backend.cc" "src/xenia/cpu/backend/assembler.cc" "src/xenia/cpu/function.cc" "src/xenia/cpu/function_debug_info.cc"
   "src/xenia/cpu/hir/opcodes.cc" "src/xenia/cpu/hir/block.cc" "src/xenia/cpu/hir/instr.cc" "src/xenia/cpu/hir/value.cc" "src/xenia/cpu/hir/hir_builder.cc"
   "src/xenia/cpu/compiler/compiler.cc" "src/xenia/cpu/compiler/compiler_pass.cc"
@@ -60,6 +62,25 @@ compile_one() {
   fi
 }
 
+compile_c() {
+  local label="$1"
+  local src="$2"
+  local obj="$OUT/$(echo "$label" | tr '/' '_').o"
+  local log="$obj.log"
+  printf '[WASM32] %-64s ' "$label"
+  if "$CC" "${COMMON_C[@]}" -c "$src" -o "$obj" >"$log" 2>&1; then
+    echo PASS
+    printf '%s\tPASS\tPORTABLE\n' "$label" >> "$OUT/report.tsv"
+    passed=$((passed + 1))
+  else
+    local category
+    category="$(classify_failure "$log")"
+    echo "BLOCKED ($category)"
+    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
+    failed=$((failed + 1))
+  fi
+}
+
 for rel in "${SOURCES[@]}"; do
   case "$rel" in
     "src/xenia/base/arena.cc") compile_one "$rel" "$OVERLAY/xenia/base/arena.cc" ;;
@@ -71,6 +92,7 @@ for rel in "${SOURCES[@]}"; do
     *) compile_one "$rel" "$XENIA/$rel" ;;
   esac
 done
+compile_c "third_party/mspack/lzxd.c" "$XENIA/third_party/mspack/lzxd.c"
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
 compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
@@ -82,6 +104,7 @@ compile_one "render360/wasm_backend_fpu_probe.cpp" "$OVERLAY/render360/wasm_back
 compile_one "render360/wasm_backend_vmx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_vmx_probe.cpp"
 compile_one "render360/sparse_guest_memory.cpp" "$ROOT/src/xenia_web_bootstrap/sparse_guest_memory.cpp"
 compile_one "render360/xex_guest_mapper.cpp" "$ROOT/src/xenia_web_bootstrap/xex_guest_mapper.cpp"
+compile_one "render360/xex_lzx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xex_lzx_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

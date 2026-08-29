@@ -30,3 +30,5 @@ export class R360Buffer extends Uint8Array{
 }
 
 export const Buffer=R360Buffer;
+export function installRender360Buffer(){if(typeof globalThis.Buffer==='undefined')globalThis.Buffer=R360Buffer;return globalThis.Buffer;}
+installRender360Buffer();

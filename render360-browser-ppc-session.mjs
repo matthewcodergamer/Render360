@@ -15,11 +15,14 @@ function normalizeGprs(initialGprs){
  * Persistent browser-side execution session for Xenia-generated guest-function
  * WASM modules.
  *
- * This deliberately does not pretend to be a full preemptive Xbox thread VM.
  * A slice is one generated guest function (including synchronous nested guest
- * calls). The important architectural change is that every slice uses the same
- * Xenia PPCContext and generation-aware function registry, so registers survive
- * across browser yields / later function-boundary resumes.
+ * calls). Every slice uses the same Xenia PPCContext and generation-aware
+ * function registry. Generated guest calls that land on registered xboxkrnl /
+ * XAM thunks are routed through the native WASM kernel ABI using that exact
+ * live PPCContext. Unsupported thunks remain fail-closed.
+ *
+ * This still is not a preemptive Xbox thread VM: safe browser preemption is at
+ * completed generated guest-function returns.
  */
 export async function createPersistentPpcSession({bootstrap,initialGprs={},clearContext=true}={}){
   if(!(bootstrap?.exports?.memory instanceof WebAssembly.Memory))throw new Error('Persistent PPC session requires bootstrap WebAssembly memory');
@@ -35,6 +38,10 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const modulePtrFn=requiredFunction(bootstrap,'r360_wasm_backend_call_module_ptr');
   const moduleSizeFn=requiredFunction(bootstrap,'r360_wasm_backend_call_module_size');
   const loweredFn=requiredFunction(bootstrap,'r360_wasm_backend_call_lowered_instructions');
+  const kernelDispatch=pick(bootstrap,'r360_kernel_import_dispatch_context');
+  const kernelLastStatus=pick(bootstrap,'r360_kernel_import_last_status');
+  const kernelLastModule=pick(bootstrap,'r360_kernel_import_last_module');
+  const kernelLastOrdinal=pick(bootstrap,'r360_kernel_import_last_ordinal');
 
   const contextPtr=contextPtrFn()>>>0;
   const contextSize=contextSizeFn()>>>0;
@@ -49,6 +56,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   let records=new Map();
   let sliceCount=0;
   let nestedDispatches=0;
+  let kernelDispatches=0;
   let registryRefreshes=0;
 
   const bytes=()=>new Uint8Array(memory.buffer,contextPtr,contextSize);
@@ -66,6 +74,15 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   for(const [rawIndex,rawValue] of normalizeGprs(initialGprs)){
     if(rawValue===undefined||rawValue===null)continue;
     setGpr(Number(rawIndex),rawValue);
+  }
+
+  function kernelFailureDetail(target){
+    if(typeof kernelLastStatus!=='function')return '';
+    const status=kernelLastStatus()>>>0;
+    const module=typeof kernelLastModule==='function'?kernelLastModule()>>>0:0;
+    const ordinal=typeof kernelLastOrdinal==='function'?kernelLastOrdinal()>>>0:0;
+    if(!status&&!module&&!ordinal)return '';
+    return `_KERNEL_STATUS_${status}_MODULE_${module}_ORDINAL_0x${ordinal.toString(16).toUpperCase()}_TARGET_0x${target.toString(16).toUpperCase()}`;
   }
 
   async function refreshFunctions({force=false}={}){
@@ -93,10 +110,16 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       target>>>=0;ctx>>>=0;
       if(ctx!==contextPtr)throw new Error(`FAIL_CLOSED_PPC_CONTEXT_MISMATCH_0x${ctx.toString(16)}`);
       const callee=next.get(target);
-      if(!callee?.instance?.exports?.run)throw new Error(`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${target.toString(16)}`);
-      nestedDispatches++;
-      callee.instance.exports.run(ctx);
-      return 1;
+      if(callee?.instance?.exports?.run){
+        nestedDispatches++;
+        callee.instance.exports.run(ctx);
+        return 1;
+      }
+      if(typeof kernelDispatch==='function'&&(kernelDispatch(target,ctx)>>>0)===1){
+        kernelDispatches++;
+        return 1;
+      }
+      throw new Error(`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${target.toString(16)}${kernelFailureDetail(target)}`);
     };
     for(const record of next.values()){
       record.instance=await WebAssembly.instantiate(record.module,{env:{memory,guest_call}});
@@ -115,6 +138,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     if(!record?.instance?.exports?.run)throw new Error(`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${address.toString(16)}`);
     const generationBefore=record.generation;
     const dispatchBefore=nestedDispatches;
+    const kernelBefore=kernelDispatches;
     const result=BigInt.asUintN(64,record.instance.exports.run(contextPtr));
     sliceCount++;
     return {
@@ -125,6 +149,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       lr:getLr(),
       ctr:getCtr(),
       nestedDispatches:nestedDispatches-dispatchBefore,
+      kernelDispatches:kernelDispatches-kernelBefore,
       sliceCount,
       contextPtr,
     };
@@ -158,14 +183,15 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     refreshFunctions,runFunctionSlice,runFunctionSlices,yieldToBrowser,
     get sliceCount(){return sliceCount;},
     get nestedDispatches(){return nestedDispatches;},
+    get kernelDispatches(){return kernelDispatches;},
     get registryRefreshes(){return registryRefreshes;},
     get functionCount(){return records.size;},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,preemptionBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',unsupportedKernelImportsFailClosed:true,preemptionBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;
 }
 
 export function persistentPpcSessionContract(){
-  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly',cacheInvalidation:'Xenia executable page generation',browserYield:'between completed guest-function slices',failClosedUnknownTargets:true,midFunctionPreemption:false,fullXboxThreadScheduler:false};
+  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly',cacheInvalidation:'Xenia executable page generation',browserYield:'between completed guest-function slices',kernelImports:'live PPCContext dispatch when bootstrap export is present',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,midFunctionPreemption:false,fullXboxThreadScheduler:false};
 }

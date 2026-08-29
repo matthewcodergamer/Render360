@@ -1,4 +1,5 @@
 import { prepareRetailXexImage } from './retail-xex-image-pipeline.mjs';
+import { decodeXexImportLibraries } from './render360-xex-imports.mjs';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
@@ -9,6 +10,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
   const headerSize=be32(xex,8);
   if(headerSize<0x18||headerSize>xex.length)throw new Error('default.xex header size out of bounds');
+  const importedLibraries=decodeXexImportLibraries(xex);
   const header=xex.subarray(0,headerSize),body=xex.subarray(headerSize);
   const prepared=await prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey,useDevkitKey});
 
@@ -34,5 +36,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
   const runtimeBoundary=executionStatus===3?'guest-return':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
 
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary};
+  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries};
 }

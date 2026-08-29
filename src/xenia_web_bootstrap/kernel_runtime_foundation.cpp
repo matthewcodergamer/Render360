@@ -3,6 +3,12 @@
 
 #include "sparse_guest_memory.h"
 
+#if defined(__wasm__)
+#define R360_WASM_EXPORT(name) __attribute__((used, export_name(name)))
+#else
+#define R360_WASM_EXPORT(name)
+#endif
+
 namespace render360::xenia_web {
 namespace {
 
@@ -157,7 +163,8 @@ uint32_t CreateThread(uint32_t entry, uint32_t context, uint32_t stack_size,
     return 0;
   }
   if (!stack_size) stack_size = 0x4000u;
-  const uint64_t aligned64 = (uint64_t(stack_size) + 0x3FFFu) & ~uint64_t(0x3FFFu);
+  const uint64_t aligned64 =
+      (uint64_t(stack_size) + 0x3FFFu) & ~uint64_t(0x3FFFu);
   if (!aligned64 || aligned64 > kGuestStackMaxBytes) {
     g_runtime_status = kStatusInvalid;
     return 0;
@@ -403,7 +410,9 @@ uint32_t r360_guest_thread_create(uint32_t entry, uint32_t context,
                                   uint32_t stack_size, uint32_t flags) {
   return render360::xenia_web::CreateThread(entry, context, stack_size, flags);
 }
-uint32_t r360_guest_thread_current() { return render360::xenia_web::g_current_thread; }
+uint32_t r360_guest_thread_current() {
+  return render360::xenia_web::g_current_thread;
+}
 uint32_t r360_guest_thread_set_current(uint32_t handle) {
   return render360::xenia_web::SetCurrentThread(handle) ? 1u : 0u;
 }
@@ -427,14 +436,17 @@ uint32_t r360_guest_thread_exit_code(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->exit_code : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_entry")
 uint32_t r360_guest_thread_entry(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->entry : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_context")
 uint32_t r360_guest_thread_context(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->context : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_flags")
 uint32_t r360_guest_thread_flags(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->flags : 0u;
@@ -443,19 +455,24 @@ uint32_t r360_guest_thread_stack_size(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->stack_size : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_stack_base")
 uint32_t r360_guest_thread_stack_base(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->stack_base : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_stack_top")
 uint32_t r360_guest_thread_stack_top(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->stack_top : 0u;
 }
+R360_WASM_EXPORT("r360_guest_thread_stack_mapped")
 uint32_t r360_guest_thread_stack_mapped(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread && thread->stack_mapped ? 1u : 0u;
 }
-uint32_t r360_guest_runtime_status() { return render360::xenia_web::g_runtime_status; }
+uint32_t r360_guest_runtime_status() {
+  return render360::xenia_web::g_runtime_status;
+}
 
 uint32_t r360_guest_tls_alloc() { return render360::xenia_web::TlsAlloc(); }
 uint32_t r360_guest_tls_free(uint32_t slot) {
@@ -481,9 +498,17 @@ uint32_t r360_kernel_service_call(uint32_t module, uint32_t ordinal,
   return render360::xenia_web::ServiceCall(module, ordinal, r3, r4, r5, r6,
                                            r7, r8, r9, r10);
 }
-uint32_t r360_kernel_service_status() { return render360::xenia_web::g_service_status; }
-uint32_t r360_kernel_service_calls() { return render360::xenia_web::g_service_calls; }
-uint32_t r360_kernel_service_last_module() { return render360::xenia_web::g_last_module; }
-uint32_t r360_kernel_service_last_ordinal() { return render360::xenia_web::g_last_ordinal; }
+uint32_t r360_kernel_service_status() {
+  return render360::xenia_web::g_service_status;
+}
+uint32_t r360_kernel_service_calls() {
+  return render360::xenia_web::g_service_calls;
+}
+uint32_t r360_kernel_service_last_module() {
+  return render360::xenia_web::g_last_module;
+}
+uint32_t r360_kernel_service_last_ordinal() {
+  return render360::xenia_web::g_last_ordinal;
+}
 
 }  // extern "C"

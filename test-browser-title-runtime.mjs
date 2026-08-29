@@ -12,7 +12,9 @@ const memory=new WebAssembly.Memory({initial:1});const exports={memory};for(cons
 const check=validateBrowserBootstrap({exports});assert.equal(check.ok,true);assert.equal(check.memoryBytes,65536);
 const broken={exports:{memory,...Object.fromEntries(names.filter(n=>n!=='memory'&&n!=='r360_xenos_submit').map(n=>[n,()=>1]))}};
 assert.throws(()=>validateBrowserBootstrap(broken),/r360_xenos_submit/);
-const contract=browserTitleRuntimeContract();assert.equal(contract.bootstrapUrl,'./xenia_ppc_bootstrap.wasm');assert.equal(contract.wholeIsoCopy,false);assert.match(contract.input,/File\/Blob/);
+const stalePe={exports:{memory,...Object.fromEntries(names.filter(n=>n!=='memory'&&n!=='r360_xex_guest_mapper_reserve_input').map(n=>[n,()=>1]))}};
+assert.throws(()=>validateBrowserBootstrap(stalePe),/r360_xex_guest_mapper_reserve_input/);
+const contract=browserTitleRuntimeContract();assert.equal(contract.bootstrapUrl,'./xenia_ppc_bootstrap.wasm');assert.equal(contract.wholeIsoCopy,false);assert.match(contract.input,/File\/Blob/);assert.equal(contract.growablePreparedPeStaging,true);assert.equal(contract.maxPreparedPeStagingBytes,256*1024*1024);
 
 const xex=R360Buffer.alloc(0x200);xex.set(R360Buffer.from('XEX2','ascii'),0);xex.set([0,0,2,0],8);xex.set([0,0,0,0x20],0x10);const key=Uint8Array.from({length:16},(_,i)=>(0x80+i)&255);xex.set(key,0x20+0x150);assert.deepEqual([...extractXex2EncryptedImageKey(xex)],[...key]);
 const short=xex.slice(0,0x17f);assert.throws(()=>extractXex2EncryptedImageKey(short),/header size out of bounds|security info/);
@@ -20,5 +22,6 @@ const short=xex.slice(0,0x17f);assert.throws(()=>extractXex2EncryptedImageKey(sh
 console.log('BROWSER_TITLE_RUNTIME=PASS');
 console.log('BROWSER_BUFFER_COMPAT=PASS');
 console.log('BROWSER_BOOTSTRAP_EXPORT_CONTRACT=PASS');
+console.log('BROWSER_GROWABLE_PE_STAGING_CONTRACT=PASS');
 console.log('BROWSER_ISO_NO_WHOLE_COPY=PASS');
 console.log('BROWSER_XEX2_SECURITY_KEY=PASS');

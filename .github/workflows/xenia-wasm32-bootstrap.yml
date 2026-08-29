@@ -14,6 +14,7 @@ on:
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
       - 'test-xenia-lzx-wasm.mjs'
+      - 'test-xex-crypto-wasm.mjs'
       - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
@@ -102,6 +103,9 @@ jobs:
 
       - name: Verify upstream Xenia LZX decoder in wasm32
         run: node ./test-xenia-lzx-wasm.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify XEX session-key and AES-CBC semantics in wasm32
+        run: node ./test-xex-crypto-wasm.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify locked foundations and V36 XEX bring-up
         run: |

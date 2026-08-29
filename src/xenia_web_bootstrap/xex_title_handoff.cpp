@@ -1,6 +1,5 @@
 #include "xex_title_handoff.h"
 
-#include <array>
 #include <cstdint>
 
 #include "sparse_guest_memory.h"
@@ -8,7 +7,6 @@
 
 extern "C" {
 void r360_ppc_probe_reset();
-uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value);
 uint32_t r360_ppc_probe_input_buffer();
 uint32_t r360_ppc_probe_input_capacity();
 uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
@@ -22,35 +20,24 @@ uint32_t g_status = kPreparedEntryHandoffIdle;
 uint32_t g_entry = 0;
 uint32_t g_bytes = 0;
 uint32_t g_hir = 0;
-std::array<uint64_t, 32> g_initial_gprs{};
-std::array<bool, 32> g_initial_gpr_valid{};
+}  // namespace
 
-void ResetPreparedEntryResult() {
+void ResetPreparedEntryHandoff() {
   g_status = kPreparedEntryHandoffIdle;
   g_entry = 0;
   g_bytes = 0;
   g_hir = 0;
-}
-}  // namespace
-
-void ResetPreparedEntryHandoff() {
-  ResetPreparedEntryResult();
-  g_initial_gprs.fill(0);
-  g_initial_gpr_valid.fill(false);
-}
-
-bool SetPreparedEntryInitialGpr(uint32_t index, uint64_t value) {
-  if (index >= g_initial_gprs.size()) {
-    g_status = kPreparedEntryHandoffInvalidGpr;
-    return false;
-  }
-  g_initial_gprs[index] = value;
-  g_initial_gpr_valid[index] = true;
-  return true;
+  // Reset the execution probe here rather than inside TranslatePreparedPeEntry
+  // so callers may apply the real title startup register state after the
+  // handoff reset and before translation/execution begins.
+  r360_ppc_probe_reset();
 }
 
 uint32_t TranslatePreparedPeEntry(uint32_t byte_count) {
-  ResetPreparedEntryResult();
+  g_status = kPreparedEntryHandoffIdle;
+  g_entry = 0;
+  g_bytes = 0;
+  g_hir = 0;
   if (PreparedPeGuestLoadStatus() != kPeGuestPass) {
     g_status = kPreparedEntryHandoffInvalidState;
     return 0;
@@ -69,14 +56,6 @@ uint32_t TranslatePreparedPeEntry(uint32_t byte_count) {
     return 0;
   }
 
-  r360_ppc_probe_reset();
-  for (uint32_t i = 0; i < g_initial_gprs.size(); ++i) {
-    if (g_initial_gpr_valid[i] &&
-        !r360_ppc_probe_set_initial_gpr(i, g_initial_gprs[i])) {
-      g_status = kPreparedEntryHandoffInvalidGpr;
-      return 0;
-    }
-  }
   const uint32_t loaded = r360_ppc_probe_load_at(entry, input, byte_count);
   if (loaded != byte_count) {
     g_status = kPreparedEntryHandoffLoadFailed;
@@ -106,9 +85,6 @@ uint32_t PreparedEntryHandoffHIRInstructions() { return g_hir; }
 extern "C" {
 void r360_title_handoff_reset() {
   render360::xenia_web::ResetPreparedEntryHandoff();
-}
-uint32_t r360_title_handoff_set_initial_gpr(uint32_t index, uint64_t value) {
-  return render360::xenia_web::SetPreparedEntryInitialGpr(index, value) ? 1u : 0u;
 }
 uint32_t r360_title_handoff_translate_entry(uint32_t byte_count) {
   return render360::xenia_web::TranslatePreparedPeEntry(byte_count);

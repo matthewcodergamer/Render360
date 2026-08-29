@@ -24,10 +24,17 @@
 extern "C" uint32_t r360_ppc_probe_guest_base();
 extern "C" uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 
+#if defined(__wasm__)
+#define R360_WASM_EXPORT(name) __attribute__((used, export_name(name)))
+#else
+#define R360_WASM_EXPORT(name)
+#endif
+
 namespace render360::xenia_web {
 namespace {
 ProbeTelemetry g_probe_telemetry;
 ProbeBackend* g_probe_backend = nullptr;
+bool g_execute_correctness_on_assemble = true;
 constexpr uint32_t kProbeGuestSize = 64u * 1024u;
 
 bool IsInActiveProbeWindow(uint32_t address) {
@@ -97,6 +104,12 @@ bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAd
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
 const ProbeTelemetry& GetProbeTelemetry() { return g_probe_telemetry; }
+void SetProbeExecuteCorrectnessOnAssemble(bool enabled) {
+  g_execute_correctness_on_assemble = enabled;
+}
+bool GetProbeExecuteCorrectnessOnAssemble() {
+  return g_execute_correctness_on_assemble;
+}
 ProbeGuestFunction::ProbeGuestFunction(xe::cpu::Module* module, uint32_t address) : xe::cpu::GuestFunction(module, address) {}
 ProbeGuestFunction::~ProbeGuestFunction() = default;
 bool ProbeGuestFunction::CallImpl(xe::cpu::ThreadState*, uint32_t) { return false; }
@@ -106,6 +119,8 @@ ProbeAssembler::~ProbeAssembler() = default;
 bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HIRBuilder* builder,
                               uint32_t, std::unique_ptr<xe::cpu::FunctionDebugInfo> debug_info) {
   const bool nested_execution = IsHIRCorrectnessExecutionActive();
+  const bool execute_correctness =
+      nested_execution || GetProbeExecuteCorrectnessOnAssemble();
   uint32_t block_count = 0, instruction_count = 0;
   for (auto* block = builder->first_block(); block; block = block->next) {
     const uint32_t block_index = block_count++;
@@ -147,15 +162,31 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
                  GetWasmBackendVmxProbeNativeSimdOps(), GetWasmBackendVmxProbeScalarizedLaneOps());
   }
 
-  const auto correctness = ExecuteHIRCorrectnessProbe(builder, memory);
+  HIRCorrectnessResult correctness;
+  if (execute_correctness) {
+    correctness = ExecuteHIRCorrectnessProbe(builder, memory);
+  } else {
+    // Production browser translation must be side-effect-free. Register/lower
+    // the generated function, but leave execution to the persistent scheduler.
+    correctness.supported = true;
+  }
   if (!nested_execution) {
     g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
     g_probe_telemetry.correctness_r3 = correctness.r3;
-    g_probe_telemetry.correctness_status = !correctness.supported ? 1u : (!correctness.reached_return_boundary ? 2u : 3u);
+    g_probe_telemetry.correctness_status =
+        !execute_correctness ? 4u
+                             : (!correctness.supported
+                                    ? 1u
+                                    : (!correctness.reached_return_boundary ? 2u
+                                                                           : 3u));
   }
-  std::fprintf(stderr, "R360_EXEC%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
-               nested_execution ? "_NESTED" : "", correctness.supported ? (correctness.reached_return_boundary ? 3u : 2u) : 1u,
-               correctness.instructions_executed, static_cast<unsigned long long>(correctness.r3), correctness.reached_return_boundary ? 1u : 0u);
+  std::fprintf(stderr, "R360_EXEC%s mode=%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
+               nested_execution ? "_NESTED" : "",
+               execute_correctness ? "execute" : "translate-only",
+               !execute_correctness ? 4u : (correctness.supported ? (correctness.reached_return_boundary ? 3u : 2u) : 1u),
+               correctness.instructions_executed,
+               static_cast<unsigned long long>(correctness.r3),
+               correctness.reached_return_boundary ? 1u : 0u);
   if (function && debug_info) function->set_debug_info(std::move(debug_info));
   if (nested_execution) return correctness.supported && correctness.reached_return_boundary;
   return true;
@@ -185,4 +216,13 @@ uint32_t r360_ppc_probe_last_guest_address(){return render360::xenia_web::GetPro
 uint32_t r360_ppc_probe_correctness_status(){return render360::xenia_web::GetProbeTelemetry().correctness_status;}
 uint32_t r360_ppc_probe_correctness_instructions(){return render360::xenia_web::GetProbeTelemetry().correctness_instructions;}
 uint64_t r360_ppc_probe_correctness_r3(){return render360::xenia_web::GetProbeTelemetry().correctness_r3;}
+R360_WASM_EXPORT("r360_ppc_probe_set_execute_on_translate")
+uint32_t r360_ppc_probe_set_execute_on_translate(uint32_t enabled){
+  render360::xenia_web::SetProbeExecuteCorrectnessOnAssemble(enabled != 0);
+  return render360::xenia_web::GetProbeExecuteCorrectnessOnAssemble() ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_ppc_probe_execute_on_translate")
+uint32_t r360_ppc_probe_execute_on_translate(){
+  return render360::xenia_web::GetProbeExecuteCorrectnessOnAssemble() ? 1u : 0u;
+}
 }

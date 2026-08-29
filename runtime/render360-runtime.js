@@ -10,20 +10,43 @@ const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart
 const RENDER360_RELEASE=44;
 const REQUIRED_CORE_BUILD=30;
 const REQUIRED_ABI=0x00030002;
+const DIAGNOSTIC_EXTRACT_PERCENT_STEP=5;
 
 export class Render360Runtime extends EventTarget{
   constructor(){
     super();this.core=new Render360Core();this.ready=false;this.sources=new Map();this.currentGame=null;this.launchConfig={};
     this.telemetryTimer=0;this.frameTimes=[];this.lastGeneration=null;this.lastFrameAt=0;this.backend='WASM';
     this.workerStats={hz:0,ticks:0,work:0};
+    this.debugExtractProgress={total:0,bucket:-1,message:''};
     this.inputHost=new RuntimeHost((level,message)=>this.emit('log',{level,message}),stats=>{this.workerStats=stats;this.emit('workerTelemetry',stats);});
+  }
+  shouldMirrorDiagnosticEvent(type,detail={}){
+    if(type!=='bootStage')return true;
+    const stage=String(detail?.stage||'').toLowerCase();
+    if(stage==='launch'){
+      this.debugExtractProgress={total:0,bucket:-1,message:''};
+      return true;
+    }
+    if(stage!=='extract')return true;
+    const done=Number(detail?.done),total=Number(detail?.total),message=String(detail?.message||'');
+    if(!Number.isFinite(done)||!Number.isFinite(total)||total<=0)return true;
+    const progress=this.debugExtractProgress;
+    if(progress.total!==total){progress.total=total;progress.bucket=-1;progress.message='';}
+    const percent=Math.min(100,Math.max(0,(done/total)*100));
+    const bucket=Math.floor(percent/DIAGNOSTIC_EXTRACT_PERCENT_STEP);
+    const complete=done>=total;
+    const messageChanged=message!==progress.message;
+    if(!complete&&!messageChanged&&bucket===progress.bucket)return false;
+    progress.bucket=bucket;progress.message=message;
+    return true;
   }
   emit(type,detail={}){
     this.dispatchEvent(new CustomEvent(type,{detail}));
-    // Mirror every emulator event onto window so diagnostics can subscribe
-    // without reaching into the private app/runtime instance. This is the
-    // stable observability bus used by the V44 developer console.
-    try{globalThis.dispatchEvent(new CustomEvent(`render360:${type}`,{detail}));}catch{}
+    // Mirror emulator events onto window so diagnostics can subscribe without
+    // reaching into the private app/runtime instance. High-frequency extraction
+    // progress is compacted to 5% milestones only on this diagnostic mirror;
+    // internal runtime/UI listeners still receive every native progress event.
+    try{if(this.shouldMirrorDiagnosticEvent(type,detail))globalThis.dispatchEvent(new CustomEvent(`render360:${type}`,{detail}));}catch{}
   }
   async init(){
     this.emit('bootStage',{stage:'core',message:'Starting Render360 runtime…'});

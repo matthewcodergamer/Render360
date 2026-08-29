@@ -85,12 +85,19 @@ export async function markPlayed(id){
 }
 
 export function sourceKindFromName(name=''){
-  const lower=String(name).toLowerCase();
+  const lower=String(name).trim().toLowerCase();
   if(lower.endsWith('.zip'))return 'zip';
   if(lower.endsWith('.iso'))return 'iso';
   if(lower.endsWith('.xex'))return 'xex';
   if(lower.endsWith('.live'))return 'live';
   if(lower.endsWith('.pirs'))return 'pirs';
   if(lower.endsWith('.con'))return 'con';
+  // Xbox Live / STFS content is commonly stored on FATX-style media and shared
+  // from iOS Files using its 40-hex content filename with no extension. Treat
+  // that canonical content-addressed filename as an STFS package instead of
+  // rejecting a previously identified CON library entry as UNKNOWN. The core
+  // still validates the package magic and metadata before execution.
+  const base=lower.split(/[\\/]/).pop()||'';
+  if(/^[0-9a-f]{40}$/.test(base))return 'con';
   return 'unknown';
 }

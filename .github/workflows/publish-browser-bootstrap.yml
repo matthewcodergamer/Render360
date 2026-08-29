@@ -19,7 +19,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 1
+          fetch-depth: 0
+      - name: Refuse stale runtime artifacts
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          # Browser/UI-only commits made while the long build runs are fine.
+          # Any change to the actual Xenia/WASM runtime closure means this
+          # artifact is stale and must never overwrite a later verified build.
+          if ! git diff --quiet "$SOURCE_SHA"..HEAD -- \
+            build-xenia-ppc-bootstrap.sh \
+            link-xenia-ppc-bootstrap.sh \
+            'prepare-*-overlay.py' \
+            src/xenia_web_bootstrap \
+            src/xenia_web_shims \
+            xenia_port \
+            render360_xenia_core.cpp \
+            render360_xenia_core_v32.cpp \
+            build-core.sh; then
+            echo "Refusing stale bootstrap: runtime source changed after $SOURCE_SHA"
+            exit 78
+          fi
       - name: Download verified bootstrap artifact
         uses: actions/download-artifact@v4
         with:

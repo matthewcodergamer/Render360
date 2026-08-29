@@ -21,6 +21,11 @@ constexpr uint32_t kGpuMmioBase = 0x7FC80000u;
 constexpr uint32_t kGpuMmioMask = 0xFFFF0000u;
 constexpr uint32_t kRegisterCpRbRptr = 0x01C4u;
 constexpr uint32_t kRegisterCpRbWptr = 0x01C5u;
+constexpr uint32_t kRegisterShaderConstantFetch00_0 = 0x4800u;
+constexpr uint32_t kPm4XeSwap = 0x64u;
+constexpr uint32_t kSwapSignature = 0x50415753u;
+constexpr uint32_t kVdSwapCommandWords = 64u;
+constexpr uint32_t kTextureFetchWords = 6u;
 
 // Runtime status is intentionally monotonic for bring-up telemetry.
 // 0 idle, 1 ring initialized, 2 write pointer observed, 3 ring word readable.
@@ -36,6 +41,12 @@ uint32_t g_xenos_submissions = 0;
 uint32_t g_xenos_rejections = 0;
 uint32_t g_last_xenos_status = 0;
 uint32_t g_last_xenos_fault_word = 0;
+uint32_t g_vd_swap_calls = 0;
+uint32_t g_vd_swap_failures = 0;
+uint32_t g_last_vd_swap_buffer = 0;
+uint32_t g_last_vd_swap_frontbuffer = 0;
+uint32_t g_last_vd_swap_width = 0;
+uint32_t g_last_vd_swap_height = 0;
 
 bool IsGpuMmio(uint32_t address) {
   return (address & kGpuMmioMask) == kGpuMmioBase;
@@ -43,6 +54,112 @@ bool IsGpuMmio(uint32_t address) {
 
 uint32_t RegisterIndex(uint32_t address) {
   return (address & 0xFFFFu) / 4u;
+}
+
+uint32_t MakePacketType0(uint32_t index, uint32_t count) {
+  return count && count <= 0x4000u && index <= 0x7FFFu
+             ? (((count - 1u) & 0x3FFFu) << 16u) | index
+             : 0u;
+}
+
+uint32_t MakePacketType3(uint32_t opcode, uint32_t count) {
+  return count && count <= 0x4000u
+             ? (3u << 30u) | (((count - 1u) & 0x3FFFu) << 16u) |
+                   ((opcode & 0x7Fu) << 8u)
+             : 0u;
+}
+
+bool ReadGuestU32BE(uint32_t address, uint32_t* out_value) {
+  if (!out_value || address > 0xFFFFFFFCu) return false;
+  uint8_t bytes[4] = {};
+  if (!ReadSparseGuestMemory(address, bytes, sizeof(bytes))) return false;
+  *out_value = (uint32_t(bytes[0]) << 24u) |
+               (uint32_t(bytes[1]) << 16u) |
+               (uint32_t(bytes[2]) << 8u) | uint32_t(bytes[3]);
+  return true;
+}
+
+bool WriteGuestU32BE(uint32_t address, uint32_t value) {
+  if (address > 0xFFFFFFFCu) return false;
+  const uint8_t bytes[4] = {static_cast<uint8_t>(value >> 24u),
+                            static_cast<uint8_t>(value >> 16u),
+                            static_cast<uint8_t>(value >> 8u),
+                            static_cast<uint8_t>(value)};
+  return WriteSparseGuestMemory(address, bytes, sizeof(bytes));
+}
+
+bool WriteVdSwapCommandBuffer(uint32_t buffer_ptr, uint32_t fetch_ptr,
+                              uint32_t frontbuffer_ptr_ptr,
+                              uint32_t texture_format_ptr,
+                              uint32_t color_space_ptr) {
+  if (!buffer_ptr || !fetch_ptr || !frontbuffer_ptr_ptr ||
+      !texture_format_ptr || !color_space_ptr) {
+    ++g_vd_swap_failures;
+    return false;
+  }
+
+  uint32_t fetch[kTextureFetchWords] = {};
+  for (uint32_t i = 0; i < kTextureFetchWords; ++i) {
+    const uint64_t address = uint64_t(fetch_ptr) + uint64_t(i) * 4u;
+    if (address > 0xFFFFFFFCull ||
+        !ReadGuestU32BE(static_cast<uint32_t>(address), &fetch[i])) {
+      ++g_vd_swap_failures;
+      return false;
+    }
+  }
+
+  // Xenia VdSwap receives the D3D9 texture-header fetch containing a virtual
+  // frontbuffer address. Render360's current bounded physical model is identity
+  // mapped, matching MmGetPhysicalAddress in this runtime, so the fetch address
+  // is already the GPU-visible address used by the ring packet.
+  const uint32_t frontbuffer_address = fetch[1] & 0xFFFFF000u;
+  const uint32_t width = (fetch[2] & 0x1FFFu) + 1u;
+  const uint32_t height = ((fetch[2] >> 13u) & 0x1FFFu) + 1u;
+  const uint32_t fetch_type = fetch[0] & 3u;
+  const uint32_t fetch_format = fetch[1] & 0x3Fu;
+  uint32_t declared_frontbuffer = 0;
+  uint32_t declared_format = 0;
+  uint32_t color_space = 0;
+  if (fetch_type != 2u || !frontbuffer_address || !width || !height ||
+      width > 8192u || height > 8192u ||
+      !ReadGuestU32BE(frontbuffer_ptr_ptr, &declared_frontbuffer) ||
+      !ReadGuestU32BE(texture_format_ptr, &declared_format) ||
+      !ReadGuestU32BE(color_space_ptr, &color_space) ||
+      declared_frontbuffer != frontbuffer_address ||
+      declared_format != fetch_format || color_space != 0u) {
+    ++g_vd_swap_failures;
+    return false;
+  }
+
+  uint32_t command[kVdSwapCommandWords] = {};
+  uint32_t offset = 0;
+  command[offset++] =
+      MakePacketType0(kRegisterShaderConstantFetch00_0, kTextureFetchWords);
+  for (uint32_t i = 0; i < kTextureFetchWords; ++i) {
+    command[offset++] = fetch[i];
+  }
+  command[offset++] = MakePacketType3(kPm4XeSwap, 4u);
+  command[offset++] = kSwapSignature;
+  command[offset++] = frontbuffer_address;
+  command[offset++] = width;
+  command[offset++] = height;
+  while (offset < kVdSwapCommandWords) command[offset++] = 0x80000000u;
+
+  for (uint32_t i = 0; i < kVdSwapCommandWords; ++i) {
+    const uint64_t address = uint64_t(buffer_ptr) + uint64_t(i) * 4u;
+    if (address > 0xFFFFFFFCull ||
+        !WriteGuestU32BE(static_cast<uint32_t>(address), command[i])) {
+      ++g_vd_swap_failures;
+      return false;
+    }
+  }
+
+  ++g_vd_swap_calls;
+  g_last_vd_swap_buffer = buffer_ptr;
+  g_last_vd_swap_frontbuffer = frontbuffer_address;
+  g_last_vd_swap_width = width;
+  g_last_vd_swap_height = height;
+  return true;
 }
 
 uint32_t RingBytesInternal() {
@@ -151,13 +268,19 @@ void ResetTitleGpuRuntime() {
   g_xenos_rejections = 0;
   g_last_xenos_status = 0;
   g_last_xenos_fault_word = 0;
+  g_vd_swap_calls = 0;
+  g_vd_swap_failures = 0;
+  g_last_vd_swap_buffer = 0;
+  g_last_vd_swap_frontbuffer = 0;
+  g_last_vd_swap_width = 0;
+  g_last_vd_swap_height = 0;
   r360_xenos_reset();
 }
 
 bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
                               uint32_t r3, uint32_t r4, uint32_t,
-                              uint32_t, uint32_t, uint32_t,
-                              uint32_t, uint32_t, uint32_t* result) {
+                              uint32_t, uint32_t, uint32_t r8,
+                              uint32_t r9, uint32_t r10, uint32_t* result) {
   if (!result || module != kModuleXboxkrnl) return false;
   switch (ordinal) {
     case 0x00BE:  // MmGetPhysicalAddress - identity in the bounded web VM.
@@ -190,6 +313,10 @@ bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
       return true;
     case 0x01D3:  // VdSetDisplayMode
     case 0x01D4:  // VdSetDisplayModeOverride
+      *result = 0;
+      return true;
+    case 0x025B:  // VdSwap - emit the same 64-dword primary-ring handoff as Xenia.
+      if (!WriteVdSwapCommandBuffer(r3, r4, r8, r9, r10)) return false;
       *result = 0;
       return true;
     default:
@@ -243,6 +370,12 @@ uint32_t TitleGpuReadPointerBlockSizeLog2() {
 }
 uint32_t TitleGpuMmioWrites() { return g_mmio_writes; }
 uint32_t TitleGpuStatus() { return g_status; }
+uint32_t TitleGpuVdSwapCalls() { return g_vd_swap_calls; }
+uint32_t TitleGpuVdSwapFailures() { return g_vd_swap_failures; }
+uint32_t TitleGpuLastVdSwapBuffer() { return g_last_vd_swap_buffer; }
+uint32_t TitleGpuLastVdSwapFrontbuffer() { return g_last_vd_swap_frontbuffer; }
+uint32_t TitleGpuLastVdSwapWidth() { return g_last_vd_swap_width; }
+uint32_t TitleGpuLastVdSwapHeight() { return g_last_vd_swap_height; }
 
 uint32_t TitleGpuRingWord(uint32_t index, bool* ok) {
   if (ok) *ok = false;
@@ -284,6 +417,24 @@ uint32_t r360_title_gpu_mmio_writes() {
 }
 uint32_t r360_title_gpu_status() {
   return render360::xenia_web::TitleGpuStatus();
+}
+uint32_t r360_title_gpu_vd_swap_calls() {
+  return render360::xenia_web::TitleGpuVdSwapCalls();
+}
+uint32_t r360_title_gpu_vd_swap_failures() {
+  return render360::xenia_web::TitleGpuVdSwapFailures();
+}
+uint32_t r360_title_gpu_last_vd_swap_buffer() {
+  return render360::xenia_web::TitleGpuLastVdSwapBuffer();
+}
+uint32_t r360_title_gpu_last_vd_swap_frontbuffer() {
+  return render360::xenia_web::TitleGpuLastVdSwapFrontbuffer();
+}
+uint32_t r360_title_gpu_last_vd_swap_width() {
+  return render360::xenia_web::TitleGpuLastVdSwapWidth();
+}
+uint32_t r360_title_gpu_last_vd_swap_height() {
+  return render360::xenia_web::TitleGpuLastVdSwapHeight();
 }
 uint32_t r360_title_gpu_ring_word(uint32_t index, uint32_t* out_value) {
   if (!out_value) return 0u;

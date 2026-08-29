@@ -8,6 +8,7 @@ on:
       - 'render360-webgpu-xenos.mjs'
       - 'test-xenos-semantic-foundation.mjs'
       - 'test-webgpu-wgsl-edram-foundation.mjs'
+      - 'test-xenos-harsh-critic.mjs'
       - '.github/workflows/xenos-foundations.yml'
   workflow_dispatch:
 
@@ -33,6 +34,8 @@ jobs:
         run: node ./test-xenos-semantic-foundation.mjs build/xenos/xenos_foundation.wasm
       - name: Verify WebGPU WGSL and Xenos frame upload bridge
         run: node ./test-webgpu-wgsl-edram-foundation.mjs
+      - name: 'Harsh critic: Xenos bounds deterministic frame and fail-closed behavior'
+        run: node ./test-xenos-harsh-critic.mjs build/xenos/xenos_foundation.wasm
       - name: Upload Xenos foundation wasm
         if: always()
         uses: actions/upload-artifact@v4

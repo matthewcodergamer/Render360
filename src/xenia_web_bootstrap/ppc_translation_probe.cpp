@@ -5,6 +5,7 @@
 
 #include "hir_correctness_executor.h"
 #include "probe_backend.h"
+#include "sparse_guest_memory.h"
 #include "wasm_backend_call_probe.h"
 #include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
@@ -15,6 +16,7 @@ namespace render360::xenia_web {
 namespace {
 constexpr uint32_t kDefaultProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeMaxBytes = 64u * 1024u;
+constexpr uint32_t kSparsePageBytes = 4096u;
 alignas(16) uint8_t g_input_buffer[kProbeMaxBytes] = {};
 uint32_t g_active_guest_base = kDefaultProbeGuestBase;
 
@@ -123,6 +125,47 @@ uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
   g_status = kProbeCodeLoaded;
   return length;
 }
+
+uint32_t PageSparseCodeWindow(uint32_t target_address) {
+  if ((target_address & 3u) || !EnsureRuntime()) return 0;
+
+  // Keep the target on the first 4 KiB page so the PPC scanner has as much
+  // forward room as possible. Real XEX sections are already mapped into the
+  // authoritative sparse 32-bit guest address space by the PE loader.
+  const uint32_t window_base = target_address & ~(kSparsePageBytes - 1u);
+  if (uint64_t(window_base) + kProbeMaxBytes > 0x100000000ull) return 0;
+
+  // A nested guest call may move the one physical wasm32 code backing window.
+  // Emitted caller HIR no longer depends on its instruction bytes; title data
+  // accesses use sparse-memory fallback, so the window can safely follow the
+  // next real executable target without allocating a desktop-sized 4 GiB heap.
+  g_active_guest_base = window_base;
+  uint8_t* guest = g_memory->TranslateVirtual<uint8_t*>(window_base);
+  if (!guest) return 0;
+  std::memset(guest, 0, kProbeMaxBytes);
+
+  uint32_t loaded = 0;
+  for (uint32_t offset = 0; offset < kProbeMaxBytes;
+       offset += kSparsePageBytes) {
+    if (!ReadSparseGuestMemory(window_base + offset, guest + offset,
+                               kSparsePageBytes)) {
+      // The target page itself must exist. A later hole merely terminates the
+      // executable window and leaves zero-filled guard bytes after it.
+      if (offset == 0) return 0;
+      break;
+    }
+    loaded += kSparsePageBytes;
+  }
+  if (!loaded || target_address >= window_base + loaded) return 0;
+
+  // This is a host-window relocation, not a title code mutation, so don't bump
+  // sparse executable content generations. We still evict generated functions
+  // whose backing window may now point at different title bytes.
+  InvalidateWasmBackendExecutableRange(window_base, loaded);
+  g_loaded_size = loaded;
+  g_status = kProbeCodeLoaded;
+  return loaded;
+}
 }  // namespace
 }  // namespace render360::xenia_web
 
@@ -147,23 +190,39 @@ uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value) {
 
 uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
   using namespace render360::xenia_web;
-  if (!EnsureRuntime() || !IsProbeGuestRange(address, 4)) return 0;
-  auto* guest = g_memory->TranslateVirtual<uint8_t*>(address);
-  if (!guest) return 0;
-  guest[0] = static_cast<uint8_t>(value >> 24);
-  guest[1] = static_cast<uint8_t>(value >> 16);
-  guest[2] = static_cast<uint8_t>(value >> 8);
-  guest[3] = static_cast<uint8_t>(value);
-  return 1;
+  if (!EnsureRuntime()) return 0;
+  if (IsProbeGuestRange(address, 4)) {
+    auto* guest = g_memory->TranslateVirtual<uint8_t*>(address);
+    if (guest) {
+      guest[0] = static_cast<uint8_t>(value >> 24);
+      guest[1] = static_cast<uint8_t>(value >> 16);
+      guest[2] = static_cast<uint8_t>(value >> 8);
+      guest[3] = static_cast<uint8_t>(value);
+      WriteSparseGuestMemory(address, guest, 4);
+      return 1;
+    }
+  }
+  const uint8_t bytes[4] = {static_cast<uint8_t>(value >> 24),
+                            static_cast<uint8_t>(value >> 16),
+                            static_cast<uint8_t>(value >> 8),
+                            static_cast<uint8_t>(value)};
+  return WriteSparseGuestMemory(address, bytes, sizeof(bytes)) ? 1u : 0u;
 }
 
 uint32_t r360_ppc_probe_read_guest_u32_be(uint32_t address) {
   using namespace render360::xenia_web;
-  if (!EnsureRuntime() || !IsProbeGuestRange(address, 4)) return 0;
-  const auto* guest = g_memory->TranslateVirtual<const uint8_t*>(address);
-  if (!guest) return 0;
-  return (uint32_t(guest[0]) << 24) | (uint32_t(guest[1]) << 16) |
-         (uint32_t(guest[2]) << 8) | uint32_t(guest[3]);
+  if (!EnsureRuntime()) return 0;
+  if (IsProbeGuestRange(address, 4)) {
+    const auto* guest = g_memory->TranslateVirtual<const uint8_t*>(address);
+    if (guest) {
+      return (uint32_t(guest[0]) << 24) | (uint32_t(guest[1]) << 16) |
+             (uint32_t(guest[2]) << 8) | uint32_t(guest[3]);
+    }
+  }
+  uint8_t bytes[4] = {};
+  if (!ReadSparseGuestMemory(address, bytes, sizeof(bytes))) return 0;
+  return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
+         (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
 }
 
 uint32_t r360_ppc_probe_input_buffer() {
@@ -178,6 +237,10 @@ uint32_t r360_ppc_probe_input_capacity() {
 uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
                                 uint32_t length) {
   return render360::xenia_web::LoadAt(address, bytes, length);
+}
+
+uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address) {
+  return render360::xenia_web::PageSparseCodeWindow(target_address);
 }
 
 uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {

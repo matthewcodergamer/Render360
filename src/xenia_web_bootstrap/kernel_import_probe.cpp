@@ -8,35 +8,35 @@ struct KernelImportEntry {
   uint32_t thunk_address = 0;
   uint32_t module_id = 0;
   uint32_t ordinal = 0;
-  uint32_t r3_result = 0;
+  uint32_t abi_target = 0;
   bool implemented = false;
   bool used = false;
 };
 constexpr uint32_t kMaxKernelImports = 256;
 std::array<KernelImportEntry, kMaxKernelImports> g_entries{};
 uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
-         g_last_ordinal = 0, g_last_status = 0;
+         g_last_ordinal = 0, g_last_status = 0, g_last_abi_target = 0;
 }  // namespace
 
 void ResetKernelImportProbe() {
   g_entries = {}; g_count = g_calls = g_last_thunk = g_last_module =
-      g_last_ordinal = g_last_status = 0;
+      g_last_ordinal = g_last_status = g_last_abi_target = 0;
 }
 bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
                                uint32_t ordinal, bool implemented,
-                               uint32_t r3_result) {
+                               uint32_t abi_target) {
   if (!thunk_address || !module_id || ordinal > 0xFFFFu) return false;
   for (auto& entry : g_entries) {
     if (entry.used && entry.thunk_address == thunk_address) {
       entry.module_id = module_id; entry.ordinal = ordinal;
-      entry.implemented = implemented; entry.r3_result = r3_result; return true;
+      entry.implemented = implemented; entry.abi_target = abi_target; return true;
     }
   }
   for (auto& entry : g_entries) {
     if (!entry.used) {
       entry.used = true; entry.thunk_address = thunk_address;
       entry.module_id = module_id; entry.ordinal = ordinal;
-      entry.implemented = implemented; entry.r3_result = r3_result;
+      entry.implemented = implemented; entry.abi_target = abi_target;
       ++g_count; return true;
     }
   }
@@ -46,11 +46,13 @@ bool ResolveKernelImportThunk(uint32_t thunk_address) {
   for (const auto& entry : g_entries) {
     if (!entry.used || entry.thunk_address != thunk_address) continue;
     ++g_calls; g_last_thunk = entry.thunk_address; g_last_module = entry.module_id;
-    g_last_ordinal = entry.ordinal;
+    g_last_ordinal = entry.ordinal; g_last_abi_target = entry.abi_target;
     if (!entry.implemented) { g_last_status = 2; return false; }
-    // The first HLE bridge contract is control-flow dispatch. Return-value ABI
-    // mutation is deliberately a separate contract so the locked Run-351 HIR
-    // executor remains byte-for-byte unchanged.
+    // A zero ABI target preserves the locked control-flow-only bridge. A
+    // non-zero target asks ProbeBackend to execute a bounded ABI critic through
+    // the same active PPCContext as the translated caller. This lets CI prove
+    // argument registers, guest-memory access, r3 return state and continuation
+    // without introducing blanket-success kernel stubs.
     g_last_status = 1; return true;
   }
   return false;
@@ -61,6 +63,8 @@ uint32_t KernelImportProbeLastThunk() { return g_last_thunk; }
 uint32_t KernelImportProbeLastModule() { return g_last_module; }
 uint32_t KernelImportProbeLastOrdinal() { return g_last_ordinal; }
 uint32_t KernelImportProbeLastStatus() { return g_last_status; }
+uint32_t KernelImportProbeLastAbiTarget() { return g_last_abi_target; }
+void MarkKernelImportProbeAbiFailure() { g_last_status = 3; }
 }  // namespace render360::xenia_web
 
 extern "C" {

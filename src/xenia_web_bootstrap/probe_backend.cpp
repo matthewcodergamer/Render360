@@ -35,8 +35,22 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   // window, but a known HLE import is an external call boundary, not guest code
   // that should be scanned from the probe window.
   if (ResolveKernelImportThunk(address)) {
-    std::fprintf(stderr, "R360_KERNEL_IMPORT resolved target=0x%08X module=%u ordinal=0x%X\n",
-                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal());
+    const uint32_t abi_target = KernelImportProbeLastAbiTarget();
+    std::fprintf(stderr, "R360_KERNEL_IMPORT resolved target=0x%08X module=%u ordinal=0x%X abi_target=0x%08X\n",
+                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal(), abi_target);
+    if (abi_target) {
+      if (abi_target == address) {
+        MarkKernelImportProbeAbiFailure();
+        return false;
+      }
+      // The ABI critic is translated as nested PPC and therefore executes on
+      // the same active PPCContext as the caller. It can consume r3..r10,
+      // touch validated guest memory through the normal HIR load/store path,
+      // write the return value into r3, return, and let the caller continue.
+      const bool abi_ok = TranslateNestedGuestAddress(abi_target, module);
+      if (!abi_ok) MarkKernelImportProbeAbiFailure();
+      return abi_ok;
+    }
     return true;
   }
   if (KernelImportProbeLastThunk() == address && KernelImportProbeLastStatus() == 2) {

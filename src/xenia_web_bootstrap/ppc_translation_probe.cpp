@@ -13,9 +13,10 @@
 
 namespace render360::xenia_web {
 namespace {
-constexpr uint32_t kProbeGuestBase = 0x80000000u;
+constexpr uint32_t kDefaultProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeMaxBytes = 64u * 1024u;
 alignas(16) uint8_t g_input_buffer[kProbeMaxBytes] = {};
+uint32_t g_active_guest_base = kDefaultProbeGuestBase;
 
 class ProbeModule final : public xe::cpu::Module {
  public:
@@ -28,8 +29,8 @@ class ProbeModule final : public xe::cpu::Module {
   }
   bool is_executable() const override { return true; }
   bool ContainsAddress(uint32_t address) override {
-    return address >= kProbeGuestBase &&
-           uint64_t(address) < uint64_t(kProbeGuestBase) + kProbeMaxBytes;
+    return address >= g_active_guest_base &&
+           uint64_t(address) < uint64_t(g_active_guest_base) + kProbeMaxBytes;
   }
 
  protected:
@@ -85,9 +86,37 @@ bool EnsureRuntime() {
 }
 
 bool IsProbeGuestRange(uint32_t address, uint32_t size) {
-  if (!size || address < kProbeGuestBase) return false;
+  if (!size || address < g_active_guest_base) return false;
   uint64_t end = uint64_t(address) + size;
-  return end <= uint64_t(kProbeGuestBase) + kProbeMaxBytes;
+  return end <= uint64_t(g_active_guest_base) + kProbeMaxBytes &&
+         end <= 0x100000000ull;
+}
+
+uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
+  if (!bytes || !length || length > kProbeMaxBytes || (length & 3u) ||
+      (address & 3u) || uint64_t(address) + length > 0x100000000ull) {
+    g_status = kProbeErrorInput;
+    return 0;
+  }
+  if (!EnsureRuntime()) return 0;
+  g_active_guest_base = address;
+  if (!IsProbeGuestRange(address, length)) {
+    g_status = kProbeErrorInput;
+    return 0;
+  }
+
+  uint8_t* guest = g_memory->TranslateVirtual<uint8_t*>(address);
+  if (!guest) {
+    g_status = kProbeErrorMemory;
+    return 0;
+  }
+  // Loading executable bytes is a code mutation. Version the affected pages
+  // and evict generated guest functions before the new bytes become visible.
+  InvalidateWasmBackendExecutableRange(address, length);
+  std::memcpy(guest, bytes, length);
+  g_loaded_size = length;
+  g_status = kProbeCodeLoaded;
+  return length;
 }
 }  // namespace
 }  // namespace render360::xenia_web
@@ -98,6 +127,8 @@ void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::ResetWasmBackendCallProbe();
+  render360::xenia_web::g_active_guest_base =
+      render360::xenia_web::kDefaultProbeGuestBase;
   render360::xenia_web::g_loaded_size = 0;
   render360::xenia_web::g_status =
       render360::xenia_web::g_processor
@@ -139,26 +170,14 @@ uint32_t r360_ppc_probe_input_capacity() {
   return render360::xenia_web::kProbeMaxBytes;
 }
 
-uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {
-  using namespace render360::xenia_web;
-  if (!bytes || !length || length > kProbeMaxBytes || (length & 3u)) {
-    g_status = kProbeErrorInput;
-    return 0;
-  }
-  if (!EnsureRuntime()) return 0;
+uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
+                                uint32_t length) {
+  return render360::xenia_web::LoadAt(address, bytes, length);
+}
 
-  uint8_t* guest = g_memory->TranslateVirtual<uint8_t*>(kProbeGuestBase);
-  if (!guest) {
-    g_status = kProbeErrorMemory;
-    return 0;
-  }
-  // Loading executable bytes is a code mutation. Version the affected pages and
-  // evict any generated guest functions before the new bytes become visible.
-  InvalidateWasmBackendExecutableRange(kProbeGuestBase, length);
-  std::memcpy(guest, bytes, length);
-  g_loaded_size = length;
-  g_status = kProbeCodeLoaded;
-  return length;
+uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {
+  return render360::xenia_web::LoadAt(
+      render360::xenia_web::kDefaultProbeGuestBase, bytes, length);
 }
 
 uint32_t r360_ppc_probe_translate() {
@@ -169,12 +188,8 @@ uint32_t r360_ppc_probe_translate() {
   }
 
   ResetProbeTelemetry();
-  // Do not clear the generated guest-function cache here. Repeated translation
-  // of unchanged executable pages must hit the address+generation cache. Code
-  // changes are invalidated by r360_ppc_probe_load or the explicit invalidation
-  // API instead.
-  ProbeGuestFunction function(g_probe_module, kProbeGuestBase);
-  function.set_end_address(kProbeGuestBase + g_loaded_size - 4u);
+  ProbeGuestFunction function(g_probe_module, g_active_guest_base);
+  function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
   if (!g_processor->frontend()->DefineFunction(&function, 0)) {
     g_status = kProbeErrorTranslate;
     return 0;
@@ -188,7 +203,7 @@ uint32_t r360_ppc_probe_status() {
   return render360::xenia_web::g_status;
 }
 uint32_t r360_ppc_probe_guest_base() {
-  return render360::xenia_web::kProbeGuestBase;
+  return render360::xenia_web::g_active_guest_base;
 }
 uint32_t r360_ppc_probe_loaded_size() {
   return render360::xenia_web::g_loaded_size;

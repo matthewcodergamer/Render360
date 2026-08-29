@@ -10,11 +10,6 @@ fn js_error(prefix: &str, error: impl core::fmt::Display) -> JsValue {
 }
 
 fn js_debug_error(prefix: &str, error: impl core::fmt::Debug) -> JsValue {
-    // Naga's Display form intentionally stays terse (for example, only
-    // "Type [29] is invalid"). The Debug form includes the nested validation
-    // reason and source span, which is required here because Render360 treats
-    // every SPIR-V -> WebGPU incompatibility as an explicit implementation
-    // boundary rather than weakening validation.
     JsValue::from_str(&format!("{prefix}: {error:#?}"))
 }
 
@@ -42,9 +37,25 @@ pub fn spirv_to_wgsl(bytes: &[u8]) -> Result<String, JsValue> {
     };
     let module = spv::parse_u8_slice(bytes, &options)
         .map_err(|e| js_error("Naga SPIR-V parse failed", e))?;
-    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+    let info = match Validator::new(ValidationFlags::all(), Capabilities::all())
         .validate(&module)
-        .map_err(|e| js_debug_error("Naga validation failed", e))?;
+    {
+        Ok(info) => info,
+        Err(error) => {
+            // Keep validation strict, but expose the parsed IR type table so a
+            // Vulkan-oriented Xenia resource construct can be lowered
+            // deliberately for WebGPU instead of being guessed from a handle
+            // number such as "Type [29]".
+            let mut types = String::new();
+            for (handle, ty) in module.types.iter() {
+                use core::fmt::Write as _;
+                let _ = writeln!(&mut types, "{handle:?}: {ty:#?}");
+            }
+            return Err(JsValue::from_str(&format!(
+                "Naga validation failed: {error:#?}\nNAGA_PARSED_TYPES_BEGIN\n{types}NAGA_PARSED_TYPES_END"
+            )));
+        }
+    };
     let source = wgsl::write_string(&module, &info, WriterFlags::empty())
         .map_err(|e| js_debug_error("Naga WGSL write failed", e))?;
     if source.trim().is_empty() {

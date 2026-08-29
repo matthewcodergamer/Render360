@@ -77,7 +77,7 @@ compile_c() {
     local category
     category="$(classify_failure "$log")"
     echo "BLOCKED ($category)"
-    printf '%s\tBLOCKED\t%s\n' "$label" >> "$OUT/report.tsv"
+    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
     failed=$((failed + 1))
   fi
 }
@@ -106,6 +106,8 @@ compile_one "render360/wasm_backend_fpu_probe.cpp" "$OVERLAY/render360/wasm_back
 compile_one "render360/wasm_backend_vmx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_vmx_probe.cpp"
 compile_one "render360/sparse_guest_memory.cpp" "$ROOT/src/xenia_web_bootstrap/sparse_guest_memory.cpp"
 compile_one "render360/xex_guest_mapper.cpp" "$ROOT/src/xenia_web_bootstrap/xex_guest_mapper.cpp"
+compile_one "render360/xex_pe_image.cpp" "$ROOT/src/xenia_web_bootstrap/xex_pe_image.cpp"
+compile_one "render360/xex_pe_guest_loader.cpp" "$ROOT/src/xenia_web_bootstrap/xex_pe_guest_loader.cpp"
 compile_one "render360/xex_lzx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xex_lzx_probe.cpp"
 compile_one "render360/xex_crypto_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xex_crypto_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"

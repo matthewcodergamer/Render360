@@ -1,5 +1,5 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.4';
-import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.4';
+import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.5';
 import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.4';
 import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.4';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.4';

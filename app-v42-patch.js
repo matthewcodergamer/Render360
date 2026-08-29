@@ -1,4 +1,4 @@
-import './developer-console-v44.js?v=44';
+import './developer-console-v44.js?v=44.5';
 import {listGames,putGame,putCover} from './library/game-library.js?v=44';
 import {resolveTitleCover} from './library/cover-resolver.js?v=44';
 import {clearGamesDirectory,storageInfo} from './storage/game-storage.js?v=44';

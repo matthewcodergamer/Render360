@@ -15,6 +15,7 @@ on:
       - 'test-kernel-hle-bridge.mjs'
       - 'test-kernel-abi-critic.mjs'
       - 'test-kernel-services-critic.mjs'
+      - 'test-kernel-import-service-bridge.mjs'
       - 'test-guest-runtime-critic.mjs'
       - 'test-title-kernel-import-integration.mjs'
       - 'test-xenos-semantic-foundation.mjs'
@@ -150,6 +151,8 @@ jobs:
         run: node ./test-kernel-abi-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: "Harsh critic: verify xboxkrnl and XAM starter services in main wasm"
         run: node ./test-kernel-services-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: "Harsh critic: verify real imported thunks reach built-in kernel services"
+        run: node ./test-kernel-import-service-bridge.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: "Harsh critic: verify guest threads TLS and runtime in main wasm"
         run: node ./test-guest-runtime-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify Xenos PM4 register draw and EDRAM semantics in main wasm

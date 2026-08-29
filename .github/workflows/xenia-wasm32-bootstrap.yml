@@ -10,6 +10,7 @@ on:
       - 'xenia_translation_foundation_check.py'
       - 'test-package-xex-foundation.mjs'
       - 'test-xex-image-decode.mjs'
+      - 'test-xex-import-libraries.mjs'
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
@@ -24,6 +25,7 @@ on:
       - 'retail-xex-image-pipeline.mjs'
       - 'render360-title-controller.mjs'
       - 'render360-package-controller.mjs'
+      - 'render360-xex-imports.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -83,6 +85,8 @@ jobs:
         run: node ./test-package-xex-foundation.mjs
       - name: Verify strict XEX2 image metadata decode
         run: node ./test-xex-image-decode.mjs
+      - name: Verify XEX import library decoding
+        run: node ./test-xex-import-libraries.mjs
       - name: Verify streaming unencrypted/uncompressed XEX preparation
         run: node ./test-xex-image-prepare-none.mjs
       - name: Verify streaming BASIC XEX preparation

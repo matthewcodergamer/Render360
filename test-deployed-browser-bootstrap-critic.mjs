@@ -26,6 +26,10 @@ const required=[
   'r360_title_gpu_ring_base','r360_title_gpu_write_pointer','r360_title_gpu_ring_word',
   'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_submit','r360_xenos_swaps','r360_xenos_real_title_frame_ready',
   'r360_xenos_shader_dwords','r360_xenos_shader_interpreter_reset','r360_xenos_shader_interpreter_analyze','r360_xenos_shader_interpreter_execute','r360_xenos_shader_interpreter_status',
+  'r360_xenos_spirv_reset','r360_xenos_spirv_translate','r360_xenos_spirv_status','r360_xenos_spirv_buffer','r360_xenos_spirv_size','r360_xenos_spirv_word',
+  'r360_xenos_frontbuffer_snapshot_capture','r360_xenos_frontbuffer_snapshot_status','r360_xenos_frontbuffer_snapshot_buffer','r360_xenos_frontbuffer_snapshot_size',
+  'r360_xenos_frontbuffer_snapshot_width','r360_xenos_frontbuffer_snapshot_height','r360_xenos_frontbuffer_snapshot_hash','r360_xenos_frontbuffer_snapshot_generation',
+  'r360_xenos_frontbuffer_snapshot_format','r360_xenos_frontbuffer_snapshot_tiled','r360_xenos_frontbuffer_snapshot_pitch','r360_xenos_frontbuffer_snapshot_source_address','r360_xenos_frontbuffer_snapshot_source_bytes',
   'r360_xenos_frame_generation','r360_xenos_frame_hash'
 ];
 for(const name of required)assert.ok(exported.has(name)||exported.has(`_${name}`),`deployed bootstrap missing ${name}`);
@@ -34,6 +38,8 @@ console.log('DEPLOYED_BROWSER_BOOTSTRAP_CRITIC=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_WASI_HOST=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_INITIALIZE=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_TITLE_SHADER_EXPORTS=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_XENOS_SPIRV_EXPORTS=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_VDSWAP_FRONTBUFFER_EXPORTS=PASS');
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_BYTES=${wasm.length}`);
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SHA256=${meta.sha256}`);
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SOURCE_RUN=${meta.sourceRun}`);

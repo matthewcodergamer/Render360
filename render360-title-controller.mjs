@@ -5,6 +5,24 @@ import { buildKernelImportPlan } from './render360-kernel-imports.mjs';
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
 const maybe=(bootstrap,n)=>typeof pick(bootstrap,n)==='function'?pick(bootstrap,n):null;
+const moduleId=name=>name.toLowerCase()==='xboxkrnl.exe'?1:name.toLowerCase()==='xam.xex'?2:0;
+
+function registerKernelImportPlan(bootstrap,kernelImports){
+  const reset=maybe(bootstrap,'r360_kernel_import_reset');
+  const register=maybe(bootstrap,'r360_kernel_import_register');
+  if(!reset||!register)return {registered:0,available:false};
+  reset();let registered=0;
+  for(const item of kernelImports.plan){
+    if(!item.isKernelModule||item.kind!=='function'||!item.thunkAddress)continue;
+    const id=moduleId(item.module);if(!id)continue;
+    const impl=item.implementation;
+    const implemented=!!impl;
+    const r3=implemented?(typeof impl==='object'&&impl!==null&&'r3' in impl?Number(impl.r3)>>>0:0):0;
+    if((register(item.thunkAddress>>>0,id,item.ordinal>>>0,implemented?1:0,r3)>>>0)!==1)throw new Error(`failed to register kernel import ${item.module} ordinal 0x${item.ordinal.toString(16)}`);
+    registered++;
+  }
+  return {registered,available:true};
+}
 
 export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,implementedKernelExports={}}){
   const xex=Buffer.from(defaultXex);
@@ -15,6 +33,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const header=xex.subarray(0,headerSize),body=xex.subarray(headerSize);
   const prepared=await prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey,useDevkitKey});
   const kernelImports=buildKernelImportPlan(xex,prepared,{implementedExports:implementedKernelExports});
+  const kernelRegistration=registerKernelImportPlan(bootstrap,kernelImports);
 
   for(const n of ['r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_pe_guest_load','r360_pe_guest_status','r360_pe_guest_entry_address','r360_title_handoff_reset','r360_title_handoff_translate_entry','r360_title_handoff_status','r360_title_handoff_entry_address','r360_title_handoff_bytes','r360_title_handoff_hir_instructions'])if(typeof pick(bootstrap,n)!=='function')throw new Error(`missing title-controller export ${n}`);
   const input=pick(bootstrap,'r360_xex_guest_mapper_input_buffer')()>>>0,cap=pick(bootstrap,'r360_xex_guest_mapper_input_capacity')()>>>0;
@@ -31,13 +50,25 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const execR3Fn=maybe(bootstrap,'r360_ppc_probe_correctness_r3');
   const callCountFn=maybe(bootstrap,'r360_wasm_backend_call_function_count');
   const callAddressFn=maybe(bootstrap,'r360_wasm_backend_call_function_address');
+  const kernelCallsFn=maybe(bootstrap,'r360_kernel_import_calls');
+  const kernelLastThunkFn=maybe(bootstrap,'r360_kernel_import_last_thunk');
+  const kernelLastModuleFn=maybe(bootstrap,'r360_kernel_import_last_module');
+  const kernelLastOrdinalFn=maybe(bootstrap,'r360_kernel_import_last_ordinal');
+  const kernelLastStatusFn=maybe(bootstrap,'r360_kernel_import_last_status');
   const executionStatus=execStatusFn?(execStatusFn()>>>0):0;
   const executionInstructions=execInstructionsFn?(execInstructionsFn()>>>0):0;
   const executionR3Hex=execR3Fn?`0x${BigInt.asUintN(64,execR3Fn()).toString(16)}`:'0x0';
   const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
-  const runtimeBoundary=executionStatus===3?'guest-return':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
+  const kernelCalls=kernelCallsFn?(kernelCallsFn()>>>0):0;
+  const kernelLastThunk=kernelLastThunkFn?(kernelLastThunkFn()>>>0):0;
+  const kernelLastModuleId=kernelLastModuleFn?(kernelLastModuleFn()>>>0):0;
+  const kernelLastOrdinal=kernelLastOrdinalFn?(kernelLastOrdinalFn()>>>0):0;
+  const kernelLastStatus=kernelLastStatusFn?(kernelLastStatusFn()>>>0):0;
+  const reachedKernelModule=kernelLastModuleId===1?'xboxkrnl.exe':kernelLastModuleId===2?'xam.xex':null;
+  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
+  const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
 
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,firstKernelBlocker};
+  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker};
 }

@@ -6,7 +6,7 @@ path = root / 'build/xenia-web-overlay/render360/hir_correctness_executor_vmx.cp
 text = path.read_text()
 
 include_anchor = '#include "hir_correctness_executor.h"\n'
-include_replacement = '''#include "hir_correctness_executor.h"\n\n#include "sparse_guest_memory.h"\n#include "title_gpu_runtime.h"\n'''
+include_replacement = '''#include "hir_correctness_executor.h"\n\n#include "sparse_guest_memory.h"\n#include "title_gpu_runtime.h"\n\nextern "C" uint32_t r360_ppc_probe_guest_base();\n'''
 if include_anchor not in text:
     raise SystemExit('title runtime memory overlay: include anchor changed')
 text = text.replace(include_anchor, include_replacement, 1)
@@ -67,8 +67,20 @@ new = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
     }
   }
 
+  // Memory::TranslateVirtual is deliberately backed by only one movable 64 KiB
+  // wasm32 window. Calling it with arbitrary Xbox virtual addresses is not a
+  // harmless miss: the bounded overlay may trap while translating an address
+  // that doesn't belong to the current window. Check the guest range first and
+  // go directly to sparse title RAM everywhere else.
+  const uint32_t probe_base = r360_ppc_probe_guest_base();
+  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
+  const uint64_t access_end = uint64_t(guest_address) + size;
+  const bool in_probe_window = guest_address >= probe_base &&
+                               access_end <= probe_end &&
+                               access_end <= 0x100000000ull;
   uint8_t* host = nullptr;
-  if (TranslateGuestRange(memory, guest_address, size, &host)) {
+  if (in_probe_window &&
+      TranslateGuestRange(memory, guest_address, size, &host)) {
     std::memcpy(&loaded.value, host, size);
     out_values[destination] = loaded;
     return true;
@@ -104,8 +116,15 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
     if (WriteTitleGpuMmio(guest_address, logical_value)) return true;
   }
 
+  const uint32_t probe_base = r360_ppc_probe_guest_base();
+  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
+  const uint64_t access_end = uint64_t(guest_address) + size;
+  const bool in_probe_window = guest_address >= probe_base &&
+                               access_end <= probe_end &&
+                               access_end <= 0x100000000ull;
   uint8_t* host = nullptr;
-  if (TranslateGuestRange(memory, guest_address, size, &host)) {
+  if (in_probe_window &&
+      TranslateGuestRange(memory, guest_address, size, &host)) {
     std::memcpy(host, &resolved.value, size);
     // Keep mapped PE/sparse aliases coherent when this address also exists in
     // sparse guest RAM. Synthetic probe-only addresses are allowed to have no
@@ -124,4 +143,4 @@ if old not in text:
     raise SystemExit('title runtime memory overlay: guest load/store source contract changed')
 text = text.replace(old, new, 1)
 path.write_text(text)
-print('Title runtime memory overlay: sparse guest RAM + Xenos MMIO enabled')
+print('Title runtime memory overlay: bounded code window + sparse guest RAM + Xenos MMIO enabled')

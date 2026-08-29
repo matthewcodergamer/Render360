@@ -291,6 +291,27 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
   return true;
 }
 
+uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
+                                   uint32_t max_size) {
+  if (!max_size) return 0;
+  const uint64_t end64 = uint64_t(virtual_address) + uint64_t(max_size);
+  const uint64_t end = end64 > (uint64_t{1} << 32)
+                           ? (uint64_t{1} << 32)
+                           : end64;
+  uint64_t current = virtual_address;
+  while (current < end) {
+    const auto it = g_pages.find(static_cast<uint32_t>(current) >> kPageShift);
+    if (it == g_pages.end() ||
+        (it->second.protection & (kGuestRead | kGuestExecute)) !=
+            (kGuestRead | kGuestExecute)) {
+      break;
+    }
+    const uint64_t page_end = (current | uint64_t(kPageMask)) + 1u;
+    current = page_end < end ? page_end : end;
+  }
+  return static_cast<uint32_t>(current - uint64_t(virtual_address));
+}
+
 uint32_t SparseGuestMappedPageCount() {
   return static_cast<uint32_t>(g_pages.size());
 }

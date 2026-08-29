@@ -10,6 +10,20 @@
 #include "xenia/gpu/spirv_shader_translator.h"
 #include "xenia/gpu/xenos.h"
 
+// Xenia's SPIR-V translator is intentionally split across implementation units
+// for ALU, fetch, memory-export and render-backend/EDRAM lowering. The desktop
+// build system compiles them as sibling objects. Render360's standalone WASM
+// bootstrap keeps the accelerator behind one explicit bridge object, so include
+// those pinned upstream implementation units here rather than duplicating or
+// stubbing any shader semantics. None of these .cc units are compiled elsewhere
+// in the current Render360 WASM source matrix.
+#include "xenia/gpu/spirv_shader_translator_alu.cc"
+#include "xenia/gpu/spirv_shader_translator_fetch.cc"
+#include "xenia/gpu/spirv_shader_translator_memexport.cc"
+#include "xenia/gpu/spirv_shader_translator_rb.cc"
+// glslang's SpvBuilder.cpp delegates CFG traversal to this sibling source.
+#include "third_party/glslang/SPIRV/InReadableOrder.cpp"
+
 extern "C" {
 uint32_t r360_xenos_shader_buffer(uint32_t shader_type);
 uint32_t r360_xenos_shader_dwords(uint32_t shader_type);
@@ -75,7 +89,8 @@ uint32_t Translate(uint32_t type) {
 
   // Conservative translation-only feature set: SPIR-V 1.0, 128 MiB storage
   // buffer slices, no Vulkan-only optional capabilities. This is intentionally
-  // chosen as the portable input tier for a subsequent SPIR-V -> WGSL layer.
+  // chosen as the portable input tier for the subsequent Naga SPIR-V -> WGSL
+  // bridge used by browser WebGPU implementations such as Safari.
   xe::gpu::SpirvShaderTranslator::Features features(false);
   xe::gpu::SpirvShaderTranslator translator(features, false, false, false);
   const uint32_t dynamic_registers = xe::gpu::xenos::kMaxShaderTempRegisters;

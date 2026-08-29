@@ -1,8 +1,8 @@
 name: UI V44 Integration
 
-# V44 release gate: validates the iOS shell, storage/import layers, the exact
-# checked-in package WASM artifact, and browser compatibility paths used by
-# commercial title launch.
+# V44 release gate: validates the iOS shell, storage/import layers, exact
+# checked-in package WASM artifact, live developer console, and browser
+# compatibility paths used by commercial title launch.
 on:
   push:
     paths:
@@ -11,6 +11,7 @@ on:
       - 'ui-v42-patch.css'
       - 'app-v41.js'
       - 'app-v42-patch.js'
+      - 'developer-console-v44.js'
       - 'wasm-core-v32.js'
       - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
@@ -43,6 +44,7 @@ on:
       - 'ui-v42-patch.css'
       - 'app-v41.js'
       - 'app-v42-patch.js'
+      - 'developer-console-v44.js'
       - 'wasm-core-v32.js'
       - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
@@ -67,6 +69,7 @@ on:
       - 'test-ui-v41-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
       - 'test-package-core-artifact-contract.mjs'
+      - '.github/workflows/ui-v41.yml'
 
 permissions:
   contents: read
@@ -84,6 +87,7 @@ jobs:
         run: |
           node --check app-v41.js
           node --check app-v42-patch.js
+          node --check developer-console-v44.js
           node --check wasm-core-v32.js
           node --check render360-stfs-browser-extractor.mjs
           node --check runtime/render360-runtime.js

@@ -26,9 +26,11 @@ function readFetchConstantGroups(e){
 export function readXenosTitleState({bootstrap}){
   if(!bootstrap?.exports)throw new TypeError('bootstrap instance required');
   const e=bootstrap.exports;
+  const optional=n=>{const fn=optionalExport(e,n);return fn?fn()>>>0:0};
   const indirect=optionalExport(e,'r360_xenos_indirect_buffers'),loads=optionalExport(e,'r360_xenos_shader_loads'),faultDepth=optionalExport(e,'r360_xenos_last_fault_depth'),invalidate=optionalExport(e,'r360_xenos_last_invalidate_mask');
   const vertexShader=readShaderProvenance(e,0),pixelShader=readShaderProvenance(e,1),fetchConstantGroups=readFetchConstantGroups(e);
-  return {vertexShader,pixelShader,fetchConstantGroups,shaderLoads:loads?loads()>>>0:0,indirectBuffers:indirect?indirect()>>>0:0,lastFaultDepth:faultDepth?faultDepth()>>>0:0,lastInvalidateMask:invalidate?invalidate()>>>0:0,hasTitleShaders:vertexShader.dwordCount>0||pixelShader.dwordCount>0,hasFetchResources:fetchConstantGroups.length>0};
+  const swaps=optional('r360_xenos_swaps'),frontbufferPtr=optional('r360_xenos_frontbuffer_ptr'),frontbufferWidth=optional('r360_xenos_frontbuffer_width'),frontbufferHeight=optional('r360_xenos_frontbuffer_height'),frameProvenance=optional('r360_xenos_frame_provenance'),realTitleFrameReady=optional('r360_xenos_real_title_frame_ready')===1;
+  return {vertexShader,pixelShader,fetchConstantGroups,shaderLoads:loads?loads()>>>0:0,indirectBuffers:indirect?indirect()>>>0:0,memoryWrites:optional('r360_xenos_memory_writes'),interrupts:optional('r360_xenos_interrupts'),lastInterruptMask:optional('r360_xenos_last_interrupt_mask'),lastFaultDepth:faultDepth?faultDepth()>>>0:0,lastInvalidateMask:invalidate?invalidate()>>>0:0,swaps,frontbufferPtr,frontbufferWidth,frontbufferHeight,frameProvenance,realTitleFrameReady,hasRealSwap:swaps>0,hasTitleShaders:vertexShader.dwordCount>0||pixelShader.dwordCount>0,hasBothTitleShaders:vertexShader.dwordCount>0&&pixelShader.dwordCount>0,hasFetchResources:fetchConstantGroups.length>0};
 }
 
 export function readTitleGpuWords({bootstrap,guestAddress,wordCount}){

@@ -1,18 +1,23 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
 import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
 import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs';
+import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
   'memory','r360_ppc_probe_load_at','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
   'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
   'r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
+  'r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate',
   'r360_ppc_context_size','r360_ppc_context_offset_gpr','r360_ppc_context_offset_lr','r360_ppc_context_offset_ctr',
   'r360_wasm_backend_call_status','r360_wasm_backend_call_function_count','r360_wasm_backend_call_function_address',
   'r360_wasm_backend_call_function_generation','r360_wasm_backend_call_module_ptr','r360_wasm_backend_call_module_size',
   'r360_wasm_backend_call_lowered_instructions','r360_wasm_backend_call_context_ptr',
   'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
-  'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
+  'r360_kernel_import_register','r360_kernel_service_call','r360_kernel_runtime_reset',
+  'r360_guest_thread_create','r360_guest_thread_current','r360_guest_thread_set_current','r360_guest_thread_terminate','r360_guest_thread_next_runnable',
+  'r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_entry','r360_guest_thread_context','r360_guest_thread_flags',
+  'r360_guest_thread_stack_size','r360_guest_thread_stack_base','r360_guest_thread_stack_top','r360_guest_thread_stack_mapped','r360_guest_tls_alloc',
   'r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_word_capacity',
   'r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_ring_word',
   'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit',
@@ -63,6 +68,11 @@ export async function createBrowserTitlePpcSession({bootstrap,initialGprs={},cle
   return createPersistentPpcSession({bootstrap,initialGprs,clearContext});
 }
 
+export async function createBrowserTitleThreadScheduler({bootstrap,session=null,...options}={}){
+  validateBrowserBootstrap(bootstrap);
+  return createGuestThreadScheduler({bootstrap,session,...options});
+}
+
 export async function mountXboxIsoBrowser(file){
   if(!file||typeof file.slice!=='function'||!Number.isSafeInteger(Number(file.size)))throw new TypeError('Xbox ISO must be a browser File/Blob-like object');
   const {mountXdvdfs}=await import('./render360-xdvdfs.mjs');
@@ -71,12 +81,91 @@ export async function mountXboxIsoBrowser(file){
   return {volume,defaultXex:node,layout:volume.layout,partitionOffset:volume.partitionOffset,telemetry:volume.telemetry};
 }
 
-export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapUrl='./xenia_ppc_bootstrap.wasm',scanEntryFunction=true,...options}){
+/**
+ * Mount and prepare a real Xbox 360 ISO for the browser runtime.
+ *
+ * Production mode is deliberately side-effect-free during Xenia translation.
+ * The mapped default.xex entry is registered as generated WASM first, then it
+ * is executed only through the native guest-thread registry with a guarded
+ * sparse Xbox stack and its own persistent PPCContext snapshot.
+ *
+ * Whole-function return is currently the cooperative preemption boundary. A
+ * title whose entry cannot yet be lowered by the callable backend is returned
+ * as an explicit scheduler blocker rather than being run by the old
+ * execute-during-translation correctness path.
+ */
+export async function handoffXboxIsoBrowser({
+  core,
+  file,
+  bootstrap=null,
+  bootstrapUrl='./xenia_ppc_bootstrap.wasm',
+  scanEntryFunction=true,
+  productionThreadedExecution=true,
+  primaryThreadContext=0,
+  primaryThreadStackSize=0x80000,
+  primaryThreadFlags=0,
+  ...options
+}){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
   const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs');
-  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,...options});
-  return {bootstrap:runtime,result};
+  const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
+  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
+  if(!productionThreadedExecution)return {bootstrap:runtime,result};
+
+  const resetRuntime=pick(runtime.exports,'r360_kernel_runtime_reset');
+  resetRuntime();
+  let ppcSession=null;
+  let threadScheduler=null;
+  let primaryThread=null;
+  let schedulerReport=null;
+  let schedulerBlocker=null;
+  try{
+    ppcSession=await createPersistentPpcSession({bootstrap:runtime,clearContext:true});
+    if(!ppcSession.functionCount)throw new Error(`No callable generated WASM function was registered for title entry 0x${(result.entry>>>0).toString(16)}`);
+    threadScheduler=await createGuestThreadScheduler({bootstrap:runtime,session:ppcSession,maxSlicesPerPump:1});
+    primaryThread=threadScheduler.createThread({entry:result.entry>>>0,context:primaryThreadContext>>>0,stackSize:primaryThreadStackSize>>>0,flags:primaryThreadFlags>>>0});
+    schedulerReport=await threadScheduler.pumpOnce({maxSlices:1});
+    if(!schedulerReport.slices.length)throw new Error('Native guest-thread scheduler found no runnable title entry');
+    result.runtimeBoundary=schedulerReport.slices[0]?.terminated?'primary-thread-return':'cooperative-thread-boundary';
+  }catch(error){
+    schedulerBlocker={
+      kind:'commercial-cpu-scheduler-blocker',
+      entry:result.entry>>>0,
+      message:error?.message||String(error),
+      translatedFunctionCount:result.translatedFunctionCount>>>0,
+      callableFunctionCount:ppcSession?.functionCount??0,
+      scheduler:threadScheduler?.inspect?.()??null,
+    };
+    result.runtimeBoundary='commercial-cpu-scheduler-blocked';
+  }
+  result.commercialCpu={
+    mode:'translation-only-then-native-thread-scheduler',
+    translationSideEffects:false,
+    primaryThread,
+    firstPump:schedulerReport,
+    blocker:schedulerBlocker,
+    callableFunctionCount:ppcSession?.functionCount??0,
+    schedulerContract:threadScheduler?.contract??guestThreadSchedulerContract(),
+  };
+  return {bootstrap:runtime,result,ppcSession,threadScheduler,primaryThread,schedulerReport,schedulerBlocker};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,browserWasiHost:true,titleEntryExecution:'Xenia-scanned executable PE function',persistentCpuSession:persistentPpcSessionContract(),titleGpu:'native circular PM4 ring + upstream Xenia interpreter + Xenos-to-SPIR-V accelerator',realFrontbuffer:'VdSwap fetch constant + mapped sparse Xbox memory',titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',legacyHleFallback:true};}
+export function browserTitleRuntimeContract(){return {
+  bootstrapUrl:'./xenia_ppc_bootstrap.wasm',
+  requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],
+  input:'File/Blob XDVDFS ISO',
+  wholeIsoCopy:false,
+  browserWasiHost:true,
+  titleEntryTranslation:'Xenia-scanned executable PE function, side-effect-free in production',
+  titleEntryExecution:'native Xbox guest thread -> persistent generated WASM',
+  persistentCpuSession:persistentPpcSessionContract(),
+  guestThreadScheduler:guestThreadSchedulerContract(),
+  preemptionBoundary:'guest-function-return',
+  midFunctionPreemption:false,
+  fullXboxThreadScheduler:false,
+  titleGpu:'native circular PM4 ring + upstream Xenia interpreter + Xenos-to-SPIR-V accelerator',
+  realFrontbuffer:'VdSwap fetch constant + mapped sparse Xbox memory',
+  titleHle:'native WASM PPC ABI + sparse guest RAM + Xenos ring capture',
+  legacyHleFallback:true,
+};}

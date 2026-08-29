@@ -8,6 +8,7 @@ on:
       - 'render360-browser-title-hle.mjs'
       - 'test-browser-title-hle.mjs'
       - 'test-title-gpu-runtime.mjs'
+      - 'test-xenos-title-state-foundation.mjs'
       - 'test-extracted-xex-gpu-traffic.mjs'
       - 'test-extracted-xex-gpu-traffic-critic.mjs'
       - 'render360-title-controller.mjs'
@@ -42,6 +43,8 @@ jobs:
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
       - name: Verify real title ring MMIO and sparse guest memory bridge
         run: node ./test-title-gpu-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify title PM4 constants shaders resources and indirect buffers
+        run: node ./test-xenos-title-state-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify relocated title HLE fallback and ring capture
         run: node ./test-browser-title-hle.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify encrypted XEX pipeline produces Xenos traffic

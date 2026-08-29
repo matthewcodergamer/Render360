@@ -41,12 +41,15 @@ uint32_t g_texture_bindings = 0;
 uint32_t g_writes_interpolators = 0;
 uint32_t g_writes_color_targets = 0;
 uint32_t g_uses_texture_fetch_results = 0;
+uint32_t g_texture_fetches = 0;
 uint32_t g_execution_count = 0;
 uint32_t g_alloc_exports = 0;
 uint32_t g_value_exports = 0;
 uint32_t g_last_export_register = 0;
 uint32_t g_last_export_mask = 0;
 std::array<uint32_t, 4> g_last_export_bits{};
+std::array<uint32_t, xe::gpu::xenos::kMaxShaderTempRegisters * 4u>
+    g_last_temp_bits{};
 
 class CaptureExportSink final : public xe::gpu::ShaderInterpreter::ExportSink {
  public:
@@ -76,11 +79,13 @@ void ResetTelemetry() {
   g_writes_interpolators = 0;
   g_writes_color_targets = 0;
   g_uses_texture_fetch_results = 0;
+  g_texture_fetches = 0;
   g_alloc_exports = 0;
   g_value_exports = 0;
   g_last_export_register = 0;
   g_last_export_mask = 0;
   g_last_export_bits.fill(0);
+  g_last_temp_bits.fill(0);
 }
 
 bool ValidShaderType(uint32_t type) { return type <= 1u; }
@@ -159,6 +164,15 @@ uint32_t Execute(uint32_t type) {
   interpreter.SetExportSink(&sink);
   interpreter.SetShader(*shader);
   interpreter.Execute();
+  g_texture_fetches = interpreter.texture_fetch_count();
+  const float* temps = interpreter.temp_registers();
+  for (uint32_t i = 0; i < g_last_temp_bits.size(); ++i) {
+    g_last_temp_bits[i] = std::bit_cast<uint32_t>(temps[i]);
+  }
+  if (interpreter.texture_fetch_failed()) {
+    g_status = kStatusTextureFetchUnsupported;
+    return 0;
+  }
   ++g_execution_count;
   g_status = kStatusExecuted;
   return 1;
@@ -201,6 +215,9 @@ uint32_t r360_xenos_shader_interpreter_texture_bindings() {
 uint32_t r360_xenos_shader_interpreter_uses_texture_fetch() {
   return render360::xenia_web::g_uses_texture_fetch_results;
 }
+uint32_t r360_xenos_shader_interpreter_texture_fetches() {
+  return render360::xenia_web::g_texture_fetches;
+}
 uint32_t r360_xenos_shader_interpreter_writes_interpolators() {
   return render360::xenia_web::g_writes_interpolators;
 }
@@ -226,5 +243,12 @@ uint32_t r360_xenos_shader_interpreter_last_export_component_bits(
     uint32_t component) {
   return component < 4 ? render360::xenia_web::g_last_export_bits[component]
                        : 0u;
+}
+uint32_t r360_xenos_shader_interpreter_temp_component_bits(uint32_t reg,
+                                                           uint32_t component) {
+  if (reg >= xe::gpu::xenos::kMaxShaderTempRegisters || component >= 4u) {
+    return 0u;
+  }
+  return render360::xenia_web::g_last_temp_bits[reg * 4u + component];
 }
 }

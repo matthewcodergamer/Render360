@@ -1,7 +1,7 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.1';
-import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs?v=44.1';
-import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=44.1';
-import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=44.1';
+import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.2';
+import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs?v=44.2';
+import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=44.2';
+import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=44.2';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
@@ -43,7 +43,7 @@ export function validateBrowserBootstrap(instance){
   return {ok:true,exports:REQUIRED_BOOTSTRAP_EXPORTS.length,memoryBytes:instance.exports.memory.buffer.byteLength};
 }
 
-export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.1',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
+export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.2',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
   const response=await fetchImpl(url,{cache:'no-store'});
@@ -76,7 +76,7 @@ export async function createBrowserTitleThreadScheduler({bootstrap,session=null,
 
 export async function mountXboxIsoBrowser(file){
   if(!file||typeof file.slice!=='function'||!Number.isSafeInteger(Number(file.size)))throw new TypeError('Xbox ISO must be a browser File/Blob-like object');
-  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs?v=44.1');
+  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs?v=44.2');
   const volume=await mountXdvdfs(file);
   const node=await volume.stat('/default.xex');
   return {volume,defaultXex:node,layout:volume.layout,partitionOffset:volume.partitionOffset,telemetry:volume.telemetry};
@@ -96,7 +96,7 @@ export async function handoffXboxIsoBrowser({
   core,
   file,
   bootstrap=null,
-  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.1',
+  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.2',
   scanEntryFunction=true,
   productionThreadedExecution=true,
   primaryThreadContext=0,
@@ -106,7 +106,7 @@ export async function handoffXboxIsoBrowser({
 }){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
-  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs?v=44.1');
+  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs?v=44.2');
   const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
   const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
   if(!productionThreadedExecution)return {bootstrap:runtime,result};
@@ -133,6 +133,41 @@ export async function handoffXboxIsoBrowser({
       schedulerContract:guestThreadSchedulerContract(),
     };
     return {bootstrap:runtime,result,ppcSession:null,threadScheduler:null,primaryThread:null,schedulerReport:null,schedulerBlocker};
+  }
+
+  const generatedFunctionCount=(pick(runtime.exports,'r360_wasm_backend_call_function_count')?.()??0)>>>0;
+  if(!generatedFunctionCount){
+    console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; forcing native HIR compatibility execution`);
+    const fallbackResult=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation:true,executeHirCompatibilityFallback:false,...options});
+    const completed=(fallbackResult.executionStatus>>>0)===3;
+    const schedulerBlocker=completed?null:{
+      kind:'native-hir-compatibility-boundary',
+      entry:fallbackResult.entry>>>0,
+      message:`Native HIR compatibility execution stopped at ${fallbackResult.runtimeBoundary}`,
+      executionStatus:fallbackResult.executionStatus>>>0,
+      executionInstructions:fallbackResult.executionInstructions>>>0,
+      reachedKernelBlocker:fallbackResult.reachedKernelBlocker??null,
+    };
+    fallbackResult.compatibilityExecution={
+      used:true,
+      reason:'forced-native-hir-after-empty-generated-wasm',
+      entry:fallbackResult.entry>>>0,
+      executionStatus:fallbackResult.executionStatus>>>0,
+      executionInstructions:fallbackResult.executionInstructions>>>0,
+      runtimeBoundary:fallbackResult.runtimeBoundary,
+      reachedKernelBlocker:fallbackResult.reachedKernelBlocker??null,
+    };
+    fallbackResult.commercialCpu={
+      mode:'native-hir-compatibility-fallback',
+      translationSideEffects:true,
+      primaryThread:null,
+      firstPump:null,
+      blocker:schedulerBlocker,
+      callableFunctionCount:0,
+      compatibility:fallbackResult.compatibilityExecution,
+      schedulerContract:guestThreadSchedulerContract(),
+    };
+    return {bootstrap:runtime,result:fallbackResult,ppcSession:null,threadScheduler:null,primaryThread:null,schedulerReport:null,schedulerBlocker};
   }
 
   const resetRuntime=pick(runtime.exports,'r360_kernel_runtime_reset');
@@ -174,7 +209,7 @@ export async function handoffXboxIsoBrowser({
 }
 
 export function browserTitleRuntimeContract(){return {
-  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.1',
+  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.2',
   requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],
   input:'File/Blob XDVDFS ISO',
   wholeIsoCopy:false,

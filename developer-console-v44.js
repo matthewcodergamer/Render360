@@ -5,7 +5,7 @@
 // handoff result, scheduler blocker, PM4 observation, or browser exception.
 
 const RELEASE=44;
-const MAX_LOGS=1000;
+const MAX_LOGS=300;
 const $=id=>document.getElementById(id);
 const fmtHex=value=>`0x${(Number(value)||0>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
 const nowLabel=()=>new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -155,7 +155,7 @@ function installBrowserErrorCapture(){
 function installConsoleCapture(){
   for(const name of ['log','info','warn','error']){
     const original=console[name]?.bind(console);if(!original||original.__render360Wrapped)continue;
-    const wrapped=(...args)=>{original(...args);const text=args.map(argText).join(' ');if(/Render360|R360|Xenia|Xenos|STFS|XEX|PM4/i.test(text)||name==='warn'||name==='error')addLog(name==='log'?'info':name,text,{source:`console.${name}`,stage:lastStageKey});};
+    const wrapped=(...args)=>{original(...args);const text=args.map(argText).join(' ');if(/^R360_HIR\s+block=/i.test(text))return;if(/Render360|R360|Xenia|Xenos|STFS|XEX|PM4/i.test(text)||name==='warn'||name==='error')addLog(name==='log'?'info':name,text,{source:`console.${name}`,stage:lastStageKey});};
     wrapped.__render360Wrapped=true;console[name]=wrapped;
   }
 }

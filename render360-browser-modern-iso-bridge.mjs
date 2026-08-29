@@ -1,5 +1,5 @@
 import {Render360Core} from './wasm-core-v32.js';
-import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.2';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';

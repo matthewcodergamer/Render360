@@ -1,0 +1,61 @@
+name: Sync V43 Browser Assets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-v43-browser-assets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Force V43 cache identity and critical module graph
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, required=True):
+              p=Path(path); text=p.read_text()
+              if old not in text:
+                  if required:
+                      raise SystemExit(f'missing sync marker in {path}: {old}')
+                  return
+              p.write_text(text.replace(old,new))
+
+          # Force Safari/GitHub Pages onto the current V43 shell instead of a
+          # previously cached ?v=42 module graph.
+          p=Path('index.html'); text=p.read_text()
+          text=text.replace('?v=42','?v=43')
+          text=text.replace('Render360 42','Render360 43')
+          text=text.replace('<span class="value">42</span>','<span class="value">43</span>')
+          p.write_text(text)
+
+          # The two modules involved in the screenshots must not reuse stale
+          # dependency URLs: extensionless STFS detection lives in game-library,
+          # and LAUNCH stage progression lives in the runtime/bridge chain.
+          replace('app-v41.js',"from './runtime/render360-runtime.js'","from './runtime/render360-runtime.js?v=43'")
+          replace('app-v41.js',"from './library/game-library.js'","from './library/game-library.js?v=43'")
+          replace('app-v41.js',"from './library/cover-resolver.js'","from './library/cover-resolver.js?v=43'")
+          replace('app-v42-patch.js',"from './library/game-library.js'","from './library/game-library.js?v=43'")
+          replace('app-v42-patch.js',"from './library/cover-resolver.js?v=43'","from './library/cover-resolver.js?v=43'",required=False)
+
+          replace('runtime/render360-runtime.js',"from '../render360-browser-modern-content-bridge.mjs'","from '../render360-browser-modern-content-bridge.mjs?v=43'")
+          replace('render360-browser-modern-content-bridge.mjs',"from './render360-browser-title-runtime.mjs'","from './render360-browser-title-runtime.mjs?v=43'")
+          replace('render360-browser-title-runtime.mjs',"from './render360-browser-ppc-session.mjs'","from './render360-browser-ppc-session.mjs?v=43'")
+          replace('render360-browser-title-runtime.mjs',"from './render360-browser-thread-scheduler.mjs'","from './render360-browser-thread-scheduler.mjs?v=43'")
+          PY
+
+          # This is intentionally a one-shot release synchronizer; remove it
+          # from the resulting tree so future browser releases use their own ID.
+          git rm .github/workflows/sync-v43-browser-assets.yml
+          git config user.name 'Render360 Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html app-v41.js app-v42-patch.js runtime/render360-runtime.js render360-browser-modern-content-bridge.mjs render360-browser-title-runtime.mjs
+          git commit -m 'V43: cache-bust iOS launch and package fixes'
+          git push

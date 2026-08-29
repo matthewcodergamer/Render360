@@ -15,7 +15,7 @@ for(const entry of WebAssembly.Module.imports(module)){
 }
 const bootstrap=await WebAssembly.instantiate(module,imports);wasi.initialize(bootstrap);
 const pick=name=>bootstrap.exports[name]??bootstrap.exports[`_${name}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_kernel_runtime_reset','r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_stack_mapped'];
+const required=['r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_instructions','r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate','r360_kernel_runtime_reset','r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_stack_mapped'];
 for(const name of required)if(typeof pick(name)!=='function')throw new Error(`Missing thread scheduler fixture export ${name}`);
 
 const words=(...values)=>Uint8Array.from(values.flatMap(w=>[w>>>24,(w>>>16)&255,(w>>>8)&255,w&255]));
@@ -32,9 +32,16 @@ pick('r360_ppc_probe_reset')();
 pick('r360_kernel_runtime_reset')();
 const entryA=0x80000000;
 const entryB=0x80010000;
-// Thread A: addi r3,r3,1 ; blr. Thread B: addi r3,r3,2 ; blr.
+// Production mode: translation may register/lower the functions, but it must
+// not execute either program or mutate guest architectural state as a side
+// effect of assembly.
+if((pick('r360_ppc_probe_set_execute_on_translate')(0)>>>0)!==0||(pick('r360_ppc_probe_execute_on_translate')()>>>0)!==0)throw new Error('Could not enter side-effect-free PPC translation mode');
 translateAt(entryA,words(0x38630001,0x4E800020));
+if((pick('r360_ppc_probe_correctness_status')()>>>0)!==4||(pick('r360_ppc_probe_correctness_instructions')()>>>0)!==0)throw new Error('Thread A executed during production translation');
 translateAt(entryB,words(0x38630002,0x4E800020));
+if((pick('r360_ppc_probe_correctness_status')()>>>0)!==4||(pick('r360_ppc_probe_correctness_instructions')()>>>0)!==0)throw new Error('Thread B executed during production translation');
+if((pick('r360_ppc_probe_set_execute_on_translate')(1)>>>0)!==1)throw new Error('Could not restore correctness-execution mode');
+console.log('BROWSER_THREAD_SCHEDULER_TRANSLATION_ONLY_BOOT=PASS');
 
 const session=await createPersistentPpcSession({bootstrap});
 const scheduler=await createGuestThreadScheduler({bootstrap,session,maxSlicesPerPump:2});

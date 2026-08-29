@@ -14,6 +14,7 @@ enum XexGuestMapperStatus : uint32_t {
   kXexMapperLoadFailed = 0x80000003u,
   kXexMapperEntryInvalid = 0x80000004u,
   kXexMapperFinalizationFailed = 0x80000005u,
+  kXexMapperStagingAllocationFailed = 0x80000006u,
 };
 
 void ResetXexGuestMapper();
@@ -23,12 +24,14 @@ bool LoadXexGuestSectionData(uint32_t virtual_address, const void* data,
                              uint32_t size);
 bool SetXexGuestEntry(uint32_t entry_address);
 bool FinalizeXexGuestMapping();
+bool ReserveXexGuestInput(uint32_t required_capacity);
 uint32_t XexGuestMapperStatusValue();
 uint32_t XexGuestEntryAddress();
 uint32_t XexGuestSectionCount();
 uint32_t XexGuestMappedBytes();
 uint8_t* XexGuestInputBuffer();
 uint32_t XexGuestInputCapacity();
+uint32_t XexGuestInputMaxCapacity();
 
 }  // namespace render360::xenia_web
 
@@ -41,12 +44,14 @@ uint32_t r360_xex_guest_mapper_load(uint32_t virtual_address,
                                     uint32_t source_ptr, uint32_t size);
 uint32_t r360_xex_guest_mapper_set_entry(uint32_t entry_address);
 uint32_t r360_xex_guest_mapper_finalize();
+uint32_t r360_xex_guest_mapper_reserve_input(uint32_t required_capacity);
 uint32_t r360_xex_guest_mapper_status();
 uint32_t r360_xex_guest_mapper_entry_address();
 uint32_t r360_xex_guest_mapper_section_count();
 uint32_t r360_xex_guest_mapper_mapped_bytes();
 uint32_t r360_xex_guest_mapper_input_buffer();
 uint32_t r360_xex_guest_mapper_input_capacity();
+uint32_t r360_xex_guest_mapper_input_max_capacity();
 }
 
 #endif

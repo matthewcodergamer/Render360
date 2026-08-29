@@ -56,6 +56,15 @@ jobs:
             verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm \
             build/spirv-wgsl/render360_spirv_wgsl.js \
             build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
+      - name: Upload verified converter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: render360-spirv-wgsl-converter
+          path: |
+            build/spirv-wgsl/render360_spirv_wgsl.js
+            build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
+          if-no-files-found: error
+          retention-days: 14
       - name: Publish verified converter
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
@@ -103,12 +112,3 @@ jobs:
           done
           echo 'Failed to publish verified converter after 3 generated-artifact retries.' >&2
           exit 1
-      - name: Upload converter artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: render360-spirv-wgsl-converter
-          path: |
-            build/spirv-wgsl/render360_spirv_wgsl.js
-            build/spirv-wgsl/render360_spirv_wgsl_bg.wasm
-          if-no-files-found: error
-          retention-days: 14

@@ -137,11 +137,18 @@ uint32_t Translate(uint32_t type) {
     return 0;
   }
 
-  // Conservative translation-only feature set: SPIR-V 1.0, 128 MiB storage
-  // buffer slices, no Vulkan-only optional capabilities. This is intentionally
-  // chosen as the portable input tier for the subsequent Naga SPIR-V -> WGSL
-  // bridge used by browser WebGPU implementations such as Safari.
+  // Browser/WebGPU translation profile. Xenia normally advertises the Vulkan
+  // minimum 128 MiB storage-buffer range here, which makes it split the 512 MiB
+  // Xbox shared-memory address space into four bindings and represent them as an
+  // array of storage-buffer structs whose final member is a runtime array.
+  // Vulkan permits that descriptor shape, but WGSL requires array element types
+  // to be sized data types, so Naga correctly rejects it as InvalidArrayBaseType.
+  // Advertising one logical 512 MiB range makes Xenia emit a single shared-memory
+  // storage-buffer struct. This is a shader-layout decision only; Render360 still
+  // pages sparse Xbox memory on the host and does not allocate 512 MiB of browser
+  // linear memory merely to translate a shader.
   xe::gpu::SpirvShaderTranslator::Features features(false);
+  features.max_storage_buffer_range = 512u * 1024u * 1024u;
   xe::gpu::SpirvShaderTranslator translator(features, false, false, false);
   const uint32_t dynamic_registers = xe::gpu::xenos::kMaxShaderTempRegisters;
   const uint64_t modification =

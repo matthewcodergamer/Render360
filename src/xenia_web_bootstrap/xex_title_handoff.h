@@ -13,11 +13,9 @@ enum PreparedEntryHandoffStatus : uint32_t {
   kPreparedEntryHandoffReadFailed = 0x82000003u,
   kPreparedEntryHandoffLoadFailed = 0x82000004u,
   kPreparedEntryHandoffTranslateFailed = 0x82000005u,
-  kPreparedEntryHandoffInvalidGpr = 0x82000006u,
 };
 
 void ResetPreparedEntryHandoff();
-bool SetPreparedEntryInitialGpr(uint32_t index, uint64_t value);
 uint32_t TranslatePreparedPeEntry(uint32_t byte_count);
 uint32_t PreparedEntryHandoffStatusValue();
 uint32_t PreparedEntryHandoffAddress();
@@ -28,7 +26,6 @@ uint32_t PreparedEntryHandoffHIRInstructions();
 
 extern "C" {
 void r360_title_handoff_reset();
-uint32_t r360_title_handoff_set_initial_gpr(uint32_t index, uint64_t value);
 uint32_t r360_title_handoff_translate_entry(uint32_t byte_count);
 uint32_t r360_title_handoff_status();
 uint32_t r360_title_handoff_entry_address();

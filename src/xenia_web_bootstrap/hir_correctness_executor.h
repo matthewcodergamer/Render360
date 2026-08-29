@@ -38,6 +38,10 @@ using HIRCorrectnessAddressResolver = bool (*)(uint32_t guest_address);
 
 void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
+// HLE/import bridges may update the currently executing PPCContext while an
+// indirect guest call is being resolved. This is deliberately unavailable
+// outside active correctness/runtime execution.
+bool SetHIRCorrectnessActiveGPR(uint32_t index, uint64_t value);
 
 // ProbeBackend installs resolvers that send direct symbols and runtime-resolved
 // indirect targets back through the real Xenia PPCScanner/PPCFrontend. Nested

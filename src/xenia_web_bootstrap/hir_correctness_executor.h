@@ -10,6 +10,9 @@ class Function;
 namespace hir {
 class HIRBuilder;
 }
+namespace ppc {
+struct PPCContext;
+}
 }  // namespace cpu
 }  // namespace xe
 
@@ -45,6 +48,12 @@ bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver);
 void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver);
 bool IsHIRCorrectnessExecutionActive();
+
+// The kernel/XAM import bridge uses this only while finalized HIR is actively
+// executing. It lets a resolved HLE import consume the caller's real r3..r10
+// arguments and place its ABI return value back in r3 without inventing a
+// second PPC execution context.
+xe::cpu::ppc::PPCContext* GetHIRCorrectnessActiveContext();
 
 HIRCorrectnessResult ExecuteHIRCorrectnessProbe(xe::cpu::hir::HIRBuilder* builder,
                                                 xe::Memory* memory);

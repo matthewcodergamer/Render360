@@ -18,6 +18,8 @@ on:
       - 'test-kernel-import-service-bridge.mjs'
       - 'test-guest-runtime-critic.mjs'
       - 'test-title-kernel-import-integration.mjs'
+      - 'test-title-gpu-runtime.mjs'
+      - 'render360-title-gpu-traffic.mjs'
       - 'test-xenos-semantic-foundation.mjs'
       - 'test-xenos-guest-memory-bridge.mjs'
       - 'test-webgpu-wgsl-edram-foundation.mjs'
@@ -72,6 +74,7 @@ on:
       - 'prepare-render360-*-overlay.py'
       - 'prepare-wasm-*-overlay.py'
       - 'prepare-vmx-executor-overlay.py'
+      - 'prepare-title-runtime-memory-overlay.py'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'test-xenia-ppc-translation-probe.mjs'
@@ -169,6 +172,8 @@ jobs:
         run: node ./test-first-frame-provenance-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify automatic XEX import to kernel execution bridge
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify sparse title RAM, far PPC paging, Xenos MMIO and captured ring submission
+        run: node ./test-title-gpu-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up
         run: |
           if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then

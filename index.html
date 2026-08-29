@@ -3,141 +3,172 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-  <meta name="theme-color" content="#030406">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
-  <title>Render360 Xenia-Web · Core V32 · UI V33 · CPU V35</title>
+  <title>Render360 · Xbox 360 Library</title>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="app.css?v=30">
-  <link rel="stylesheet" href="v32.css?v=32">
-  <link rel="stylesheet" href="v33.css?v=33">
+  <link rel="stylesheet" href="ui-v40.css?v=40">
 </head>
 <body>
 <div id="app">
-  <canvas id="gpuCanvas" aria-label="Render360 WebGPU graphics surface"></canvas>
-  <canvas id="threeCanvas" aria-label="Render360 playable 3D surface"></canvas>
-  <div class="ambient"></div>
-  <div id="lookZone" class="look-zone hidden" aria-label="Drag to look around"><span>DRAG TO LOOK</span></div>
-
-  <header class="topbar glass">
-    <div class="brand"><span class="orb"></span><div><strong>Render360</strong><span>Xenia-Web · Core V32 · UI V33 · CPU V35</span></div></div>
-    <div class="top-actions">
-      <button id="arenaButton" class="icon-button" type="button" aria-label="Play test arena">PLAY</button>
-      <button id="consoleButton" class="icon-button" type="button" aria-label="Open console">&gt;_</button>
-      <button id="settingsButton" class="icon-button" type="button" aria-label="Project status">•••</button>
-    </div>
-  </header>
-
-  <div id="arenaHud" class="arena-hud glass hidden">
-    <div><b>TEST ARENA</b><span id="arenaScore">0 / 6 ORBS</span></div>
-    <div class="arena-help">LEFT STICK MOVE · DRAG SCREEN LOOK · A JUMP · RT SPRINT · X RESET</div>
-    <button id="leaveArena" type="button">MENU</button>
-  </div>
-
-  <main id="stage" class="stage">
-    <section id="emptyState" class="hero glass">
-      <div class="hero-mark"><span></span></div>
-      <p class="eyebrow">CORE V32 · UI V33 · CPU V35 · WEBGPU HOST</p>
-      <h1>Render360 V35 generated WASM is executing.</h1>
-      <p class="hero-copy">Stable Core V32 handles the live package/XEX path. The V35 development track has six regression-complete foundations, and the first real finalized-Xenia-HIR → generated-WebAssembly scalar stage is now green. Hot WasmBackend expansion is active before full guest-memory and real default.xex entry bring-up.</p>
-      <div class="status-grid six">
-        <div class="status-card"><span>Build</span><b id="buildStatus">V32</b></div>
-        <div class="status-card"><span>WASM</span><b id="wasmStatus">Starting…</b></div>
-        <div class="status-card"><span>Worker</span><b id="workerStatus">Starting…</b></div>
-        <div class="status-card"><span>WebGPU</span><b id="gpuStatus">Detecting…</b></div>
-        <div class="status-card"><span>Three.js</span><b id="threeStatus">Loading…</b></div>
-        <div class="status-card"><span>ABI</span><b id="abiStatus">—</b></div>
-      </div>
-      <div class="hero-actions">
-        <label class="primary-button play-button" for="gameInput">Load Xbox 360 game</label>
-        <button id="playNowButton" class="primary-button secondary-button" type="button">Controller test arena</button>
-      </div>
-      <input id="gameInput" type="file" accept=".xex,.live,.pirs,.con,.iso,application/octet-stream" hidden>
-      <p class="support-note"><b>Braid / XBLA:</b> use the LIVE/PIRS/CON package directly. V32 mounts the package and streams the complete default.xex without converting it to ISO. ISO/XDVDFS is a separate input path.</p>
-    </section>
-
-    <section id="gameState" class="game-card glass hidden">
-      <div class="game-heading">
-        <div><p class="eyebrow">XBOX CONTENT PIPELINE</p><h2 id="gameName">Game</h2></div>
-        <div class="game-heading-buttons"><button id="hideGameButton" class="small-button" type="button">Arena</button><button id="ejectButton" class="small-button" type="button">Eject</button></div>
-      </div>
-      <div class="game-meta"><div><span>Type</span><b id="gameType">—</b></div><div><span>Size</span><b id="gameSize">—</b></div><div><span>Core</span><b id="gameCore">WASM V32</b></div></div>
-
-      <div id="stfsDetails" class="xex-panel hidden">
-        <div class="xex-panel-title"><span></span><b>Xenia-aligned STFS mount</b></div>
-        <div class="xex-grid">
-          <div><span>Package name</span><b id="stfsDisplayName">—</b></div><div><span>Mount status</span><b id="stfsMountStatus">—</b></div>
-          <div><span>Title ID</span><b id="stfsTitleId">—</b></div><div><span>Media ID</span><b id="stfsMediaId">—</b></div>
-          <div><span>Header size</span><b id="stfsHeaderSize">—</b></div><div><span>File table</span><b id="stfsFileTable">—</b></div>
-          <div><span>Data blocks</span><b id="stfsBlocks">—</b></div><div><span>Format</span><b id="stfsFormat">—</b></div>
-          <div><span>Entries seen</span><b id="stfsEntries">—</b></div><div><span>Browser reads</span><b id="stfsRequests">—</b></div>
-          <div><span>default.xex</span><b id="stfsDefaultXex">—</b></div><div><span>XEX type</span><b id="stfsDefaultKind">—</b></div>
-          <div><span>Full extraction</span><b id="stfsExtractStatus">—</b></div><div><span>Capture</span><b id="stfsExtractCapture">—</b></div>
-        </div>
-        <div id="stfsFileList" class="stfs-file-list"></div>
-      </div>
-
-      <div id="xexDetails" class="xex-panel hidden">
-        <div class="xex-panel-title"><span></span><b>Xenia-aligned XEX metadata</b></div>
-        <div class="xex-grid">
-          <div><span>Title ID</span><b id="xexTitleId">—</b></div><div><span>Entry</span><b id="xexEntry">—</b></div>
-          <div><span>Image base</span><b id="xexImageBase">—</b></div><div><span>Header size</span><b id="xexHeaderSize">—</b></div>
-          <div><span>Security offset</span><b id="xexSecurity">—</b></div><div><span>Optional headers</span><b id="xexOptCount">—</b></div>
-          <div><span>Compression</span><b id="xexCompression">—</b></div><div><span>Encryption</span><b id="xexEncryption">—</b></div>
-          <div><span>Image size</span><b id="xexImageSize">—</b></div><div><span>Load address</span><b id="xexLoadAddress">—</b></div>
+  <section id="libraryView" class="view">
+    <div class="navbar">
+      <div class="nav-row">
+        <div class="nav-title">Render360</div>
+        <div class="nav-actions">
+          <button id="settingsButton" class="ios-icon-button" type="button" aria-label="Render360 settings">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1a1.7 1.7 0 0 0-.4-1.1 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2v-4h.1a1.7 1.7 0 0 0 1.1-.4 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h4v.1a1.7 1.7 0 0 0 .4 1.1 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8c.14.38.34.72.6 1 .3.3.7.46 1.1.5h.1v4h-.1c-.4.04-.8.2-1.1.5-.26.28-.46.62-.6 1Z"></path></svg>
+          </button>
+          <button id="importButton" class="ios-icon-button" type="button" aria-label="Import game">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
         </div>
       </div>
+      <div class="nav-title large">Library</div>
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+        <input id="librarySearch" class="search-input" type="search" placeholder="Search Games" autocomplete="off">
+      </div>
+    </div>
+    <div class="library-content">
+      <div id="libraryBootStatus" style="color:#636366;font-size:11px;margin:2px 0 14px">Starting emulator…</div>
+      <div id="gameGrid" class="game-grid"></div>
+      <div id="emptyLibrary" class="empty-library">
+        <div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"></path><path d="M8 10h2M9 9v2M15 10h.01M17 12h.01"></path></svg></div>
+        <h2>No Games Yet</h2>
+        <p>Import an Xbox 360 ISO, XEX, LIVE/PIRS/CON package, or a ZIP containing one of those formats.</p>
+        <button id="emptyImportButton" class="primary" type="button">Import Game</button>
+      </div>
+    </div>
+  </section>
 
-      <div id="firstFrameGate" class="frame-gate hidden">
-        <div class="frame-gate-title"><span></span><b>First real Xbox frame</b><em id="frameGateState">PREPARING</em></div>
-        <div class="frame-gate-grid">
-          <div class="ready"><span>1</span><b>STFS mount</b><em>READY</em></div>
-          <div id="gateExtract"><span>2</span><b>default.xex stream</b><em>WAIT</em></div>
-          <div id="gateXex"><span>3</span><b>XEX image loader</b><em>WAIT</em></div>
-          <div id="gateCpu"><span>4</span><b>V35 CPU → hot WASM</b><em>SCALAR ✓</em></div>
-          <div id="gateKernel"><span>5</span><b>Kernel / XAM</b><em>BLOCKED</em></div>
-          <div id="gateGpu"><span>6</span><b>Xenos → WebGPU</b><em>BLOCKED</em></div>
+  <section id="detailView" class="view hidden">
+    <div class="detail-nav">
+      <button id="detailBack" class="text-button" type="button">‹ Library</button>
+      <button id="gameSettingsButton" class="text-button" type="button">Settings</button>
+    </div>
+    <div class="detail-body">
+      <div class="detail-hero">
+        <div>
+          <div id="detailCover" class="detail-cover"></div>
+          <button id="chooseCoverButton" class="cover-action" type="button">Choose Cover</button>
+        </div>
+        <div class="detail-info">
+          <h1 id="detailName">Xbox 360 Game</h1>
+          <div class="detail-sub">Title ID <span id="detailTitleId">Unknown</span></div>
+          <div id="detailCompatibility" class="compat-pill">Testing</div>
+          <button id="playGameButton" class="play-button" type="button">Play</button>
         </div>
       </div>
-      <div class="boundary"><span class="pulse"></span><div><b id="boundaryTitle">Container recognized</b><p id="boundaryText">Waiting for the next Xenia subsystem to be ported.</p></div></div>
-    </section>
-  </main>
-
-  <button id="gameChip" class="game-chip glass hidden" type="button"><span class="tele-dot"></span><b id="gameChipName">Xbox content</b><span>INSPECT</span></button>
-  <div id="liveTelemetry" class="live-telemetry glass"><span class="tele-dot"></span><b>WASM WORKER STARTING</b><span>GPU —</span><span>SCALE —</span></div>
-
-  <div class="controller-layer">
-    <div class="top-controller-row">
-      <button id="pauseRuntimeButton" class="glass host-control pause-control" type="button">Pause</button>
-      <div class="top-controller-center"><button class="glass control top-control" data-key="BACK">Back</button><button class="glass control top-control" data-key="START">Start</button></div>
-      <div class="top-controller-right"><button class="glass control top-control" data-key="LB">LB</button><button class="glass control top-control" data-key="RB">RB</button></div>
+      <div class="group-title">Game</div>
+      <div class="group">
+        <div class="row"><span>Content</span><span id="detailType" class="value">—</span></div>
+        <div class="row"><span>Size</span><span id="detailSize" class="value">—</span></div>
+        <div class="row"><span>Source</span><span id="detailSource" class="value">—</span></div>
+      </div>
+      <div class="group-title">Manage</div>
+      <div class="group">
+        <button id="diagnosticsButton" class="row row-button" type="button"><span>Diagnostics</span><span class="chev">›</span></button>
+        <button id="deleteGameButton" class="row row-button danger" type="button"><span>Remove from Library</span><span></span></button>
+      </div>
     </div>
-    <div class="left-cluster">
-      <button class="glass control trigger" data-key="LT">LT</button>
-      <div class="stick glass" id="moveStick" role="slider" aria-label="Movement stick"><div id="moveKnob" class="stick-knob"></div></div>
+  </section>
+
+  <section id="settingsView" class="view hidden">
+    <div class="detail-nav"><button id="settingsBack" class="text-button" type="button">‹ Game</button><button id="saveSettings" class="text-button" type="button">Save</button></div>
+    <div class="settings-body">
+      <div class="settings-header"><div style="color:#8e8e93;font-size:12px" id="settingsGameName"></div><h1>Game Settings</h1></div>
+      <div class="group-title">Display</div>
+      <div class="group">
+        <div class="row"><span>Resolution</span><select id="settingResolution" class="settings-select"><option value="auto">Auto</option><option value="640x480">640×480</option><option value="720x480">720×480</option><option value="720x576">720×576</option><option value="800x600">800×600</option><option value="854x480">854×480</option><option value="960x540">960×540</option><option value="1280x720">1280×720</option></select></div>
+        <div class="row"><span>Renderer</span><select id="settingRenderer" class="settings-select"><option value="auto">Auto</option><option value="webgpu">WebGPU</option><option value="webgl2">WebGL2 fallback</option></select></div>
+        <div class="row"><span>Dynamic Resolution</span><label class="switch"><input id="settingDynamic" type="checkbox"><span></span></label></div>
+        <div class="row"><span>Target FPS</span><select id="settingTargetFps" class="settings-select"><option>30</option><option>60</option></select></div>
+      </div>
+      <div class="group-title">Graphics Workarounds</div>
+      <div class="group">
+        <div class="row"><span>Half-Pixel Offset</span><label class="switch"><input id="settingHalfPixel" type="checkbox"><span></span></label></div>
+        <div class="row"><span>Treat 3D Textures as 2D</span><label class="switch"><input id="setting3DTextures" type="checkbox"><span></span></label></div>
+        <div class="row"><span>Allow Invalid Fetch Constants</span><label class="switch"><input id="settingInvalidFetch" type="checkbox"><span></span></label></div>
+        <div class="row"><span>Readback Resolves</span><label class="switch"><input id="settingReadback" type="checkbox"><span></span></label></div>
+      </div>
+      <div class="group-title">Advanced</div>
+      <div class="group">
+        <div class="row"><span>Developer Mode</span><label class="switch"><input id="settingDeveloper" type="checkbox"><span></span></label></div>
+        <button id="resetSettings" class="row row-button danger" type="button"><span>Reset Game Settings</span><span></span></button>
+      </div>
     </div>
-    <div id="lookStick" class="look-stick glass" role="slider" aria-label="Look stick"><div id="lookKnob" class="look-stick-knob">LOOK</div></div>
-    <div class="right-cluster"><button class="glass control trigger" data-key="RT">RT</button><div class="face-grid"><button class="glass control face y" data-key="Y">Y</button><button class="glass control face x" data-key="X">X</button><button class="glass control face b" data-key="B">B</button><button class="glass control face a" data-key="A">A</button></div></div>
-  </div>
+  </section>
+
+  <section id="runtimeView" class="view runtime-view hidden">
+    <div class="runtime-stage">
+      <canvas id="gpuCanvas" aria-label="Render360 Xbox 360 graphics surface"></canvas>
+      <div id="bootOverlay" class="boot-overlay">
+        <div class="boot-card"><div class="spinner"></div><div id="bootTitle" class="boot-title">Starting Xbox 360 title</div><div id="bootMessage" class="boot-message">Preparing runtime…</div></div>
+      </div>
+      <div id="performanceHud" class="performance-hud">
+        <div class="hud-head"><span>Render360</span><span id="hudBackend">WAITING</span></div>
+        <div class="hud-grid">
+          <span>FPS</span><b><span id="hudFps">—</span> · <span id="hudFrame">—</span></b>
+          <span>CPU</span><b id="hudCpu">—</b>
+          <span>GPU</span><b id="hudGpu">—</b>
+          <span>Scale</span><b id="hudScale">1.00x</b>
+          <span>RAM</span><b id="hudRam">—</b>
+          <span>PM4</span><b id="hudPm4">0</b>
+          <span>Draws</span><b id="hudDraws">0</b>
+        </div>
+        <canvas id="hudGraph" class="hud-canvas"></canvas>
+      </div>
+      <button id="runtimeBack" class="runtime-back" type="button" aria-label="Pause">•••</button>
+      <div id="controllerLayer" class="controller-layer">
+        <div class="top-controls">
+          <div><button id="pauseButton" class="control top-control pause-control" type="button">Pause</button></div>
+          <div><button class="control top-control" data-key="BACK" type="button">Back</button><button class="control top-control" data-key="START" type="button">Start</button></div>
+          <div><button class="control top-control" data-key="LB" type="button">LB</button><button class="control top-control" data-key="RB" type="button">RB</button></div>
+        </div>
+        <div class="left-controls">
+          <button class="control trigger" data-key="LT" type="button">LT</button>
+          <div id="leftStick" class="stick" role="slider" aria-label="Movement stick"><div id="leftStickKnob" class="stick-knob"></div><div class="stick-label">Move</div></div>
+        </div>
+        <div class="right-controls">
+          <button class="control trigger" data-key="RT" type="button">RT</button>
+          <div id="rightStick" class="stick" role="slider" aria-label="Look stick" style="right:0;left:auto"><div id="rightStickKnob" class="stick-knob"></div><div class="stick-label">Look</div></div>
+          <div class="face-grid"><button class="control face y" data-key="Y" type="button">Y</button><button class="control face x" data-key="X" type="button">X</button><button class="control face b" data-key="B" type="button">B</button><button class="control face a" data-key="A" type="button">A</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <input id="importInput" type="file" accept=".zip,.iso,.xex,.live,.pirs,.con,application/zip,application/octet-stream" hidden>
+  <input id="relinkInput" type="file" accept=".iso,.xex,.live,.pirs,.con,application/octet-stream" hidden>
+  <input id="coverInput" type="file" accept="image/png,image/jpeg" hidden>
 
   <div id="scrim" class="scrim hidden"></div>
-  <section id="consoleSheet" class="sheet glass hidden" aria-label="Render360 console">
-    <div class="sheet-head"><div><b>Render360 Console</b><span id="logCount">0</span></div><div class="sheet-actions"><button id="copyLogs" type="button">Copy</button><button id="clearLogs" type="button">Clear</button><button id="closeConsole" type="button">Done</button></div></div><div id="consoleBody" class="console-body"></div>
+  <section id="importSheet" class="sheet hidden" aria-label="Importing game">
+    <div class="sheet-handle"></div><div class="sheet-head"><b id="importTitle">Preparing game…</b></div>
+    <div class="sheet-content"><div class="import-progress"><div class="progress-track"><div id="importProgressFill" class="progress-fill"></div></div><div class="progress-meta"><span id="importProgressMeta">Reading file…</span><span id="importProgressPercent">0%</span></div></div></div>
   </section>
-
-  <section id="statusSheet" class="sheet glass hidden">
-    <div class="sheet-head"><div><b>Port Status</b><span>Core V32 · UI V33 · CPU V35</span></div><button id="closeStatus" type="button">Done</button></div>
-    <div class="port-list">
-      <div class="port-row done"><span></span><div><b>Playable browser input test</b><p>Real analog joystick, drag-look camera, keyboard/gamepad polling, jump/sprint/reset and a lightweight Three.js arena are active now.</p></div></div>
-      <div class="port-row done"><span></span><div><b>C++ / WebAssembly ABI</b><p>Freestanding wasm32 core plus native digital and analog input bridge.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Continuous WASM worker runtime</b><p>Native runtime ticks continuously off the UI thread.</p><div class="runtime-mini"><span>Worker <b id="runtimeStatus">Starting…</b></span><span>Ticks <b id="runtimeTicks">—</b></span><span>Work <b id="runtimeWork">—</b></span></div></div></div>
-      <div class="port-row done"><span></span><div><b>STFS / XEX extraction</b><p>LIVE/PIRS/CON mount, native directory traversal, root default.xex lookup, contiguous/hash-chain streaming, and full XEX capture are active.</p></div></div>
-      <div class="port-row done"><span></span><div><b>Performance foundation</b><p>WebGPU underlay plus dynamic resolution. The test arena is a host-side input/render test, not the Xbox renderer.</p><div class="runtime-mini"><span>GPU <b id="gpuFps">—</b></span><span>Scale <b id="renderScale">—</b></span><span>Three <b id="threeFps">—</b></span></div><div class="perf-controls"><label>Profile<select id="performanceProfile"><option value="performance">Performance</option><option value="balanced">Balanced</option><option value="compatibility">Compatibility</option></select></label><label class="toggle-row"><input id="autoScaleToggle" type="checkbox" checked> Dynamic resolution</label></div></div></div>
-      <div class="port-row active"><span></span><div><b>Retail Xbox execution</b><p>The V35 track has six completed CPU/browser foundations and the first generated-WASM scalar stage is green. WasmBackend control/memory/calls/FPU/VMX expansion, full guest memory, kernel/XAM and Xenos → WebGPU remain before genuine retail gameplay.</p></div></div>
-    </div>
+  <section id="pauseSheet" class="sheet hidden" aria-label="Game paused">
+    <div class="sheet-handle"></div><div class="sheet-head"><b>Paused</b></div>
+    <button id="resumeButton" class="sheet-action primary-action" type="button">Resume</button>
+    <button id="leaveGameButton" class="sheet-action" type="button">Return to Game Details</button>
+  </section>
+  <section id="diagnosticsSheet" class="sheet hidden" aria-label="Diagnostics">
+    <div class="sheet-handle"></div><div class="sheet-head"><b>Diagnostics</b></div>
+    <div class="sheet-content"><div id="diagnosticsLog" class="diagnostics-log"></div></div>
+    <button class="sheet-action" data-close-sheet type="button">Done</button>
+  </section>
+  <section id="appSettingsSheet" class="sheet hidden" aria-label="Render360 settings">
+    <div class="sheet-handle"></div><div class="sheet-head"><b>Render360</b></div>
+    <div class="sheet-content"><div class="group" style="margin-top:0"><button id="appDiagnosticsButton" class="row row-button" type="button"><span>Emulator Diagnostics</span><span class="chev">›</span></button></div></div>
+    <button class="sheet-action" data-close-sheet type="button">Done</button>
+  </section>
+  <section id="iosAlert" class="alert hidden" role="alertdialog" aria-modal="true">
+    <div class="alert-body"><h3 id="alertTitle">Render360</h3><p id="alertMessage"></p></div><div id="alertActions" class="alert-actions"></div>
   </section>
 </div>
-<script type="module" src="app-v32.js?v=32"></script>
+<script type="module" src="app-v40.js?v=40"></script>
 </body>
 </html>

@@ -1,0 +1,46 @@
+name: Kernel Runtime Harsh Critics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - 'test-kernel-services-critic.mjs'
+      - 'test-guest-runtime-critic.mjs'
+      - '.github/workflows/kernel-runtime-critics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel-runtime-harsh-critics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+
+      - name: Compile kernel/runtime foundation to standalone wasm32
+        run: |
+          mkdir -p build/kernel-runtime
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            emscripten/emsdk:latest \
+            bash -lc 'em++ -std=c++20 -O2 src/xenia_web_bootstrap/kernel_runtime_foundation.cpp -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS='"'"'["_r360_kernel_runtime_reset","_r360_guest_thread_create","_r360_guest_thread_current","_r360_guest_thread_set_current","_r360_guest_thread_suspend","_r360_guest_thread_resume","_r360_guest_thread_terminate","_r360_guest_thread_next_runnable","_r360_guest_thread_state","_r360_guest_thread_exit_code","_r360_guest_thread_stack_size","_r360_guest_runtime_status","_r360_guest_tls_alloc","_r360_guest_tls_free","_r360_guest_tls_set","_r360_guest_tls_get","_r360_kernel_service_reset","_r360_kernel_service_call","_r360_kernel_service_status","_r360_kernel_service_calls","_r360_kernel_service_last_module","_r360_kernel_service_last_ordinal"]'"'"' -o build/kernel-runtime/kernel_runtime.wasm'
+
+      - name: 'Harsh critic: verify xboxkrnl and XAM starter services'
+        run: node ./test-kernel-services-critic.mjs build/kernel-runtime/kernel_runtime.wasm
+
+      - name: 'Harsh critic: verify guest threads TLS and runtime'
+        run: node ./test-guest-runtime-critic.mjs build/kernel-runtime/kernel_runtime.wasm
+
+      - name: Upload harsh-critic wasm
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-runtime-harsh-critic-wasm
+          path: build/kernel-runtime/kernel_runtime.wasm
+          if-no-files-found: error
+          retention-days: 14

@@ -4,6 +4,15 @@
 
 #include "sparse_guest_memory.h"
 
+extern "C" {
+void r360_xenos_reset();
+uint32_t r360_xenos_ring_buffer();
+uint32_t r360_xenos_ring_capacity();
+uint32_t r360_xenos_submit(uint32_t words);
+uint32_t r360_xenos_status();
+uint32_t r360_xenos_last_fault_word();
+}
+
 namespace render360::xenia_web {
 namespace {
 
@@ -18,10 +27,15 @@ constexpr uint32_t kRegisterCpRbWptr = 0x01C5u;
 uint32_t g_status = 0;
 uint32_t g_ring_base = 0;
 uint32_t g_ring_size_log2 = 0;
+uint32_t g_read_pointer = 0;
 uint32_t g_write_pointer = 0;
 uint32_t g_rptr_writeback = 0;
 uint32_t g_rptr_block_size_log2 = 0;
 uint32_t g_mmio_writes = 0;
+uint32_t g_xenos_submissions = 0;
+uint32_t g_xenos_rejections = 0;
+uint32_t g_last_xenos_status = 0;
+uint32_t g_last_xenos_fault_word = 0;
 
 bool IsGpuMmio(uint32_t address) {
   return (address & kGpuMmioMask) == kGpuMmioBase;
@@ -31,10 +45,94 @@ uint32_t RegisterIndex(uint32_t address) {
   return (address & 0xFFFFu) / 4u;
 }
 
+uint32_t RingBytesInternal() {
+  return g_ring_base && g_ring_size_log2 < 29u
+             ? (uint32_t{1} << (g_ring_size_log2 + 3u))
+             : 0u;
+}
+
+uint32_t RingCapacityInternal() { return RingBytesInternal() / 4u; }
+
+bool ReadRingWordInternal(uint32_t index, uint32_t* out_value) {
+  if (!out_value) return false;
+  const uint32_t capacity = RingCapacityInternal();
+  if (!capacity || index >= capacity) return false;
+  const uint64_t address64 = uint64_t(g_ring_base) + uint64_t(index) * 4u;
+  if (address64 > UINT32_MAX) return false;
+  uint8_t bytes[4] = {};
+  if (!ReadSparseGuestMemory(static_cast<uint32_t>(address64), bytes,
+                             sizeof(bytes))) {
+    return false;
+  }
+  *out_value = (uint32_t(bytes[0]) << 24) |
+               (uint32_t(bytes[1]) << 16) |
+               (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
+  if (g_status < 3u) g_status = 3u;
+  return true;
+}
+
+bool PublishReadPointer() {
+  if (!g_rptr_writeback) return true;
+  const uint8_t bytes[4] = {static_cast<uint8_t>(g_read_pointer >> 24),
+                            static_cast<uint8_t>(g_read_pointer >> 16),
+                            static_cast<uint8_t>(g_read_pointer >> 8),
+                            static_cast<uint8_t>(g_read_pointer)};
+  return WriteSparseGuestMemory(g_rptr_writeback, bytes, sizeof(bytes));
+}
+
+bool DrainPendingRingToXenos() {
+  const uint32_t capacity = RingCapacityInternal();
+  if (!capacity || g_read_pointer >= capacity || g_write_pointer >= capacity) {
+    ++g_xenos_rejections;
+    return false;
+  }
+  if (g_read_pointer == g_write_pointer) return true;
+
+  const uint32_t pending = g_write_pointer >= g_read_pointer
+                               ? g_write_pointer - g_read_pointer
+                               : (capacity - g_read_pointer) + g_write_pointer;
+  const uint32_t decoder_capacity = r360_xenos_ring_capacity();
+  const uint32_t decoder_ptr = r360_xenos_ring_buffer();
+  if (!pending || !decoder_ptr || pending > decoder_capacity) {
+    ++g_xenos_rejections;
+    g_last_xenos_status = r360_xenos_status();
+    g_last_xenos_fault_word = r360_xenos_last_fault_word();
+    return false;
+  }
+
+  auto* decoder = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(decoder_ptr));
+  for (uint32_t i = 0; i < pending; ++i) {
+    const uint32_t ring_index = (g_read_pointer + i) % capacity;
+    if (!ReadRingWordInternal(ring_index, &decoder[i])) {
+      ++g_xenos_rejections;
+      return false;
+    }
+  }
+
+  if (!r360_xenos_submit(pending)) {
+    ++g_xenos_rejections;
+    g_last_xenos_status = r360_xenos_status();
+    g_last_xenos_fault_word = r360_xenos_last_fault_word();
+    return false;
+  }
+
+  ++g_xenos_submissions;
+  g_last_xenos_status = r360_xenos_status();
+  g_last_xenos_fault_word = r360_xenos_last_fault_word();
+  g_read_pointer = g_write_pointer;
+  return PublishReadPointer();
+}
+
 void CaptureRing(uint32_t base, uint32_t size_log2) {
   g_ring_base = base;
   g_ring_size_log2 = size_log2;
+  g_read_pointer = 0;
   g_write_pointer = 0;
+  g_xenos_submissions = 0;
+  g_xenos_rejections = 0;
+  g_last_xenos_status = 0;
+  g_last_xenos_fault_word = 0;
+  r360_xenos_reset();
   if (base && size_log2 < 29u) g_status = g_status < 1u ? 1u : g_status;
 }
 
@@ -44,10 +142,16 @@ void ResetTitleGpuRuntime() {
   g_status = 0;
   g_ring_base = 0;
   g_ring_size_log2 = 0;
+  g_read_pointer = 0;
   g_write_pointer = 0;
   g_rptr_writeback = 0;
   g_rptr_block_size_log2 = 0;
   g_mmio_writes = 0;
+  g_xenos_submissions = 0;
+  g_xenos_rejections = 0;
+  g_last_xenos_status = 0;
+  g_last_xenos_fault_word = 0;
+  r360_xenos_reset();
 }
 
 bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
@@ -65,6 +169,7 @@ bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
     case 0x01B6:  // VdEnableRingBufferRPtrWriteBack(ptr, block_size_log2)
       g_rptr_writeback = r3;
       g_rptr_block_size_log2 = r4;
+      PublishReadPointer();
       *result = 0;
       return true;
     case 0x01BC:  // VdGetGraphicsAsicID
@@ -96,7 +201,7 @@ bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
   if (!value || !IsGpuMmio(address)) return false;
   switch (RegisterIndex(address)) {
     case kRegisterCpRbRptr:
-      *value = 0u;  // No packets are retired until the browser submits them.
+      *value = g_read_pointer;
       return true;
     case kRegisterCpRbWptr:
       *value = g_write_pointer;
@@ -113,6 +218,11 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
     case kRegisterCpRbWptr:
       g_write_pointer = value;
       if (g_ring_base) g_status = g_status < 2u ? 2u : g_status;
+      // GPU consumption is coupled to the real producer MMIO write so guest
+      // code polling CP_RB_RPTR can make forward progress while the PPC entry
+      // function is still executing. Decoder rejection intentionally leaves
+      // RPTR unchanged and is surfaced by Xenos telemetry as the real blocker.
+      if (g_ring_base) DrainPendingRingToXenos();
       return true;
     default:
       // Other GPU registers are not claimed as supported here. They must reach
@@ -124,12 +234,8 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
 
 uint32_t TitleGpuRingBase() { return g_ring_base; }
 uint32_t TitleGpuRingSizeLog2() { return g_ring_size_log2; }
-uint32_t TitleGpuRingBytes() {
-  return g_ring_base && g_ring_size_log2 < 29u
-             ? (uint32_t{1} << (g_ring_size_log2 + 3u))
-             : 0u;
-}
-uint32_t TitleGpuRingWordCapacity() { return TitleGpuRingBytes() / 4u; }
+uint32_t TitleGpuRingBytes() { return RingBytesInternal(); }
+uint32_t TitleGpuRingWordCapacity() { return RingCapacityInternal(); }
 uint32_t TitleGpuWritePointer() { return g_write_pointer; }
 uint32_t TitleGpuReadPointerWriteback() { return g_rptr_writeback; }
 uint32_t TitleGpuReadPointerBlockSizeLog2() {
@@ -140,20 +246,9 @@ uint32_t TitleGpuStatus() { return g_status; }
 
 uint32_t TitleGpuRingWord(uint32_t index, bool* ok) {
   if (ok) *ok = false;
-  const uint32_t capacity = TitleGpuRingWordCapacity();
-  if (!capacity || index >= capacity) return 0;
-  const uint64_t address64 = uint64_t(g_ring_base) + uint64_t(index) * 4u;
-  if (address64 > UINT32_MAX) return 0;
-  uint8_t bytes[4] = {};
-  if (!ReadSparseGuestMemory(static_cast<uint32_t>(address64), bytes,
-                             sizeof(bytes))) {
-    return 0;
-  }
-  const uint32_t value = (uint32_t(bytes[0]) << 24) |
-                         (uint32_t(bytes[1]) << 16) |
-                         (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
+  uint32_t value = 0;
+  if (!ReadRingWordInternal(index, &value)) return 0;
   if (ok) *ok = true;
-  if (g_status < 3u) g_status = 3u;
   return value;
 }
 

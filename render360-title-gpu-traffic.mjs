@@ -33,6 +33,17 @@ export function readXenosTitleState({bootstrap}){
   return {vertexShader,pixelShader,fetchConstantGroups,shaderLoads:loads?loads()>>>0:0,indirectBuffers:indirect?indirect()>>>0:0,memoryWrites:optional('r360_xenos_memory_writes'),interrupts:optional('r360_xenos_interrupts'),lastInterruptMask:optional('r360_xenos_last_interrupt_mask'),lastFaultDepth:faultDepth?faultDepth()>>>0:0,lastInvalidateMask:invalidate?invalidate()>>>0:0,swaps,frontbufferPtr,frontbufferWidth,frontbufferHeight,frameProvenance,realTitleFrameReady,hasRealSwap:swaps>0,hasTitleShaders:vertexShader.dwordCount>0||pixelShader.dwordCount>0,hasBothTitleShaders:vertexShader.dwordCount>0&&pixelShader.dwordCount>0,hasFetchResources:fetchConstantGroups.length>0};
 }
 
+function currentXenosResult({bootstrap,source,throwOnReject=false}){
+  const e=bootstrap.exports;
+  const status=requireExport(e,'r360_xenos_status')()>>>0,packets=requireExport(e,'r360_xenos_packets')()>>>0,draws=requireExport(e,'r360_xenos_draws')()>>>0,presents=requireExport(e,'r360_xenos_presents')()>>>0,generation=requireExport(e,'r360_xenos_frame_generation')()>>>0,frameHash=requireExport(e,'r360_xenos_frame_hash')()>>>0,lastOpcode=requireExport(e,'r360_xenos_last_opcode')()>>>0,lastFaultWord=requireExport(e,'r360_xenos_last_fault_word')()>>>0;
+  const titleState=readXenosTitleState({bootstrap});
+  const titleStatus=optionalExport(e,'r360_title_gpu_status')?.()>>>0||0,guestAddress=optionalExport(e,'r360_title_gpu_ring_base')?.()>>>0||0,ringCapacity=optionalExport(e,'r360_title_gpu_ring_word_capacity')?.()>>>0||0,writePointer=optionalExport(e,'r360_title_gpu_write_pointer')?.()>>>0||0;
+  const submitted=status===1;
+  const result={ready:true,reason:submitted?'native-mmio-ring-drained':'native-mmio-xenos-rejected',status:titleStatus,guestAddress,ringCapacity,writePointer,wordCount:0,words:[],wordHash:0,source,nativeDrained:true,submitted,xenosStatus:status,packets,draws,presents,frameGeneration:generation,frameHash,lastOpcode,lastFaultWord,...titleState};
+  if(!submitted&&throwOnReject)throw new Error(`title Xenos stream rejected status=${result.xenosStatus} word=${result.lastFaultWord} depth=${result.lastFaultDepth}`);
+  return result;
+}
+
 export function readTitleGpuWords({bootstrap,guestAddress,wordCount}){
   if(!bootstrap?.exports)throw new TypeError('bootstrap instance required');
   if(!Number.isInteger(wordCount)||wordCount<=0)throw new RangeError('GPU word count must be positive');
@@ -83,6 +94,16 @@ export function readCapturedTitleGpuWords({bootstrap}){
 }
 
 export function submitCapturedTitleGpuTraffic({bootstrap,throwOnReject=false}={}){
+  if(!bootstrap?.exports)throw new TypeError('bootstrap instance required');
+  const e=bootstrap.exports;
+  // Modern bootstraps synchronously drain the actual circular title ring from
+  // the translated PPC CP_RB_WPTR MMIO write. Never reset or replay that state
+  // from JavaScript: doing so destroys real register/shader/resource history.
+  const xenosStatus=optionalExport(e,'r360_xenos_status')?.()>>>0||0;
+  const packets=optionalExport(e,'r360_xenos_packets')?.()>>>0||0;
+  if(xenosStatus!==0||packets>0)return currentXenosResult({bootstrap,source:'native-cp-rb-wptr-drain',throwOnReject});
+  // Compatibility fallback for older published bootstraps with telemetry-only
+  // ring capture and no native MMIO consumer.
   const trace=readCapturedTitleGpuWords({bootstrap});
   if(!trace.ready)return {...trace,submitted:false,source:'captured-title-xenos-ring'};
   return submitWords({bootstrap,trace,source:'captured-title-xenos-ring',throwOnReject});

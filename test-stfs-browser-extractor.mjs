@@ -41,7 +41,7 @@ assert.equal(out2.requestCount,2,'contiguous extraction must not need hash-table
 assert.deepEqual(out2.captured,out.captured);
 
 const contract=browserStfsExtractorContract();
-assert.equal(contract.version,43);
+assert.equal(contract.version,44);
 assert.equal(contract.nativePreferred,true);
 assert.equal(contract.failClosed,true);
 

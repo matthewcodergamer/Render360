@@ -28,9 +28,14 @@ const required = [
   'r360_wasm_backend_cfg_module_size',
   'r360_wasm_backend_cfg_lowered_instructions',
   'r360_wasm_backend_cfg_context_ptr',
+  'r360_wasm_backend_cfg_continuation_slot_count',
+  'r360_wasm_backend_cfg_continuation_state_size',
+  'r360_wasm_backend_cfg_continuation_ptr',
+  'r360_wasm_backend_cfg_continuation_status',
+  'r360_wasm_backend_cfg_continuation_reset',
 ];
 for (const name of required) {
-  if (typeof pick(name) !== 'function') throw new Error(`Missing WasmBackend CFG gate export ${name}`);
+  if (typeof pick(name) !== 'function') throw new Error(`Missing resumable WasmBackend CFG gate export ${name}`);
 }
 if (!(instance.exports.memory instanceof WebAssembly.Memory)) throw new Error('Parent bootstrap memory is not exported');
 
@@ -67,6 +72,16 @@ function seedContext(initialGprs) {
     view.setBigUint64(contextPtr + gprOffset + reg * 8, BigInt.asUintN(64, value), true);
   }
   return view;
+}
+
+function continuation(slot = 0) {
+  const count = pick('r360_wasm_backend_cfg_continuation_slot_count')() >>> 0;
+  const stateSize = pick('r360_wasm_backend_cfg_continuation_state_size')() >>> 0;
+  if (!count || slot >= count || stateSize < 8) throw new Error(`Invalid CFG continuation layout count=${count} size=${stateSize}`);
+  pick('r360_wasm_backend_cfg_continuation_reset')(slot);
+  const ptr = pick('r360_wasm_backend_cfg_continuation_ptr')(slot) >>> 0;
+  if (!ptr || ptr + stateSize > instance.exports.memory.buffer.byteLength) throw new Error(`Invalid CFG continuation pointer slot=${slot} ptr=0x${ptr.toString(16)} size=${stateSize}`);
+  return {slot, ptr, stateSize, status: () => pick('r360_wasm_backend_cfg_continuation_status')(slot) >>> 0};
 }
 
 async function translateCfg({ name, ppc, initialGprs, expectedR3, minLowered }) {
@@ -106,9 +121,11 @@ async function translateCfg({ name, ppc, initialGprs, expectedR3, minLowered }) 
   const child = await WebAssembly.instantiate(childModule, { env: { memory: instance.exports.memory } });
   if (typeof child.exports.run !== 'function') throw new Error(`${name}: generated CFG module has no run export`);
 
+  const state = continuation(0);
   const view = seedContext(initialGprs);
-  const generatedR3 = BigInt.asUintN(64, child.exports.run(contextPtr));
+  const generatedR3 = BigInt.asUintN(64, child.exports.run(contextPtr, state.ptr));
   const storedR3 = view.getBigUint64(contextPtr + gprOffset + 3 * 8, true);
+  if (state.status() !== 2) throw new Error(`${name}: small CFG function did not reach completed continuation state`);
   if (generatedR3 !== oracleR3 || storedR3 !== oracleR3) {
     throw new Error(`${name}: CFG mismatch oracle=${oracleR3} generated=${generatedR3} stored=${storedR3}`);
   }
@@ -125,10 +142,11 @@ const conditional = await translateCfg({
 
 // Reuse the exact same compiled CFG module with the opposite live predicate.
 {
+  const state = continuation(0);
   const view = seedContext([[4, 5n]]);
-  const reused = BigInt.asUintN(64, conditional.exports.run(contextPtr));
+  const reused = BigInt.asUintN(64, conditional.exports.run(contextPtr, state.ptr));
   const stored = view.getBigUint64(contextPtr + gprOffset + 3 * 8, true);
-  if (reused !== 1n || stored !== 1n) throw new Error(`conditional reuse mismatch returned=${reused} stored=${stored}`);
+  if (state.status() !== 2 || reused !== 1n || stored !== 1n) throw new Error(`conditional reuse mismatch status=${state.status()} returned=${reused} stored=${stored}`);
   console.log(`cfg_conditional_reuse_r3=${reused}`);
 }
 
@@ -140,13 +158,50 @@ const loop = await translateCfg({
 // Reuse proves the loop trip count comes from the live PPCContext, not from a
 // translation-time constant or the oracle result.
 {
+  const state = continuation(0);
   const view = seedContext([[4, 5n]]);
-  const reused = BigInt.asUintN(64, loop.exports.run(contextPtr));
+  const reused = BigInt.asUintN(64, loop.exports.run(contextPtr, state.ptr));
   const stored = view.getBigUint64(contextPtr + gprOffset + 3 * 8, true);
-  if (reused !== 5n || stored !== 5n) throw new Error(`loop reuse mismatch returned=${reused} stored=${stored}`);
+  if (state.status() !== 2 || reused !== 5n || stored !== 5n) throw new Error(`loop reuse mismatch status=${state.status()} returned=${reused} stored=${stored}`);
   console.log(`cfg_loop_reuse_r3=${reused}`);
+}
+
+// Adversarial resumability proof: this live trip count is intentionally larger
+// than the generated browser fuel quantum. The first invocation must yield
+// without claiming a guest return, then later invocations using the exact same
+// continuation slot must resume from the saved dispatcher PC / HIR locals and
+// eventually match the true PPC result. A trap/restart implementation cannot
+// satisfy both the observed yield and the exact final r3=10000.
+{
+  const state = continuation(0);
+  const view = seedContext([[4, 10000n]]);
+  let sawYield = false;
+  let completed = false;
+  let quanta = 0;
+  let returned = 0n;
+  for (; quanta < 16; quanta++) {
+    returned = BigInt.asUintN(64, loop.exports.run(contextPtr, state.ptr));
+    const status = state.status();
+    if (status === 1) {
+      sawYield = true;
+      continue;
+    }
+    if (status === 2) {
+      completed = true;
+      quanta++;
+      break;
+    }
+    throw new Error(`long CFG loop entered invalid continuation status ${status}`);
+  }
+  const stored = view.getBigUint64(contextPtr + gprOffset + 3 * 8, true);
+  if (!sawYield) throw new Error('Long CFG loop completed without exercising fuel-yield continuation');
+  if (!completed) throw new Error(`Long CFG loop did not complete after ${quanta} resumable quanta`);
+  if (returned !== 10000n || stored !== 10000n) throw new Error(`Resumed CFG loop corrupted PPC state returned=${returned} stored=${stored}`);
+  console.log(`cfg_resumable_quanta=${quanta}`);
+  console.log(`cfg_resumable_final_r3=${returned}`);
 }
 
 console.log('WASM_BACKEND_CFG_BRANCH=PASS');
 console.log('WASM_BACKEND_CFG_LOOP=PASS');
-console.log('WASM_BACKEND_STAGE=CFG_BRANCH_LOOP_PASS');
+console.log('WASM_BACKEND_CFG_RESUMABLE_FUEL=PASS');
+console.log('WASM_BACKEND_STAGE=CFG_BRANCH_LOOP_RESUME_PASS');

@@ -12,6 +12,12 @@ let activeRun=0;
 
 function setText(id,value){const el=$(id);if(el)el.textContent=String(value)}
 function setGate(id,state,label){const el=$(id);if(!el)return;el.classList.remove('ready','blocked');if(state)el.classList.add(state);const em=el.querySelector('em');if(em)em.textContent=label}
+function refreshModernStaticCopy(){
+  const support=document.querySelector('.support-note');
+  if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters the PPC/kernel runtime without copying the whole disc into WASM memory.';
+  const active=document.querySelector('#statusSheet .port-row.active p');
+  if(active)active.textContent='The modern browser bootstrap now has XDVDFS ISO input, retail XEX preparation/PE mapping, translated guest PPC, live kernel-import ABI routing and Xenos ring initialization capture. Commercial gameplay is still gated by title-specific kernel services plus the real ring producer/write pointer and unsupported PM4/shader/resource work.';
+}
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
   console[level==='error'?'error':level==='warn'?'warn':'info'](`[Render360] ${message}`);
@@ -22,6 +28,7 @@ function hostLog(level,message){
 function showGame(file){
   setText('gameName',file.name||'Xbox 360 ISO');setText('gameChipName',file.name||'Xbox 360 ISO');setText('gameType','Xbox ISO / XDVDFS');setText('gameSize',fmtBytes(file.size));setText('gameCore','Modern Xenia WASM');
   $('emptyState')?.classList.add('hidden');$('gameState')?.classList.remove('hidden');$('firstFrameGate')?.classList.remove('hidden');
+  const inputGate=document.querySelector('.frame-gate-grid > div:first-child');if(inputGate){const b=inputGate.querySelector('b');const em=inputGate.querySelector('em');if(b)b.textContent='XDVDFS ISO input';if(em)em.textContent='READY';inputGate.classList.add('ready')}
   setGate('gateExtract','','MOUNTING');setGate('gateXex','','WAIT');setGate('gateCpu','','WAIT');setGate('gateKernel','','WAIT');setGate('gateGpu','','WAIT');setText('frameGateState','REAL TITLE BOOT');
 }
 function showFailure(error){
@@ -78,6 +85,7 @@ export async function runModernXboxIso(file){
 
 export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryWindowBytes:ENTRY_WINDOW_BYTES,usesRealTitleHleTelemetry:true,requiresProducerWritePointerBeforePm4Submit:true};}
 
+refreshModernStaticCopy();
 const input=$('gameInput');
 if(input){
   input.addEventListener('change',event=>{

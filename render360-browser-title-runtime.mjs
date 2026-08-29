@@ -2,7 +2,9 @@ import {installRender360Buffer} from './render360-byte-buffer.mjs';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
-  'memory','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
+  'memory','r360_ppc_probe_load_at','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
+  'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
+  'r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
   'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
   'r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_submit','r360_xenos_frame_generation','r360_xenos_frame_hash'
@@ -43,4 +45,4 @@ export async function handoffXboxIsoBrowser({core,file,bootstrap=null,bootstrapU
   return {bootstrap:runtime,result};
 }
 
-export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false};}
+export function browserTitleRuntimeContract(){return {bootstrapUrl:'./xenia_ppc_bootstrap.wasm',requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],input:'File/Blob XDVDFS ISO',wholeIsoCopy:false,titleHle:'relocated PPC ABI shims'};}

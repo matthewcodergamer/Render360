@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Adapt upstream Xenia's shader interpreter to Render360 sparse guest RAM.
+"""Adapt upstream Xenia's shader runtime to Render360's browser/WASM host.
 
-The Xenos control-flow, ALU, vertex-format and export semantics remain upstream
-Xenia. Only the desktop physical-memory pointer used by vertex fetches is
-redirected to Render360's authoritative sparse guest-memory model. Trace-writer
-file telemetry is disabled in this standalone browser runtime.
+The Xenos control-flow, ALU, vertex-format, shader analysis and export semantics
+remain upstream Xenia. Only desktop-only integration seams are changed:
+- physical vertex reads use Render360 sparse guest RAM;
+- file trace telemetry is disabled;
+- optional shader dumping to the host filesystem is disabled;
+- GPU cvars use fixed browser defaults without desktop config registration.
 """
 from pathlib import Path
 
@@ -78,4 +80,36 @@ text = text.replace(
 DEST.parent.mkdir(parents=True, exist_ok=True)
 DEST.write_text(text)
 print(f"Generated sparse-memory Xenia shader interpreter overlay: {DEST}")
-print("Shader rule: upstream control-flow/ALU/vertex unpacking unchanged; only physical vertex reads use SparseGuestMemory")
+
+# Shader::AnalyzeUcode's optional desktop dump is debugging-only. The analysis
+# itself (control flow, bindings, constants, disassembly and hashes) remains
+# upstream and is used by the Render360 interpreter probe.
+translator = ROOT / "upstream/xenia/src/xenia/gpu/shader_translator.cc"
+translator_text = translator.read_text(errors="strict")
+dump_block = '''  // An empty shader can be created internally by shader translators as a dummy,
+  // don't dump it.
+  if (!cvars::dump_shaders.empty() && !ucode_data().empty()) {
+    DumpUcode(cvars::dump_shaders);
+  }
+'''
+if dump_block not in translator_text:
+    raise SystemExit("Upstream Shader::AnalyzeUcode dump block drifted")
+translator_text = translator_text.replace(
+    dump_block,
+    '''  // Render360 browser/WASM: preserve AnalyzeUcode semantics but skip the
+  // optional desktop shader-file dump. Captured shader telemetry remains in
+  // memory and is surfaced through the browser runtime.
+''',
+    1,
+)
+translator.write_text(translator_text)
+
+# DEFINE_path / DEFINE_* registers desktop config objects during static
+# initialization. The shader-only standalone runtime needs the values, not the
+# desktop configuration/filesystem machinery. Keep upstream defaults as plain
+# variables so linked shader code sees identical values without getcwd/config
+# filesystem syscalls on Safari.
+gpu_flags = ROOT / "upstream/xenia/src/xenia/gpu/gpu_flags.cc"
+gpu_flags.write_text('''#include "xenia/gpu/gpu_flags.h"\n\nnamespace cvars {\nstd::filesystem::path trace_gpu_prefix = std::filesystem::path("scratch/gpu/");\nbool trace_gpu_stream = false;\nstd::filesystem::path dump_shaders = std::filesystem::path();\nbool vsync = true;\nbool gpu_allow_invalid_fetch_constants = false;\nbool non_seamless_cube_map = true;\nbool half_pixel_offset = true;\nint32_t query_occlusion_fake_sample_count = 1000;\n}  // namespace cvars\n''')
+
+print("Shader rule: upstream control-flow/ALU/analysis preserved; sparse guest reads + browser-safe telemetry/defaults only")

@@ -1,5 +1,5 @@
 import {Render360Core} from './wasm-core-v32.js';
-import {handoffXboxIsoBrowser, loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
@@ -20,7 +20,7 @@ function refreshModernStaticCopy(){
   const support=document.querySelector('.support-note');
   if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters PPC/kernel/Xenos without copying the whole disc into WASM memory.';
   const active=document.querySelector('#statusSheet .port-row.active p');
-  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries, upstream Xenia shader analysis/translation, Naga WGSL conversion, Safari WebGPU shader-module validation and a fail-closed VdSwap frontbuffer snapshot path. A real title frame is promoted only when mapped title-produced frontbuffer pixels are decoded and displayed.';
+  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, a persistent generation-aware Xenia PPC function session, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries, upstream Xenia shader analysis/translation, Naga WGSL conversion, Safari WebGPU shader-module validation and a fail-closed VdSwap frontbuffer snapshot path. A real title frame is promoted only when mapped title-produced frontbuffer pixels are decoded and displayed.';
 }
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
@@ -96,17 +96,17 @@ function summarizeGpuTraffic(gpu,shaderRuntime=null,frontbufferFrame=null,shader
   return false;
 }
 
-function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFrame=null,shaderWebGPU=null){
+function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFrame=null,shaderWebGPU=null,persistentCpu=null){
   const gpu=result.titleGpuTelemetry||result.browserHleTelemetry;
   setGate('gateExtract','ready','XDVDFS READY');setGate('gateXex','ready','PE MAPPED');
-  setGate('gateCpu',result.executionStatus?'ready':'blocked',result.executionStatus?`${result.executionInstructions||0} INSNS`:'NO EXEC');
+  setGate('gateCpu',result.executionStatus?'ready':'blocked',persistentCpu?.ready?`${persistentCpu.functionCount} FUNCS`:result.executionStatus?`${result.executionInstructions||0} INSNS`:'NO EXEC');
 
   if(result.reachedKernelBlocker){
     const b=result.reachedKernelBlocker;
     setGate('gateKernel','blocked',`0x${(b.ordinal>>>0).toString(16).toUpperCase()}`);
     setGate('gateGpu','','WAIT');setText('frameGateState','KERNEL BLOCKER');
     setText('boundaryTitle',`Real title reached ${b.module||'kernel'} ordinal 0x${(b.ordinal>>>0).toString(16).toUpperCase()}`);
-    setText('boundaryText',`The ISO mounted, default.xex was prepared and guest PPC reached a real imported service at ${fmtHex(b.thunkAddress)}. Implement this exact service next; no blanket-success stub was used.`);
+    setText('boundaryText',`The ISO mounted, default.xex was prepared and guest PPC reached a real imported service at ${fmtHex(b.thunkAddress)}. Implement this exact service next; no blanket-success stub was used.${persistentCpu?.ready?' A persistent Xenia PPC function session is retained for explicit function-boundary continuation.':''}`);
     hostLog('warn',`Real kernel blocker ${b.module||'unknown'} ordinal 0x${(b.ordinal>>>0).toString(16)} @ ${fmtHex(b.thunkAddress)}`);
     return;
   }
@@ -122,8 +122,8 @@ function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFr
     hostLog('ok',`Xenos ring captured · base ${fmtHex(gpu.ringBase)} · ${fmtBytes(gpu.ringBytes)} · WPtr ${producer}`);
   }else{
     setGate('gateGpu','','WAIT');setText('frameGateState',String(result.runtimeBoundary||'TITLE EXECUTION').toUpperCase());
-    setText('boundaryTitle','Real default.xex is executing in the browser runtime');
-    setText('boundaryText',`Runtime boundary: ${result.runtimeBoundary}. PPC instructions observed: ${result.executionInstructions||0}; imported kernel calls: ${result.kernelCalls||0}. No Xenos ring initialization has been observed yet, so GPU traffic is not being invented.`);
+    setText('boundaryTitle','Real default.xex reached the browser runtime boundary');
+    setText('boundaryText',`Runtime boundary: ${result.runtimeBoundary}. PPC instructions observed: ${result.executionInstructions||0}; imported kernel calls: ${result.kernelCalls||0}.${persistentCpu?.ready?` Persistent Xenia PPCContext session ready with ${persistentCpu.functionCount} generated guest function${persistentCpu.functionCount===1?'':'s'}; browser continuation is safe at completed guest-function boundaries.`:''} No Xenos ring initialization has been observed yet, so GPU traffic is not being invented.`);
     hostLog('ok',`Title runtime boundary ${result.runtimeBoundary} · ${result.executionInstructions||0} PPC instructions · ${result.kernelCalls||0} kernel calls`);
   }
 }
@@ -137,6 +137,33 @@ export async function runModernXboxIso(file){
     const [core,bootstrap]=await Promise.all([getCore(),getBootstrap()]);if(run!==activeRun)return null;
     setGate('gateExtract','','DEFAULT.XEX');setText('boundaryTitle','default.xex found — preparing retail image…');setText('boundaryText','Decrypting/decompressing and mapping the real title image, then executing its Xenia-scanned entry function from RX sparse guest memory.');
     const {result}=await handoffXboxIsoBrowser({core,file,bootstrap,entryBytes:ENTRY_WINDOW_BYTES});if(run!==activeRun)return result;
+
+    let ppcSession=null;
+    let persistentCpu={ready:false,functionCount:0,reason:'no generated Xenia guest functions were registered'};
+    if((result.translatedFunctionCount||0)>0){
+      try{
+        // The one-shot correctness entry uses its own executor context. Do not
+        // silently re-run default.xex here. Keep the generated-function context
+        // intact and expose explicit function-boundary continuation to the
+        // browser/debug runtime instead.
+        ppcSession=await createBrowserTitlePpcSession({bootstrap,clearContext:false});
+        persistentCpu={
+          ready:ppcSession.functionCount>0,
+          functionCount:ppcSession.functionCount,
+          contextPtr:ppcSession.contextPtr,
+          contextSize:ppcSession.contextSize,
+          registryRefreshes:ppcSession.registryRefreshes,
+          preemptionBoundary:ppcSession.contract.preemptionBoundary,
+          midFunctionPreemption:ppcSession.contract.midFunctionPreemption,
+          fullXboxThreadScheduler:ppcSession.contract.fullXboxThreadScheduler,
+        };
+        hostLog(persistentCpu.ready?'ok':'warn',persistentCpu.ready?`Persistent Xenia PPC session ready · ${persistentCpu.functionCount} generated functions · context ${fmtHex(persistentCpu.contextPtr)} · resume boundary guest-function-return`:'Persistent Xenia PPC session has no generated functions yet');
+      }catch(error){
+        persistentCpu={ready:false,functionCount:0,reason:error?.message||String(error)};
+        hostLog('warn',`Persistent Xenia PPC session unavailable: ${persistentCpu.reason}`);
+      }
+    }
+
     let gpuTraffic=null;
     if(result.titleGpuTelemetry){try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};hostLog('warn',`Captured PM4 state unavailable: ${gpuTraffic.reason}`)}}
     let shaderRuntime=null;
@@ -168,13 +195,13 @@ export async function runModernXboxIso(file){
         }
       }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};hostLog('warn',`Real frontbuffer capture stopped: ${frontbufferFrame.reason}`)}
     }
-    summarizeResult(result,gpuTraffic,shaderRuntime,frontbufferFrame,shaderWebGPU);
-    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
-    return {...result,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation};
+    summarizeResult(result,gpuTraffic,shaderRuntime,frontbufferFrame,shaderWebGPU,persistentCpu);
+    globalThis.render360ModernTitle={fileName:file.name||'',result,persistentCpu,ppcSession,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
+    return {...result,persistentCpu,ppcSession,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation};
   }catch(error){if(run===activeRun)showFailure(error);throw error}
 }
 
-export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,usesXeniaSpirvTranslation:true,usesNagaWgslTranslation:true,validatesCapturedShadersWithWebGPU:true,webgpuShaderValidationCountsAsRealFrame:false,realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],requiresTitleProducedPixelsForRealFrame:true,syntheticRasterAcceptedForRealFrame:false,failClosedOnUnsupportedPm4:true};}
+export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,persistentPpcContext:true,persistentGeneratedFunctionCache:true,cpuResumeBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,usesXeniaSpirvTranslation:true,usesNagaWgslTranslation:true,validatesCapturedShadersWithWebGPU:true,webgpuShaderValidationCountsAsRealFrame:false,realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],requiresTitleProducedPixelsForRealFrame:true,syntheticRasterAcceptedForRealFrame:false,failClosedOnUnsupportedPm4:true};}
 
 refreshModernStaticCopy();
 const input=$('gameInput');

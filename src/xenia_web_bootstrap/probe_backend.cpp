@@ -179,6 +179,9 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
                                     ? 1u
                                     : (!correctness.reached_return_boundary ? 2u
                                                                            : 3u));
+    g_probe_telemetry.correctness_blocker_kind = correctness.blocker_kind;
+    g_probe_telemetry.correctness_blocker_opcode = correctness.blocker_opcode;
+    g_probe_telemetry.correctness_blocker_address = correctness.blocker_address;
   }
   std::fprintf(stderr, "R360_EXEC%s mode=%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
                nested_execution ? "_NESTED" : "",
@@ -216,6 +219,9 @@ uint32_t r360_ppc_probe_last_guest_address(){return render360::xenia_web::GetPro
 uint32_t r360_ppc_probe_correctness_status(){return render360::xenia_web::GetProbeTelemetry().correctness_status;}
 uint32_t r360_ppc_probe_correctness_instructions(){return render360::xenia_web::GetProbeTelemetry().correctness_instructions;}
 uint64_t r360_ppc_probe_correctness_r3(){return render360::xenia_web::GetProbeTelemetry().correctness_r3;}
+uint32_t r360_ppc_probe_correctness_blocker_kind(){return render360::xenia_web::GetProbeTelemetry().correctness_blocker_kind;}
+uint32_t r360_ppc_probe_correctness_blocker_opcode(){return render360::xenia_web::GetProbeTelemetry().correctness_blocker_opcode;}
+uint32_t r360_ppc_probe_correctness_blocker_address(){return render360::xenia_web::GetProbeTelemetry().correctness_blocker_address;}
 R360_WASM_EXPORT("r360_ppc_probe_set_execute_on_translate")
 uint32_t r360_ppc_probe_set_execute_on_translate(uint32_t enabled){
   render360::xenia_web::SetProbeExecuteCorrectnessOnAssemble(enabled != 0);

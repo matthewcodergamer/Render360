@@ -694,6 +694,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
   RuntimeValues values;
   bool supported = true;
   bool reached_return = false;
+  uint32_t current_source_address = 0;
   auto* block = builder->first_block();
 
   while (block && supported && !reached_return) {
@@ -701,14 +702,23 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
     bool block_terminated = false;
     for (auto* instr = block->instr_head;
          instr && supported && !reached_return; instr = instr->next) {
-      if (++result.instructions_executed > kMaxCorrectnessInstructions ||
-          !instr->opcode) {
+      if (++result.instructions_executed > kMaxCorrectnessInstructions) {
+        result.blocker_kind = kHIRBlockerInstructionLimit;
+        result.blocker_address = current_source_address;
+        supported = false;
+        break;
+      }
+      if (!instr->opcode) {
+        result.blocker_kind = kHIRBlockerUnsupportedOpcode;
+        result.blocker_address = current_source_address;
         supported = false;
         break;
       }
 
       switch (instr->opcode->num) {
         case xe::cpu::hir::OPCODE_SOURCE_OFFSET:
+          current_source_address = static_cast<uint32_t>(instr->src1.offset);
+          break;
         case xe::cpu::hir::OPCODE_CONTEXT_BARRIER:
         case xe::cpu::hir::OPCODE_MEMORY_BARRIER:
           break;
@@ -885,6 +895,18 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           supported = false;
           break;
       }
+      if (!supported && result.blocker_kind == kHIRBlockerNone) {
+        const uint32_t opcode = instr->opcode ? instr->opcode->num : 0;
+        const bool call_boundary =
+            opcode == xe::cpu::hir::OPCODE_CALL ||
+            opcode == xe::cpu::hir::OPCODE_CALL_TRUE ||
+            opcode == xe::cpu::hir::OPCODE_CALL_INDIRECT ||
+            opcode == xe::cpu::hir::OPCODE_CALL_INDIRECT_TRUE;
+        result.blocker_kind = call_boundary ? kHIRBlockerUnresolvedCall
+                                            : kHIRBlockerUnsupportedOpcode;
+        result.blocker_opcode = opcode;
+        result.blocker_address = current_source_address;
+      }
       if (block_terminated) break;
     }
     block = next_block;
@@ -893,6 +915,10 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
   result.supported = supported;
   result.reached_return_boundary = reached_return;
   result.r3 = context.r[3];
+  if (supported && !reached_return && result.blocker_kind == kHIRBlockerNone) {
+    result.blocker_kind = kHIRBlockerNoReturnBoundary;
+    result.blocker_address = current_source_address;
+  }
   return result;
 }
 

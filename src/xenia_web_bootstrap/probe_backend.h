@@ -19,6 +19,9 @@ struct ProbeTelemetry {
   uint32_t correctness_status = 0;
   uint32_t correctness_instructions = 0;
   uint64_t correctness_r3 = 0;
+  uint32_t correctness_blocker_kind = 0;
+  uint32_t correctness_blocker_opcode = 0;
+  uint32_t correctness_blocker_address = 0;
 };
 
 void ResetProbeTelemetry();
@@ -74,6 +77,9 @@ uint32_t r360_ppc_probe_last_guest_address();
 uint32_t r360_ppc_probe_correctness_status();
 uint32_t r360_ppc_probe_correctness_instructions();
 uint64_t r360_ppc_probe_correctness_r3();
+uint32_t r360_ppc_probe_correctness_blocker_kind();
+uint32_t r360_ppc_probe_correctness_blocker_opcode();
+uint32_t r360_ppc_probe_correctness_blocker_address();
 }
 
 #endif  // RENDER360_XENIA_WEB_BOOTSTRAP_PROBE_BACKEND_H_

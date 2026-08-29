@@ -122,6 +122,9 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const execStatusFn=maybe(bootstrap,'r360_ppc_probe_correctness_status');
   const execInstructionsFn=maybe(bootstrap,'r360_ppc_probe_correctness_instructions');
   const execR3Fn=maybe(bootstrap,'r360_ppc_probe_correctness_r3');
+  const execBlockerKindFn=maybe(bootstrap,'r360_ppc_probe_correctness_blocker_kind');
+  const execBlockerOpcodeFn=maybe(bootstrap,'r360_ppc_probe_correctness_blocker_opcode');
+  const execBlockerAddressFn=maybe(bootstrap,'r360_ppc_probe_correctness_blocker_address');
   const callCountFn=maybe(bootstrap,'r360_wasm_backend_call_function_count');
   const callAddressFn=maybe(bootstrap,'r360_wasm_backend_call_function_address');
   const kernelCallsFn=maybe(bootstrap,'r360_kernel_import_calls');
@@ -132,6 +135,9 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const executionStatus=execStatusFn?(execStatusFn()>>>0):0;
   const executionInstructions=execInstructionsFn?(execInstructionsFn()>>>0):0;
   const executionR3Hex=execR3Fn?`0x${BigInt.asUintN(64,execR3Fn()).toString(16)}`:'0x0';
+  const executionBlockerKind=execBlockerKindFn?(execBlockerKindFn()>>>0):0;
+  const executionBlockerOpcode=execBlockerOpcodeFn?(execBlockerOpcodeFn()>>>0):0;
+  const executionBlockerAddress=execBlockerAddressFn?(execBlockerAddressFn()>>>0):0;
   const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
   const kernelCalls=kernelCallsFn?(kernelCallsFn()>>>0):0;
@@ -140,12 +146,12 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelLastOrdinal=kernelLastOrdinalFn?(kernelLastOrdinalFn()>>>0):0;
   const kernelLastStatus=kernelLastStatusFn?(kernelLastStatusFn()>>>0):0;
   const reachedKernelModule=kernelLastModuleId===1?'xboxkrnl.exe':kernelLastModuleId===2?'xam.xex':null;
-  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
+  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':'unsupported-hir-or-runtime-dependency'):'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
   const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
   const titleGpuTelemetry=nativeTitleGpu?readNativeTitleGpuTelemetry(bootstrap,entry):null;
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

@@ -1,11 +1,11 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.3';
-import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.3';
-import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.3';
-import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.3';
-import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.3';
-import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44.3';
-import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs?v=44.3';
-import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs?v=44.3';
+import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.4';
+import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.4';
+import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.4';
+import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.4';
+import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.4';
+import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44.4';
+import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs?v=44.4';
+import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs?v=44.4';
 
 installRender360Buffer();
 
@@ -92,8 +92,9 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
     setExecute(previous?1:0);
   }
   const status=result.executionStatus>>>0;
-  result.compatibilityExecution={used:true,reason:'generated-wasm-entry-not-callable',entry:result.entry>>>0,executionStatus:status,executionInstructions:result.executionInstructions>>>0,runtimeBoundary:result.runtimeBoundary,reachedKernelBlocker:result.reachedKernelBlocker??null};
-  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}`);
+  const exact=result.executionBlockerOpcode?` · opcode ${result.executionBlockerOpcode} @ 0x${(result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
+  result.compatibilityExecution={used:true,reason:'generated-wasm-entry-not-callable',entry:result.entry>>>0,executionStatus:status,executionInstructions:result.executionInstructions>>>0,runtimeBoundary:result.runtimeBoundary,blockerKind:result.executionBlockerKind>>>0,blockerOpcode:result.executionBlockerOpcode>>>0,blockerAddress:result.executionBlockerAddress>>>0,reachedKernelBlocker:result.reachedKernelBlocker??null};
+  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}${exact}`);
   return result;
 }
 
@@ -114,7 +115,8 @@ async function attachScheduler({bootstrap,result,onStage,config={}}){
 function updatePersistentCpu(state){
   if(state.result?.compatibilityExecution?.used){
     const status=state.result.executionStatus>>>0;
-    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:'native-hir-unsupported-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:null));
+    const exact=state.result.executionBlockerOpcode?` · HIR opcode ${state.result.executionBlockerOpcode} @ 0x${(state.result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
+    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:null));
     state.schedulerBlocker=compatibilityBlocker;
     state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
     return state.persistentCpu;

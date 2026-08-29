@@ -3,6 +3,7 @@
 #include <array>
 
 #include "hir_correctness_executor.h"
+#include "title_gpu_runtime.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 
 extern "C" {
@@ -39,6 +40,22 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry) {
   auto* context = GetHIRCorrectnessActiveContext();
   if (!context) return false;
 
+  uint32_t title_gpu_result = 0;
+  if (TryTitleGpuKernelService(
+          entry.module_id, entry.ordinal,
+          static_cast<uint32_t>(context->r[3]),
+          static_cast<uint32_t>(context->r[4]),
+          static_cast<uint32_t>(context->r[5]),
+          static_cast<uint32_t>(context->r[6]),
+          static_cast<uint32_t>(context->r[7]),
+          static_cast<uint32_t>(context->r[8]),
+          static_cast<uint32_t>(context->r[9]),
+          static_cast<uint32_t>(context->r[10]), &title_gpu_result)) {
+    context->r[3] = title_gpu_result;
+    g_last_status = 1;
+    return true;
+  }
+
   const uint32_t result = r360_kernel_service_call(
       entry.module_id, entry.ordinal,
       static_cast<uint32_t>(context->r[3]),
@@ -67,6 +84,7 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry) {
 void ResetKernelImportProbe() {
   g_entries = {}; g_count = g_calls = g_last_thunk = g_last_module =
       g_last_ordinal = g_last_status = g_last_abi_target = 0;
+  ResetTitleGpuRuntime();
 }
 bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
                                uint32_t ordinal, bool implemented,

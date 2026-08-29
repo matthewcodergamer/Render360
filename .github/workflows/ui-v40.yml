@@ -11,6 +11,7 @@ on:
       - 'import/**'
       - 'profiles/**'
       - 'runtime/**'
+      - 'render360-browser-thread-scheduler.mjs'
       - 'manifest.webmanifest'
       - 'test-ui-v40-contract.mjs'
       - '.github/workflows/ui-v40.yml'
@@ -24,6 +25,7 @@ on:
       - 'import/**'
       - 'profiles/**'
       - 'runtime/**'
+      - 'render360-browser-thread-scheduler.mjs'
       - 'manifest.webmanifest'
       - 'test-ui-v40-contract.mjs'
 
@@ -43,6 +45,8 @@ jobs:
         run: |
           node --check app-v40.js
           node --check runtime/render360-runtime.js
+          node --check runtime/title-controls.js
+          node --check render360-browser-thread-scheduler.mjs
           node --check library/game-library.js
           node --check library/cover-resolver.js
           node --check import/zip-importer.js

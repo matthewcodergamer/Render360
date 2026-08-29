@@ -1,0 +1,96 @@
+name: Xenia Browser Bootstrap Fastlane
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prepare-wasm-backend-cfg-overlay.py'
+      - 'render360-browser-ppc-session.mjs'
+      - 'render360-browser-thread-scheduler.mjs'
+      - 'render360-browser-title-runtime.mjs'
+      - 'test-wasm-backend-cfg.mjs'
+      - 'test-browser-thread-scheduler.mjs'
+      - 'build-xenia-ppc-bootstrap.sh'
+      - 'link-xenia-ppc-bootstrap.sh'
+      - 'src/xenia_web_bootstrap/**'
+      - '.github/workflows/xenia-browser-bootstrap-fastlane.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xenia-browser-bootstrap-fastlane
+  cancel-in-progress: true
+
+jobs:
+  browser-bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+
+      - name: Fetch upstream Xenia
+        run: bash ./fetch-xenia.sh
+
+      - name: Build and link browser bootstrap
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            emscripten/emsdk:latest \
+            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
+
+      # Upload before the runtime tests so a failing/hanging test never strands
+      # the newly linked binary inside an expired Actions runner again.
+      - name: Upload freshly linked browser bootstrap
+        uses: actions/upload-artifact@v4
+        with:
+          name: xenia-browser-bootstrap-fastlane
+          path: |
+            build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+            build/xenia-ppc-bootstrap/report.tsv
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Verify resumable integer CFG backend
+        run: timeout 90s node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify browser Xbox thread scheduler
+        run: timeout 90s node ./test-browser-thread-scheduler.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify browser bootstrap runtime contract
+        run: |
+          mkdir -p .fastlane-published
+          cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm .fastlane-published/xenia_ppc_bootstrap.wasm
+          node ./test-deployed-browser-bootstrap-critic.mjs .fastlane-published/xenia_ppc_bootstrap.wasm
+
+      - name: Publish verified bootstrap to GitHub Pages source
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_RUN: ${{ github.run_id }}
+        run: |
+          cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          p=Path('xenia_ppc_bootstrap.wasm')
+          data=p.read_bytes()
+          meta={
+            'sourceCommit': os.environ['SOURCE_COMMIT'],
+            'sourceRun': os.environ['SOURCE_RUN'],
+            'sha256': hashlib.sha256(data).hexdigest(),
+            'bytes': len(data),
+          }
+          Path('xenia_ppc_bootstrap.meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+          PY
+          git config user.name 'Render360 Browser Bootstrap Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
+          if git diff --cached --quiet; then
+            echo 'Published bootstrap already matches this verified build.'
+            exit 0
+          fi
+          git commit -m 'V43: publish verified browser bootstrap'
+          git push

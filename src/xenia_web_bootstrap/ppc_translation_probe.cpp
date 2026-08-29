@@ -9,6 +9,7 @@
 #include "wasm_backend_call_probe.h"
 #include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
+#include "xenia/cpu/ppc/ppc_scanner.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/memory.h"
 
@@ -271,6 +272,31 @@ uint32_t r360_ppc_probe_translate() {
   ProbeGuestFunction function(g_probe_module, g_active_guest_base);
   function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
   if (!g_processor->frontend()->DefineFunction(&function, 0)) {
+    g_status = kProbeErrorTranslate;
+    return 0;
+  }
+
+  g_status = kProbeTranslated;
+  return GetProbeTelemetry().hir_instructions;
+}
+
+uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
+  using namespace render360::xenia_web;
+  if (!EnsureRuntime() || !g_loaded_size || !g_probe_module || (address & 3u) ||
+      !IsProbeGuestRange(address, 4u)) {
+    if (g_status < 0xE000) g_status = kProbeErrorInput;
+    return 0;
+  }
+
+  ResetProbeTelemetry();
+  ProbeGuestFunction function(g_probe_module, address);
+  // Give upstream Xenia a hard upper bound equal to the RX bytes currently
+  // paged into the movable wasm32 code window, then let PPCScanner discover the
+  // actual function end (blr/bctr/control-flow) within that real title span.
+  function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
+  xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());
+  if (!scanner.Scan(&function, nullptr) ||
+      !g_processor->frontend()->DefineFunction(&function, 0)) {
     g_status = kProbeErrorTranslate;
     return 0;
   }

@@ -2,7 +2,7 @@
 
 ## Project rule
 
-**Port Xenia; do not imitate Xenia.** Xenia remains the semantic source of truth for Xbox 360 CPU, kernel and GPU behavior. Render360 owns the browser-native integration: WebAssembly, sparse memory, browser storage/I/O, workers, WebGPU, WebGL2 fallback, WebAudio, input and diagnostics.
+**Port Xenia; do not imitate Xenia.** Xenia remains the semantic source of truth for Xbox 360 CPU, kernel and GPU behavior. Render360 owns browser-native integration: WebAssembly, sparse memory, browser storage/I/O, workers, WebGPU, WebGL2 fallback, WebAudio, input and diagnostics.
 
 The root `README.md` is the authoritative public status board.
 
@@ -11,7 +11,7 @@ The root `README.md` is the authoritative public status board.
 Development order is implementation first, critic last:
 
 1. define a bounded subsystem contract;
-2. finish that implementation;
+2. finish the implementation;
 3. pass its implementation tests;
 4. let a separate adversarial critic attack it;
 5. replay previously locked foundations;
@@ -38,11 +38,12 @@ Run 348  entry execution + first runtime-boundary telemetry
 Run 369  XEX imports → real PE RVA mapping → kernel HLE execution bridge
 Run 373  independent harsh critic → PPC/kernel ABI + guest state + continuation
 Run 379  starter xboxkrnl/XAM services + guest threads/TLS/runtime
-Run 381  full locked Xenia/WASM replay remains green after GPU implementation lands
-GPU Run 3  bounded Xenos + EDRAM + guest-memory bridge + WebGPU/WGSL + harsh critic
+GPU Run 3  bounded Xenos + EDRAM + guest-memory bridge + WebGPU/WGSL
+Run 389  translated guest PPC → PM4 → Xenos → EDRAM frame + provenance critic
+WebGL2 Run 1  Xenos framebuffer → WebGL2 presentation + harsh critic
 ```
 
-GPU Run 3 is Actions ID `33237507899` on aggregate commit `8355d007b4b265eeab572b9ba27abe41900cd6bc`. Xenia WASM32 Run 381 is Actions ID `33237342332` and is also green.
+Run 389 is Actions ID `33238490587` on aggregate commit `b5c540e7a5dd44eeca8cc3e277bd2a01a3f153ae` and completed the entire locked Xenia/WASM regression after the first-frame provenance critic. WebGL2 Run 1 is Actions ID `33238538315` on `f1bbbd9acb9c0f74f191958628211ecec4fdcc13`.
 
 ## Closed V36 contracts
 
@@ -72,111 +73,98 @@ XENOS FIRST-FRAME SEMANTIC FOUNDATION            100% ✓
 INDEPENDENT XENOS HARSH CRITIC                   100% ✓
 WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION    100% ✓
 GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE       100% ✓
+FIRST GENUINE GUEST FRAME                        100% ✓
+INDEPENDENT FIRST-FRAME PROVENANCE CRITIC        100% ✓
+WEBGL2 XENOS FRAMEBUFFER FALLBACK                100% ✓
+INDEPENDENT WEBGL2 FALLBACK HARSH CRITIC         100% ✓
 ```
 
 These are bounded contracts, not universal Xbox 360 compatibility claims.
 
-## Gate D3A — Xenos first-frame semantic foundation — CLOSED
+## Gate D3D — first genuine guest frame — CLOSED
 
-The bounded semantic module now supports the minimum path needed to carry a real guest command stream forward:
+The verified first-frame path now begins with **translated PowerPC guest execution**, not JavaScript injecting the final framebuffer:
 
 ```text
-big-endian guest command words
+translated PPC stw instructions
         ↓
-PM4 ringbuffer parser
+PM4 command words written into Xbox guest memory
         ↓
-type-0 register writes / type-2 NOP
+exact command words read through the guest-memory path
         ↓
-PM4_DRAW_INDX (0x22) / PM4_DRAW_INDX_2 (0x36)
+Xenos PM4 parser
         ↓
-register + draw + present telemetry
+register writes + DRAW_INDX_2
         ↓
-bounded raster event
+bounded raster semantics
         ↓
-2048-tile circular EDRAM addressing
+circular EDRAM target
         ↓
-RGBA resolve + deterministic frame generation/hash
+RGBA framebuffer + generation + hash
 ```
 
-Malformed lengths, unsupported opcodes, unsupported primitives and oversized ring submissions fail closed. The harsh critic separately attacks these cases and ensures a present cannot appear before a decoded draw.
+The independent provenance critic checks exact guest-produced command words, nonzero framebuffer pixels, draw/present counts, EDRAM/frame generation, unsupported-primitive rejection and truncated-stream rejection. Corrupt guest GPU traffic therefore cannot satisfy the gate.
 
-This is intentionally a first-frame semantic subset. More packet types, shader microcode, texture/resource formats and render-backend behavior are added from real execution blockers rather than guessed in advance.
+This closes a translated-guest-PPC-produced frame. It does **not** claim an extracted retail title has reached a frame yet.
 
-## Gate D3B — WebGPU / WGSL / EDRAM presentation foundation — CLOSED
+## Gate D3E — WebGL2 Xenos framebuffer fallback — CLOSED
 
-The browser bridge now contains:
+The fallback consumes the exact Xenos-resolved framebuffer already used by WebGPU:
 
 ```text
-Xenos resolved RGBA frame
+Xenos RGBA framebuffer
         ↓
 generation-tracked frame view
         ↓
-WebGPU rgba8unorm texture upload
+WebGL2 RGBA texture upload
         ↓
-WGSL vertex + fragment presentation stages
+fullscreen triangle
         ↓
-canvas presentation
+GLSL ES 3 texture presentation
 ```
 
-The WGSL/presentation gate is structural in CI because GitHub runners do not provide the target iPhone/Safari GPU environment. Device-level browser validation remains part of later real-device bring-up, but the bounded bridge contract is closed.
+The implementation fails closed if WebGL2 is unavailable. Its critic independently checks Xenos-frame provenance and invalid-frame bounds. No substitute framebuffer is generated by the fallback.
 
-## Gate D3C — guest memory to Xenos frame bridge — CLOSED
+## Gate D4A — extracted title to real GPU traffic — ACTIVE
 
-`render360-xenos-controller.mjs` consumes Xbox big-endian command words from a `WebAssembly.Memory`, range-validates them, converts them to host words, submits them to the Xenos module, and returns only a frame generated downstream of decoded GPU commands. Out-of-range guest command streams fail closed.
-
-## Gate D3D — first genuine guest frame — ACTIVE
-
-This is now the next primary milestone:
+This is now the primary milestone:
 
 ```text
-translated guest/title PPC
+STFS / XDVDFS / default.xex
         ↓
-actual GPU MMIO / ringbuffer state produced by guest execution
+retail XEX preparation + PE mapping
         ↓
-closed guest-memory → Xenos bridge
+Xenia PPC/HIR execution
         ↓
-closed PM4 / register / EDRAM path
+real title kernel/runtime progress
         ↓
-closed WebGPU / WGSL presenter
+actual title GPU MMIO / ringbuffer writes
         ↓
-FIRST GENUINE GUEST-PRODUCED FRAMEBUFFER
+closed Xenos PM4 / EDRAM path
+        ↓
+FIRST EXTRACTED-TITLE FRAME
 ```
 
-The remaining work is **provenance and real integration**, not another browser-side rendering demo. The current CI command stream is controlled test data placed in guest memory. To close D3D, translated guest execution itself must create or expose the GPU command stream that results in the frame.
-
-The first-frame critic must prove:
-
-```text
-translated guest execution occurred
-actual guest GPU command address/range captured
-nonzero decoded PM4 packet count
-at least one supported draw reached Xenos
-EDRAM generation changed only because of that draw
-frame generation/hash changed
-frame was presented through the browser GPU bridge
-removing/corrupting the guest GPU stream prevents the frame
-```
-
-Only after that provenance chain passes can `FIRST GENUINE GUEST FRAME` become 100%.
+The implementation must capture the real GPU command address/range created by title execution rather than replacing it with a test PM4 sequence. The first unsupported command/register/shader/resource becomes the next implementation target, and unknown behavior continues to fail closed.
 
 ## Immediate implementation order
 
 ```text
-1. Add GPU MMIO / ringbuffer handoff at the existing guest execution boundary.
-2. Feed the real guest-produced command address/range into render360-xenos-controller.mjs.
-3. Record exact unsupported PM4/register/shader blocker telemetry.
-4. Implement the first real blocker from Xenia semantics.
-5. Repeat until a supported draw reaches EDRAM.
-6. Present through render360-webgpu-xenos.mjs.
-7. Run the provenance critic.
-8. Promote FIRST GENUINE GUEST FRAME only if it passes.
+1. Connect title/runtime GPU MMIO and ringbuffer writes to the Xenos controller.
+2. Record the first exact unsupported PM4 packet/register from genuine title execution.
+3. Port the corresponding Xenia semantic behavior.
+4. Add shader microcode capture and begin Xenos → WGSL translation from the first real shader blocker.
+5. Add vertex/index fetch and texture/resource descriptors reached by that title.
+6. Expand EDRAM/resolve formats only as real traffic requests them.
+7. Present the first extracted-title frame through WebGPU and verify the same frame via WebGL2 fallback where supported.
+8. Run an extracted-title frame provenance critic before promoting that new milestone.
 ```
 
-Additional xboxkrnl/XAM, synchronization, memory or filesystem behavior is implemented only if genuine execution asks for it along this route.
+Additional xboxkrnl/XAM, synchronization, filesystem, audio or input behavior is implemented only when real title execution asks for it.
 
 ## ISO / GOD input track
 
-This does not block the first-frame controlled workload. The future title input route remains:
+Render360 should not require ISO2GOD. The intended input route is:
 
 ```text
 .iso → random-access XDVDFS mount → default.xex + game files
@@ -184,11 +172,11 @@ GOD/STFS → STFS/GOD mount → default.xex + game files
 both → existing Render360 XEX / PE / PPC pipeline
 ```
 
-Do not require ISO2GOD. Large disc images should stay as browser `File`/`Blob` objects and be read in bounded ranges.
+Large disc images should stay as browser `File`/`Blob` objects and be read in bounded ranges rather than duplicated wholesale into Wasm memory.
 
-## Performance after first genuine frame
+## Performance track
 
-Once D3D closes, optimize from measured traces: keep hot execution in Wasm, minimize JS↔Wasm crossings, move the GPU sidecar toward shared/integrated memory where browser isolation permits, retain compiled PPC Wasm caching, use Wasm SIMD for VMX, start at low internal resolution, cache translated shaders/resources, and reduce EDRAM copies.
+Now that the first translated-guest frame exists, performance work may start alongside real-title bring-up, but only from measurements: keep hot execution in Wasm, minimize JS↔Wasm crossings, retain compiled PPC Wasm caching, use Wasm SIMD for VMX, batch Xenos command handling, cache translated shaders/resources, reduce EDRAM copies, use low internal resolution for mobile, and move shared queues/workers behind cross-origin-isolation capability checks.
 
 ## Compatibility ladder
 
@@ -200,12 +188,13 @@ strict PE decode + guest mapping                ✓ LOCKED
 prepared entry → Xenia PPC/HIR                  ✓ LOCKED
 kernel ABI + starter services                   ✓ LOCKED
 threads/TLS/runtime                             ✓ LOCKED
-Xenos first-frame semantic foundation           ✓ LOCKED BY HARSH CRITIC
+Xenos first-frame semantic foundation           ✓ LOCKED
 WebGPU/WGSL/EDRAM presentation foundation       ✓ LOCKED
-guest-memory → Xenos frame bridge               ✓ LOCKED
-FIRST GENUINE GUEST FRAME                       ← ACTIVE
-expand Xenos/shaders/resources from real traces
-WebGL2 fallback
+first translated-guest-PPC frame                ✓ LOCKED BY PROVENANCE CRITIC
+WebGL2 Xenos framebuffer fallback               ✓ LOCKED BY HARSH CRITIC
+extracted title → actual GPU traffic             ← ACTIVE
+real shader / texture / resource translation
+first extracted-title frame
 performance / latency optimization
 ISO/XDVDFS virtual mount
 small homebrew / XBLA-class bring-up
@@ -216,4 +205,4 @@ Portal 2-class bring-up
 
 ## Status rule
 
-Never report `REAL TITLE ENTRY`, `FIRST DRAW`, `FIRST PRESENT`, `FIRST GENUINE GUEST FRAME`, `PLAYABLE`, title FPS, shader translation or title boot unless that event came from genuine execution through the corresponding emulator subsystem.
+Never report `REAL TITLE ENTRY`, `FIRST TITLE DRAW`, `FIRST TITLE PRESENT`, `FIRST EXTRACTED-TITLE FRAME`, `PLAYABLE`, title FPS, shader translation or title boot unless that event came from genuine extracted-title execution through the corresponding emulator subsystem.

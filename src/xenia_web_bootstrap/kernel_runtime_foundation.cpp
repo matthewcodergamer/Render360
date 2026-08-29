@@ -1,6 +1,8 @@
 #include <array>
 #include <cstdint>
 
+#include "sparse_guest_memory.h"
+
 namespace render360::xenia_web {
 namespace {
 
@@ -14,6 +16,18 @@ constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
 constexpr uint32_t kMaxThreads = 32;
 constexpr uint32_t kMaxTlsSlots = 64;
 constexpr uint32_t kGuestTickFrequency = 50000000u;
+constexpr uint32_t kGuestPageSize = 4096u;
+// Browser guest stacks live in a dedicated 512 MiB sparse virtual arena below
+// the normal 0x82000000 retail XEX image region. Each thread owns a 16 MiB
+// slot, with the first page intentionally left unmapped as a downward-growing
+// stack guard. Mapping is fail-closed: if a title already occupies a slot,
+// thread creation fails rather than overwriting guest memory.
+constexpr uint32_t kGuestStackArenaBase = 0x60000000u;
+constexpr uint32_t kGuestStackSlotStride = 0x01000000u;
+constexpr uint32_t kGuestStackGuardBytes = kGuestPageSize;
+constexpr uint32_t kGuestStackTopReserve = 0x100u;
+constexpr uint32_t kGuestStackMaxBytes =
+    kGuestStackSlotStride - kGuestStackGuardBytes;
 
 enum ThreadState : uint32_t {
   kThreadInvalid = 0,
@@ -25,11 +39,14 @@ enum ThreadState : uint32_t {
 
 struct GuestThread {
   bool used = false;
+  bool stack_mapped = false;
   uint16_t generation = 0;
   ThreadState state = kThreadInvalid;
   uint32_t entry = 0;
   uint32_t context = 0;
   uint32_t stack_size = 0;
+  uint32_t stack_base = 0;
+  uint32_t stack_top = 0;
   uint32_t flags = 0;
   uint32_t suspend_count = 0;
   uint32_t exit_code = 0;
@@ -75,8 +92,54 @@ uint32_t ThreadHandleByIndex(uint32_t index) {
   return MakeHandle(index, g_threads[index].generation);
 }
 
+void ReleaseThreadStack(GuestThread& thread) {
+  if (thread.stack_mapped && thread.stack_base && thread.stack_size) {
+    const uint32_t pages = thread.stack_size / kGuestPageSize;
+    // Sparse memory may already have been reset independently. An absent old
+    // mapping is harmless here; a subsequent allocation/map clears that fault.
+    UnmapSparseGuestMemory(thread.stack_base, pages);
+  }
+  thread.stack_mapped = false;
+}
+
+bool AllocateThreadStack(uint32_t thread_index, uint32_t stack_size,
+                         uint32_t* stack_base_out,
+                         uint32_t* stack_top_out) {
+  if (thread_index >= kMaxThreads || !stack_size ||
+      stack_size > kGuestStackMaxBytes ||
+      (stack_size & (kGuestPageSize - 1u))) {
+    return false;
+  }
+  const uint64_t slot64 = uint64_t(kGuestStackArenaBase) +
+                          uint64_t(thread_index) * kGuestStackSlotStride;
+  const uint64_t base64 = slot64 + kGuestStackGuardBytes;
+  const uint64_t end64 = base64 + stack_size;
+  if (end64 > uint64_t(UINT32_MAX) + 1u ||
+      end64 > slot64 + kGuestStackSlotStride) {
+    return false;
+  }
+  const uint32_t stack_base = static_cast<uint32_t>(base64);
+  const uint32_t page_count = stack_size / kGuestPageSize;
+  const uint32_t backing = AllocateSparseGuestBacking(page_count);
+  if (!backing ||
+      !MapSparseGuestMemory(stack_base, page_count, backing, 0,
+                            kGuestRead | kGuestWrite)) {
+    return false;
+  }
+  uint32_t stack_top = static_cast<uint32_t>(end64) - kGuestStackTopReserve;
+  stack_top &= ~0xFu;
+  if (stack_top <= stack_base) {
+    UnmapSparseGuestMemory(stack_base, page_count);
+    return false;
+  }
+  if (stack_base_out) *stack_base_out = stack_base;
+  if (stack_top_out) *stack_top_out = stack_top;
+  return true;
+}
+
 void ResetRuntime() {
   for (auto& thread : g_threads) {
+    ReleaseThreadStack(thread);
     const uint16_t next_generation = uint16_t(thread.generation + 1u);
     thread = {};
     thread.generation = next_generation ? next_generation : 1u;
@@ -94,23 +157,34 @@ uint32_t CreateThread(uint32_t entry, uint32_t context, uint32_t stack_size,
     return 0;
   }
   if (!stack_size) stack_size = 0x4000u;
-  stack_size = (stack_size + 0x3FFFu) & ~0x3FFFu;
-  if (!stack_size) {
+  const uint64_t aligned64 = (uint64_t(stack_size) + 0x3FFFu) & ~uint64_t(0x3FFFu);
+  if (!aligned64 || aligned64 > kGuestStackMaxBytes) {
     g_runtime_status = kStatusInvalid;
     return 0;
   }
+  stack_size = static_cast<uint32_t>(aligned64);
   for (uint32_t i = 0; i < kMaxThreads; ++i) {
     auto& thread = g_threads[i];
     if (thread.used && thread.state != kThreadTerminated) continue;
+    ReleaseThreadStack(thread);
+    uint32_t stack_base = 0;
+    uint32_t stack_top = 0;
+    if (!AllocateThreadStack(i, stack_size, &stack_base, &stack_top)) {
+      g_runtime_status = kStatusInvalid;
+      return 0;
+    }
     uint16_t generation = uint16_t(thread.generation + 1u);
     if (!generation) generation = 1;
     thread = {};
     thread.used = true;
+    thread.stack_mapped = true;
     thread.generation = generation;
     thread.state = kThreadReady;
     thread.entry = entry;
     thread.context = context;
     thread.stack_size = stack_size;
+    thread.stack_base = stack_base;
+    thread.stack_top = stack_top;
     thread.flags = flags;
     const uint32_t handle = MakeHandle(i, generation);
     if (!g_current_thread) {
@@ -132,7 +206,8 @@ bool SetCurrentThread(uint32_t handle) {
     return false;
   }
   auto& next = g_threads[new_index];
-  if (next.state == kThreadTerminated || next.suspend_count) {
+  if (next.state == kThreadTerminated || next.suspend_count ||
+      !next.stack_mapped) {
     g_runtime_status = kStatusInvalid;
     return false;
   }
@@ -163,7 +238,7 @@ uint32_t SuspendThread(uint32_t handle) {
 
 uint32_t ResumeThread(uint32_t handle) {
   auto* thread = LookupThread(handle);
-  if (!thread || !thread->suspend_count) {
+  if (!thread || !thread->suspend_count || !thread->stack_mapped) {
     g_runtime_status = kStatusInvalid;
     return 0xFFFFFFFFu;
   }
@@ -182,6 +257,7 @@ bool TerminateThread(uint32_t handle, uint32_t exit_code) {
   thread->state = kThreadTerminated;
   thread->exit_code = exit_code;
   thread->suspend_count = 0;
+  ReleaseThreadStack(*thread);
   if (handle == g_current_thread) g_current_thread = 0;
   g_runtime_status = kStatusSuccess;
   return true;
@@ -192,7 +268,7 @@ uint32_t NextRunnable() {
     const uint32_t index = (g_scheduler_cursor + step) % kMaxThreads;
     auto& thread = g_threads[index];
     if (!thread.used || thread.state == kThreadTerminated ||
-        thread.suspend_count) {
+        thread.suspend_count || !thread.stack_mapped) {
       continue;
     }
     const uint32_t handle = ThreadHandleByIndex(index);
@@ -351,9 +427,33 @@ uint32_t r360_guest_thread_exit_code(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->exit_code : 0u;
 }
+uint32_t r360_guest_thread_entry(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->entry : 0u;
+}
+uint32_t r360_guest_thread_context(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->context : 0u;
+}
+uint32_t r360_guest_thread_flags(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->flags : 0u;
+}
 uint32_t r360_guest_thread_stack_size(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread ? thread->stack_size : 0u;
+}
+uint32_t r360_guest_thread_stack_base(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->stack_base : 0u;
+}
+uint32_t r360_guest_thread_stack_top(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->stack_top : 0u;
+}
+uint32_t r360_guest_thread_stack_mapped(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread && thread->stack_mapped ? 1u : 0u;
 }
 uint32_t r360_guest_runtime_status() { return render360::xenia_web::g_runtime_status; }
 

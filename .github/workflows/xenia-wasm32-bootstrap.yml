@@ -13,6 +13,7 @@ on:
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
+      - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-real-mapper-integration.mjs'
       - 'test-guest-control-foundation.mjs'
       - 'test-fpu-foundation.mjs'
@@ -98,6 +99,9 @@ jobs:
             -w /src \
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
+
+      - name: Verify upstream Xenia LZX decoder in wasm32
+        run: node ./test-xenia-lzx-wasm.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify locked foundations and V36 XEX bring-up
         run: |

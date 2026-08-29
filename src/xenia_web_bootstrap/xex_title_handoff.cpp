@@ -11,7 +11,10 @@ uint32_t r360_ppc_probe_input_buffer();
 uint32_t r360_ppc_probe_input_capacity();
 uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
                                 uint32_t length);
+uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 uint32_t r360_ppc_probe_translate();
+uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address);
+uint32_t r360_ppc_probe_loaded_size();
 }
 
 namespace render360::xenia_web {
@@ -20,24 +23,25 @@ uint32_t g_status = kPreparedEntryHandoffIdle;
 uint32_t g_entry = 0;
 uint32_t g_bytes = 0;
 uint32_t g_hir = 0;
-}  // namespace
 
-void ResetPreparedEntryHandoff() {
+void ClearPreparedEntryTelemetry() {
   g_status = kPreparedEntryHandoffIdle;
   g_entry = 0;
   g_bytes = 0;
   g_hir = 0;
-  // Reset the execution probe here rather than inside TranslatePreparedPeEntry
-  // so callers may apply the real title startup register state after the
-  // handoff reset and before translation/execution begins.
+}
+}  // namespace
+
+void ResetPreparedEntryHandoff() {
+  ClearPreparedEntryTelemetry();
+  // Reset the execution probe here rather than inside either translation path
+  // so callers may apply the real title startup register state after handoff
+  // reset and before translation/execution begins.
   r360_ppc_probe_reset();
 }
 
 uint32_t TranslatePreparedPeEntry(uint32_t byte_count) {
-  g_status = kPreparedEntryHandoffIdle;
-  g_entry = 0;
-  g_bytes = 0;
-  g_hir = 0;
+  ClearPreparedEntryTelemetry();
   if (PreparedPeGuestLoadStatus() != kPeGuestPass) {
     g_status = kPreparedEntryHandoffInvalidState;
     return 0;
@@ -75,6 +79,41 @@ uint32_t TranslatePreparedPeEntry(uint32_t byte_count) {
   return hir;
 }
 
+uint32_t TranslatePreparedPeEntryScanned() {
+  ClearPreparedEntryTelemetry();
+  if (PreparedPeGuestLoadStatus() != kPeGuestPass) {
+    g_status = kPreparedEntryHandoffInvalidState;
+    return 0;
+  }
+
+  const uint32_t entry = PreparedPeGuestEntryAddress();
+  // Page the actual executable PE section containing the entry point from the
+  // authoritative sparse guest address space. PageSparseCodeWindow enforces RX
+  // permissions, so mapped data can never be promoted into executable PPC by
+  // this convenience path.
+  const uint32_t paged = r360_ppc_probe_page_sparse_code(entry);
+  if (!paged || r360_ppc_probe_loaded_size() < 4u) {
+    g_status = kPreparedEntryHandoffLoadFailed;
+    return 0;
+  }
+
+  // Unlike the compatibility byte-probe above, this asks upstream Xenia's
+  // PPCScanner to discover the function boundary inside the mapped executable
+  // span and then translates/executes that real function. This is the browser
+  // title-runtime path; no guessed 8-byte function length is involved.
+  const uint32_t hir = r360_ppc_probe_translate_scanned_at(entry);
+  if (!hir) {
+    g_status = kPreparedEntryHandoffTranslateFailed;
+    return 0;
+  }
+
+  g_entry = entry;
+  g_bytes = r360_ppc_probe_loaded_size();
+  g_hir = hir;
+  g_status = kPreparedEntryHandoffPass;
+  return hir;
+}
+
 uint32_t PreparedEntryHandoffStatusValue() { return g_status; }
 uint32_t PreparedEntryHandoffAddress() { return g_entry; }
 uint32_t PreparedEntryHandoffBytes() { return g_bytes; }
@@ -88,6 +127,9 @@ void r360_title_handoff_reset() {
 }
 uint32_t r360_title_handoff_translate_entry(uint32_t byte_count) {
   return render360::xenia_web::TranslatePreparedPeEntry(byte_count);
+}
+uint32_t r360_title_handoff_translate_scanned_entry() {
+  return render360::xenia_web::TranslatePreparedPeEntryScanned();
 }
 uint32_t r360_title_handoff_status() {
   return render360::xenia_web::PreparedEntryHandoffStatusValue();

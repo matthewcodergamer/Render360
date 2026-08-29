@@ -234,6 +234,22 @@ if old_dispatch not in text:
     raise SystemExit('VMX overlay: vector dispatch source contract changed')
 text = text.replace(old_dispatch, new_dispatch)
 
+active_context_anchor = r'''bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }
+
+HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
+'''
+active_context_replacement = r'''bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }
+
+xe::cpu::ppc::PPCContext* GetHIRCorrectnessActiveContext() {
+  return g_active_context;
+}
+
+HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
+'''
+if active_context_anchor not in text:
+    raise SystemExit('kernel service bridge overlay: active context anchor changed')
+text = text.replace(active_context_anchor, active_context_replacement, 1)
+
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(text)
 print(f'VMX executor overlay: {src.relative_to(root)} -> {out.relative_to(root)}')

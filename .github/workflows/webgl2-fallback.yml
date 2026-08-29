@@ -1,0 +1,26 @@
+name: WebGL2 Xenos Fallback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-webgl2-xenos.mjs'
+      - 'render360-webgpu-xenos.mjs'
+      - 'test-webgl2-xenos-fallback.mjs'
+      - 'test-webgl2-fallback-critic.mjs'
+      - '.github/workflows/webgl2-fallback.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webgl2-xenos-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+      - name: Verify WebGL2 Xenos framebuffer fallback
+        run: node ./test-webgl2-xenos-fallback.mjs
+      - name: "Harsh critic: verify WebGL2 fallback provenance and bounds"
+        run: node ./test-webgl2-fallback-critic.mjs

@@ -1,5 +1,5 @@
-const KEY='render360.settings.v43';
-const LEGACY_KEYS=['render360.settings.v41'];
+const KEY='render360.settings.v44';
+const LEGACY_KEYS=['render360.settings.v43','render360.settings.v41'];
 
 const DEFAULTS=Object.freeze({
   appearance:'system',
@@ -23,9 +23,6 @@ export function loadAppSettings(){
     const current=readJson(KEY);if(current)return {...DEFAULTS,...current};
     for(const legacyKey of LEGACY_KEYS){
       const legacy=readJson(legacyKey);if(!legacy)continue;
-      // V43 ships the performance HUD as part of the normal player surface.
-      // A legacy hidden-HUD value should not make the new release look as if
-      // telemetry is missing; users may turn it off again after migration.
       const migrated={...DEFAULTS,...legacy,performanceHud:true};
       localStorage.setItem(KEY,JSON.stringify(migrated));return migrated;
     }
@@ -33,16 +30,7 @@ export function loadAppSettings(){
   }catch{return {...DEFAULTS};}
 }
 
-export function saveAppSettings(value){
-  const next={...DEFAULTS,...value};
-  localStorage.setItem(KEY,JSON.stringify(next));
-  return next;
-}
-
+export function saveAppSettings(value){const next={...DEFAULTS,...value};localStorage.setItem(KEY,JSON.stringify(next));return next;}
 export function resetAppSettings(){localStorage.removeItem(KEY);for(const key of LEGACY_KEYS)localStorage.removeItem(key);return {...DEFAULTS};}
 export function appSettingDefaults(){return {...DEFAULTS};}
-
-export function resolveAppearance(appearance='system'){
-  if(appearance==='light'||appearance==='dark')return appearance;
-  return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';
-}
+export function resolveAppearance(appearance='system'){if(appearance==='light'||appearance==='dark')return appearance;return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}

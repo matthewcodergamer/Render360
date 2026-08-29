@@ -22,6 +22,7 @@
 #include "xenia/memory.h"
 
 extern "C" uint32_t r360_ppc_probe_guest_base();
+extern "C" uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 
 namespace render360::xenia_web {
 namespace {
@@ -72,7 +73,13 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X active_base=0x%08X\n",
                address, r360_ppc_probe_guest_base());
   if (!IsInActiveProbeWindow(address)) {
-    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target outside active probe window\n"); return false;
+    const uint32_t paged = r360_ppc_probe_page_sparse_code(address);
+    std::fprintf(stderr, "R360_CALL_RESOLVE sparse-page target=0x%08X bytes=%u new_base=0x%08X\n",
+                 address, paged, r360_ppc_probe_guest_base());
+    if (!paged || !IsInActiveProbeWindow(address)) {
+      std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target unavailable in sparse guest code\n");
+      return false;
+    }
   }
   ProbeGuestFunction nested_function(module, address);
   xe::cpu::ppc::PPCScanner scanner(frontend);

@@ -20,6 +20,7 @@ const version=read('./VERSION').trim();
 const failures=[];
 const must=(v,m)=>{if(!v)failures.push(m);};
 const has=(s,n)=>s.includes(n);
+const PIPELINE_NAMES=['Source / Core','Disc / Package','XEX2 / Security','PE / Guest Memory','PPC / Scheduler','xboxkrnl / XAM','Xenos / Frame'];
 
 must(version==='44','VERSION must be 44');
 must(has(html,'app-v41.js?v=44'),'deployed page must cache-bust the synchronized runtime shell at V44');
@@ -98,5 +99,3 @@ must(has(patchCss,'.cover-art-surface')&&has(patchCss,'background-size:cover')&&
 must(has(patchCss,'.tile-play-badge'),'library tiles must visibly advertise Play');
 
 if(failures.length){console.error('UI_V44_CONTRACT FAIL');for(const f of failures)console.error(` - ${f}`);process.exit(1);}console.log('UI_V44_CONTRACT PASS');
-
-function PIPELINE_NAMES(){return ['Source / Core','Disc / Package','XEX2 / Security','PE / Guest Memory','PPC / Scheduler','xboxkrnl / XAM','Xenos / Frame'];}

@@ -1,11 +1,11 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44';
-import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44';
-import {handoffDefaultXex} from './render360-title-controller.mjs?v=44';
-import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44';
-import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44';
-import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44';
-import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs?v=44';
-import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs?v=44';
+import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.3';
+import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.3';
+import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.3';
+import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.3';
+import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.3';
+import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44.3';
+import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs?v=44.3';
+import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs?v=44.3';
 
 installRender360Buffer();
 
@@ -74,6 +74,29 @@ async function translateOnlyXex({core,bootstrap,bytes,onStage}){
   return {...result,runtimeBoundary:'translation-only',entryExecutedDuringTranslation:false};
 }
 
+async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
+  stage(onStage,'execute','Generated-WASM entry is not callable; entering native HIR compatibility executor…');
+  let securityKey=null;
+  try{securityKey=extractXex2EncryptedImageKey(bytes);}catch(error){throw new Error(`XEX security metadata could not be read: ${error.message}`);}
+  const setExecute=pick(bootstrap,'r360_ppc_probe_set_execute_on_translate');
+  const getExecute=pick(bootstrap,'r360_ppc_probe_execute_on_translate');
+  if(typeof setExecute!=='function'||typeof getExecute!=='function')throw new Error('Published browser bootstrap does not support native HIR compatibility execution');
+  const resetKernel=pick(bootstrap,'r360_kernel_runtime_reset');
+  if(typeof resetKernel==='function')resetKernel();
+  const previous=getExecute()>>>0;
+  if((setExecute(1)>>>0)!==1)throw new Error('Unable to enable native HIR compatibility execution');
+  let result;
+  try{
+    result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});
+  }finally{
+    setExecute(previous?1:0);
+  }
+  const status=result.executionStatus>>>0;
+  result.compatibilityExecution={used:true,reason:'generated-wasm-entry-not-callable',entry:result.entry>>>0,executionStatus:status,executionInstructions:result.executionInstructions>>>0,runtimeBoundary:result.runtimeBoundary,reachedKernelBlocker:result.reachedKernelBlocker??null};
+  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}`);
+  return result;
+}
+
 async function attachScheduler({bootstrap,result,onStage,config={}}){
   const reset=pick(bootstrap,'r360_kernel_runtime_reset');
   if(typeof reset!=='function')throw new Error('Published browser bootstrap is missing kernel runtime reset');
@@ -89,6 +112,13 @@ async function attachScheduler({bootstrap,result,onStage,config={}}){
 }
 
 function updatePersistentCpu(state){
+  if(state.result?.compatibilityExecution?.used){
+    const status=state.result.executionStatus>>>0;
+    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:'native-hir-unsupported-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}`}:null));
+    state.schedulerBlocker=compatibilityBlocker;
+    state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
+    return state.persistentCpu;
+  }
   const inspect=state.threadScheduler?.inspect?.()??null;
   state.persistentCpu={ready:Boolean(state.ppcSession)&&!state.schedulerBlocker,schedulerReady:Boolean(state.threadScheduler),functionCount:state.ppcSession?.functionCount??0,pumpCount:inspect?.pumpCount??state.schedulerReport?.pumpCount??0,totalSlices:inspect?.sliceCount??state.schedulerReport?.totalSlices??0,completedThreads:inspect?.completedThreads??state.schedulerReport?.completedThreads??0,paused:Boolean(inspect?.paused),blocker:state.schedulerBlocker||inspect?.lastBlocker||null};
   return state.persistentCpu;
@@ -130,11 +160,19 @@ export async function runModernXboxContent({core,file,type,onStage=null,config={
   const run=++activeRun;stopActive();stage(onStage,'launch',`Starting ${file.name||'Xbox 360 title'}…`);
   const bootstrap=await getBootstrap(onStage);if(run!==activeRun)return null;
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
-  const result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
-  const threaded=await attachScheduler({bootstrap,result,onStage,config});if(run!==activeRun)return null;
-  const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded.ppcSession,threadScheduler:threaded.scheduler,primaryThread:threaded.primaryThread,schedulerReport:threaded.schedulerReport,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
-  updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);driveScheduler(run,state,onStage);
-  return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};
+let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
+let threaded=null;
+if(Number(result.translatedFunctionCount||0)>0){
+  threaded=await attachScheduler({bootstrap,result,onStage,config});
+}else{
+  console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
+  result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
+}
+if(run!==activeRun)return null;
+const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
+updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
+else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
+return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};
 }
 
-export function modernContentBridgeContract(){return {release:44,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true};}
+export function modernContentBridgeContract(){return {release:44,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true,nativeHirCompatibilityFallback:true};}

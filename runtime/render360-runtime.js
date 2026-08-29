@@ -1,4 +1,4 @@
-import {Render360Core,containerName} from '../wasm-core-v32.js';
+import {Render360Core,containerName} from '../wasm-core-v32.js?v=43';
 import {RuntimeHost} from '../runtime-host-v32.js';
 import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
 import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=43';
@@ -7,6 +7,7 @@ import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
+const RENDER360_RELEASE=43;
 const REQUIRED_CORE_BUILD=30;
 const REQUIRED_ABI=0x00030002;
 
@@ -25,10 +26,12 @@ export class Render360Runtime extends EventTarget{
     if(this.core.buildVersion<REQUIRED_CORE_BUILD)throw new Error(`Runtime contract requires Core V${REQUIRED_CORE_BUILD}+; loaded V${this.core.buildVersion}`);
     if(this.core.abiVersion<REQUIRED_ABI)throw new Error(`Runtime contract requires ABI ${fmtHex(REQUIRED_ABI)}+; loaded ${fmtHex(this.core.abiVersion)}`);
     await Promise.allSettled([inputPromise]);this.ready=true;
+    this.emit('log',{level:'ok',message:`Core source ${this.core.source} · STFS extraction ${this.core.stfsExtractionMode}`});
+    if(this.core.source==='embedded'&&this.core.networkError)this.emit('log',{level:'warn',message:`Network core unavailable; using embedded fallback: ${this.core.networkError.message}`});
     this.emit('ready',{buildVersion:this.core.buildVersion,abiVersion:this.core.abiVersion,featureBits:this.core.featureBits,contract:this.contract()});
     this.startTelemetry();return this;
   }
-  contract(){return {release:41,minCoreBuild:REQUIRED_CORE_BUILD,minAbi:REQUIRED_ABI,loadedCoreBuild:this.core?.exports?this.core.buildVersion:null,loadedAbi:this.core?.exports?this.core.abiVersion:null,inputs:['iso','xex','live','pirs','con'],contentBridge:modernContentBridgeContract()};}
+  contract(){return {release:RENDER360_RELEASE,minCoreBuild:REQUIRED_CORE_BUILD,minAbi:REQUIRED_ABI,loadedCoreBuild:this.core?.exports?this.core.buildVersion:null,loadedAbi:this.core?.exports?this.core.abiVersion:null,coreSource:this.core?.source||'none',stfsExtraction:this.core?.exports?this.core.stfsExtractionMode:'unavailable',nativeStfsExtraction:Boolean(this.core?.nativeStfsExtraction),inputs:['iso','xex','live','pirs','con'],contentBridge:modernContentBridgeContract()};}
   configure(config={}){this.launchConfig={...this.launchConfig,...config};return this.launchConfig;}
   bindSource(gameId,file){if(gameId&&file)this.sources.set(gameId,file);}
   getSource(gameId){return this.sources.get(gameId)||null;}
@@ -113,4 +116,4 @@ export class Render360Runtime extends EventTarget{
 }
 
 function stripExtension(name='Xbox 360 Game'){return String(name).replace(/\.(zip|iso|xex|live|pirs|con)$/i,'').replace(/[._-]+/g,' ').trim()||'Xbox 360 Game';}
-export {fmtHex,stripExtension,REQUIRED_CORE_BUILD,REQUIRED_ABI};
+export {fmtHex,stripExtension,RENDER360_RELEASE,REQUIRED_CORE_BUILD,REQUIRED_ABI};

@@ -8,11 +8,14 @@ The root `README.md` is the authoritative public status board.
 
 ## Promotion rule
 
-No subsystem reaches 100% from its implementation test alone. Promotion requires all three:
+Development order is implementation first, critic last:
 
-1. the implementation gate is green;
-2. an independent adversarial critic proves the exact contract and fail-closed cases;
-3. the full locked regression replay remains green.
+1. define a bounded subsystem contract;
+2. finish the implementation for that contract;
+3. pass its implementation tests;
+4. let a separate adversarial critic attack it;
+5. replay every previously locked foundation;
+6. only then promote to 100%.
 
 A red critic or red aggregate replay blocks promotion even when the happy path passes.
 
@@ -36,11 +39,12 @@ Run 338  encrypted retail NONE/BASIC/NORMAL → exact prepared image
 Run 348  entry execution + first runtime-boundary telemetry
 Run 369  XEX imports → real PE RVA mapping → kernel HLE execution bridge
 Run 373  independent harsh critic → PPC/kernel ABI + guest state + continuation
+Run 379  starter xboxkrnl/XAM services + guest threads/TLS/runtime in main wasm
 ```
 
-**Run 373** is Actions ID `33235084799` on aggregate commit `2a860d2aacc0e21a1d9fcda39d46d8df99c79e8a`. It is fully green and closes the controlled **minimum PPC↔kernel ABI contract**.
+**Run 379** is Actions ID `33236768472` on aggregate commit `a350df341289352326bfe188ce58460a17ce8414`. It is fully green.
 
-The independent critic proves PPC argument registers, guest-visible memory mutation, `r3` return semantics, continuation after HLE return, cross-boundary range rejection, 32-bit wraparound rejection, recursive-target rejection, exact unsupported-import telemetry and no blanket-success behavior. The same run then replays every previously locked Xenia/Wasm foundation successfully.
+Run 379 compiles the new kernel/runtime implementation into the same strict `xenia_ppc_bootstrap.wasm` used by the rest of Render360. Both independent critics run against that main wasm, and the complete older stack replays afterward.
 
 ## Closed V36 contracts
 
@@ -65,9 +69,13 @@ AUTOMATIC XEX IMPORT → KERNEL EXECUTION          100% ✓
 KERNEL EXECUTION FOUNDATION                      100% ✓
 MINIMUM PPC ↔ KERNEL ABI                         100% ✓
 INDEPENDENT KERNEL ABI HARSH CRITIC              100% ✓
+REAL xboxkrnl / XAM STARTER SERVICES             100% ✓
+INDEPENDENT KERNEL SERVICES HARSH CRITIC         100% ✓
+GUEST THREADS / TLS / RUNTIME FOUNDATION         100% ✓
+INDEPENDENT GUEST RUNTIME HARSH CRITIC           100% ✓
 ```
 
-These are defined CI contracts, not universal title-compatibility claims and not complete xboxkrnl/XAM API coverage.
+These are bounded first-frame contracts, not universal title-compatibility claims and not complete xboxkrnl/XAM API coverage.
 
 ## Gate D1 — one-call extracted-title handoff — CLOSED
 
@@ -93,8 +101,6 @@ controlled execution
 exact runtime boundary telemetry
 ```
 
-The controlled path is CI-closed. Genuine title testing still requires legally obtained user-supplied runtime content and must not be inferred from synthetic critics.
-
 ## Gate D2A — kernel import/execution bridge — CLOSED
 
 ```text
@@ -114,75 +120,64 @@ implemented export → return and continue
 unimplemented export → exact fail-closed blocker
 ```
 
-No blanket success stubs.
-
 ## Gate D2B — minimum PPC ↔ kernel ABI — CLOSED
 
-```text
-PPC r3/r4 arguments
-        ↓
-registered HLE thunk
-        ↓
-nested service on the same live PPCContext
-        ↓
-validated guest memory access
-        ↓
-guest-visible state mutation
-        ↓
-r3 return value
-        ↓
-return to translated guest PPC
-        ↓
-caller continues
-```
+The ABI critic proves argument registers, guest-visible memory mutation, `r3` return semantics, caller continuation, boundary/wraparound rejection, recursive-target rejection and exact unsupported-import telemetry.
 
-The independent harsh critic separately verifies boundary crossing, 32-bit address wraparound, recursive ABI targets and unsupported imports all fail closed. D2B is promoted only because Run 373 passed both that critic and the complete regression replay.
+## Gate D2C — first-frame xboxkrnl / XAM starter services — CLOSED
 
-## Gate D2C — first real xboxkrnl / XAM services — ACTIVE
-
-Do not pre-build a giant guessed API catalog. Genuine execution chooses the order. For each reached import:
+The bounded service surface currently proves:
 
 ```text
-exact module + ordinal blocker
-        ↓
-identify corresponding Xenia kernel/XAM semantic source
-        ↓
-implement minimum browser-portable behavior
-        ↓
-validate all guest pointers/ranges
-        ↓
-return exact r3 / NTSTATUS / guest-visible state
-        ↓
-continue real guest execution
-        ↓
-record next blocker
-        ↓
-independent critic + full replay before 100%
+xboxkrnl starter semantics
+  KeQueryPerformanceFrequency
+  RtlLowerChar
+  RtlUpperChar
+  KeTlsAlloc
+  KeTlsFree
+  KeTlsGetValue
+  KeTlsSetValue
+
+XAM starter semantics
+  XGetLanguage
+
+unknown module / ordinal
+  → exact unsupported status
+  → no blanket-success fallback
 ```
 
-Expected runtime classes, only when demanded by execution:
+Additional APIs remain title-specific blockers when reached.
+
+## Gate D2D — guest threads / TLS / runtime foundation — CLOSED
+
+The bounded runtime foundation proves:
 
 ```text
-thread/TLS             → KernelState / guest thread startup
-heap / virtual memory  → required memory APIs
-synchronization/time   → events, waits, timers as reached
-filesystem             → browser-backed VFS
-XAM startup            → minimum XAM exports actually imported
-GPU initialization     → handoff into Xenos command/ringbuffer path
+generation-tagged guest thread handles
+thread creation + aligned stack metadata
+current-thread switching
+suspend / resume
+termination + exit telemetry
+stale-handle rejection
+per-thread TLS isolation
+TLS allocation / free / exhaustion
+bounded cooperative runnable selection
 ```
 
-A service family does not become 100% merely because one export works. Its critic must define and prove the exact promoted scope.
+This is the first-frame runtime foundation, not a claim that the entire Xbox scheduler/kernel object model is finished.
 
-## Gate D3 — Xenos to first frame
+## Gate D3 — Xenos to first frame — ACTIVE
+
+The primary development target is now the GPU boundary:
 
 ```text
 guest PPC execution
         ↓
-minimum real kernel/runtime services
+closed first-frame kernel/runtime foundation
         ↓
-Xenos packets / ringbuffer
+first Xenos packet / register traffic
         ↓
-command processor
+ringbuffer / command processor
         ↓
 shared Xenos semantic layer
         ↓
@@ -197,11 +192,32 @@ WebGL2 fallback where practical
 FIRST GENUINE GUEST-PRODUCED FRAMEBUFFER
 ```
 
-`FIRST GENUINE FRAME` is promoted only when a frame originates from guest GPU work. The first-frame critic should compare deterministic guest-produced output/state and remain permanently in CI.
+The first-frame workload should be deliberately tiny: guest code that causes the emulated Xenos path to clear a target or draw a minimal primitive. Browser-side rendering that bypasses guest/Xenos semantics does not count.
+
+The eventual first-frame critic must prove that the frame originates from guest GPU work and should remain permanently in CI.
+
+## ISO / GOD input track
+
+This does not block the first-frame synthetic guest workload, but it is the preferred future real-title input path:
+
+```text
+.iso
+  → random-access XDVDFS mount
+  → default.xex + game files
+
+GOD / STFS
+  → STFS/GOD mount
+  → default.xex + game files
+
+both
+  → existing Render360 XEX / PE / PPC pipeline
+```
+
+Do not require ISO2GOD. Large disc images should remain browser `File`/`Blob` objects and be read by bounded ranges rather than copied whole into Wasm memory.
 
 ## Gate D4 — performance after correctness
 
-Keep hot execution inside Wasm, retain compiled-function caching/invalidation, use Wasm SIMD for VMX, minimize JS↔Wasm crossings, stream title data, use workers/shared queues where available, start at low internal resolution, then build shader/resource caches and optimize Xenos/EDRAM traffic from real traces.
+Once a guest-produced frame exists, optimize from real traces: keep hot execution in Wasm, retain compiled-function caching/invalidation, use Wasm SIMD for VMX, minimize JS↔Wasm crossings, stream title data, use workers/shared queues where available, begin at low internal resolution, cache shaders/resources, and reduce EDRAM traffic.
 
 ## Compatibility ladder
 
@@ -215,14 +231,16 @@ one-call extracted-title controller             ✓ LOCKED
 entry execution/runtime boundary                ✓ LOCKED
 XEX import discovery + thunk pairing            ✓ LOCKED
 PPC → kernel HLE execution bridge               ✓ LOCKED
-minimum PPC ↔ kernel ABI                        ✓ LOCKED BY HARSH CRITIC
-first real xboxkrnl/XAM services                ← ACTIVE
-actual extracted title → next real blocker
-TLS / threads / heap / VFS as required
-first Xenos packets
+minimum PPC ↔ kernel ABI                        ✓ LOCKED
+first-frame xboxkrnl/XAM starter services       ✓ LOCKED BY HARSH CRITIC
+guest threads/TLS/runtime foundation            ✓ LOCKED BY HARSH CRITIC
+first Xenos packets                             ← ACTIVE
+ringbuffer / command processor
 first guest shader / draw
+EDRAM / render target
 FIRST GENUINE GUEST FRAME
 performance / latency optimization
+ISO/XDVDFS virtual mount
 small homebrew / XBLA-class bring-up
 Braid-class playable target
 Portal-class bring-up

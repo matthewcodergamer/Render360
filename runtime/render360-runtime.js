@@ -2,6 +2,7 @@ import {Render360Core,containerName} from '../wasm-core-v32.js';
 import {RuntimeHost} from '../runtime-host-v32.js';
 import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
 import {mountXdvdfs} from '../render360-xdvdfs.mjs';
+import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
@@ -25,8 +26,8 @@ export class Render360Runtime extends EventTarget{
   getSource(gameId){return this.sources.get(gameId)||null;}
   setKey(key,pressed){this.inputHost.setKey(key,pressed);}
   setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);}
-  pause(){this.inputHost.pause();this.emit('paused',{});}
-  resume(){this.inputHost.resume();this.emit('resumed',{});}
+  pause(){const titlePaused=pauseActiveTitle();this.inputHost.pause();this.emit('paused',{titlePaused});return titlePaused;}
+  resume(){const titleResumed=resumeActiveTitle();this.inputHost.resume();this.emit('resumed',{titleResumed});return titleResumed;}
   resetInput(){this.inputHost.reset();}
   async inspectFile(file){
     if(!this.ready)throw new Error('Render360 core is not ready');

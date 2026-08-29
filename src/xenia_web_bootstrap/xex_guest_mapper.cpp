@@ -72,7 +72,9 @@ bool EntryInsideExecutableSection() {
 void ResetXexGuestMapper() {
   ResetSparseGuestMemory();
   g_sections.clear();
-  g_input.fill(0);
+  // g_input is caller-facing staging memory. Mapping reset must not erase it:
+  // higher-level loaders may stage a prepared image here and then reset only
+  // the guest mapping state before decoding/copying those bytes.
   g_status = kXexMapperReset;
   g_entry_address = 0;
   g_entry_set = false;

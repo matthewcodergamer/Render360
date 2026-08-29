@@ -1,6 +1,6 @@
 {
-  "sourceCommit": "f9f47a4643824beb9cf674706f5dea44daae5f0d",
-  "sourceRun": "33256702361",
+  "sourceCommit": "52905b226a77b08684574b532822dce8a019973a",
+  "sourceRun": "33257741945",
   "sha256": "0507b74be38a0b8717ad706984fd7530d8fc5858d9b6c6db1a0308bdecd1b35d",
   "bytes": 790060,
   "translator": "Naga SPIR-V -> WGSL"

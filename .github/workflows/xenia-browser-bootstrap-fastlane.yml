@@ -10,6 +10,7 @@ on:
       - 'render360-browser-title-runtime.mjs'
       - 'test-wasm-backend-cfg.mjs'
       - 'test-browser-thread-scheduler.mjs'
+      - 'test-xex-guest-mapper.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_bootstrap/**'
@@ -54,6 +55,9 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+      - name: Verify commercial-title PE staging growth
+        run: timeout 90s node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
       - name: Verify resumable integer CFG backend
         run: timeout 90s node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
@@ -71,9 +75,9 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_RUN: ${{ github.run_id }}
         run: |
-          # main may have advanced while this 4-minute build was running. Refresh
-          # the tracked source tree first; build/ is ignored/untracked and keeps
-          # the exact verified artifact that was just tested above.
+          # main may have advanced while this build was running. Refresh the
+          # tracked source tree first; build/ is ignored/untracked and keeps the
+          # exact verified artifact that was just tested above.
           git fetch origin main
           git reset --hard origin/main
           cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm
@@ -97,5 +101,5 @@ jobs:
             echo 'Published bootstrap already matches this verified build.'
             exit 0
           fi
-          git commit -m 'V43: publish verified browser bootstrap'
+          git commit -m 'build: publish verified browser bootstrap'
           git push origin HEAD:main

@@ -11,8 +11,18 @@ function preparedPe(){
   const a=Buffer.alloc(0x600),nt=0x80,opt=nt+24,sh=opt+224;
   ascii(a,0,'MZ');p32le(a,0x3c,nt);p32le(a,nt,0x00004550);p16le(a,nt+4,0x01F2);p16le(a,nt+6,1);p16le(a,nt+20,224);p16le(a,nt+22,0x0102);p16le(a,opt,0x10B);p32le(a,opt+16,0x1000);p32le(a,opt+28,base);p32le(a,opt+32,0x1000);p32le(a,opt+36,0x200);p32le(a,opt+56,0x3000);p32le(a,opt+60,0x200);p16le(a,opt+68,14);
   ascii(a,sh,'.text\0\0\0');p32le(a,sh+8,0x400);p32le(a,sh+12,0x1000);p32le(a,sh+16,0x400);p32le(a,sh+20,0x200);p32le(a,sh+36,0xE0000020);
-  // Guest RVA 0x1100/0x1104/0x1200 map to raw 0x300/0x304/0x400.
+  // Compact/disk PE: guest RVA 0x1100/0x1104/0x1200 map through raw pointer 0x200.
   p32be(a,0x300,0x00000123);p32be(a,0x304,0x01000123);p32be(a,0x400,0x00000456);
+  return a;
+}
+
+function preparedMappedPe(){
+  // Real XEX preparation is a loaded-memory image: RVA is the byte offset from
+  // image base. Keep deliberately invalid type 0x89 bytes at the disk-style
+  // raw locations so the regression catches the exact commercial-title bug.
+  const disk=preparedPe(),a=Buffer.alloc(0x3000);disk.copy(a);
+  p32be(a,0x300,0x8900AAAA);p32be(a,0x304,0x8900BBBB);p32be(a,0x400,0x8900CCCC);
+  p32be(a,0x1100,0x00000123);p32be(a,0x1104,0x01000123);p32be(a,0x1200,0x00000456);
   return a;
 }
 
@@ -32,17 +42,24 @@ const {x,prepared}=fixture();
 const decoded=decodeKernelImportRecords(x,prepared);
 if(decoded.imageBase!==base||decoded.libraries.length!==2)throw new Error('kernel import decode metadata mismatch');
 const k=decoded.libraries[0].imports[0],v=decoded.libraries[1].imports[0];
-if(k.kind!=='function'||k.ordinal!==0x123||k.valueAddress!==base+0x1100||k.thunkAddress!==base+0x1104||k.descriptorRawOffset!==0x300||k.thunkRawOffset!==0x304)throw new Error(`function pair mismatch ${JSON.stringify(k)}`);
-if(v.kind!=='variable'||v.ordinal!==0x456||v.valueAddress!==base+0x1200||v.thunkAddress!==0||v.descriptorRawOffset!==0x400)throw new Error(`variable import mismatch ${JSON.stringify(v)}`);
+if(k.kind!=='function'||k.ordinal!==0x123||k.valueAddress!==base+0x1100||k.thunkAddress!==base+0x1104||k.descriptorRawOffset!==0x300||k.thunkRawOffset!==0x304||k.descriptorLayout!=='raw-pe'||k.thunkLayout!=='raw-pe')throw new Error(`function pair mismatch ${JSON.stringify(k)}`);
+if(v.kind!=='variable'||v.ordinal!==0x456||v.valueAddress!==base+0x1200||v.thunkAddress!==0||v.descriptorRawOffset!==0x400||v.descriptorLayout!=='raw-pe')throw new Error(`variable import mismatch ${JSON.stringify(v)}`);
 console.log('KERNEL_IMPORT_DESCRIPTOR_DECODE=PASS');
 console.log('KERNEL_IMPORT_PE_RVA_TO_RAW=PASS');
 console.log('KERNEL_IMPORT_FUNCTION_THUNK_PAIR=PASS');
 console.log('KERNEL_IMPORT_VARIABLE_DECODE=PASS');
 
-let plan=buildKernelImportPlan(x,prepared);
+const mapped=decodeKernelImportRecords(x,preparedMappedPe());
+const mk=mapped.libraries[0].imports[0],mv=mapped.libraries[1].imports[0];
+if(mk.ordinal!==0x123||mk.descriptorLayout!=='mapped-image'||mk.thunkLayout!=='mapped-image'||mk.descriptorOffset!==0x1100||mk.thunkOffset!==0x1104)throw new Error(`mapped function import mismatch ${JSON.stringify(mk)}`);
+if(mv.ordinal!==0x456||mv.descriptorLayout!=='mapped-image'||mv.descriptorOffset!==0x1200)throw new Error(`mapped variable import mismatch ${JSON.stringify(mv)}`);
+console.log('KERNEL_IMPORT_MAPPED_XEX_RVA_DIRECT=PASS');
+console.log('KERNEL_IMPORT_MAPPED_XEX_REJECTS_RAW_POISON=PASS');
+
+let plan=buildKernelImportPlan(x,preparedMappedPe());
 if(!plan.firstKernelBlocker||plan.firstKernelBlocker.module!=='xboxkrnl.exe'||plan.firstKernelBlocker.ordinal!==0x123)throw new Error(`first kernel blocker mismatch ${JSON.stringify(plan.firstKernelBlocker)}`);
 console.log('FIRST_KERNEL_BLOCKER_IDENTIFICATION=PASS');
-plan=buildKernelImportPlan(x,prepared,{implementedExports:{'xboxkrnl.exe:291':()=>1}});
+plan=buildKernelImportPlan(x,preparedMappedPe(),{implementedExports:{'xboxkrnl.exe:291':()=>1}});
 if(!plan.firstKernelBlocker||plan.firstKernelBlocker.module!=='xam.xex'||plan.firstKernelBlocker.ordinal!==0x456)throw new Error('implemented export did not advance blocker');
 console.log('KERNEL_IMPORT_IMPLEMENTATION_ADVANCES_BLOCKER=PASS');
 

@@ -26,48 +26,82 @@ function parsePreparedPe(preparedImage){
   const sectionCount=le16(p,nt+6),optionalSize=le16(p,nt+20),optional=nt+24;
   if(optional>p.length||optionalSize>p.length-optional)throw new Error('kernel import PE optional header out of bounds');
   if(optionalSize<64)throw new Error('kernel import PE optional header too small');
-  const sizeOfHeaders=le32(p,optional+60);
-  if(sizeOfHeaders>p.length)throw new Error('kernel import PE headers exceed prepared image');
+  const sizeOfImage=le32(p,optional+56),sizeOfHeaders=le32(p,optional+60);
+  if(!sizeOfImage||sizeOfHeaders>p.length)throw new Error('kernel import PE image/header size invalid');
   const sectionTable=optional+optionalSize;
   if(sectionCount>((p.length-sectionTable)/40|0))throw new Error('kernel import PE section table out of bounds');
   const sections=[];
   for(let i=0;i<sectionCount;i++){
     const s=sectionTable+i*40;
     const virtualSize=le32(p,s+8),virtualAddress=le32(p,s+12),rawSize=le32(p,s+16),rawPointer=le32(p,s+20);
-    if(rawSize&&(rawPointer>p.length||rawSize>p.length-rawPointer))throw new Error('kernel import PE section raw range out of bounds');
     const virtualSpan=Math.max(virtualSize,rawSize);
     const virtualEnd=BigInt(virtualAddress)+BigInt(virtualSpan);
-    if(virtualEnd>0x100000000n)throw new Error('kernel import PE section RVA wraps');
+    if(virtualEnd>0x100000000n||virtualEnd>BigInt(sizeOfImage))throw new Error('kernel import PE section RVA wraps/exceeds image');
     sections.push({virtualSize,virtualAddress,rawSize,rawPointer,virtualSpan});
   }
-  return {bytes:p,sizeOfHeaders,sections};
+  return {bytes:p,sizeOfImage,sizeOfHeaders,sections};
 }
 
-function peRawOffsetForRva(pe,rva,size=4){
-  if(!Number.isInteger(rva)||rva<0||rva>0xffffffff||!Number.isInteger(size)||size<=0)throw new Error('kernel import PE RVA invalid');
-  if(rva<pe.sizeOfHeaders){
-    if(rva>pe.sizeOfHeaders-size||rva>pe.bytes.length-size)throw new Error('kernel import descriptor crosses PE headers');
-    return rva;
-  }
+function rvaInsideMappedPe(pe,rva,size){
+  if(rva<pe.sizeOfHeaders)return rva<=pe.sizeOfHeaders-size&&rva<=pe.bytes.length-size;
   for(const section of pe.sections){
     if(rva<section.virtualAddress)continue;
     const delta=rva-section.virtualAddress;
     if(delta>=section.virtualSpan)continue;
-    // An RVA in virtual zero-fill is a valid mapped address but has no file
-    // bytes containing an import descriptor, so fail closed rather than read
-    // unrelated bytes.
-    if(delta>section.rawSize-size)throw new Error('XEX import descriptor lies in unbacked PE virtual range');
+    return rva<=pe.bytes.length-size&&delta<=section.virtualSpan-size;
+  }
+  return false;
+}
+
+function rawOffsetForRva(pe,rva,size){
+  if(rva<pe.sizeOfHeaders)return rva<=pe.sizeOfHeaders-size&&rva<=pe.bytes.length-size?rva:null;
+  for(const section of pe.sections){
+    if(rva<section.virtualAddress)continue;
+    const delta=rva-section.virtualAddress;
+    if(delta>=section.virtualSpan)continue;
+    // Disk-layout PE fallback only has initialized bytes through SizeOfRawData.
+    if(delta>section.rawSize-size)return null;
     const raw=section.rawPointer+delta;
-    if(raw>pe.bytes.length-size)throw new Error('XEX import descriptor raw offset out of bounds');
+    if(raw>pe.bytes.length-size)return null;
     return raw;
   }
-  throw new Error('XEX import descriptor RVA is outside PE mappings');
+  return null;
+}
+
+function resolveImportDescriptor(pe,rva){
+  if(!Number.isInteger(rva)||rva<0||rva>0xffffffff)throw new Error('kernel import PE RVA invalid');
+  const candidates=[];
+  if(rvaInsideMappedPe(pe,rva,4))candidates.push({layout:'mapped-image',offset:rva});
+  const rawOffset=rawOffsetForRva(pe,rva,4);
+  if(rawOffset!==null&&!candidates.some(x=>x.offset===rawOffset))candidates.push({layout:'raw-pe',offset:rawOffset});
+  if(!candidates.length)throw new Error('XEX import descriptor RVA is outside PE mappings');
+
+  for(const candidate of candidates){
+    candidate.descriptor=be32(pe.bytes,candidate.offset);
+    candidate.type=(candidate.descriptor>>>24)&0xff;
+    candidate.ordinal=candidate.descriptor&0xffff;
+  }
+  const valid=candidates.filter(x=>x.type===0||x.type===1);
+  if(valid.length===1)return valid[0];
+  if(valid.length>1){
+    // A decompressed XEX is a loaded-memory image, while older synthetic tests
+    // may still provide a compact disk-layout PE. Prefer mapped RVA semantics
+    // when the prepared buffer spans SizeOfImage. Otherwise retain the raw PE
+    // interpretation if both locations happen to resemble valid descriptors.
+    const preferred=pe.bytes.length>=pe.sizeOfImage
+      ?valid.find(x=>x.layout==='mapped-image')
+      :valid.find(x=>x.layout==='raw-pe');
+    return preferred??valid[0];
+  }
+
+  const first=candidates[0];
+  const detail=candidates.map(x=>`${x.layout}@0x${x.offset.toString(16)}=type${x.type}`).join(', ');
+  throw new Error(`unsupported XEX import descriptor type ${first.type} (${detail})`);
 }
 
 export function decodeKernelImportRecords(xexBytes,preparedImage){
   const libraries=decodeXexImportLibraries(xexBytes);
-  const prepared=Buffer.from(preparedImage);
-  const pe=parsePreparedPe(prepared);
+  const pe=parsePreparedPe(preparedImage);
   const imageBase=imageBaseFromXex(xexBytes);
   const decoded=[];
   for(const library of libraries){
@@ -79,17 +113,22 @@ export function decodeKernelImportRecords(xexBytes,preparedImage){
       const rvaBig=va-base;
       if(rvaBig>0xffffffffn)throw new Error('XEX import descriptor RVA overflow');
       const rva=Number(rvaBig);
-      const rawOffset=peRawOffsetForRva(pe,rva,4);
-      const descriptor=be32(prepared,rawOffset);
-      const type=(descriptor>>>24)&0xff;
-      const ordinal=descriptor&0xffff;
-      if(type!==0&&type!==1)throw new Error(`unsupported XEX import descriptor type ${type}`);
-      records.push({recordAddress:recordAddress>>>0,rva,rawOffset,descriptor,type,ordinal});
+      const resolved=resolveImportDescriptor(pe,rva);
+      records.push({
+        recordAddress:recordAddress>>>0,
+        rva,
+        rawOffset:resolved.offset,
+        descriptorOffset:resolved.offset,
+        descriptorLayout:resolved.layout,
+        descriptor:resolved.descriptor,
+        type:resolved.type,
+        ordinal:resolved.ordinal
+      });
     }
     const imports=[];
     for(const record of records){
       if(record.type===0){
-        imports.push({module:library.name,ordinal:record.ordinal,kind:'variable',valueAddress:record.recordAddress,thunkAddress:0,descriptorAddress:record.recordAddress,descriptorRva:record.rva,descriptorRawOffset:record.rawOffset});
+        imports.push({module:library.name,ordinal:record.ordinal,kind:'variable',valueAddress:record.recordAddress,thunkAddress:0,descriptorAddress:record.recordAddress,descriptorRva:record.rva,descriptorRawOffset:record.rawOffset,descriptorOffset:record.descriptorOffset,descriptorLayout:record.descriptorLayout});
         continue;
       }
       const previous=imports[imports.length-1];
@@ -98,6 +137,8 @@ export function decodeKernelImportRecords(xexBytes,preparedImage){
       previous.thunkAddress=record.recordAddress;
       previous.thunkRva=record.rva;
       previous.thunkRawOffset=record.rawOffset;
+      previous.thunkOffset=record.descriptorOffset;
+      previous.thunkLayout=record.descriptorLayout;
     }
     decoded.push({name:library.name,id:library.id,version:library.version,versionMin:library.versionMin,isKernelModule:KERNEL_MODULES.has(module),imports});
   }

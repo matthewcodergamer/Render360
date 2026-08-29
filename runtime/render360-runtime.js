@@ -18,7 +18,13 @@ export class Render360Runtime extends EventTarget{
     this.workerStats={hz:0,ticks:0,work:0};
     this.inputHost=new RuntimeHost((level,message)=>this.emit('log',{level,message}),stats=>{this.workerStats=stats;this.emit('workerTelemetry',stats);});
   }
-  emit(type,detail={}){this.dispatchEvent(new CustomEvent(type,{detail}));}
+  emit(type,detail={}){
+    this.dispatchEvent(new CustomEvent(type,{detail}));
+    // Mirror every emulator event onto window so diagnostics can subscribe
+    // without reaching into the private app/runtime instance. This is the
+    // stable observability bus used by the V44 developer console.
+    try{globalThis.dispatchEvent(new CustomEvent(`render360:${type}`,{detail}));}catch{}
+  }
   async init(){
     this.emit('bootStage',{stage:'core',message:'Starting Render360 runtime…'});
     const inputPromise=this.inputHost.init().catch(error=>{this.emit('log',{level:'warn',message:`Input worker unavailable: ${error.message}`});return null;});
@@ -77,7 +83,7 @@ export class Render360Runtime extends EventTarget{
     const type=String(game.sourceType||ext(file.name)).toLowerCase();
     const launchConfig={...this.launchConfig,...config};
     this.inputHost.setSession({kind:type==='iso'?1:type==='xex'?2:3,stage:5,titleId:game.titleId||0});
-    this.emit('bootStage',{stage:'launch',message:`Starting ${game.name}…`,type});
+    this.emit('bootStage',{stage:'launch',message:`Starting ${game.name}…`,type,fileName:file.name||'',fileSize:file.size||0,titleId:game.titleId||0,mediaId:game.mediaId||0});
     try{
       let result;
       if(type==='iso'){
@@ -91,7 +97,7 @@ export class Render360Runtime extends EventTarget{
         throw new Error(`${type.toUpperCase()} is not a runnable Render360 source type`);
       }
       this.emit('titleStarted',{game,result,type,config:launchConfig});return result;
-    }catch(error){this.emit('fatalError',{message:error?.message||String(error),error,type});throw error;}
+    }catch(error){this.emit('fatalError',{message:error?.message||String(error),error,type,lastStage:globalThis.render360ModernTitle?.result?.runtimeBoundary||null});throw error;}
   }
   startTelemetry(){clearInterval(this.telemetryTimer);this.telemetryTimer=setInterval(()=>this.sampleTelemetry(),250);}
   sampleTelemetry(){

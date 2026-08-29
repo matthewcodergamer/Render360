@@ -15,21 +15,17 @@ function normalizeGprs(initialGprs){
  * Persistent browser-side execution session for Xenia-generated guest-function
  * WASM modules.
  *
- * A slice is one generated guest function (including synchronous nested guest
- * calls). Every slice uses the same Xenia PPCContext and generation-aware
- * function registry. Generated guest calls that land on registered xboxkrnl /
- * XAM thunks are routed through the native WASM kernel ABI using that exact
- * live PPCContext. Unsupported thunks remain fail-closed.
+ * The lightweight callable emitter executes complete guest functions. The
+ * integer CFG fallback additionally supports browser-safe mid-function resume:
+ * when its block-dispatch fuel expires, generated WASM saves the dispatcher PC
+ * and all live integer HIR locals into a per-thread continuation slot and
+ * returns to JavaScript without claiming a guest return. The next slice restores
+ * that exact state and continues against the same Xenia PPCContext.
  *
- * The lightweight callable emitter is preferred. For the most recently Xenia-
- * translated top-level function, the verified fuel-bounded CFG module is also
- * admitted as a fallback when the lightweight emitter couldn't represent a
- * multi-block integer branch/loop function. That fallback deliberately does
- * not pretend to cover guest-memory, FPU/VMX or arbitrary calls yet.
- *
- * This still is not a preemptive Xbox thread VM: safe browser preemption is at
- * completed generated guest-function returns (or an explicit fail-closed CFG
- * fuel trap until resumable mid-function state is implemented).
+ * This is deliberately fail-closed outside the admitted CFG tier: arbitrary
+ * guest-memory/FPU/VMX/call-heavy functions still remain explicit compatibility
+ * boundaries until their generated-WASM lowering gains the same continuation
+ * semantics.
  */
 export async function createPersistentPpcSession({bootstrap,initialGprs={},clearContext=true}={}){
   if(!(bootstrap?.exports?.memory instanceof WebAssembly.Memory))throw new Error('Persistent PPC session requires bootstrap WebAssembly memory');
@@ -50,6 +46,11 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const cfgPtrFn=pick(bootstrap,'r360_wasm_backend_cfg_module_ptr');
   const cfgSizeFn=pick(bootstrap,'r360_wasm_backend_cfg_module_size');
   const cfgLoweredFn=pick(bootstrap,'r360_wasm_backend_cfg_lowered_instructions');
+  const cfgSlotCountFn=pick(bootstrap,'r360_wasm_backend_cfg_continuation_slot_count');
+  const cfgStateSizeFn=pick(bootstrap,'r360_wasm_backend_cfg_continuation_state_size');
+  const cfgStatePtrFn=pick(bootstrap,'r360_wasm_backend_cfg_continuation_ptr');
+  const cfgStateStatusFn=pick(bootstrap,'r360_wasm_backend_cfg_continuation_status');
+  const cfgStateResetFn=pick(bootstrap,'r360_wasm_backend_cfg_continuation_reset');
   const lastGuestAddressFn=pick(bootstrap,'r360_ppc_probe_last_guest_address');
   const kernelDispatch=pick(bootstrap,'r360_kernel_import_dispatch_context');
   const kernelLastStatus=pick(bootstrap,'r360_kernel_import_last_status');
@@ -65,13 +66,17 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     throw new Error(`Invalid Xenia PPCContext ABI ptr=0x${contextPtr.toString(16)} size=${contextSize}`);
   }
 
+  const hasCfgContinuation=[cfgSlotCountFn,cfgStateSizeFn,cfgStatePtrFn,cfgStateStatusFn,cfgStateResetFn].every(fn=>typeof fn==='function');
   let registryKey='';
   let records=new Map();
   let sliceCount=0;
+  let yieldedSliceCount=0;
   let nestedDispatches=0;
   let kernelDispatches=0;
   let registryRefreshes=0;
   let cfgFallbackLoads=0;
+  let nextCfgSlot=0;
+  const cfgContinuations=new Map();
 
   const bytes=()=>new Uint8Array(memory.buffer,contextPtr,contextSize);
   const view=()=>new DataView(memory.buffer);
@@ -99,6 +104,47 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     return `_KERNEL_STATUS_${status}_MODULE_${module}_ORDINAL_0x${ordinal.toString(16).toUpperCase()}_TARGET_0x${target.toString(16).toUpperCase()}`;
   }
 
+  function continuationOwner(address,key){
+    const normalized=key===undefined||key===null?'default':String(key);
+    return `${address>>>0}:${normalized}`;
+  }
+
+  function clearContinuationRegistry(){
+    if(hasCfgContinuation){
+      const count=cfgSlotCountFn()>>>0;
+      for(let slot=0;slot<count;slot++)cfgStateResetFn(slot);
+    }
+    cfgContinuations.clear();
+    nextCfgSlot=0;
+  }
+
+  function acquireCfgContinuation(address,key){
+    if(!hasCfgContinuation)throw new Error('FAIL_CLOSED_CFG_CONTINUATION_ABI_MISSING');
+    const owner=continuationOwner(address,key);
+    const existing=cfgContinuations.get(owner);
+    if(existing)return existing;
+    const count=cfgSlotCountFn()>>>0;
+    const stateSize=cfgStateSizeFn()>>>0;
+    if(!count||!stateSize)throw new Error(`FAIL_CLOSED_CFG_CONTINUATION_LAYOUT_${count}_${stateSize}`);
+    if(nextCfgSlot>=count)throw new Error(`FAIL_CLOSED_CFG_CONTINUATION_SLOTS_EXHAUSTED_${count}`);
+    const slot=nextCfgSlot++;
+    cfgStateResetFn(slot);
+    const ptr=cfgStatePtrFn(slot)>>>0;
+    if(!ptr||ptr+stateSize>memory.buffer.byteLength)throw new Error(`FAIL_CLOSED_CFG_CONTINUATION_PTR_${slot}_0x${ptr.toString(16)}_${stateSize}`);
+    const record={owner,slot,ptr,stateSize};
+    cfgContinuations.set(owner,record);
+    return record;
+  }
+
+  function releaseCfgContinuation(address,key,{reset=true}={}){
+    if(!hasCfgContinuation)return;
+    const owner=continuationOwner(address,key);
+    const record=cfgContinuations.get(owner);
+    if(!record)return;
+    if(reset)cfgStateResetFn(record.slot);
+    cfgContinuations.delete(owner);
+  }
+
   function maybeAppendCfgFallback(descriptors){
     if(typeof cfgStatusFn!=='function'||typeof cfgPtrFn!=='function'||typeof cfgSizeFn!=='function'||typeof cfgLoweredFn!=='function'||typeof lastGuestAddressFn!=='function')return;
     if((cfgStatusFn()>>>0)!==2)return;
@@ -107,6 +153,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     const size=cfgSizeFn()>>>0;
     const lowered=cfgLoweredFn()>>>0;
     if(!address||!ptr||size<=8||!lowered||descriptors.some(x=>x.address===address))return;
+    if(!hasCfgContinuation)throw new Error('CFG fallback was generated without resumable continuation exports');
     const generation=typeof contentGenerationFn==='function'?(contentGenerationFn(address)>>>0)||1:1;
     descriptors.push({index:-1,address,generation,ptr,size,lowered,tier:'cfg-fallback'});
   }
@@ -140,6 +187,13 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       const callee=next.get(target);
       if(callee?.instance?.exports?.run){
         nestedDispatches++;
+        if(callee.tier==='cfg-fallback'){
+          const continuation=acquireCfgContinuation(target,`nested:${target}`);
+          callee.instance.exports.run(ctx,continuation.ptr);
+          const status=cfgStateStatusFn(continuation.slot)>>>0;
+          if(status===2){releaseCfgContinuation(target,`nested:${target}`);return 1;}
+          throw new Error(`FAIL_CLOSED_NESTED_CFG_YIELD_0x${target.toString(16).toUpperCase()}_REQUIRES_ASYNC_SCHEDULER`);
+        }
         callee.instance.exports.run(ctx);
         return 1;
       }
@@ -153,13 +207,14 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       record.instance=await WebAssembly.instantiate(record.module,{env:{memory,guest_call}});
       if(typeof record.instance?.exports?.run!=='function')throw new Error(`Generated guest function 0x${record.address.toString(16)} has no run export`);
     }
+    clearContinuationRegistry();
     records=next;
     registryKey=nextKey;
     registryRefreshes++;
     return {changed:true,count:records.size,key:registryKey};
   }
 
-  async function runFunctionSlice(address){
+  async function runFunctionSlice(address,{continuationKey='default'}={}){
     address>>>=0;
     await refreshFunctions();
     const record=records.get(address);
@@ -168,10 +223,23 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     const dispatchBefore=nestedDispatches;
     const kernelBefore=kernelDispatches;
     let rawResult;
+    let continuation=null;
+    let continuationStatus=0;
+    let yielded=false;
+    let guestReturned=true;
     try{
-      rawResult=record.instance.exports.run(contextPtr);
+      if(record.tier==='cfg-fallback'){
+        continuation=acquireCfgContinuation(address,continuationKey);
+        rawResult=record.instance.exports.run(contextPtr,continuation.ptr);
+        continuationStatus=cfgStateStatusFn(continuation.slot)>>>0;
+        if(continuationStatus===1){yielded=true;guestReturned=false;yieldedSliceCount++;}
+        else if(continuationStatus===2){releaseCfgContinuation(address,continuationKey);}
+        else throw new Error(`FAIL_CLOSED_CFG_CONTINUATION_STATUS_${continuationStatus}`);
+      }else{
+        rawResult=record.instance.exports.run(contextPtr);
+      }
     }catch(error){
-      if(record.tier==='cfg-fallback')throw new Error(`FAIL_CLOSED_CFG_FUNCTION_0x${address.toString(16).toUpperCase()}_TRAP_OR_FUEL_EXHAUSTED: ${error?.message||error}`);
+      if(record.tier==='cfg-fallback')throw new Error(`FAIL_CLOSED_CFG_FUNCTION_0x${address.toString(16).toUpperCase()}_RESUME: ${error?.message||error}`);
       throw error;
     }
     const result=BigInt.asUintN(64,rawResult);
@@ -185,6 +253,10 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       r3:getGpr(3),
       lr:getLr(),
       ctr:getCtr(),
+      yielded,
+      guestReturned,
+      continuationStatus,
+      continuationSlot:continuation?.slot??null,
       nestedDispatches:nestedDispatches-dispatchBefore,
       kernelDispatches:kernelDispatches-kernelBefore,
       sliceCount,
@@ -200,14 +272,15 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     });
   }
 
-  async function runFunctionSlices({address,maxSlices=1,continueWhile=()=>true,onSlice=null,yieldBetween=true}={}){
+  async function runFunctionSlices({address,maxSlices=1,continueWhile=()=>true,onSlice=null,yieldBetween=true,continuationKey='default'}={}){
     if(!Number.isInteger(maxSlices)||maxSlices<1)throw new RangeError('maxSlices must be >= 1');
     const results=[];
     for(let i=0;i<maxSlices;i++){
       if(!continueWhile({index:i,session:api}))break;
-      const result=await runFunctionSlice(address);
+      const result=await runFunctionSlice(address,{continuationKey});
       results.push(result);
       if(typeof onSlice==='function')await onSlice(result);
+      if(result.guestReturned)break;
       if(yieldBetween&&i+1<maxSlices)await yieldToBrowser();
     }
     return results;
@@ -218,19 +291,22 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     contextPtr,contextSize,gprOffset,lrOffset,ctrOffset,
     resetContext,getGpr,setGpr,getLr,setLr,getCtr,setCtr,
     refreshFunctions,runFunctionSlice,runFunctionSlices,yieldToBrowser,
+    releaseCfgContinuation,
     get sliceCount(){return sliceCount;},
+    get yieldedSliceCount(){return yieldedSliceCount;},
     get nestedDispatches(){return nestedDispatches;},
     get kernelDispatches(){return kernelDispatches;},
     get registryRefreshes(){return registryRefreshes;},
     get cfgFallbackLoads(){return cfgFallbackLoads;},
+    get cfgContinuationCount(){return cfgContinuations.size;},
     get functionCount(){return records.size;},
     get functionTiers(){return [...records.values()].map(r=>({address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered}));},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionFailsClosed:true,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'guest-function-return',midFunctionPreemption:false,fullXboxThreadScheduler:false},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;
 }
 
 export function persistentPpcSessionContract(){
-  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',browserYield:'between completed guest-function slices',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:100000,unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,midFunctionPreemption:false,fullXboxThreadScheduler:false};
+  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + resumable fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',browserYield:'between completed guest functions or yielded CFG quanta',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:4096,cfgFuelExhaustionYields:true,cfgContinuationState:'per-thread status + dispatcher PC + live integer HIR locals',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false};
 }

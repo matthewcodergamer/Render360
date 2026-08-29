@@ -1,4 +1,4 @@
-name: UI V42 Integration
+name: UI V43 Integration
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Parse V42 browser modules
+      - name: Parse V43 browser modules
         run: |
           node --check app-v41.js
           node --check app-v42-patch.js
@@ -83,7 +83,7 @@ jobs:
           node --check library/cover-resolver.js
           node --check import/zip-importer.js
           node --check profiles/title-profile-store.js
-      - name: Enforce V42 deployed integration contract
+      - name: Enforce V43 deployed integration contract
         run: node test-ui-v41-contract.mjs
       - name: Stage published bootstrap for scheduler test
         run: |

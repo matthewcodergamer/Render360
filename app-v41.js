@@ -1,10 +1,10 @@
-import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js?v=43';
-import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js?v=43';
-import {resolveTitleCover} from './library/cover-resolver.js?v=43';
-import {prepareZipGame} from './import/zip-importer.js';
-import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js';
-import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js';
-import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory} from './storage/game-storage.js';
+import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js?v=44';
+import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js?v=44';
+import {resolveTitleCover} from './library/cover-resolver.js?v=44';
+import {prepareZipGame} from './import/zip-importer.js?v=44';
+import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js?v=44';
+import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js?v=44';
+import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory} from './storage/game-storage.js?v=44';
 
 const $=id=>document.getElementById(id);
 const runtime=new Render360Runtime();
@@ -20,23 +20,16 @@ let appSettings=loadAppSettings();
 let touchAnalog={lx:0,ly:0,rx:0,ry:0};
 let gamepadKeys=new Map();
 
-function log(level,message){
-  const item={at:Date.now(),level,message:String(message)};logs.push(item);if(logs.length>800)logs.shift();
-  console[level==='error'?'error':level==='warn'?'warn':'log'](`[Render360] ${item.message}`);
-}
-function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+function log(level,message){const item={at:Date.now(),level,message:String(message)};logs.push(item);if(logs.length>800)logs.shift();console[level==='error'?'error':level==='warn'?'warn':'log'](`[Render360] ${item.message}`);}
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c]));}
 function formatBytes(n=0){const v=Number(n)||0;if(v<1024)return`${v} B`;if(v<1048576)return`${(v/1024).toFixed(1)} KB`;if(v<1073741824)return`${(v/1048576).toFixed(1)} MB`;return`${(v/1073741824).toFixed(2)} GB`;}
 function hex8(value){return (Number(value||0)>>>0).toString(16).toUpperCase().padStart(8,'0');}
 function titleIdText(game){return game?.titleId?hex8(game.titleId):'Unknown';}
 function mediaIdText(game){return game?.mediaId?hex8(game.mediaId):'Unknown';}
 function setText(id,value){const el=$(id);if(el)el.textContent=String(value??'');}
 
-function updateViewportHeight(){
-  const h=Math.max(320,Math.round(globalThis.visualViewport?.height||innerHeight||document.documentElement.clientHeight||0));
-  document.documentElement.style.setProperty('--app-height',`${h}px`);
-}
-updateViewportHeight();
-visualViewport?.addEventListener('resize',updateViewportHeight);visualViewport?.addEventListener('scroll',updateViewportHeight);window.addEventListener('orientationchange',()=>setTimeout(updateViewportHeight,80));window.addEventListener('resize',updateViewportHeight);
+function updateViewportHeight(){const h=Math.max(320,Math.round(globalThis.visualViewport?.height||innerHeight||document.documentElement.clientHeight||0));document.documentElement.style.setProperty('--app-height',`${h}px`);}
+updateViewportHeight();visualViewport?.addEventListener('resize',updateViewportHeight);visualViewport?.addEventListener('scroll',updateViewportHeight);window.addEventListener('orientationchange',()=>setTimeout(updateViewportHeight,80));window.addEventListener('resize',updateViewportHeight);
 
 function applyAppSettings(){
   const theme=resolveAppearance(appSettings.appearance);document.documentElement.dataset.theme=theme;
@@ -46,85 +39,36 @@ function applyAppSettings(){
   $('performanceHud')?.classList.toggle('hidden',!appSettings.performanceHud);
   runtime.configure({renderer:appSettings.preferredRenderer,resolutionScale:appSettings.defaultResolutionScale,targetFps:appSettings.defaultTargetFps,audioEnabled:appSettings.audioEnabled,audioLatency:appSettings.audioLatency});
 }
-applyAppSettings();
-matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(appSettings.appearance==='system')applyAppSettings();});
+applyAppSettings();matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(appSettings.appearance==='system')applyAppSettings();});
 
 const STATE_TO_VIEW={LIBRARY:'libraryView',GAME_DETAILS:'detailView',GAME_SETTINGS:'gameSettingsView',APP_SETTINGS:'appSettingsView',BOOTING_GAME:'runtimeView',RUNNING:'runtimeView',PAUSED:'runtimeView'};
-function setState(next,{keepScroll=false}={}){
-  appState=next;
-  for(const id of Object.values(STATE_TO_VIEW))$(id)?.classList.add('hidden');
-  const view=$(STATE_TO_VIEW[next]);view?.classList.remove('hidden');
-  if(view&&!keepScroll&&next!=='RUNNING'&&next!=='PAUSED')view.scrollTop=0;
-  document.body.dataset.state=next;
-  updateViewportHeight();
-}
+function setState(next,{keepScroll=false}={}){appState=next;for(const id of Object.values(STATE_TO_VIEW))$(id)?.classList.add('hidden');const view=$(STATE_TO_VIEW[next]);view?.classList.remove('hidden');if(view&&!keepScroll&&next!=='RUNNING'&&next!=='PAUSED')view.scrollTop=0;document.body.dataset.state=next;updateViewportHeight();}
 
-async function coverUrl(game){
-  if(!game?.coverKey)return null;if(coverUrls.has(game.coverKey))return coverUrls.get(game.coverKey);
-  const blob=await getCover(game.coverKey);if(!blob)return null;const url=URL.createObjectURL(blob);coverUrls.set(game.coverKey,url);return url;
-}
+async function coverUrl(game){if(!game?.coverKey)return null;if(coverUrls.has(game.coverKey))return coverUrls.get(game.coverKey);const blob=await getCover(game.coverKey);if(!blob)return null;const url=URL.createObjectURL(blob);coverUrls.set(game.coverKey,url);return url;}
 function coverMarkup(game,url){return url?`<img src="${url}" alt="${escapeHtml(game.name)} cover">`:`<div class="cover-placeholder"><div><b>${escapeHtml(game.name)}</b><span>XBOX 360</span></div></div>`;}
-
 async function refreshLibrary(){games=await listGames();await renderLibrary();}
 async function renderLibrary(){
-  const q=($('librarySearch')?.value||'').trim().toLowerCase();const filtered=games.filter(g=>!q||String(g.name).toLowerCase().includes(q)||titleIdText(g).toLowerCase().includes(q));
+  const q=($('librarySearch')?.value||'').trim().toLowerCase(),filtered=games.filter(g=>!q||String(g.name).toLowerCase().includes(q)||titleIdText(g).toLowerCase().includes(q));
   $('emptyLibrary')?.classList.toggle('hidden',games.length>0);const grid=$('gameGrid');if(!grid)return;grid.innerHTML='';
-  for(const game of filtered){
-    const url=await coverUrl(game),button=document.createElement('button');button.type='button';button.className='game-tile';button.dataset.gameId=game.id;
-    const linked=!!runtime.getSource(game.id),persistent=!!game.persistentSource;
-    button.innerHTML=`<div class="cover-shell">${coverMarkup(game,url)}</div><span class="game-tile-title">${escapeHtml(game.name)}</span><span class="game-tile-meta"><i class="status-dot ${linked?'ready':'link'}"></i>${linked?'Ready':persistent?'Restoring…':'Needs file'} · ${escapeHtml(String(game.sourceType||'game').toUpperCase())}</span>`;
-    button.addEventListener('click',()=>openGame(game.id));grid.appendChild(button);
-  }
+  for(const game of filtered){const url=await coverUrl(game),button=document.createElement('button');button.type='button';button.className='game-tile';button.dataset.gameId=game.id;const linked=!!runtime.getSource(game.id),persistent=!!game.persistentSource;button.innerHTML=`<div class="cover-shell">${coverMarkup(game,url)}</div><span class="game-tile-title">${escapeHtml(game.name)}</span><span class="game-tile-meta"><i class="status-dot ${linked?'ready':'link'}"></i>${linked?'Ready':persistent?'Restoring…':'Needs file'} · ${escapeHtml(String(game.sourceType||'game').toUpperCase())}</span>`;button.addEventListener('click',()=>openGame(game.id));grid.appendChild(button);}
 }
-
-async function restorePersistentSources(){
-  let restored=0;
-  for(const game of games){
-    if(!game.persistentSource||!game.opfsPath||runtime.getSource(game.id))continue;
-    try{const file=await openPersistentSource(game.opfsPath,game.sourceName);if(file){runtime.bindSource(game.id,file);restored++;}}
-    catch(error){log('warn',`Stored source unavailable for ${game.name}: ${error.message}`);game.needsRelink=true;await putGame(game);}
-  }
-  if(restored)await renderLibrary();return restored;
-}
+async function restorePersistentSources(){let restored=0;for(const game of games){if(!game.persistentSource||!game.opfsPath||runtime.getSource(game.id))continue;try{const file=await openPersistentSource(game.opfsPath,game.sourceName);if(file){runtime.bindSource(game.id,file);restored++;}}catch(error){log('warn',`Stored source unavailable for ${game.name}: ${error.message}`);game.needsRelink=true;await putGame(game);}}if(restored)await renderLibrary();return restored;}
 
 async function openGame(id){currentGame=await getGame(id);if(!currentGame)return;await renderDetail();setState('GAME_DETAILS');}
-async function renderDetail(){
-  if(!currentGame)return;const game=currentGame,url=await coverUrl(game);
-  $('detailCover').innerHTML=coverMarkup(game,url);setText('detailName',game.name);setText('detailTitleId',titleIdText(game));setText('detailMediaId',mediaIdText(game));setText('detailType',String(game.sourceType||'Unknown').toUpperCase());setText('detailSize',formatBytes(game.size||0));setText('detailCompatibility',game.compatibility||'Testing');setText('detailSource',game.archiveName||game.sourceName||'Imported game');
-  const linked=!!runtime.getSource(game.id);setText('detailStorage',game.persistentSource?'Render360/Games':linked?'Current browser session':'Needs file');setText('playGameButton',linked?'Play':'Choose File & Play');
-}
+async function renderDetail(){if(!currentGame)return;const game=currentGame,url=await coverUrl(game);$('detailCover').innerHTML=coverMarkup(game,url);setText('detailName',game.name);setText('detailTitleId',titleIdText(game));setText('detailMediaId',mediaIdText(game));setText('detailType',String(game.sourceType||'Unknown').toUpperCase());setText('detailSize',formatBytes(game.size||0));setText('detailCompatibility',game.compatibility||'Testing');setText('detailSource',game.archiveName||game.sourceName||'Imported game');const linked=!!runtime.getSource(game.id);setText('detailStorage',game.persistentSource?'Render360/Games':linked?'Current browser session':'Needs file');setText('playGameButton',linked?'Play':'Choose File & Play');}
 
 function setImportProgress(title,percent,meta=''){setText('importTitle',title);$('importProgressFill').style.width=`${Math.max(0,Math.min(100,Number(percent)||0))}%`;setText('importProgressPercent',`${Math.round(Number(percent)||0)}%`);setText('importProgressMeta',meta);}
 function openImport(){const input=$('importInput');input.value='';input.click();}
-async function resolveImportCover(info,coverFile){
-  if(coverFile)return {coverFile,name:null};if(!info?.titleId)return {coverFile:null,name:null};
-  setImportProgress('Finding game artwork…',96,`Title ID ${hex8(info.titleId)}`);
-  const resolved=await resolveTitleCover({titleId:info.titleId,timeoutMs:4200});
-  return {coverFile:resolved?.blob?new File([resolved.blob],`cover-${hex8(info.titleId)}.jpg`,{type:resolved.blob.type}):null,name:resolved?.name||null};
-}
-
-async function maybePersistSource(file,id,existingStorage=null){
-  if(existingStorage?.persistent)return existingStorage;if(!appSettings.autoPersistImports||!storageSupported())return null;
-  try{
-    setImportProgress('Saving game to Render360…',42,`${formatBytes(0)} / ${formatBytes(file.size)}`);
-    const storage=await persistGameSource(file,id,{onProgress:p=>setImportProgress('Saving game to Render360…',42+(p.percent||0)*.48,`${formatBytes(p.done||0)} / ${formatBytes(p.total||file.size)}`)});
-    return storage;
-  }catch(error){log('warn',`Game stays session-only: ${error.message}`);return null;}
-}
+async function resolveImportCover(info,coverFile){if(coverFile)return {coverFile,name:null};if(!info?.titleId)return {coverFile:null,name:null};setImportProgress('Finding game artwork…',96,`Title ID ${hex8(info.titleId)}`);const resolved=await resolveTitleCover({titleId:info.titleId,timeoutMs:4200});return {coverFile:resolved?.blob?new File([resolved.blob],`cover-${hex8(info.titleId)}.jpg`,{type:resolved.blob.type}):null,name:resolved?.name||null};}
+async function maybePersistSource(file,id,existingStorage=null){if(existingStorage?.persistent)return existingStorage;if(!appSettings.autoPersistImports||!storageSupported())return null;try{setImportProgress('Saving game to Render360…',42,`${formatBytes(0)} / ${formatBytes(file.size)}`);return await persistGameSource(file,id,{onProgress:p=>setImportProgress('Saving game to Render360…',42+(p.percent||0)*.48,`${formatBytes(p.done||0)} / ${formatBytes(p.total||file.size)}`)});}catch(error){log('warn',`Game stays session-only: ${error.message}`);return null;}}
 
 async function importSelectedFile(file){
-  if(!file)return;showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);
-  let gameFile=file,coverFile=null,archiveName=null,storage=null;
+  if(!file)return;showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);let gameFile=file,coverFile=null,archiveName=null,storage=null;
   try{
-    if(sourceKindFromName(file.name)==='zip'){
-      archiveName=file.name;const prepared=await prepareZipGame(file,{onProgress:p=>{const pct=p.phase==='index'?Math.min(18,p.percent||4):18+(p.percent||0)*.52;setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,pct,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…');}});gameFile=prepared.gameFile;coverFile=prepared.coverFile;storage=prepared.gameStorage;
-    }
-    setImportProgress('Reading Xbox metadata…',72,gameFile.name);const info=await runtime.inspectFile(gameFile);const id=makeGameId();
-    storage=await maybePersistSource(gameFile,id,storage);
-    const resolved=await resolveImportCover(info,coverFile);coverFile=resolved.coverFile||coverFile;let coverKey=null;if(coverFile)coverKey=await putCover(coverFile);
+    if(sourceKindFromName(file.name)==='zip'){archiveName=file.name;const prepared=await prepareZipGame(file,{onProgress:p=>{const pct=p.phase==='index'?Math.min(18,p.percent||4):18+(p.percent||0)*.52;setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,pct,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…');}});gameFile=prepared.gameFile;coverFile=prepared.coverFile;storage=prepared.gameStorage;}
+    setImportProgress('Reading Xbox metadata…',72,gameFile.name);const info=await runtime.inspectFile(gameFile),id=makeGameId();storage=await maybePersistSource(gameFile,id,storage);const resolved=await resolveImportCover(info,coverFile);coverFile=resolved.coverFile||coverFile;let coverKey=null;if(coverFile)coverKey=await putCover(coverFile);
     const game={id,name:resolved.name||info.name||gameFile.name,titleId:Number(info.titleId||0)>>>0,mediaId:Number(info.mediaId||0)>>>0,contentType:info.displayType||'Xbox 360 Game',sourceType:info.sourceType||sourceKindFromName(gameFile.name),sourceName:gameFile.name,archiveName,size:gameFile.size,coverKey,compatibility:'Testing',profileId:`title-${hex8(info.titleId||0)}`,importedAt:Date.now(),lastPlayed:0,opfsPath:storage?.opfsPath||null,persistentSource:Boolean(storage?.persistent),needsRelink:!storage?.persistent,inspectionWarning:info.inspectionWarning||null};
-    runtime.bindSource(id,gameFile);await putGame(game);games.unshift(game);currentGame=game;setImportProgress('Added to Library',100,`${game.name} is ready`);
-    setTimeout(async()=>{closeSheets();await renderLibrary();await renderDetail();setState('GAME_DETAILS');},350);
+    runtime.bindSource(id,gameFile);await putGame(game);games.unshift(game);currentGame=game;setImportProgress('Added to Library',100,`${game.name} is ready`);setTimeout(async()=>{closeSheets();await renderLibrary();await renderDetail();setState('GAME_DETAILS');},350);
   }catch(error){log('error',error.message);closeSheets();showAlert('Import Failed',error.message,[{label:'OK'}]);}
 }
 
@@ -132,9 +76,7 @@ function startRelink(){if(!currentGame)return;relinkTarget=currentGame;const inp
 async function handleRelink(file){
   if(!relinkTarget||!file)return;let source=file,actual=sourceKindFromName(file.name),storage=null;
   try{
-    if(actual==='zip'){
-      showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);const prepared=await prepareZipGame(file,{onProgress:p=>setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,p.percent||0,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…')});source=prepared.gameFile;actual=sourceKindFromName(source.name);storage=prepared.gameStorage;closeSheets();
-    }
+    if(actual==='zip'){showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);const prepared=await prepareZipGame(file,{onProgress:p=>setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,p.percent||0,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…')});source=prepared.gameFile;actual=sourceKindFromName(source.name);storage=prepared.gameStorage;closeSheets();}
     const expected=String(relinkTarget.sourceType||'').toLowerCase();if(expected&&expected!=='unknown'&&actual!==expected){showAlert('Wrong File',`This library entry expects ${expected.toUpperCase()}, but you selected ${actual.toUpperCase()}.`,[{label:'OK'}]);return;}
     if(appSettings.autoPersistImports&&!storage?.persistent){showSheet('importSheet');storage=await maybePersistSource(source,relinkTarget.id,storage);closeSheets();}
     if(storage?.persistent){if(relinkTarget.opfsPath&&relinkTarget.opfsPath!==storage.opfsPath)await deletePersistentSource(relinkTarget.opfsPath);relinkTarget.opfsPath=storage.opfsPath;relinkTarget.persistentSource=true;relinkTarget.needsRelink=false;await putGame(relinkTarget);}
@@ -142,67 +84,30 @@ async function handleRelink(file){
   }catch(error){closeSheets();showAlert('File Could Not Be Opened',error.message,[{label:'OK'}]);}
 }
 
-async function playCurrent(){
-  if(!currentGame)return;const source=runtime.getSource(currentGame.id);if(!source){startRelink();return;}
-  closeSheets();setState('BOOTING_GAME');$('bootOverlay').classList.remove('frame-live');setText('bootTitle',currentGame.name);setText('bootMessage','Preparing Xbox 360 runtime…');setText('bootStage',String(currentGame.sourceType||'game').toUpperCase());
-  const profile=resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings);runtime.configure(profile);
-  try{await markPlayed(currentGame.id);const result=await runtime.play(currentGame,source,profile);if(appState==='BOOTING_GAME')setState('RUNNING');setText('bootMessage','Guest execution is running. Waiting for real title pixels…');return result;}
-  catch(error){setState('GAME_DETAILS');await renderDetail();showAlert('Game Stopped',error.message,[{label:'Done'}]);}
-}
+async function playCurrent(){if(!currentGame)return;const source=runtime.getSource(currentGame.id);if(!source){startRelink();return;}closeSheets();setState('BOOTING_GAME');$('bootOverlay').classList.remove('frame-live');setText('bootTitle',currentGame.name);setText('bootMessage','Preparing Xbox 360 runtime…');setText('bootStage',String(currentGame.sourceType||'game').toUpperCase());const profile=resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings);runtime.configure(profile);try{await markPlayed(currentGame.id);const result=await runtime.play(currentGame,source,profile);if(appState==='BOOTING_GAME')setState('RUNNING');setText('bootMessage','Guest execution is running. Waiting for real title pixels…');return result;}catch(error){setState('GAME_DETAILS');await renderDetail();showAlert('Game Stopped',error.message,[{label:'Done'}]);}}
 
-function renderGameSettings(){
-  if(!currentGame)return;const p=loadTitleProfile(currentGame);setText('gameSettingsName',`${currentGame.name} · ${titleIdText(currentGame)}`);
-  $('gameRenderer').value=p.renderer;$('gameResolutionScale').value=String(p.resolutionScale);$('gameTargetFps').value=String(p.targetFps);$('gameDynamicResolution').checked=!!p.dynamicResolution;$('gameHalfPixel').checked=!!p.halfPixelOffset;$('gameTextures2D').checked=!!p.treat3DTexturesAs2D;$('gameInvalidFetch').checked=!!p.allowInvalidFetchConstants;$('gameReadback').checked=!!p.readbackResolves;$('gameTextureCache').value=p.textureCache||'auto';$('gameSchedulerQuantum').value=String(p.schedulerQuantum||1);$('gameAudioEnabled').value=p.audioEnabled||'inherit';$('gameAudioLatency').value=p.audioLatency||'inherit';$('gameLanguage').value=p.language||'system';$('gameDeveloper').checked=!!p.developerMode;$('gameStrictKernel').checked=true;
-}
-function saveGameSettings(){
-  if(!currentGame)return;const p=loadTitleProfile(currentGame);Object.assign(p,{renderer:$('gameRenderer').value,resolutionScale:$('gameResolutionScale').value,targetFps:$('gameTargetFps').value,dynamicResolution:$('gameDynamicResolution').checked,halfPixelOffset:$('gameHalfPixel').checked,treat3DTexturesAs2D:$('gameTextures2D').checked,allowInvalidFetchConstants:$('gameInvalidFetch').checked,readbackResolves:$('gameReadback').checked,textureCache:$('gameTextureCache').value,schedulerQuantum:Number($('gameSchedulerQuantum').value)||1,strictKernelHle:true,audioEnabled:$('gameAudioEnabled').value,audioLatency:$('gameAudioLatency').value,language:$('gameLanguage').value,developerMode:$('gameDeveloper').checked});saveTitleProfile(currentGame,p);setState('GAME_DETAILS');
-}
+function renderGameSettings(){if(!currentGame)return;const p=loadTitleProfile(currentGame);setText('gameSettingsName',`${currentGame.name} · ${titleIdText(currentGame)}`);$('gameRenderer').value=p.renderer;$('gameResolutionScale').value=String(p.resolutionScale);$('gameTargetFps').value=String(p.targetFps);$('gameDynamicResolution').checked=!!p.dynamicResolution;$('gameHalfPixel').checked=!!p.halfPixelOffset;$('gameTextures2D').checked=!!p.treat3DTexturesAs2D;$('gameInvalidFetch').checked=!!p.allowInvalidFetchConstants;$('gameReadback').checked=!!p.readbackResolves;$('gameTextureCache').value=p.textureCache||'auto';$('gameSchedulerQuantum').value=String(p.schedulerQuantum||1);$('gameAudioEnabled').value=p.audioEnabled||'inherit';$('gameAudioLatency').value=p.audioLatency||'inherit';$('gameLanguage').value=p.language||'system';$('gameDeveloper').checked=!!p.developerMode;$('gameStrictKernel').checked=true;}
+function saveGameSettings(){if(!currentGame)return;const p=loadTitleProfile(currentGame);Object.assign(p,{renderer:$('gameRenderer').value,resolutionScale:$('gameResolutionScale').value,targetFps:$('gameTargetFps').value,dynamicResolution:$('gameDynamicResolution').checked,halfPixelOffset:$('gameHalfPixel').checked,treat3DTexturesAs2D:$('gameTextures2D').checked,allowInvalidFetchConstants:$('gameInvalidFetch').checked,readbackResolves:$('gameReadback').checked,textureCache:$('gameTextureCache').value,schedulerQuantum:Number($('gameSchedulerQuantum').value)||1,strictKernelHle:true,audioEnabled:$('gameAudioEnabled').value,audioLatency:$('gameAudioLatency').value,language:$('gameLanguage').value,developerMode:$('gameDeveloper').checked});saveTitleProfile(currentGame,p);setState('GAME_DETAILS');}
 
-async function updateStorageUi(){
-  const info=await storageInfo();setText('gamesFolderPath',info.path||'Render360/Games');setText('storagePersisted',!info.supported?'Unavailable':info.persisted?'Protected':'Best effort');
-  const pct=info.quota?Math.min(100,info.usage/info.quota*100):0;$('storageMeterFill').style.width=`${pct}%`;setText('storageNumbers',info.quota?`${formatBytes(info.usage)} / ${formatBytes(info.quota)}`:'Unavailable');setText('storageSummary',info.supported?`${formatBytes(info.free)} estimated free in this browser origin. Large ISO imports are only copied when enough quota is available.`:'This browser does not expose Origin Private File System storage. Imported games remain linked for the current session.');
-}
-function renderAppSettings(){
-  $('appAppearance').value=appSettings.appearance;$('appAutoPersist').checked=!!appSettings.autoPersistImports;$('appRenderer').value=appSettings.preferredRenderer;$('appResolutionScale').value=String(appSettings.defaultResolutionScale);$('appTargetFps').value=String(appSettings.defaultTargetFps);$('appHud').checked=!!appSettings.performanceHud;$('appControllerOpacity').value=String(appSettings.controllerOpacity);$('appControllerScale').value=String(appSettings.controllerScale);$('appGamepad').checked=!!appSettings.gamepadEnabled;$('appAudio').checked=!!appSettings.audioEnabled;$('appAudioLatency').value=appSettings.audioLatency;$('appDeveloper').checked=!!appSettings.developerMode;setText('controllerOpacityValue',`${Math.round(Number(appSettings.controllerOpacity)*100)}%`);setText('controllerScaleValue',`${Math.round(Number(appSettings.controllerScale)*100)}%`);updateStorageUi();
-}
-function saveAppSettingsFromUi(){
-  appSettings=saveAppSettings({...appSettings,appearance:$('appAppearance').value,autoPersistImports:$('appAutoPersist').checked,preferredRenderer:$('appRenderer').value,defaultResolutionScale:Number($('appResolutionScale').value)||1,defaultTargetFps:Number($('appTargetFps').value)||30,performanceHud:$('appHud').checked,controllerOpacity:Number($('appControllerOpacity').value)||.14,controllerScale:Number($('appControllerScale').value)||1,gamepadEnabled:$('appGamepad').checked,audioEnabled:$('appAudio').checked,audioLatency:$('appAudioLatency').value,developerMode:$('appDeveloper').checked});applyAppSettings();setText('controllerOpacityValue',`${Math.round(appSettings.controllerOpacity*100)}%`);setText('controllerScaleValue',`${Math.round(appSettings.controllerScale*100)}%`);
-}
+async function updateStorageUi(){const info=await storageInfo();setText('gamesFolderPath',info.path||'Render360/Games');setText('storagePersisted',!info.supported?'Unavailable':info.persisted?'Protected':'Best effort');const pct=info.quota?Math.min(100,info.usage/info.quota*100):0;$('storageMeterFill').style.width=`${pct}%`;setText('storageNumbers',info.quota?`${formatBytes(info.usage)} / ${formatBytes(info.quota)}`:'Unavailable');setText('storageSummary',info.supported?`${formatBytes(info.free)} estimated free in this browser origin. Large ISO imports are only copied when enough quota is available.`:'This browser does not expose Origin Private File System storage. Imported games remain linked for the current session.');}
+function renderAppSettings(){$('appAppearance').value=appSettings.appearance;$('appAutoPersist').checked=!!appSettings.autoPersistImports;$('appRenderer').value=appSettings.preferredRenderer;$('appResolutionScale').value=String(appSettings.defaultResolutionScale);$('appTargetFps').value=String(appSettings.defaultTargetFps);$('appHud').checked=!!appSettings.performanceHud;$('appControllerOpacity').value=String(appSettings.controllerOpacity);$('appControllerScale').value=String(appSettings.controllerScale);$('appGamepad').checked=!!appSettings.gamepadEnabled;$('appAudio').checked=!!appSettings.audioEnabled;$('appAudioLatency').value=appSettings.audioLatency;$('appDeveloper').checked=!!appSettings.developerMode;setText('controllerOpacityValue',`${Math.round(Number(appSettings.controllerOpacity)*100)}%`);setText('controllerScaleValue',`${Math.round(Number(appSettings.controllerScale)*100)}%`);updateStorageUi();}
+function saveAppSettingsFromUi(){appSettings=saveAppSettings({...appSettings,appearance:$('appAppearance').value,autoPersistImports:$('appAutoPersist').checked,preferredRenderer:$('appRenderer').value,defaultResolutionScale:Number($('appResolutionScale').value)||1,defaultTargetFps:Number($('appTargetFps').value)||30,performanceHud:$('appHud').checked,controllerOpacity:Number($('appControllerOpacity').value)||.14,controllerScale:Number($('appControllerScale').value)||1,gamepadEnabled:$('appGamepad').checked,audioEnabled:$('appAudio').checked,audioLatency:$('appAudioLatency').value,developerMode:$('appDeveloper').checked});applyAppSettings();setText('controllerOpacityValue',`${Math.round(appSettings.controllerOpacity*100)}%`);setText('controllerScaleValue',`${Math.round(appSettings.controllerScale*100)}%`);}
 
 async function chooseCover(file){if(!currentGame||!file||(!/^image\//.test(file.type)&&!/[.](png|jpe?g)$/i.test(file.name)))return;currentGame.coverKey=await putCover(file,currentGame.coverKey||undefined);await putGame(currentGame);if(coverUrls.has(currentGame.coverKey)){URL.revokeObjectURL(coverUrls.get(currentGame.coverKey));coverUrls.delete(currentGame.coverKey);}await renderDetail();await refreshLibrary();}
 async function removeCurrentGame(){if(!currentGame)return;const game=currentGame;if(game.opfsPath)await deletePersistentSource(game.opfsPath);await deleteGame(game.id);runtime.unbindSource(game.id);currentGame=null;await refreshLibrary();setState('LIBRARY');}
-
 function showSheet(id){$('scrim').classList.remove('hidden');$(id).classList.remove('hidden');}
 function closeSheets(){$('scrim').classList.add('hidden');document.querySelectorAll('.sheet,.alert').forEach(el=>el.classList.add('hidden'));}
-function showAlert(title,message,actions=[{label:'OK'}]){
-  const alert=$('iosAlert');setText('alertTitle',title);setText('alertMessage',message);const wrap=$('alertActions');wrap.innerHTML='';wrap.style.gridTemplateColumns=`repeat(${Math.min(2,actions.length)},1fr)`;
-  for(const a of actions){const b=document.createElement('button');b.textContent=a.label;b.addEventListener('click',async()=>{if(b.disabled)return;b.disabled=true;closeSheets();try{await a.action?.();}catch(error){log('error',error?.message||error);setTimeout(()=>showAlert('Action Failed',error?.message||String(error),[{label:'OK'}]),0);}},{once:true});wrap.appendChild(b);}
-  $('scrim').classList.remove('hidden');alert.classList.remove('hidden');
-}
+function showAlert(title,message,actions=[{label:'OK'}]){const alert=$('iosAlert');setText('alertTitle',title);setText('alertMessage',message);const wrap=$('alertActions');wrap.innerHTML='';wrap.style.gridTemplateColumns=`repeat(${Math.min(2,actions.length)},1fr)`;for(const a of actions){const b=document.createElement('button');b.textContent=a.label;b.addEventListener('click',async()=>{if(b.disabled)return;b.disabled=true;closeSheets();try{await a.action?.();}catch(error){log('error',error?.message||error);setTimeout(()=>showAlert('Action Failed',error?.message||String(error),[{label:'OK'}]),0);}},{once:true});wrap.appendChild(b);}$('scrim').classList.remove('hidden');alert.classList.remove('hidden');}
+async function showDiagnostics(){const state=globalThis.render360ModernTitle||null,store=await storageInfo().catch(()=>null);const summary={release:RENDER360_RELEASE,appState,runtimeContract:runtime.contract(),game:currentGame?{name:currentGame.name,titleId:titleIdText(currentGame),mediaId:mediaIdText(currentGame),type:currentGame.sourceType,persistent:currentGame.persistentSource}:null,profile:currentGame?resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings):null,telemetry:lastTelemetry?{fps:lastTelemetry.fps,pm4:lastTelemetry.pm4Packets,draws:lastTelemetry.draws,swaps:lastTelemetry.swaps,shaders:lastTelemetry.shaderStatus,realFrame:lastTelemetry.realFrame}:null,runtime:state?{inputKind:state.inputKind,runtimeBoundary:state.result?.runtimeBoundary,scheduler:state.threadScheduler?.inspect?.()??null,schedulerBlocker:state.schedulerBlocker||null}:null,storage:store};$('diagnosticsLog').textContent=`${logs.slice(-100).map(x=>`${new Date(x.at).toLocaleTimeString()} ${x.level.toUpperCase()} ${x.message}`).join('\n')}\n\nSTATE\n${JSON.stringify(summary,null,2)}`;showSheet('diagnosticsSheet');}
 
-async function showDiagnostics(){
-  const state=globalThis.render360ModernTitle||null,store=await storageInfo().catch(()=>null);const summary={release:RENDER360_RELEASE,appState,runtimeContract:runtime.contract(),game:currentGame?{name:currentGame.name,titleId:titleIdText(currentGame),mediaId:mediaIdText(currentGame),type:currentGame.sourceType,persistent:currentGame.persistentSource}:null,profile:currentGame?resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings):null,telemetry:lastTelemetry?{fps:lastTelemetry.fps,pm4:lastTelemetry.pm4Packets,draws:lastTelemetry.draws,swaps:lastTelemetry.swaps,shaders:lastTelemetry.shaderStatus,realFrame:lastTelemetry.realFrame}:null,runtime:state?{inputKind:state.inputKind,runtimeBoundary:state.result?.runtimeBoundary,scheduler:state.threadScheduler?.inspect?.()??null,schedulerBlocker:state.schedulerBlocker||null}:null,storage:store};
-  $('diagnosticsLog').textContent=`${logs.slice(-100).map(x=>`${new Date(x.at).toLocaleTimeString()} ${x.level.toUpperCase()} ${x.message}`).join('\n')}\n\nSTATE\n${JSON.stringify(summary,null,2)}`;showSheet('diagnosticsSheet');
-}
-
-function updateHud(t){
-  lastTelemetry=t;setText('hudFps',t.fps?t.fps.toFixed(1):'—');setText('hudFrame',t.frameMs?`${t.frameMs.toFixed(1)} ms`:'—');setText('hudCpu',t.cpuMs?`${t.cpuMs.toFixed(2)} ms`:`${Number(t.workerHz||0).toFixed(0)} Hz WASM`);setText('hudGpu',t.gpuMs?`${t.gpuMs.toFixed(2)} ms`:`${Number(t.swaps||0)} swaps`);setText('hudScale',`${Number(t.scale||1).toFixed(2)}x`);setText('hudRam',t.ramBytes?formatBytes(t.ramBytes):'—');setText('hudPm4',Number(t.pm4Packets||0).toLocaleString());setText('hudDraws',Number(t.draws||0).toLocaleString());setText('hudBackend',t.realFrame?'REAL FRAME':String(t.shaderStatus||'waiting').toUpperCase());hudHistory.push(t.fps||0);if(hudHistory.length>70)hudHistory.shift();drawHudGraph();if(t.realFrame){$('bootOverlay').classList.add('frame-live');if(appState==='BOOTING_GAME')setState('RUNNING',{keepScroll:true});}if(t.blocker&&['RUNNING','BOOTING_GAME'].includes(appState))setText('bootMessage',blockerText(t.blocker));
-}
+function updateHud(t){lastTelemetry=t;setText('hudFps',t.fps?t.fps.toFixed(1):'—');setText('hudFrame',t.frameMs?`${t.frameMs.toFixed(1)} ms`:'—');setText('hudCpu',t.cpuMs?`${t.cpuMs.toFixed(2)} ms`:`${Number(t.workerHz||0).toFixed(0)} Hz WASM`);setText('hudGpu',t.gpuMs?`${t.gpuMs.toFixed(2)} ms`:`${Number(t.swaps||0)} swaps`);setText('hudScale',`${Number(t.scale||1).toFixed(2)}x`);setText('hudRam',t.ramBytes?formatBytes(t.ramBytes):'—');setText('hudPm4',Number(t.pm4Packets||0).toLocaleString());setText('hudDraws',Number(t.draws||0).toLocaleString());setText('hudBackend',t.realFrame?'REAL FRAME':String(t.shaderStatus||'waiting').toUpperCase());hudHistory.push(t.fps||0);if(hudHistory.length>70)hudHistory.shift();drawHudGraph();if(t.realFrame){$('bootOverlay').classList.add('frame-live');if(appState==='BOOTING_GAME')setState('RUNNING',{keepScroll:true});}if(t.blocker&&['RUNNING','BOOTING_GAME'].includes(appState))setText('bootMessage',blockerText(t.blocker));}
 function blockerText(b){if(b?.message)return b.message;if(b?.ordinal!==undefined)return`Kernel blocker ordinal 0x${(b.ordinal>>>0).toString(16).toUpperCase()}`;if(b?.lastOpcode!==undefined)return`GPU blocker PM4 0x${(b.lastOpcode>>>0).toString(16).toUpperCase()}`;return'Title runtime reached a concrete blocker.';}
 function drawHudGraph(){const c=$('hudGraph'),ctx=c?.getContext('2d');if(!ctx)return;const dpr=Math.min(devicePixelRatio||1,2),w=Math.max(1,Math.floor(c.clientWidth*dpr)),h=Math.max(1,Math.floor(c.clientHeight*dpr));if(c.width!==w||c.height!==h){c.width=w;c.height=h;}ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(48,209,88,.88)';ctx.lineWidth=Math.max(1,dpr);ctx.beginPath();hudHistory.forEach((fps,i)=>{const x=hudHistory.length<=1?0:i/(hudHistory.length-1)*w,y=h-Math.min(1,Math.max(0,fps/60))*h;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
 
 function wireDigitalControls(){document.querySelectorAll('[data-key]').forEach(button=>{const key=button.dataset.key;const down=e=>{e.preventDefault();button.classList.add('pressed');runtime.setKey(key,true);};const up=e=>{e.preventDefault();button.classList.remove('pressed');runtime.setKey(key,false);};button.addEventListener('pointerdown',down);button.addEventListener('pointerup',up);button.addEventListener('pointercancel',up);button.addEventListener('pointerleave',e=>{if(e.buttons)up(e);});});}
 function wireStick(zone,knob){if(!zone||!knob)return;let pointer=null;const move=e=>{if(pointer!==e.pointerId)return;const r=zone.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,max=r.width*.34,dx=e.clientX-cx,dy=e.clientY-cy,d=Math.hypot(dx,dy)||1,s=Math.min(1,max/d),x=dx*s,y=dy*s;knob.style.transform=`translate(${x}px,${y}px)`;touchAnalog.lx=Math.max(-1,Math.min(1,x/max));touchAnalog.ly=Math.max(-1,Math.min(1,y/max));runtime.setAnalog(touchAnalog.lx,touchAnalog.ly,touchAnalog.rx,touchAnalog.ry);};const end=e=>{if(pointer!==e.pointerId)return;pointer=null;knob.style.transform='';touchAnalog.lx=touchAnalog.ly=0;runtime.setAnalog(0,0,touchAnalog.rx,touchAnalog.ry);};zone.addEventListener('pointerdown',e=>{e.preventDefault();pointer=e.pointerId;zone.setPointerCapture?.(pointer);move(e);});zone.addEventListener('pointermove',move);zone.addEventListener('pointerup',end);zone.addEventListener('pointercancel',end);}
-
 const GAMEPAD_BUTTONS=['A','B','X','Y','LB','RB','LT','RT','BACK','START'];
-function pollGamepads(){
-  if(appSettings.gamepadEnabled&&['RUNNING','BOOTING_GAME','PAUSED'].includes(appState)){
-    const gp=[...(navigator.getGamepads?.()||[])].find(Boolean);if(gp){GAMEPAD_BUTTONS.forEach((key,i)=>{const pressed=!!gp.buttons?.[i]?.pressed;if(gamepadKeys.get(key)!==pressed){gamepadKeys.set(key,pressed);runtime.setKey(key,pressed);}});const dead=v=>Math.abs(v||0)<.08?0:Number(v||0);runtime.setAnalog(dead(gp.axes?.[0]),dead(gp.axes?.[1]),dead(gp.axes?.[2]),dead(gp.axes?.[3]));}
-  }
-  requestAnimationFrame(pollGamepads);
-}
-requestAnimationFrame(pollGamepads);
-
+function pollGamepads(){if(appSettings.gamepadEnabled&&['RUNNING','BOOTING_GAME','PAUSED'].includes(appState)){const gp=[...(navigator.getGamepads?.()||[])].find(Boolean);if(gp){GAMEPAD_BUTTONS.forEach((key,i)=>{const pressed=!!gp.buttons?.[i]?.pressed;if(gamepadKeys.get(key)!==pressed){gamepadKeys.set(key,pressed);runtime.setKey(key,pressed);}});const dead=v=>Math.abs(v||0)<.08?0:Number(v||0);runtime.setAnalog(dead(gp.axes?.[0]),dead(gp.axes?.[1]),dead(gp.axes?.[2]),dead(gp.axes?.[3]));}}requestAnimationFrame(pollGamepads);}requestAnimationFrame(pollGamepads);
 function pauseGame(){runtime.pause();setState('PAUSED',{keepScroll:true});$('controllerLayer').classList.add('paused');showSheet('pauseSheet');}
 function resumeGame(){runtime.resume();$('controllerLayer').classList.remove('paused');closeSheets();setState('RUNNING',{keepScroll:true});}
 function stopTitle(){try{globalThis.render360ModernTitle?.stop?.();}catch{}const titleCanvas=$('titleFrameCanvas');if(titleCanvas)titleCanvas.style.display='none';runtime.resetInput();}
@@ -210,14 +115,7 @@ function leaveGame(){stopTitle();$('controllerLayer').classList.remove('paused')
 
 async function createStorageFolder(){try{await ensureGamesDirectory();await requestPersistentStorage();await updateStorageUi();showAlert('Games Folder Ready','Render360/Games is ready in persistent browser storage.',[{label:'Done'}]);}catch(error){showAlert('Storage Unavailable',error.message,[{label:'OK'}]);}}
 async function askPersistentStorage(){const granted=await requestPersistentStorage();await updateStorageUi();showAlert(granted?'Storage Protected':'Best-Effort Storage',granted?'The browser granted persistent storage for Render360.':'The browser did not grant protected storage. Games can still be stored, but iOS may reclaim them if space is needed.',[{label:'OK'}]);}
-async function clearStoredGames(){
-  const affected=games.filter(game=>String(game.opfsPath||'').startsWith('Render360/Games/'));
-  await clearGamesDirectory();
-  for(const game of affected){game.opfsPath=null;game.persistentSource=false;game.needsRelink=true;runtime.unbindSource(game.id);await putGame(game);}
-  await refreshLibrary();await updateStorageUi();if(currentGame)await renderDetail();
-  showAlert('Game Copies Cleared',affected.length?`${affected.length} stored game cop${affected.length===1?'y was':'ies were'} removed. Library entries and artwork were kept.`:'Render360/Games is already empty.',[{label:'Done'}]);
-}
-
+async function clearStoredGames(){const affected=games.filter(game=>String(game.opfsPath||'').startsWith('Render360/Games/'));await clearGamesDirectory();for(const game of affected){game.opfsPath=null;game.persistentSource=false;game.needsRelink=true;runtime.unbindSource(game.id);await putGame(game);}await refreshLibrary();await updateStorageUi();if(currentGame)await renderDetail();showAlert('Game Copies Cleared',affected.length?`${affected.length} stored game cop${affected.length===1?'y was':'ies were'} removed. Library entries and artwork were kept.`:'Render360/Games is already empty.',[{label:'Done'}]);}
 function bindAppSettingsEvents(){['appAppearance','appAutoPersist','appRenderer','appResolutionScale','appTargetFps','appHud','appGamepad','appAudio','appAudioLatency','appDeveloper'].forEach(id=>$(id).addEventListener('change',saveAppSettingsFromUi));['appControllerOpacity','appControllerScale'].forEach(id=>$(id).addEventListener('input',saveAppSettingsFromUi));}
 
 $('importButton').addEventListener('click',openImport);$('emptyImportButton').addEventListener('click',openImport);$('importInput').addEventListener('change',e=>importSelectedFile(e.target.files?.[0]));$('librarySearch').addEventListener('input',renderLibrary);
@@ -232,9 +130,7 @@ window.addEventListener('keydown',e=>{const map={Enter:'START',Escape:'BACK',q:'
 async function boot(){
   setState('LIBRARY');$('importButton').disabled=true;$('emptyImportButton').disabled=true;await refreshLibrary();
   runtime.addEventListener('log',e=>log(e.detail.level,e.detail.message));runtime.addEventListener('telemetry',e=>updateHud(e.detail));runtime.addEventListener('framePresented',()=>{$('bootOverlay').classList.add('frame-live');if(appState==='BOOTING_GAME')setState('RUNNING',{keepScroll:true});});runtime.addEventListener('bootStage',e=>{setText('bootMessage',e.detail.message||'Working…');setText('bootStage',String(e.detail.stage||'runtime').toUpperCase());});runtime.addEventListener('runtimeBlocker',e=>log('warn',e.detail.message||'Runtime blocker'));runtime.addEventListener('fatalError',e=>log('error',e.detail.message));
-  try{
-    await runtime.init();await restorePersistentSources();const c=runtime.contract();$('runtimeSyncStatus').classList.add('ready');setText('runtimeSyncText',`Runtime V${c.release} synced · Core V${c.loadedCoreBuild} (${c.coreSource}) · ${c.stfsExtraction}`);setText('aboutCore',`V${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutAbi',fmtHex(c.loadedAbi));$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Render360 ${RENDER360_RELEASE} ready · Core V${c.loadedCoreBuild} · ABI ${fmtHex(c.loadedAbi)} · ${c.stfsExtraction} · ISO/XEX/STFS launch adapters active`);
-  }catch(error){$('runtimeSyncStatus').classList.add('error');setText('runtimeSyncText',`Runtime contract failed · ${error.message}`);setText('aboutCore','Unavailable');setText('aboutAbi','Unavailable');log('error',error.message);}
+  try{await runtime.init();await restorePersistentSources();const c=runtime.contract();$('runtimeSyncStatus').classList.add('ready');setText('runtimeSyncText',`Runtime V${c.release} synced · Core V${c.loadedCoreBuild} (${c.coreSource}) · ${c.stfsExtraction}`);setText('aboutCore',`V${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutAbi',fmtHex(c.loadedAbi));$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Render360 ${RENDER360_RELEASE} ready · Core V${c.loadedCoreBuild} · ABI ${fmtHex(c.loadedAbi)} · ${c.stfsExtraction} · ISO/XEX/STFS launch adapters active`);}catch(error){$('runtimeSyncStatus').classList.add('error');setText('runtimeSyncText',`Runtime contract failed · ${error.message}`);setText('aboutCore','Unavailable');setText('aboutAbi','Unavailable');log('error',error.message);}
   await updateStorageUi();
 }
 boot();

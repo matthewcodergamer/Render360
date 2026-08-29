@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 
+# Render360 V41 runtime sync point: changing this gate intentionally rebuilds
+# and republishes the verified browser bootstrap so deployed JS/WASM stay aligned.
 ROOT = Path(__file__).resolve().parent
 XENIA = ROOT / 'upstream' / 'xenia'
 BUILD = ROOT / 'build-xenia-ppc-bootstrap.sh'

@@ -71,6 +71,11 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_RUN: ${{ github.run_id }}
         run: |
+          # main may have advanced while this 4-minute build was running. Refresh
+          # the tracked source tree first; build/ is ignored/untracked and keeps
+          # the exact verified artifact that was just tested above.
+          git fetch origin main
+          git reset --hard origin/main
           cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm
           python3 - <<'PY'
           import hashlib, json, os
@@ -93,4 +98,4 @@ jobs:
             exit 0
           fi
           git commit -m 'V43: publish verified browser bootstrap'
-          git push
+          git push origin HEAD:main

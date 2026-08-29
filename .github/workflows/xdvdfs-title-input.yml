@@ -4,7 +4,10 @@ on:
     paths:
       - 'render360-xdvdfs.mjs'
       - 'render360-iso-title-controller.mjs'
+      - 'render360-byte-buffer.mjs'
+      - 'render360-browser-title-runtime.mjs'
       - 'test-xdvdfs-virtual-mount*.mjs'
+      - 'test-browser-title-runtime.mjs'
       - '.github/workflows/xdvdfs-title-input.yml'
   workflow_dispatch:
 
@@ -19,5 +22,7 @@ jobs:
         run: node test-xdvdfs-virtual-mount.mjs
       - name: Run independent XDVDFS harsh critic
         run: node test-xdvdfs-virtual-mount-critic.mjs
+      - name: Verify browser-native title runtime contract
+        run: node test-browser-title-runtime.mjs
       - name: Verify ISO title controller imports cleanly
-        run: node -e "import('./render360-iso-title-controller.mjs').then(m=>{if(typeof m.handoffXboxIso!=='function')process.exit(1);console.log('XDVDFS_TITLE_CONTROLLER=PASS')})"
+        run: node -e "import('./render360-byte-buffer.mjs').then(()=>import('./render360-iso-title-controller.mjs')).then(m=>{if(typeof m.handoffXboxIso!=='function')process.exit(1);console.log('XDVDFS_TITLE_CONTROLLER=PASS')})"

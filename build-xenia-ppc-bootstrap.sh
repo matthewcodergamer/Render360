@@ -11,7 +11,7 @@ python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
 COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include")
-COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack")
+COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
 SOURCES=(
@@ -93,6 +93,7 @@ for rel in "${SOURCES[@]}"; do
   esac
 done
 compile_c "third_party/mspack/lzxd.c" "$XENIA/third_party/mspack/lzxd.c"
+compile_c "third_party/crypto/rijndael-alg-fst.c" "$XENIA/third_party/crypto/rijndael-alg-fst.c"
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
 compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
@@ -105,6 +106,7 @@ compile_one "render360/wasm_backend_vmx_probe.cpp" "$ROOT/src/xenia_web_bootstra
 compile_one "render360/sparse_guest_memory.cpp" "$ROOT/src/xenia_web_bootstrap/sparse_guest_memory.cpp"
 compile_one "render360/xex_guest_mapper.cpp" "$ROOT/src/xenia_web_bootstrap/xex_guest_mapper.cpp"
 compile_one "render360/xex_lzx_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xex_lzx_probe.cpp"
+compile_one "render360/xex_crypto_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xex_crypto_probe.cpp"
 compile_one "render360/probe_backend.cpp" "$ROOT/src/xenia_web_bootstrap/probe_backend.cpp"
 compile_one "render360/ppc_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_translation_probe.cpp"
 compile_one "render360/ppc_context_abi_probe.cpp" "$ROOT/src/xenia_web_bootstrap/ppc_context_abi_probe.cpp"

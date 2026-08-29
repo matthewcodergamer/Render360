@@ -220,32 +220,61 @@ bool StoreConvertValue(Value* destination, const RuntimeValue& src,
   RuntimeValue result;
   result.type = destination->type;
   result.value = {};
+
+  if (IsFloatType(src.type) && IsFloatType(destination->type)) {
+    const double input = src.type == xe::cpu::hir::FLOAT32_TYPE
+                             ? static_cast<double>(src.value.f32)
+                             : src.value.f64;
+    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) {
+      result.value.f32 = static_cast<float>(input);
+    } else {
+      result.value.f64 = input;
+    }
+    out_values[destination] = result;
+    return true;
+  }
+
   if (IsIntegerType(src.type) && IsFloatType(destination->type)) {
     int64_t signed_value = 0;
     if (!GetSigned(src, &signed_value)) return false;
-    if (destination->type == xe::cpu::hir::FLOAT32_TYPE)
+    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) {
       result.value.f32 = static_cast<float>(signed_value);
-    else
+    } else {
       result.value.f64 = static_cast<double>(signed_value);
-  } else if (IsFloatType(src.type) && IsIntegerType(destination->type)) {
-    double value = src.type == xe::cpu::hir::FLOAT32_TYPE ? src.value.f32
-                                                          : src.value.f64;
-    value = RoundFloating(value, round_mode);
-    SetUnsigned(&result, destination->type, static_cast<uint64_t>(value));
-  } else if (IsFloatType(src.type) && IsFloatType(destination->type)) {
-    if (destination->type == xe::cpu::hir::FLOAT32_TYPE)
-      result.value.f32 = src.type == xe::cpu::hir::FLOAT32_TYPE
-                             ? src.value.f32
-                             : static_cast<float>(src.value.f64);
-    else
-      result.value.f64 = src.type == xe::cpu::hir::FLOAT64_TYPE
-                             ? src.value.f64
-                             : static_cast<double>(src.value.f32);
-  } else {
-    return false;
+    }
+    out_values[destination] = result;
+    return true;
   }
-  out_values[destination] = result;
-  return true;
+
+  if (IsFloatType(src.type) && IsIntegerType(destination->type)) {
+    const double input = src.type == xe::cpu::hir::FLOAT32_TYPE
+                             ? static_cast<double>(src.value.f32)
+                             : src.value.f64;
+    if (!std::isfinite(input)) return false;
+    const double rounded = RoundFloating(input, round_mode);
+    if (destination->type == xe::cpu::hir::INT32_TYPE) {
+      if (rounded < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+          rounded > static_cast<double>(std::numeric_limits<int32_t>::max())) {
+        return false;
+      }
+      SetUnsigned(&result, destination->type,
+                  static_cast<uint64_t>(static_cast<int64_t>(rounded)));
+    } else if (destination->type == xe::cpu::hir::INT64_TYPE) {
+      const long double wide = static_cast<long double>(rounded);
+      if (wide < static_cast<long double>(std::numeric_limits<int64_t>::min()) ||
+          wide > static_cast<long double>(std::numeric_limits<int64_t>::max())) {
+        return false;
+      }
+      SetUnsigned(&result, destination->type,
+                  static_cast<uint64_t>(static_cast<int64_t>(rounded)));
+    } else {
+      return false;
+    }
+    out_values[destination] = result;
+    return true;
+  }
+
+  return false;
 }
 
 bool StoreUnaryValue(Value* destination, const Value* source,
@@ -254,77 +283,124 @@ bool StoreUnaryValue(Value* destination, const Value* source,
   if (!destination || !source) return false;
   RuntimeValue src;
   if (!ResolveRuntimeValue(source, values, &src)) return false;
-  RuntimeValue result;
-  result.type = destination->type;
-  result.value = {};
 
-  if (opcode == xe::cpu::hir::OPCODE_ASSIGN ||
-      opcode == xe::cpu::hir::OPCODE_CAST) {
-    if (src.type != destination->type) return false;
-    result = src;
-  } else if (opcode == xe::cpu::hir::OPCODE_ZERO_EXTEND ||
-             opcode == xe::cpu::hir::OPCODE_SIGN_EXTEND ||
-             opcode == xe::cpu::hir::OPCODE_TRUNCATE) {
-    uint64_t raw = 0;
-    if (opcode == xe::cpu::hir::OPCODE_SIGN_EXTEND) {
-      int64_t signed_value = 0;
-      if (!GetSigned(src, &signed_value)) return false;
-      raw = static_cast<uint64_t>(signed_value);
-    } else if (!GetUnsigned(src, &raw)) {
-      return false;
-    }
-    SetUnsigned(&result, destination->type, raw);
-  } else if (opcode == xe::cpu::hir::OPCODE_CONVERT) {
+  if (opcode == xe::cpu::hir::OPCODE_CAST) {
+    const size_t source_size = xe::cpu::hir::GetTypeSize(source->type);
+    const size_t destination_size = xe::cpu::hir::GetTypeSize(destination->type);
+    if (source_size != destination_size) return false;
+    RuntimeValue result;
+    result.type = destination->type;
+    result.value = {};
+    std::memcpy(&result.value, &src.value, source_size);
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (opcode == xe::cpu::hir::OPCODE_CONVERT) {
     return StoreConvertValue(destination, src, out_values, flags);
-  } else if (opcode == xe::cpu::hir::OPCODE_ROUND) {
-    if (!IsFloatType(src.type) || src.type != destination->type) return false;
-    if (src.type == xe::cpu::hir::FLOAT32_TYPE)
-      result.value.f32 = static_cast<float>(RoundFloating(src.value.f32, flags));
-    else
-      result.value.f64 = RoundFloating(src.value.f64, flags);
-  } else if (opcode == xe::cpu::hir::OPCODE_NEG ||
-             opcode == xe::cpu::hir::OPCODE_ABS) {
-    if (IsFloatType(src.type)) {
-      if (src.type == xe::cpu::hir::FLOAT32_TYPE)
-        result.value.f32 = opcode == xe::cpu::hir::OPCODE_NEG
-                               ? -src.value.f32
-                               : std::fabs(src.value.f32);
-      else
-        result.value.f64 = opcode == xe::cpu::hir::OPCODE_NEG
-                               ? -src.value.f64
-                               : std::fabs(src.value.f64);
+  }
+
+  if (opcode == xe::cpu::hir::OPCODE_IS_NAN &&
+      IsFloatType(source->type) && IsIntegerType(destination->type)) {
+    const bool is_nan = source->type == xe::cpu::hir::FLOAT32_TYPE
+                            ? std::isnan(src.value.f32)
+                            : std::isnan(src.value.f64);
+    RuntimeValue result;
+    SetUnsigned(&result, destination->type, is_nan ? 1u : 0u);
+    out_values[destination] = result;
+    return true;
+  }
+
+  if ((opcode == xe::cpu::hir::OPCODE_NEG ||
+       opcode == xe::cpu::hir::OPCODE_ABS) &&
+      IsFloatType(destination->type) && destination->type == source->type) {
+    RuntimeValue result;
+    result.type = destination->type;
+    result.value = {};
+    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) {
+      result.value.f32 = opcode == xe::cpu::hir::OPCODE_NEG
+                             ? -src.value.f32
+                             : std::fabs(src.value.f32);
     } else {
-      int64_t value = 0;
-      if (!GetSigned(src, &value)) return false;
-      SetUnsigned(&result, destination->type,
-                  static_cast<uint64_t>(opcode == xe::cpu::hir::OPCODE_NEG
-                                            ? -value
-                                            : (value < 0 ? -value : value)));
+      result.value.f64 = opcode == xe::cpu::hir::OPCODE_NEG
+                             ? -src.value.f64
+                             : std::fabs(src.value.f64);
     }
-  } else if (opcode == xe::cpu::hir::OPCODE_NOT) {
-    uint64_t value = 0;
-    if (!GetUnsigned(src, &value)) return false;
-    SetUnsigned(&result, destination->type, ~value);
-  } else if (opcode == xe::cpu::hir::OPCODE_BYTE_SWAP) {
-    uint64_t value = 0;
-    if (!GetUnsigned(src, &value)) return false;
-    SetUnsigned(&result, destination->type,
-                ByteSwapUnsigned(value, destination->type));
-  } else if (opcode == xe::cpu::hir::OPCODE_IS_TRUE ||
-             opcode == xe::cpu::hir::OPCODE_IS_FALSE) {
-    uint64_t value = 0;
-    if (!GetUnsigned(src, &value)) return false;
-    SetUnsigned(&result, destination->type,
-                opcode == xe::cpu::hir::OPCODE_IS_TRUE ? value != 0
-                                                       : value == 0);
-  } else if (opcode == xe::cpu::hir::OPCODE_IS_NAN) {
-    bool is_nan = false;
-    if (src.type == xe::cpu::hir::FLOAT32_TYPE) is_nan = std::isnan(src.value.f32);
-    else if (src.type == xe::cpu::hir::FLOAT64_TYPE) is_nan = std::isnan(src.value.f64);
-    else return false;
-    SetUnsigned(&result, destination->type, is_nan);
-  } else {
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (opcode == xe::cpu::hir::OPCODE_ROUND && IsFloatType(source->type) &&
+      destination->type == source->type) {
+    RuntimeValue result;
+    result.type = destination->type;
+    result.value = {};
+    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) {
+      result.value.f32 = static_cast<float>(RoundFloating(src.value.f32, flags));
+    } else {
+      result.value.f64 = RoundFloating(src.value.f64, flags);
+    }
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (opcode == xe::cpu::hir::OPCODE_BYTE_SWAP &&
+      destination->type == xe::cpu::hir::VEC128_TYPE &&
+      source->type == xe::cpu::hir::VEC128_TYPE) {
+    RuntimeValue result;
+    result.type = xe::cpu::hir::VEC128_TYPE;
+    result.value = {};
+    for (size_t i = 0; i < 4; ++i) {
+      result.value.v128.u32[i] = static_cast<uint32_t>(ByteSwapUnsigned(
+          src.value.v128.u32[i], xe::cpu::hir::INT32_TYPE));
+    }
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (!IsIntegerType(destination->type) || !IsIntegerType(source->type)) {
     return false;
+  }
+
+  uint64_t u = 0;
+  int64_t s = 0;
+  RuntimeValue result;
+  switch (opcode) {
+    case xe::cpu::hir::OPCODE_ASSIGN:
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+      if (!GetUnsigned(src, &u)) return false;
+      SetUnsigned(&result, destination->type, u);
+      break;
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+      if (!GetSigned(src, &s)) return false;
+      SetUnsigned(&result, destination->type, static_cast<uint64_t>(s));
+      break;
+    case xe::cpu::hir::OPCODE_NEG:
+      if (!GetUnsigned(src, &u)) return false;
+      SetUnsigned(&result, destination->type, uint64_t{0} - u);
+      break;
+    case xe::cpu::hir::OPCODE_NOT:
+      if (!GetUnsigned(src, &u)) return false;
+      SetUnsigned(&result, destination->type, ~u);
+      break;
+    case xe::cpu::hir::OPCODE_BYTE_SWAP:
+      if (!GetUnsigned(src, &u) || destination->type != source->type) {
+        return false;
+      }
+      SetUnsigned(&result, destination->type,
+                  ByteSwapUnsigned(u, destination->type));
+      break;
+    case xe::cpu::hir::OPCODE_IS_TRUE:
+      if (!GetUnsigned(src, &u)) return false;
+      SetUnsigned(&result, destination->type, u != 0);
+      break;
+    case xe::cpu::hir::OPCODE_IS_FALSE:
+      if (!GetUnsigned(src, &u)) return false;
+      SetUnsigned(&result, destination->type, u == 0);
+      break;
+    default:
+      return false;
   }
   out_values[destination] = result;
   return true;
@@ -336,46 +412,108 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
   if (!destination || !lhs || !rhs) return false;
   RuntimeValue a, b;
   if (!ResolveRuntimeValue(lhs, values, &a) ||
-      !ResolveRuntimeValue(rhs, values, &b)) return false;
-  RuntimeValue result;
-  result.type = destination->type;
-  result.value = {};
-  const uint32_t width = IntegerBitWidth(destination->type);
-  const uint64_t shift_mask = width ? width - 1u : 63u;
-  uint64_t au = 0, bu = 0;
-  int64_t as = 0, bs = 0;
+      !ResolveRuntimeValue(rhs, values, &b)) {
+    return false;
+  }
 
-  if (IsFloatType(destination->type)) {
-    double av = a.type == xe::cpu::hir::FLOAT32_TYPE ? a.value.f32 : a.value.f64;
-    double bv = b.type == xe::cpu::hir::FLOAT32_TYPE ? b.value.f32 : b.value.f64;
-    double rv = 0.0;
+  if (IsFloatType(lhs->type) && lhs->type == rhs->type &&
+      IsIntegerType(destination->type) &&
+      (opcode == xe::cpu::hir::OPCODE_COMPARE_EQ ||
+       opcode == xe::cpu::hir::OPCODE_COMPARE_NE ||
+       opcode == xe::cpu::hir::OPCODE_COMPARE_SLT ||
+       opcode == xe::cpu::hir::OPCODE_COMPARE_SLE ||
+       opcode == xe::cpu::hir::OPCODE_COMPARE_SGT ||
+       opcode == xe::cpu::hir::OPCODE_COMPARE_SGE)) {
+    const double av = lhs->type == xe::cpu::hir::FLOAT32_TYPE
+                          ? static_cast<double>(a.value.f32)
+                          : a.value.f64;
+    const double bv = rhs->type == xe::cpu::hir::FLOAT32_TYPE
+                          ? static_cast<double>(b.value.f32)
+                          : b.value.f64;
+    bool comparison = false;
     switch (opcode) {
-      case xe::cpu::hir::OPCODE_ADD: rv = av + bv; break;
-      case xe::cpu::hir::OPCODE_SUB: rv = av - bv; break;
-      case xe::cpu::hir::OPCODE_MUL: rv = av * bv; break;
-      case xe::cpu::hir::OPCODE_DIV: rv = av / bv; break;
-      default: return false;
+      case xe::cpu::hir::OPCODE_COMPARE_EQ:
+        comparison = av == bv;
+        break;
+      case xe::cpu::hir::OPCODE_COMPARE_NE:
+        comparison = av != bv;
+        break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLT:
+        comparison = av < bv;
+        break;
+      case xe::cpu::hir::OPCODE_COMPARE_SLE:
+        comparison = av <= bv;
+        break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGT:
+        comparison = av > bv;
+        break;
+      case xe::cpu::hir::OPCODE_COMPARE_SGE:
+        comparison = av >= bv;
+        break;
+      default:
+        return false;
     }
-    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) result.value.f32 = static_cast<float>(rv);
-    else result.value.f64 = rv;
+    RuntimeValue result;
+    SetUnsigned(&result, destination->type, comparison ? 1u : 0u);
     out_values[destination] = result;
     return true;
   }
 
+  if (IsFloatType(destination->type) && destination->type == lhs->type &&
+      destination->type == rhs->type) {
+    RuntimeValue result;
+    result.type = destination->type;
+    result.value = {};
+    if (destination->type == xe::cpu::hir::FLOAT32_TYPE) {
+      if (opcode == xe::cpu::hir::OPCODE_ADD) {
+        result.value.f32 = a.value.f32 + b.value.f32;
+      } else if (opcode == xe::cpu::hir::OPCODE_SUB) {
+        result.value.f32 = a.value.f32 - b.value.f32;
+      } else if (opcode == xe::cpu::hir::OPCODE_MUL) {
+        result.value.f32 = a.value.f32 * b.value.f32;
+      } else if (opcode == xe::cpu::hir::OPCODE_DIV) {
+        result.value.f32 = a.value.f32 / b.value.f32;
+      } else {
+        return false;
+      }
+    } else {
+      if (opcode == xe::cpu::hir::OPCODE_ADD) {
+        result.value.f64 = a.value.f64 + b.value.f64;
+      } else if (opcode == xe::cpu::hir::OPCODE_SUB) {
+        result.value.f64 = a.value.f64 - b.value.f64;
+      } else if (opcode == xe::cpu::hir::OPCODE_MUL) {
+        result.value.f64 = a.value.f64 * b.value.f64;
+      } else if (opcode == xe::cpu::hir::OPCODE_DIV) {
+        result.value.f64 = a.value.f64 / b.value.f64;
+      } else {
+        return false;
+      }
+    }
+    out_values[destination] = result;
+    return true;
+  }
+
+  if (!IsIntegerType(destination->type) || !IsIntegerType(lhs->type) ||
+      !IsIntegerType(rhs->type)) {
+    return false;
+  }
+
+  uint64_t au = 0, bu = 0;
+  int64_t as = 0, bs = 0;
+  RuntimeValue result;
+  const uint32_t shift_mask = IntegerBitWidth(destination->type) - 1u;
   switch (opcode) {
     case xe::cpu::hir::OPCODE_ADD:
-    case xe::cpu::hir::OPCODE_SUB:
-    case xe::cpu::hir::OPCODE_MUL:
-    case xe::cpu::hir::OPCODE_DIV:
       if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
-      if (opcode == xe::cpu::hir::OPCODE_ADD) au += bu;
-      if (opcode == xe::cpu::hir::OPCODE_SUB) au -= bu;
-      if (opcode == xe::cpu::hir::OPCODE_MUL) au *= bu;
-      if (opcode == xe::cpu::hir::OPCODE_DIV) {
-        if (!bu) return false;
-        au /= bu;
-      }
-      SetUnsigned(&result, destination->type, au);
+      SetUnsigned(&result, destination->type, au + bu);
+      break;
+    case xe::cpu::hir::OPCODE_SUB:
+      if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
+      SetUnsigned(&result, destination->type, au - bu);
+      break;
+    case xe::cpu::hir::OPCODE_MUL:
+      if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu)) return false;
+      SetUnsigned(&result, destination->type, au * bu);
       break;
     case xe::cpu::hir::OPCODE_AND:
     case xe::cpu::hir::OPCODE_AND_NOT:
@@ -672,6 +810,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
                                        instr->src2.value, values, values,
                                        instr->opcode->num);
           break;
+
         case xe::cpu::hir::OPCODE_BRANCH:
           supported = instr->src1.label && instr->src1.label->block;
           if (supported) next_block = instr->src1.label->block;
@@ -764,12 +903,6 @@ void ResetHIRCorrectnessInitialState() { g_initial_gprs.fill(0); }
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
   if (index >= g_initial_gprs.size()) return false;
   g_initial_gprs[index] = value;
-  return true;
-}
-
-bool SetHIRCorrectnessActiveGPR(uint32_t index, uint64_t value) {
-  if (!g_active_context || !g_execution_depth || index >= 32) return false;
-  g_active_context->r[index] = value;
   return true;
 }
 

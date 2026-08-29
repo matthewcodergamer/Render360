@@ -1,5 +1,5 @@
 import {listGames,putGame,putCover} from './library/game-library.js';
-import {resolveTitleCover} from './library/cover-resolver.js?v=42';
+import {resolveTitleCover} from './library/cover-resolver.js?v=43';
 
 const $=id=>document.getElementById(id);
 const holdState=new WeakMap();
@@ -28,42 +28,63 @@ function playBadge(){
   return badge;
 }
 
-function neutralizeNativeCoverGesture(img){
-  if(!(img instanceof HTMLImageElement))return;
-  img.draggable=false;
-  img.setAttribute('draggable','false');
-  img.setAttribute('aria-hidden','true');
-  img.style.webkitTouchCallout='none';
-  img.style.webkitUserSelect='none';
-  img.style.userSelect='none';
-  img.style.pointerEvents='none';
+/*
+ * Do not leave Xbox cover art as an <img> in the interactive library/detail
+ * surfaces. On iOS Safari a long press can still be claimed by the system image
+ * preview / Live Text / Copy Subject stack even when draggable=false and
+ * -webkit-touch-callout:none are present. A CSS background is visually identical
+ * but is not a browser image object, so the entire hold gesture belongs to the
+ * Render360 tile and can reliably open Game Details.
+ */
+function coverSurface(url,label='Xbox 360 game cover'){
+  const surface=document.createElement('span');
+  surface.className='cover-art-surface';
+  surface.setAttribute('role','img');
+  surface.setAttribute('aria-label',label);
+  surface.setAttribute('draggable','false');
+  surface.style.backgroundImage=`url(${JSON.stringify(String(url)).slice(1,-1)})`;
+  return surface;
+}
+
+function convertNativeCoverImages(root=document){
+  root.querySelectorAll?.('.cover-shell img,.detail-cover img').forEach(img=>{
+    const src=img.currentSrc||img.src;
+    if(!src){img.remove();return;}
+    const label=img.alt||'Xbox 360 game cover';
+    img.replaceWith(coverSurface(src,label));
+  });
+}
+
+function setCoverSurface(container,url,label){
+  if(!container||!url)return;
+  container.querySelectorAll('img,.cover-art-surface').forEach(node=>node.remove());
+  container.querySelector('.cover-placeholder')?.remove();
+  container.prepend(coverSurface(url,label));
 }
 
 function applyCachedCover(tile){
   const url=coverUrls.get(tile.dataset.gameId);
   if(!url)return;
   const shell=tile.querySelector('.cover-shell');if(!shell)return;
-  shell.querySelector('.cover-placeholder')?.remove();
-  let img=shell.querySelector('img');
-  if(!img){img=document.createElement('img');img.alt=`${tile.querySelector('.game-tile-title')?.textContent||'Xbox 360 game'} cover`;shell.prepend(img);}
-  neutralizeNativeCoverGesture(img);
-  if(img.src!==url)img.src=url;
+  const title=tile.querySelector('.game-tile-title')?.textContent||'Xbox 360 game';
+  setCoverSurface(shell,url,`${title} cover`);
 }
 
 function decorateTile(tile){
   if(!(tile instanceof HTMLElement))return;
   const shell=tile.querySelector('.cover-shell');if(!shell)return;
-  shell.querySelectorAll('img').forEach(neutralizeNativeCoverGesture);
+  convertNativeCoverImages(shell);
   if(!shell.querySelector('.tile-play-badge'))shell.appendChild(playBadge());
   if(!tile.querySelector('.game-tile-hint')){
     const hint=document.createElement('span');hint.className='game-tile-hint';hint.textContent='Tap to play · hold for details';tile.appendChild(hint);
   }
   const title=tile.querySelector('.game-tile-title')?.textContent||'Game';
   tile.setAttribute('aria-label',`${title}. Tap to play. Press and hold for game details.`);
+  tile.setAttribute('draggable','false');
   applyCachedCover(tile);
 }
 
-function decorateTiles(){document.querySelectorAll('#gameGrid .game-tile').forEach(decorateTile);}
+function decorateTiles(){document.querySelectorAll('#gameGrid .game-tile').forEach(decorateTile);convertNativeCoverImages(document);}
 
 function applyCoverToVisible(game,blob){
   let url=coverUrls.get(game.id);
@@ -71,7 +92,7 @@ function applyCoverToVisible(game,blob){
   document.querySelectorAll('#gameGrid .game-tile').forEach(tile=>{if(tile.dataset.gameId===game.id)applyCachedCover(tile);});
   const detailTid=$('detailTitleId')?.textContent?.trim();
   if(!document.getElementById('detailView')?.classList.contains('hidden')&&detailTid===hex8(game.titleId)){
-    const cover=$('detailCover');if(cover){cover.innerHTML='';const img=document.createElement('img');img.src=url;img.alt=`${game.name||'Xbox 360 game'} cover`;cover.appendChild(img);}
+    const cover=$('detailCover');if(cover)setCoverSurface(cover,url,`${game.name||'Xbox 360 game'} cover`);
   }
 }
 
@@ -100,7 +121,7 @@ async function scheduleAutoPlay(tile){
   let expected=null;
   try{expected=(await listGames()).find(game=>game.id===gameId)||null;}catch{}
   const expectedTid=expected?.titleId?hex8(expected.titleId):null;
-  for(let i=0;i<72;i++){
+  for(let i=0;i<100;i++){
     await sleep(20);
     if(document.body.dataset.state!=='GAME_DETAILS')continue;
     const sameGame=expectedTid?$('detailTitleId')?.textContent?.trim()===expectedTid:(!$('detailName')||$('detailName').textContent===tile.querySelector('.game-tile-title')?.textContent);
@@ -115,39 +136,47 @@ function clearHoldTimer(state){if(state?.timer){clearTimeout(state.timer);state.
 function bindLibraryLaunchGestures(){
   const grid=$('gameGrid');if(!grid)return;
 
-  // Never hand an app-owned cover gesture to Safari's image preview / Live Text /
-  // Copy Subject stack. The tile itself remains the accessible pointer target.
-  grid.addEventListener('dragstart',event=>{if(event.target.closest?.('.game-tile'))event.preventDefault();},true);
-  grid.addEventListener('selectstart',event=>{if(event.target.closest?.('.game-tile'))event.preventDefault();},true);
+  const ownedTile=event=>event.target.closest?.('.game-tile')||null;
+  const suppressNative=event=>{if(ownedTile(event))event.preventDefault();};
+  grid.addEventListener('dragstart',suppressNative,true);
+  grid.addEventListener('selectstart',suppressNative,true);
+  grid.addEventListener('webkitmouseforcewillbegin',suppressNative,true);
 
   grid.addEventListener('pointerdown',event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;
+    const tile=ownedTile(event);if(!tile)return;
     if(event.pointerType==='mouse'&&event.button!==0)return;
     const state={timer:null,held:false,startX:event.clientX,startY:event.clientY,pointerId:event.pointerId,blockTrustedUntil:0,allowSyntheticDetails:false};
-    state.timer=setTimeout(()=>{state.timer=null;state.held=true;tile.classList.add('v42-holding');navigator.vibrate?.(10);},520);
+    state.timer=setTimeout(()=>{
+      state.timer=null;state.held=true;tile.classList.add('v42-holding');navigator.vibrate?.(10);
+      // iOS has no image element to claim at this point; keep the pointer owned
+      // by the tile until release, then invoke the normal Details route.
+      try{tile.setPointerCapture?.(event.pointerId);}catch{}
+    },500);
     holdState.set(tile,state);
   },true);
 
   grid.addEventListener('pointermove',event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;const state=holdState.get(tile);if(!state||state.pointerId!==event.pointerId||state.held)return;
+    const tile=ownedTile(event);if(!tile)return;const state=holdState.get(tile);if(!state||state.pointerId!==event.pointerId||state.held)return;
     if(Math.hypot(event.clientX-state.startX,event.clientY-state.startY)>12)clearHoldTimer(state);
   },true);
 
   const endPointer=event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;const state=holdState.get(tile);if(!state||state.pointerId!==event.pointerId)return;
+    const tile=ownedTile(event);if(!tile)return;const state=holdState.get(tile);if(!state||state.pointerId!==event.pointerId)return;
     clearHoldTimer(state);
     if(state.held){
-      event.preventDefault();
+      event.preventDefault();event.stopPropagation();
       state.blockTrustedUntil=Date.now()+900;
       state.allowSyntheticDetails=true;
+      try{tile.releasePointerCapture?.(event.pointerId);}catch{}
       queueMicrotask(()=>tile.click());
       setTimeout(()=>tile.classList.remove('v42-holding'),160);
     }
   };
-  grid.addEventListener('pointerup',endPointer,true);grid.addEventListener('pointercancel',event=>{const tile=event.target.closest?.('.game-tile');const state=tile&&holdState.get(tile);clearHoldTimer(state);tile?.classList.remove('v42-holding');},true);
+  grid.addEventListener('pointerup',endPointer,true);
+  grid.addEventListener('pointercancel',event=>{const tile=ownedTile(event);const state=tile&&holdState.get(tile);clearHoldTimer(state);tile?.classList.remove('v42-holding');},true);
 
   grid.addEventListener('click',event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;const state=holdState.get(tile);
+    const tile=ownedTile(event);if(!tile)return;const state=holdState.get(tile);
     if(state?.allowSyntheticDetails&&!event.isTrusted){state.allowSyntheticDetails=false;return;}
     if(event.isTrusted&&state?.blockTrustedUntil>Date.now()){
       event.preventDefault();event.stopImmediatePropagation();return;
@@ -157,8 +186,26 @@ function bindLibraryLaunchGestures(){
   },true);
 
   grid.addEventListener('contextmenu',event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;event.preventDefault();event.stopPropagation();
-    const state=holdState.get(tile)||{};clearHoldTimer(state);state.allowSyntheticDetails=true;state.blockTrustedUntil=Date.now()+500;holdState.set(tile,state);tile.click();
+    const tile=ownedTile(event);if(!tile)return;
+    event.preventDefault();event.stopImmediatePropagation();
+    const state=holdState.get(tile)||{};clearHoldTimer(state);state.allowSyntheticDetails=true;state.blockTrustedUntil=Date.now()+900;holdState.set(tile,state);
+    queueMicrotask(()=>tile.click());
+  },true);
+}
+
+function bindGlobalCoverProtection(){
+  const app=$('app');if(!app)return;
+  const block=event=>{
+    const target=event.target.closest?.('.game-tile,.cover-shell,.detail-cover,.cover-art-surface');
+    if(!target)return;
+    if(event.type==='contextmenu'&&target.closest?.('.game-tile'))return; // grid handler owns the details gesture.
+    event.preventDefault();
+  };
+  app.addEventListener('dragstart',block,true);
+  app.addEventListener('selectstart',block,true);
+  // Detail artwork should also never open Safari's native image actions.
+  app.addEventListener('contextmenu',event=>{
+    if(event.target.closest?.('.detail-cover,.cover-art-surface')&&!event.target.closest?.('.game-tile'))event.preventDefault();
   },true);
 }
 
@@ -169,11 +216,11 @@ function patchDiagnosticsRelease(){
 function bootV43Patch(){
   syncThemeChrome();
   new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
-  bindLibraryLaunchGestures();decorateTiles();
-  const grid=$('gameGrid');if(grid)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(grid,{childList:true,subtree:true});
+  bindLibraryLaunchGestures();bindGlobalCoverProtection();decorateTiles();
+  const app=$('app');if(app)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(app,{childList:true,subtree:true});
   $('diagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);$('appDiagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);
   setTimeout(hydrateMissingArtwork,450);
-  console.log('[Render360 V43] Direct-play library, app-owned hold-for-details, x360db artwork backfill, and iOS theme chrome active');
+  console.log('[Render360 V43] Direct-play library, app-owned hold-for-details, non-image cover surfaces, x360db artwork, and iOS theme chrome active');
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootV43Patch,{once:true});else bootV43Patch();

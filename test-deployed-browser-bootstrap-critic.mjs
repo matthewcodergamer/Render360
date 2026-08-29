@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
 
 const wasm=await readFile(new URL('./xenia_ppc_bootstrap.wasm',import.meta.url));
 const meta=JSON.parse(await readFile(new URL('./xenia_ppc_bootstrap.meta.json',import.meta.url),'utf8'));
@@ -11,10 +12,12 @@ assert.match(meta.sourceCommit,/^[0-9a-f]{40}$/,'publisher provenance source com
 assert.match(String(meta.sourceRun),/^\d+$/,'publisher provenance source run invalid');
 
 const module=await WebAssembly.compile(wasm);
-const moduleImports=WebAssembly.Module.imports(module);
-assert.deepEqual(moduleImports,[],'deployed browser bootstrap unexpectedly requires host imports; the browser loader instantiates it with an empty import object');
-const instance=await WebAssembly.instantiate(module,{});
-assert.ok(instance?.exports?.memory instanceof WebAssembly.Memory,'exact deployed bootstrap did not instantiate with exported browser memory');
+const importCheck=validateRender360BrowserImports(module);
+assert.ok(importCheck.ok,'browser import contract failed');
+const host=createRender360BrowserImports({onStdout:()=>{},onStderr:()=>{}});
+const instance=await WebAssembly.instantiate(module,host.imports);
+attachRender360BrowserInstance(host,instance);
+assert.ok(instance?.exports?.memory instanceof WebAssembly.Memory,'exact deployed bootstrap did not initialize with exported browser memory');
 const exported=new Set(WebAssembly.Module.exports(module).map(e=>e.name));
 const required=[
   'memory','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
@@ -28,7 +31,8 @@ const required=[
 for(const name of required)assert.ok(exported.has(name)||exported.has(`_${name}`),`deployed bootstrap missing ${name}`);
 
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_CRITIC=PASS');
-console.log('DEPLOYED_BROWSER_BOOTSTRAP_EMPTY_IMPORT_OBJECT=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_WASI_HOST=PASS');
+console.log('DEPLOYED_BROWSER_BOOTSTRAP_INITIALIZE=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_TITLE_SHADER_EXPORTS=PASS');
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_BYTES=${wasm.length}`);
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SHA256=${meta.sha256}`);

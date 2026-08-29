@@ -49,12 +49,15 @@ if [ "${#ALL_R360_SYMBOLS[@]}" -eq 0 ]; then
   exit 2
 fi
 
-# These are the production-threaded execution exports that previously existed
-# in source but were absent from xenia_ppc_bootstrap.wasm. Fail before publish
-# if any side of that source contract ever drifts again.
+# These are production execution exports that must exist in the deployed Wasm.
+# In particular, the PE staging reserve pair prevents commercial prepared XEX
+# images from being incorrectly constrained by the historical 64 KiB scratch
+# buffer used by early bring-up tests.
 CRITICAL_EXPORTS=(
   r360_ppc_probe_set_execute_on_translate
   r360_ppc_probe_execute_on_translate
+  r360_xex_guest_mapper_reserve_input
+  r360_xex_guest_mapper_input_max_capacity
   r360_guest_thread_entry
   r360_guest_thread_context
   r360_guest_thread_flags

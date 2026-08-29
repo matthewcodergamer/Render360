@@ -6,6 +6,8 @@ DECODER="$ROOT/src/xenia_web_bootstrap/xex_image_decoder.cpp"
 DECODER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_decoder_exports.cpp"
 PREPARER="$ROOT/src/xenia_web_bootstrap/xex_image_preparer.cpp"
 PREPARER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_preparer_exports.cpp"
+PE_IMAGE="$ROOT/src/xenia_web_bootstrap/xex_pe_image.cpp"
+PE_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_pe_image_exports.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
 
@@ -76,6 +78,14 @@ EXPORTS=(
   r360_xex_prepare_normal_window_size r360_xex_prepare_normal_block_size
   r360_xex_prepare_normal_block_seen r360_xex_prepare_normal_blocks_done
   r360_xex_prepare_last_output_kind r360_xex_prepare_last_output_bytes
+  r360_xex_pe_reset r360_xex_pe_decode r360_xex_pe_status
+  r360_xex_pe_nt_offset r360_xex_pe_machine r360_xex_pe_characteristics
+  r360_xex_pe_section_count r360_xex_pe_entry_rva r360_xex_pe_image_base
+  r360_xex_pe_section_alignment r360_xex_pe_file_alignment
+  r360_xex_pe_size_of_image r360_xex_pe_size_of_headers r360_xex_pe_subsystem
+  r360_xex_pe_section_virtual_address r360_xex_pe_section_virtual_size
+  r360_xex_pe_section_raw_address r360_xex_pe_section_raw_size
+  r360_xex_pe_section_characteristics
   r360_feature_bits
 )
 
@@ -88,5 +98,6 @@ ARGS=(
 for symbol in "${EXPORTS[@]}"; do ARGS+=("-Wl,--export=$symbol"); done
 
 "$CXX" "${ARGS[@]}" -o "$OUT" \
-  "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS"
-printf 'Built %s from V32 package core + V36 XEX decode/preparation layers\n' "$OUT"
+  "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS" \
+  "$PE_IMAGE" "$PE_EXPORTS"
+printf 'Built %s from V32 package core + V36 XEX decode/preparation/PE layers\n' "$OUT"

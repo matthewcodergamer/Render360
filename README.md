@@ -11,19 +11,24 @@ OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
 ██████████░░░░░░░░░░  ~50%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff and controlled entry-execution boundary reporting are closed CI contracts. Kernel/XAM services, guest threads/TLS, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, sparse memory, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff, controlled entry execution, XEX import discovery and the first automatic kernel-execution bridge are now closed CI contracts. Full xboxkrnl/XAM service coverage, guest threads/TLS, Xenos, EDRAM, WebGPU presentation and title compatibility remain major implementation work.
 
 ## Latest authoritative gate
 
-**Run 348 — Actions ID `33231592519` — SUCCESS**
+**Run 369 — Actions ID `33232933395` — SUCCESS**
 
-Aggregate commit: `fcd86e25d4be01b2daf7e640e87127b3471c5cf7`
+Aggregate commit: `2c190baaa129b97f66ddfcbf6a4b4e3c75d8f8ed`
 
-Run 348 closes the controlled entry-execution/runtime-boundary contract. The package/title controllers now expose execution status after finalized Xenia HIR. The critic proves both sides: a mapped PE-derived guest entry executes and returns cleanly with the expected PPC result, while a deliberate indirect call to an unmapped guest target translates but stops at a runtime dependency boundary instead of being mislabeled as successful execution.
+Run 369 closes the **kernel execution foundation** for the controlled bring-up path. The aggregate gate proves that XEX import records are decoded through real PE RVA mapping, paired into function descriptors/thunks, registered automatically with the Wasm kernel bridge, and reached from translated PPC execution.
 
-Run 348 also replays the complete existing stack successfully: STFS/XEX, NONE/BASIC/NORMAL preparation, retail session-key/AES-CBC, upstream Xenia LZX, strict PE metadata, PE-to-guest mapping, prepared-entry handoff, one-call `default.xex`, one-call STFS package handoff, PPC/HIR, WasmBackend and SparseGuestMemory.
+The kernel critic proves both sides:
 
-The next kernel-facing implementation is already in flight: Xenia-compatible XEX import-library decoding. The dedicated `xboxkrnl.exe` / `xam.xex` import critic has passed its early step in Run 350; aggregate promotion waits for the full run.
+- a registered implemented kernel thunk returns through the PPC execution path and guest execution continues to a clean return;
+- an unimplemented kernel thunk stops fail-closed and reports the exact imported module, ordinal and thunk address instead of being mislabeled as a generic runtime failure.
+
+Run 369 also replays the complete locked stack successfully: STFS/XEX, NONE/BASIC/NORMAL preparation, retail session-key/AES-CBC, upstream Xenia LZX, strict PE metadata, PE-to-guest mapping, prepared-entry handoff, one-call `default.xex`, one-call STFS package handoff, PPC/HIR, WasmBackend, SparseGuestMemory, runtime-boundary telemetry, PPC→kernel HLE dispatch and automatic XEX-import→kernel execution integration.
+
+This closes the bridge into kernel HLE. It does **not** mean every xboxkrnl/XAM API is implemented. The next work is the minimum real kernel ABI/service surface selected by the first genuine title blocker.
 
 ## Closed foundations and bring-up contracts
 
@@ -52,33 +57,42 @@ PREPARED PE ENTRY → XENIA PPC / HIR              100% ✓
 ONE-CALL default.xex → XENIA ENTRY HANDOFF       100% ✓
 ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF      100% ✓
 ENTRY EXECUTION / RUNTIME BOUNDARY TELEMETRY     100% ✓
+XEX IMPORT LIBRARY / KERNEL DEPENDENCY DISCOVERY 100% ✓
+KERNEL IMPORT DESCRIPTOR / THUNK PAIRING         100% ✓
+PPC → KERNEL HLE DISPATCH BRIDGE                 100% ✓
+AUTOMATIC XEX IMPORT → KERNEL EXECUTION BRIDGE   100% ✓
+KERNEL EXECUTION FOUNDATION                      100% ✓
 ```
 
-These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
+These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility or complete xboxkrnl/XAM coverage.
 
-## What Run 348 proves
+## What Run 369 proves
 
 ```text
-STFS package
+STFS package / default.xex
    ↓
-default.xex reconstruction
+retail XEX preparation
    ↓
-retail image preparation
+strict PE decode + guest section mapping
    ↓
-strict PE decode + guest section mappings
+XEX import-library decode
    ↓
-PE-derived entry PC
+guest VA → RVA → PE section → raw offset
    ↓
-bytes read from SparseGuestMemory
+import descriptor / thunk pairing
+   ↓
+automatic kernel-thunk registration
+   ↓
+PE-derived guest entry PC
    ↓
 Xenia PPC scanner / frontend / finalized HIR
    ↓
-controlled HIR execution
-   ├── clean guest return → reported as return
-   └── unresolved guest call boundary → reported as runtime dependency
+controlled execution
+   ├── implemented kernel thunk → return → continue guest execution
+   └── unimplemented kernel thunk → exact module + ordinal + thunk blocker
 ```
 
-The runtime-boundary critic uses changed keys and relocated Xbox image bases elsewhere in the stack, and the unresolved-call workload deliberately targets an unmapped guest address so a broad success stub cannot pass.
+The critics use controlled synthetic title content and fail-closed malformed/unbacked mapping cases. No broad success stub can satisfy the contract.
 
 This is still controlled test content. It is **not yet a claim that a commercial title has booted**.
 
@@ -104,11 +118,13 @@ ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF
 ████████████████████  100% ✓
 ENTRY EXECUTION / RUNTIME BOUNDARY TELEMETRY
 ████████████████████  100% ✓
-
 XEX IMPORT LIBRARIES / KERNEL DEPENDENCY DISCOVERY
-████████████░░░░░░░░  ← ACTIVE; critic step PASS, aggregate pending
-KERNEL / xboxkrnl / XAM
-██░░░░░░░░░░░░░░░░░░  ← NEXT AFTER IMPORT GATE
+████████████████████  100% ✓
+KERNEL EXECUTION FOUNDATION
+████████████████████  100% ✓
+
+MINIMUM xboxkrnl / XAM ABI + SERVICES
+████░░░░░░░░░░░░░░░░  ← ACTIVE: implement only services reached by real execution
 GUEST THREADS / TLS / RUNTIME
 ░░░░░░░░░░░░░░░░░░░░
 XENOS SEMANTIC LAYER
@@ -123,35 +139,32 @@ FIRST GENUINE GUEST FRAME
 
 Partial bars are planning indicators only. A subsystem reaches 100% only when its exact aggregate critic is green.
 
-## Active implementation — XEX imports into minimum kernel HLE
+## Active implementation — minimum kernel ABI and first real services
 
-The title controller now owns the point where XEX import metadata can be joined to runtime-boundary telemetry:
+The bridge is closed. The next controller path is:
 
 ```text
 user-supplied STFS / default.xex
-  → XEX import-library table
-  → identify xboxkrnl.exe / xam.xex / other modules
-  → import table entries / thunk addresses
-  → execute title entry
-  → unresolved guest call
-  → match call/thunk to imported module + ordinal
-  → FIRST_RUNTIME_BLOCKER=<module, ordinal, guest address>
-  → implement only that minimum HLE service
+  → decoded XEX import libraries
+  → exact xboxkrnl.exe / xam.xex thunk + ordinal
+  → translated guest PPC reaches kernel thunk
+  → dispatch through shared PPCContext
+  → execute the minimum implemented HLE service
+  → return ABI result to guest
+  → continue guest instructions
+  → stop at the next exact missing dependency
 ```
 
-The import parser follows Xenia's current format: a padded import string table followed by variable-size `xex2_import_library` records. Malformed string indexes, sizes and tables fail closed.
+The immediate ABI contracts are integer return values/NTSTATUS through `r3`, argument passing through the PPC GPR ABI, guest pointer/range validation against sparse memory, and exact fail-closed handling for unsupported exports. After that, genuine title execution chooses the service order: thread/TLS, heap/virtual memory, filesystem, XAM startup, or whichever dependency appears first.
 
 No copyrighted title binary belongs in this repository. Genuine-title testing consumes legally obtained runtime content supplied by the user.
 
-## After the first imported service
-
-The real title chooses the implementation order: `xboxkrnl` export → minimum required HLE; XAM → minimum XAM surface; TLS/thread creation → guest runtime; heap/virtual memory → required memory services; VFS → browser-backed filesystem; GPU initialization → Xenos command/ringbuffer work.
-
-The rendering path remains:
+## Road to the first genuine frame
 
 ```text
 Guest PPC title execution
-  → minimum runtime services
+  → minimum xboxkrnl/XAM services
+  → guest threads / TLS / runtime
   → Xenos packets / ringbuffer
   → command processor
   → shared Xenos semantics
@@ -162,19 +175,20 @@ Guest PPC title execution
   → FIRST GENUINE GUEST FRAME
 ```
 
-The first-frame milestone should be a tiny guest-generated graphics workload whose PPC/Xenos work reaches the emulator graphics path. A browser-side WebGPU triangle by itself does **not** count as a guest frame.
+The first-frame milestone must originate from guest GPU work. A browser-side WebGPU triangle by itself does **not** count as a guest frame.
 
-Once the first genuine frame exists, keep that workload permanently in CI and then optimize aggressively: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches and EDRAM traffic optimization.
+Once the first genuine frame exists, keep that workload permanently in CI and optimize from real traces: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches and EDRAM traffic optimization.
 
-Portal and Portal 2 remain later compatibility targets. The immediate target is **real import discovery → minimum kernel/runtime → Xenos → first guest frame**.
+A smaller homebrew/XBLA-class title remains the sensible first genuine bring-up target before larger Portal-class software.
 
 ## Repository organization
 
-- `src/xenia_web_bootstrap/` — active browser-native title bring-up and verified integration layers.
+- `src/xenia_web_bootstrap/` — active browser-native title bring-up, execution and kernel bridge layers.
 - `src/xenia_web_shims/` — browser/WASM portability shims.
 - `retail-xex-image-pipeline.mjs` — unified retail NONE/BASIC/NORMAL preparation adapter.
 - `render360-xex-imports.mjs` — Xenia-compatible XEX import-library parser.
-- `render360-title-controller.mjs` — one-call `default.xex` preparation/map/entry execution telemetry.
+- `render360-kernel-imports.mjs` — import descriptor/thunk planning and kernel blocker identification.
+- `render360-title-controller.mjs` — one-call `default.xex` preparation, mapping, import registration and entry execution telemetry.
 - `render360-package-controller.mjs` — one-call STFS package extraction through title handoff.
 - `xenia_port/` — older port surface retained until migration is safe.
 - `docs/` — maintained project/release documentation.

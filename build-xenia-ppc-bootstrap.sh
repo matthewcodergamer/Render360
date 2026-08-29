@@ -100,6 +100,7 @@ compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstr
 compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
 compile_one "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 compile_one "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
+compile_one "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 compile_one "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
 compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
 compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"

@@ -268,24 +268,31 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
       }
       case 0x0152: {  // KeTlsAlloc
         const uint32_t slot = TlsAlloc();
-        if (slot == kTlsOutOfIndexes) g_service_status = kStatusInvalid;
+        if (g_runtime_status != kStatusSuccess) g_service_status = kStatusInvalid;
         return slot;
       }
-      case 0x0153:  // KeTlsFree
-        return TlsFree(r3) ? 1u : 0u;
+      case 0x0153: {  // KeTlsFree
+        const bool ok = TlsFree(r3);
+        if (!ok) g_service_status = kStatusInvalid;
+        return ok ? 1u : 0u;
+      }
       case 0x0154: {  // KeTlsGetValue
         if (!g_current_thread) {
           g_service_status = kStatusInvalid;
           return 0;
         }
-        return TlsGet(g_current_thread, r3);
+        const uint32_t value = TlsGet(g_current_thread, r3);
+        if (g_runtime_status != kStatusSuccess) g_service_status = kStatusInvalid;
+        return value;
       }
       case 0x0155: {  // KeTlsSetValue
         if (!g_current_thread) {
           g_service_status = kStatusInvalid;
           return 0;
         }
-        return TlsSet(g_current_thread, r3, r4) ? 1u : 0u;
+        const bool ok = TlsSet(g_current_thread, r3, r4);
+        if (!ok) g_service_status = kStatusInvalid;
+        return ok ? 1u : 0u;
       }
       default:
         g_service_status = kStatusUnsupported;
@@ -314,8 +321,6 @@ extern "C" {
 
 void r360_kernel_runtime_reset() {
   render360::xenia_web::ResetRuntime();
-  // Service telemetry is reset separately below through the same public reset.
-  // Keep all externally visible runtime state deterministic across title loads.
 }
 
 uint32_t r360_guest_thread_create(uint32_t entry, uint32_t context,

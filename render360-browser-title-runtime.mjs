@@ -85,15 +85,12 @@ export async function mountXboxIsoBrowser(file){
 /**
  * Mount and prepare a real Xbox 360 ISO for the browser runtime.
  *
- * Production mode is deliberately side-effect-free during Xenia translation.
- * The mapped default.xex entry is registered as generated WASM first, then it
- * is executed only through the native guest-thread registry with a guarded
- * sparse Xbox stack and its own persistent PPCContext snapshot.
- *
- * Whole-function return is currently the cooperative preemption boundary. A
- * title whose entry cannot yet be lowered by the callable backend is returned
- * as an explicit scheduler blocker rather than being run by the old
- * execute-during-translation correctness path.
+ * Production mode first performs side-effect-free Xenia translation and uses
+ * persistent generated WASM whenever the entry is fully lowerable. If Xenia
+ * translated a genuine title function but the generated-WASM emitter produced
+ * no callable entry, the ISO controller may use the broader native HIR
+ * compatibility executor to expose the next real title/runtime boundary rather
+ * than stopping at an emitter-coverage artifact.
  */
 export async function handoffXboxIsoBrowser({
   core,
@@ -113,6 +110,33 @@ export async function handoffXboxIsoBrowser({
   const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
   const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
   if(!productionThreadedExecution)return {bootstrap:runtime,result};
+
+  // The compatibility tier has already executed the scanned Xenia HIR against
+  // the real mapped guest state. Do not overwrite that genuine boundary with
+  // the less informative "0 callable functions" scheduler error.
+  if(result.compatibilityExecution?.used){
+    const compatibility=result.compatibilityExecution;
+    const completed=(result.executionStatus>>>0)===3;
+    const schedulerBlocker=completed?null:{
+      kind:'native-hir-compatibility-boundary',
+      entry:result.entry>>>0,
+      message:`Native HIR compatibility execution stopped at ${result.runtimeBoundary}`,
+      executionStatus:result.executionStatus>>>0,
+      executionInstructions:result.executionInstructions>>>0,
+      reachedKernelBlocker:result.reachedKernelBlocker??null,
+    };
+    result.commercialCpu={
+      mode:'native-hir-compatibility-fallback',
+      translationSideEffects:true,
+      primaryThread:null,
+      firstPump:null,
+      blocker:schedulerBlocker,
+      callableFunctionCount:0,
+      compatibility,
+      schedulerContract:guestThreadSchedulerContract(),
+    };
+    return {bootstrap:runtime,result,ppcSession:null,threadScheduler:null,primaryThread:null,schedulerReport:null,schedulerBlocker};
+  }
 
   const resetRuntime=pick(runtime.exports,'r360_kernel_runtime_reset');
   resetRuntime();
@@ -160,8 +184,8 @@ export function browserTitleRuntimeContract(){return {
   browserWasiHost:true,
   growablePreparedPeStaging:true,
   maxPreparedPeStagingBytes:256*1024*1024,
-  titleEntryTranslation:'Xenia-scanned executable PE function, side-effect-free in production',
-  titleEntryExecution:'native Xbox guest thread -> persistent generated WASM',
+  titleEntryTranslation:'Xenia-scanned executable PE function, side-effect-free first',
+  titleEntryExecution:'persistent generated WASM, with native HIR compatibility fallback when the emitter has no callable entry',
   persistentCpuSession:persistentPpcSessionContract(),
   guestThreadScheduler:guestThreadSchedulerContract(),
   preemptionBoundary:'guest-function-return',

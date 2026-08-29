@@ -1,7 +1,8 @@
-name: UI V43 Integration
+name: UI V44 Integration
 
-# V43 release gate: validates the iOS shell, storage/import layers and exact
-# browser package/runtime compatibility paths used by commercial title launch.
+# V44 release gate: validates the iOS shell, storage/import layers, the exact
+# checked-in package WASM artifact, and browser compatibility paths used by
+# commercial title launch.
 on:
   push:
     paths:
@@ -33,6 +34,7 @@ on:
       - 'VERSION'
       - 'test-ui-v41-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
+      - 'test-package-core-artifact-contract.mjs'
       - '.github/workflows/ui-v41.yml'
   pull_request:
     paths:
@@ -64,6 +66,7 @@ on:
       - 'VERSION'
       - 'test-ui-v41-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
+      - 'test-package-core-artifact-contract.mjs'
 
 permissions:
   contents: read
@@ -77,7 +80,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Parse V43 browser modules
+      - name: Parse V44 browser modules
         run: |
           node --check app-v41.js
           node --check app-v42-patch.js
@@ -93,8 +96,10 @@ jobs:
           node --check library/cover-resolver.js
           node --check import/zip-importer.js
           node --check profiles/title-profile-store.js
-      - name: Enforce V43 deployed integration contract
+      - name: Enforce V44 deployed integration contract
         run: node test-ui-v41-contract.mjs
+      - name: Verify checked-in package WASM artifact
+        run: node test-package-core-artifact-contract.mjs
       - name: Regress legacy-core STFS extraction compatibility
         run: node test-stfs-browser-extractor.mjs
       - name: Stage published bootstrap for scheduler test

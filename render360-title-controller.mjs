@@ -54,6 +54,40 @@ function applyInitialGprs(bootstrap,initialGprs){
   return applied;
 }
 
+function stagePreparedPeImage(bootstrap,prepared){
+  const inputBuffer=pick(bootstrap,'r360_xex_guest_mapper_input_buffer');
+  const inputCapacity=pick(bootstrap,'r360_xex_guest_mapper_input_capacity');
+  let input=inputBuffer()>>>0;
+  let cap=inputCapacity()>>>0;
+  let stagingGrew=false;
+
+  if(prepared.length>cap){
+    const reserve=maybe(bootstrap,'r360_xex_guest_mapper_reserve_input');
+    const maxCapacity=maybe(bootstrap,'r360_xex_guest_mapper_input_max_capacity');
+    const max=maxCapacity?(maxCapacity()>>>0):0;
+    if(!reserve){
+      throw new Error(`published browser bootstrap cannot grow PE staging for prepared image ${prepared.length}/${cap}; refresh to the synchronized runtime`);
+    }
+    if(max&&prepared.length>max){
+      throw new Error(`prepared image exceeds bounded PE staging ceiling ${prepared.length}/${max}`);
+    }
+    if((reserve(prepared.length)>>>0)!==1){
+      const status=maybe(bootstrap,'r360_xex_guest_mapper_status')?.()>>>0;
+      throw new Error(`unable to reserve PE staging for prepared image ${prepared.length} bytes (status 0x${(status||0).toString(16)})`);
+    }
+    // ALLOW_MEMORY_GROWTH may replace memory.buffer and realloc may move the
+    // native staging pointer. Never retain either view across the reserve.
+    input=inputBuffer()>>>0;
+    cap=inputCapacity()>>>0;
+    stagingGrew=true;
+  }
+
+  if(!input||prepared.length>cap)throw new Error(`prepared image exceeds current PE staging capacity ${prepared.length}/${cap}`);
+  new Uint8Array(bootstrap.exports.memory.buffer,input,prepared.length).set(prepared);
+  if((pick(bootstrap,'r360_pe_guest_load')(input,prepared.length)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
+  return {input,capacity:cap,stagingGrew};
+}
+
 export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true}){
   const xex=Buffer.from(defaultXex);
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
@@ -64,10 +98,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const prepared=await prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey,useDevkitKey});
 
   for(const n of ['r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_pe_guest_load','r360_pe_guest_status','r360_pe_guest_entry_address','r360_title_handoff_reset','r360_title_handoff_translate_entry','r360_title_handoff_status','r360_title_handoff_entry_address','r360_title_handoff_bytes','r360_title_handoff_hir_instructions'])if(typeof pick(bootstrap,n)!=='function')throw new Error(`missing title-controller export ${n}`);
-  const input=pick(bootstrap,'r360_xex_guest_mapper_input_buffer')()>>>0,cap=pick(bootstrap,'r360_xex_guest_mapper_input_capacity')()>>>0;
-  if(!input||prepared.length>cap)throw new Error(`prepared image exceeds current PE staging capacity ${prepared.length}/${cap}`);
-  new Uint8Array(bootstrap.exports.memory.buffer,input,prepared.length).set(prepared);
-  if((pick(bootstrap,'r360_pe_guest_load')(input,prepared.length)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
+  const peStage=stagePreparedPeImage(bootstrap,prepared);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
 
   // Modern bootstraps route decoded real-title imports through the live PPC
@@ -116,5 +147,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

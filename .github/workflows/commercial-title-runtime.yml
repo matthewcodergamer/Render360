@@ -1,0 +1,39 @@
+name: Commercial Title Runtime Critic
+
+on:
+  workflow_run:
+    workflows: ['Xenia WASM32 Bootstrap']
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  commercial-title-runtime:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact Xenia source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Download exact verified Xenia bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: xenia-wasm32-bootstrap-report
+          path: verified-bootstrap
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify resumable persistent PPC session
+        run: node ./test-persistent-ppc-session.mjs verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify native Xbox thread yield and resume
+        run: node ./test-browser-thread-scheduler.mjs verified-bootstrap/build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify continuous modern ISO driver contract
+        run: node ./test-browser-modern-iso-bridge.mjs
+      - name: Record authoritative runtime provenance
+        run: |
+          echo "COMMERCIAL_TITLE_RUNTIME_SOURCE_SHA=${{ github.event.workflow_run.head_sha }}"
+          echo "COMMERCIAL_TITLE_RUNTIME_XENIA_RUN=${{ github.event.workflow_run.id }}"
+          echo 'COMMERCIAL_TITLE_RUNTIME_CRITIC=PASS'

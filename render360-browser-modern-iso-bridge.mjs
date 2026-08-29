@@ -2,6 +2,7 @@ import {Render360Core} from './wasm-core-v32.js';
 import {handoffXboxIsoBrowser, loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
+import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
 import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
@@ -19,7 +20,7 @@ function refreshModernStaticCopy(){
   const support=document.querySelector('.support-note');
   if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters PPC/kernel/Xenos without copying the whole disc into WASM memory.';
   const active=document.querySelector('#statusSheet .port-row.active p');
-  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries, upstream Xenia shader analysis/translation and a fail-closed VdSwap frontbuffer snapshot path. A real title frame is promoted only when mapped title-produced frontbuffer pixels are decoded and displayed.';
+  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, Xenia-scanned guest PPC, live kernel-import ABI routing, sparse guest RAM, native circular Xenos ring consumption, real XE_SWAP boundaries, upstream Xenia shader analysis/translation, Naga WGSL conversion, Safari WebGPU shader-module validation and a fail-closed VdSwap frontbuffer snapshot path. A real title frame is promoted only when mapped title-produced frontbuffer pixels are decoded and displayed.';
 }
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
@@ -42,27 +43,35 @@ function showFailure(error){
 async function getCore(){if(!corePromise)corePromise=(async()=>{const core=new Render360Core();await core.init();return core})();return corePromise}
 async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();return bootstrapPromise}
 
-function shaderSummary(shaderRuntime){
+function shaderSummary(shaderRuntime,shaderWebGPU=null){
   if(!shaderRuntime?.available||!shaderRuntime.capturedShaders)return '';
   const one=(name,s)=>!s?.captured?`${name} not captured`:s.executed?`${name} executed by upstream Xenia`:s.reason?`${name} ${s.reason}`:`${name} status 0x${(s.status>>>0).toString(16)}`;
-  if(shaderRuntime.bothSpirvTranslated)return ` Both captured title shaders translated through Xenia to SPIR-V.${shaderRuntime.bothExecuted?` Interpreter fallback also executed both stages.`:''}`;
-  if(shaderRuntime.bothExecuted)return ` Both captured title shaders executed through upstream Xenia (${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}).`;
-  if(shaderRuntime.textureFetchBlocker)return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.`;
-  return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.`;
+  let webgpu='';
+  if(shaderWebGPU?.bothAccepted){webgpu=' Safari WebGPU accepted both Naga-translated shader modules.';}
+  else if(shaderWebGPU?.available===false){webgpu=` WebGPU shader validation unavailable: ${shaderWebGPU.reason||'unknown reason'}.`;}
+  else if(shaderWebGPU?.available){
+    const vs=shaderWebGPU.vertex?.webgpuAccepted===true?'VS accepted':`VS blocked${shaderWebGPU.vertex?.errors?.[0]?.message?`: ${shaderWebGPU.vertex.errors[0].message}`:''}`;
+    const ps=shaderWebGPU.pixel?.webgpuAccepted===true?'PS accepted':`PS blocked${shaderWebGPU.pixel?.errors?.[0]?.message?`: ${shaderWebGPU.pixel.errors[0].message}`:''}`;
+    webgpu=` WebGPU shader boundary: ${vs}; ${ps}.`;
+  }else if(shaderWebGPU?.reason){webgpu=` WebGPU shader boundary: ${shaderWebGPU.reason}.`;}
+  if(shaderRuntime.bothSpirvTranslated)return ` Both captured title shaders translated through Xenia to SPIR-V.${shaderRuntime.bothExecuted?` Interpreter fallback also executed both stages.`:''}${webgpu}`;
+  if(shaderRuntime.bothExecuted)return ` Both captured title shaders executed through upstream Xenia (${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}).${webgpu}`;
+  if(shaderRuntime.textureFetchBlocker)return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.${webgpu}`;
+  return ` Shader boundary: ${one('VS',shaderRuntime.vertex)}; ${one('PS',shaderRuntime.pixel)}.${webgpu}`;
 }
 
-function summarizeGpuTraffic(gpu,shaderRuntime=null,frontbufferFrame=null){
+function summarizeGpuTraffic(gpu,shaderRuntime=null,frontbufferFrame=null,shaderWebGPU=null){
   if(!gpu)return false;
   if(gpu.submitted){
     const snapshotFrame=frontbufferFrame?.realTitleFrameReady===true;
     const coreFrame=gpu.realTitleFrameReady===true;
     const realFrame=snapshotFrame||coreFrame;
     const realSwap=(gpu.swaps||0)>0;
-    setGate('gateGpu','ready',snapshotFrame?'REAL FRONTBUFFER':realFrame?'REAL FRAME':realSwap?'XE_SWAP SEEN':'PM4 ACCEPTED');
-    setText('frameGateState',realFrame?'FIRST EXTRACTED-TITLE FRAME':realSwap?'REAL TITLE SWAP':'TITLE PM4 ACCEPTED');
-    setText('boundaryTitle',snapshotFrame?'A real title VdSwap frontbuffer is on screen':realFrame?'A title-produced frame reached a real swap':realSwap?'Real title command traffic reached XE_SWAP':'Real title PM4 reached the Xenos decoder');
+    setGate('gateGpu','ready',snapshotFrame?'REAL FRONTBUFFER':realFrame?'REAL FRAME':shaderWebGPU?.bothAccepted?'WEBGPU SHADERS':realSwap?'XE_SWAP SEEN':'PM4 ACCEPTED');
+    setText('frameGateState',realFrame?'FIRST EXTRACTED-TITLE FRAME':realSwap?'REAL TITLE SWAP':shaderWebGPU?.bothAccepted?'WEBGPU SHADERS READY':'TITLE PM4 ACCEPTED');
+    setText('boundaryTitle',snapshotFrame?'A real title VdSwap frontbuffer is on screen':realFrame?'A title-produced frame reached a real swap':realSwap?'Real title command traffic reached XE_SWAP':shaderWebGPU?.bothAccepted?'Captured title shaders compile in WebGPU':'Real title PM4 reached the Xenos decoder');
     const state=`Xenos accepted ${gpu.packets} packets, draws ${gpu.draws}, swaps ${gpu.swaps||0}, shader loads ${gpu.shaderLoads||0}, fetch groups ${gpu.fetchConstantGroups?.length||0}, backed textures ${gpu.backedTextureResources?.length||0}, memory writes ${gpu.memoryWrites||0}.`;
-    const shaders=shaderSummary(shaderRuntime);
+    const shaders=shaderSummary(shaderRuntime,shaderWebGPU);
     let frame='';
     if(snapshotFrame){
       frame=`Real frontbuffer ${frontbufferFrame.width}×${frontbufferFrame.height}, format ${frontbufferFrame.format}, ${frontbufferFrame.tiled?'Xenos tiled':'linear'}, pitch ${frontbufferFrame.pitchPixels}, source ${fmtHex(frontbufferFrame.sourceAddress)}, hash ${fmtHex(frontbufferFrame.hash)}. These pixels came from the mapped VdSwap frontbuffer, not the bounded software triangle.${shaders}`;
@@ -74,20 +83,20 @@ function summarizeGpuTraffic(gpu,shaderRuntime=null,frontbufferFrame=null){
       frame=`Continue guest execution until XE_SWAP or a concrete GPU/kernel blocker appears.${shaders}`;
     }
     setText('boundaryText',`${gpu.nativeDrained?'Native circular ring consumption is active.':`Submitted ${gpu.wordCount} genuinely produced ring words from ${fmtHex(gpu.guestAddress)} (CP_RB_WPTR ${gpu.writePointer}).`} ${state} ${frame}`);
-    hostLog('ok',`Real title PM4 accepted · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.swaps||0} swaps · ${shaderRuntime?.translatedSpirvShaders||shaderRuntime?.executedShaders||0} shaders advanced${snapshotFrame?' · REAL FRONTBUFFER PRESENTED':''}`);
+    hostLog('ok',`Real title PM4 accepted · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.swaps||0} swaps · ${shaderRuntime?.translatedSpirvShaders||shaderRuntime?.executedShaders||0} shaders advanced${shaderWebGPU?.bothAccepted?' · WEBGPU VS+PS ACCEPTED':''}${snapshotFrame?' · REAL FRONTBUFFER PRESENTED':''}`);
     return true;
   }
   if(gpu.ready&&gpu.lastFaultWord!==undefined){
     setGate('gateGpu','blocked',`PM4 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);setText('frameGateState','REAL PM4 BLOCKER');
     setText('boundaryTitle',`First real Xenos blocker: PM4 opcode 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);
-    setText('boundaryText',`The title reached the native Xenos consumer. Xenos stopped at word ${gpu.lastFaultWord} with status ${gpu.xenosStatus}; ${gpu.packets} packets were accepted first.${shaderSummary(shaderRuntime)} This is the exact next GPU implementation target—no synthetic trace and no guessed command count.`);
+    setText('boundaryText',`The title reached the native Xenos consumer. Xenos stopped at word ${gpu.lastFaultWord} with status ${gpu.xenosStatus}; ${gpu.packets} packets were accepted first.${shaderSummary(shaderRuntime,shaderWebGPU)} This is the exact next GPU implementation target—no synthetic trace and no guessed command count.`);
     hostLog('warn',`Real PM4 blocker · opcode 0x${(gpu.lastOpcode>>>0).toString(16)} · word ${gpu.lastFaultWord} · status ${gpu.xenosStatus}`);
     return true;
   }
   return false;
 }
 
-function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFrame=null){
+function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFrame=null,shaderWebGPU=null){
   const gpu=result.titleGpuTelemetry||result.browserHleTelemetry;
   setGate('gateExtract','ready','XDVDFS READY');setGate('gateXex','ready','PE MAPPED');
   setGate('gateCpu',result.executionStatus?'ready':'blocked',result.executionStatus?`${result.executionInstructions||0} INSNS`:'NO EXEC');
@@ -103,7 +112,7 @@ function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFr
   }
 
   setGate('gateKernel','ready',result.kernelCalls?`${result.kernelCalls} CALLS`:'ENTERED');
-  if(summarizeGpuTraffic(gpuTraffic,shaderRuntime,frontbufferFrame))return;
+  if(summarizeGpuTraffic(gpuTraffic,shaderRuntime,frontbufferFrame,shaderWebGPU))return;
   if(gpu?.ringInitialized){
     const producer=gpu.writePointer??0;
     setGate('gateGpu','ready',producer?'WPTR CAPTURED':'RING CAPTURED');setText('frameGateState',producer?'REAL XENOS WPTR':'REAL XENOS RING');
@@ -132,6 +141,21 @@ export async function runModernXboxIso(file){
     if(result.titleGpuTelemetry){try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};hostLog('warn',`Captured PM4 state unavailable: ${gpuTraffic.reason}`)}}
     let shaderRuntime=null;
     try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};hostLog('warn',`Xenia shader runtime stopped: ${shaderRuntime.error}`)}
+    let shaderWebGPU=null;
+    if(shaderRuntime?.bothSpirvTranslated){
+      try{
+        shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap});
+        if(shaderWebGPU.bothAccepted){
+          hostLog('ok','Captured Xenos VS + PS translated through Xenia/Naga and accepted by WebGPU');
+        }else if(shaderWebGPU.available){
+          const vs=shaderWebGPU.vertex?.errors?.[0]?.message||shaderWebGPU.vertex?.reason||'not accepted';
+          const ps=shaderWebGPU.pixel?.errors?.[0]?.message||shaderWebGPU.pixel?.reason||'not accepted';
+          hostLog('warn',`WebGPU title shader boundary · VS ${vs} · PS ${ps}`);
+        }else{
+          hostLog('warn',`WebGPU title shader validation unavailable: ${shaderWebGPU.reason||'unknown reason'}`);
+        }
+      }catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};hostLog('warn',`Xenos → WGSL → WebGPU validation stopped: ${shaderWebGPU.reason}`)}
+    }
     let frontbufferFrame=null,presentation=null;
     if((gpuTraffic?.swaps||0)>0){
       try{
@@ -144,13 +168,13 @@ export async function runModernXboxIso(file){
         }
       }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};hostLog('warn',`Real frontbuffer capture stopped: ${frontbufferFrame.reason}`)}
     }
-    summarizeResult(result,gpuTraffic,shaderRuntime,frontbufferFrame);
-    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,shaderRuntime,frontbufferFrame,presentation,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
-    return {...result,gpuTraffic,shaderRuntime,frontbufferFrame,presentation};
+    summarizeResult(result,gpuTraffic,shaderRuntime,frontbufferFrame,shaderWebGPU);
+    globalThis.render360ModernTitle={fileName:file.name||'',result,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,bootstrap,core,entryWindowBytes:ENTRY_WINDOW_BYTES};
+    return {...result,gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation};
   }catch(error){if(run===activeRun)showFailure(error);throw error}
 }
 
-export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,usesXeniaSpirvTranslation:true,realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],requiresTitleProducedPixelsForRealFrame:true,syntheticRasterAcceptedForRealFrame:false,failClosedOnUnsupportedPm4:true};}
+export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryExecution:'Xenia-scanned RX function',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,nativeCircularRingConsumption:true,requiresRealXeSwapForFrameBoundary:true,usesUpstreamXeniaShaderInterpreter:true,usesXeniaSpirvTranslation:true,usesNagaWgslTranslation:true,validatesCapturedShadersWithWebGPU:true,webgpuShaderValidationCountsAsRealFrame:false,realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],requiresTitleProducedPixelsForRealFrame:true,syntheticRasterAcceptedForRealFrame:false,failClosedOnUnsupportedPm4:true};}
 
 refreshModernStaticCopy();
 const input=$('gameInput');

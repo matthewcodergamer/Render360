@@ -9,7 +9,8 @@ const bootstrap=await WebAssembly.instantiate(mod,imports);wasi.initialize(boots
 const pick=n=>e[n]??e[`_${n}`];
 const p32be=(a,o,v)=>{a[o]=(v>>>24)&255;a[o+1]=(v>>>16)&255;a[o+2]=(v>>>8)&255;a[o+3]=v&255};
 const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;
-const lis=(rt,imm)=>dform(15,rt,0,imm),ori=(ra,rs,imm)=>dform(24,rs,ra,imm);
+const li=(rt,imm)=>dform(14,rt,0,imm),oris=(ra,rs,imm)=>dform(25,rs,ra,imm),ori=(ra,rs,imm)=>dform(24,rs,ra,imm);
+const addressWords=(reg,address)=>[li(reg,0),oris(reg,reg,(address>>>16)&0xffff),ori(reg,reg,address&0xffff)];
 const mtctr11=0x7D6903A6,bctrl=0x4E800421,blr=0x4E800020;
 const entry=0x91000000;
 const hle=installBrowserTitleHle({bootstrap,entry});
@@ -18,7 +19,7 @@ if(!hle.implementedKernelExports['xboxkrnl.exe:451'])throw new Error('VdInitiali
 
 function runCall(target,{r3=0,r4=0}={}){
   pick('r360_ppc_probe_reset')();
-  const words=[lis(11,target>>>16),ori(11,11,target&0xffff),mtctr11,bctrl,blr];
+  const words=[...addressWords(11,target),mtctr11,bctrl,blr];
   const ptr=pick('r360_ppc_probe_input_buffer')()>>>0;const bytes=new Uint8Array(e.memory.buffer,ptr,words.length*4);words.forEach((w,i)=>p32be(bytes,i*4,w));
   if((pick('r360_ppc_probe_load_at')(entry,ptr,bytes.length)>>>0)!==bytes.length)throw new Error('relocated caller load failed');
   if((pick('r360_ppc_probe_set_initial_gpr')(3,BigInt(r3>>>0))>>>0)!==1||(pick('r360_ppc_probe_set_initial_gpr')(4,BigInt(r4>>>0))>>>0)!==1)throw new Error('initial GPR setup failed');

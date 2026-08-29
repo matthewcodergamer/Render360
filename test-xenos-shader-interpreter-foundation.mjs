@@ -70,3 +70,9 @@ if((f('r360_xenos_shader_interpreter_execute')(1)>>>0)!==0)throw new Error('text
 if((f('r360_xenos_shader_interpreter_status')()>>>0)!==0xE1000003)throw new Error(`unmapped texture did not surface exact blocker status=0x${(f('r360_xenos_shader_interpreter_status')()>>>0).toString(16)}`);
 console.log('XENOS_TEXTURE_SHADER_UNMAPPED_FAIL_CLOSED=PASS');
 console.log('XENOS_SHADER_INTERPRETER_FOUNDATION=PASS');
+
+// Keep Xenia's translated-shader accelerator under the same publication gate
+// as the interpreter fallback. This second critic instantiates the same exact
+// bootstrap and requires valid vertex + pixel SPIR-V modules and fail-closed
+// behavior before the full Xenia workflow can publish a browser artifact.
+await import('./test-xenos-spirv-translation.mjs');

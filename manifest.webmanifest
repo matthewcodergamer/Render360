@@ -1,10 +1,11 @@
 {
-  "name": "Render360 Xenia-Web",
+  "name": "Render360",
   "short_name": "Render360",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#030406",
-  "theme_color": "#030406",
-  "description": "Render360 Xenia-Web — V35 development track, stable Core V32, UI V33. Six CPU/browser foundations are regression-complete and the first finalized-Xenia-HIR to generated-WebAssembly scalar stage is green; Hot WasmBackend expansion is active."
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "description": "Render360 is an iOS-style Xbox 360 game library and browser runtime powered by the Xenia-Web/WASM core."
 }

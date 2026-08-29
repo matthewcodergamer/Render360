@@ -1,0 +1,76 @@
+name: UI V41 Integration
+
+on:
+  push:
+    paths:
+      - 'index.html'
+      - 'ui-v41.css'
+      - 'app-v41.js'
+      - 'library/**'
+      - 'import/**'
+      - 'profiles/**'
+      - 'runtime/**'
+      - 'settings/**'
+      - 'storage/**'
+      - 'render360-browser-modern-content-bridge.mjs'
+      - 'render360-browser-modern-iso-bridge.mjs'
+      - 'render360-browser-thread-scheduler.mjs'
+      - 'render360-browser-title-runtime.mjs'
+      - 'render360-title-controller.mjs'
+      - 'render360-title-gpu-traffic.mjs'
+      - 'render360-title-frontbuffer.mjs'
+      - 'manifest.webmanifest'
+      - 'VERSION'
+      - 'test-ui-v41-contract.mjs'
+      - '.github/workflows/ui-v41.yml'
+  pull_request:
+    paths:
+      - 'index.html'
+      - 'ui-v41.css'
+      - 'app-v41.js'
+      - 'library/**'
+      - 'import/**'
+      - 'profiles/**'
+      - 'runtime/**'
+      - 'settings/**'
+      - 'storage/**'
+      - 'render360-browser-modern-content-bridge.mjs'
+      - 'render360-browser-modern-iso-bridge.mjs'
+      - 'render360-browser-thread-scheduler.mjs'
+      - 'render360-browser-title-runtime.mjs'
+      - 'render360-title-controller.mjs'
+      - 'render360-title-gpu-traffic.mjs'
+      - 'render360-title-frontbuffer.mjs'
+      - 'manifest.webmanifest'
+      - 'VERSION'
+      - 'test-ui-v41-contract.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  integration-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse V41 browser modules
+        run: |
+          node --check app-v41.js
+          node --check runtime/render360-runtime.js
+          node --check runtime/title-controls.js
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check render360-browser-thread-scheduler.mjs
+          node --check storage/game-storage.js
+          node --check settings/app-settings-store.js
+          node --check library/game-library.js
+          node --check library/cover-resolver.js
+          node --check import/zip-importer.js
+          node --check profiles/title-profile-store.js
+      - name: Enforce V41 deployed integration contract
+        run: node test-ui-v41-contract.mjs
+      - name: Regress guest scheduler
+        run: node test-browser-thread-scheduler.mjs

@@ -1,0 +1,200 @@
+name: Render360 title memory overlay hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-title-memory-overlay-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-title-memory-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Update endian-aware title memory overlay and fail closed
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('prepare-title-runtime-memory-overlay.py')
+          s=p.read_text()
+          start=s.index("old = r'''bool LoadGuestValue")
+          end=s.index("\n\nif old not in text:", start)
+          replacement=r'''old = r'''\''bool LoadGuestValue(xe::Memory* memory, Value* destination,
+                    const Value* address, const Value* offset,
+                    const RuntimeValues& values, RuntimeValues& out_values,
+                    uint32_t flags) {
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !destination) return false;
+  uint32_t guest_address = 0;
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
+  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
+  uint8_t* host = nullptr;
+  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
+  RuntimeValue loaded;
+  loaded.type = destination->type;
+  std::memcpy(&loaded.value, host, size);
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&loaded)) {
+    return false;
+  }
+  out_values[destination] = loaded;
+  return true;
+}
+
+bool StoreGuestValue(xe::Memory* memory, const Value* address,
+                     const Value* offset, const Value* source,
+                     const RuntimeValues& values, uint32_t flags) {
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !source) return false;
+  uint32_t guest_address = 0;
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
+  const size_t size = xe::cpu::hir::GetTypeSize(source->type);
+  uint8_t* host = nullptr;
+  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
+  RuntimeValue stored;
+  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
+    return false;
+  }
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&stored)) {
+    return false;
+  }
+  std::memcpy(host, &stored.value, size);
+  return true;
+}
+'''\'''
+
+new = r'''\''bool LoadGuestValue(xe::Memory* memory, Value* destination,
+                    const Value* address, const Value* offset,
+                    const RuntimeValues& values, RuntimeValues& out_values,
+                    uint32_t flags) {
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !destination) return false;
+  uint32_t guest_address = 0;
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
+  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
+  RuntimeValue loaded;
+  loaded.type = destination->type;
+  loaded.value = {};
+
+  // Xenos MMIO is a logical 32-bit register interface. Convert the logical
+  // value to the same host integer representation that a big-endian guest RAM
+  // load would have produced, then let either explicit BYTE_SWAP HIR or the
+  // LOAD_STORE_BYTE_SWAP flag perform the guest-endian conversion exactly once.
+  if (size == 4 && destination->type == xe::cpu::hir::INT32_TYPE) {
+    uint32_t mmio_value = 0;
+    if (ReadTitleGpuMmio(guest_address, &mmio_value)) {
+      loaded.value.u32 = static_cast<uint32_t>(
+          ByteSwapUnsigned(mmio_value, xe::cpu::hir::INT32_TYPE));
+      if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+          !ByteSwapRuntimeValue(&loaded)) {
+        return false;
+      }
+      out_values[destination] = loaded;
+      return true;
+    }
+  }
+
+  // The wasm32 Xenia Memory object intentionally exposes only the movable
+  // 64 KiB PPC probe window. Never translate arbitrary Xbox virtual addresses
+  // through it; title data/code outside that window lives in SparseGuestMemory.
+  const uint32_t probe_base = r360_ppc_probe_guest_base();
+  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
+  const uint64_t access_end = uint64_t(guest_address) + size;
+  const bool in_probe_window = guest_address >= probe_base &&
+                               access_end <= probe_end &&
+                               access_end <= 0x100000000ull;
+  uint8_t* host = nullptr;
+  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
+    std::memcpy(&loaded.value, host, size);
+  } else if (!ReadSparseGuestMemory(guest_address, &loaded.value,
+                                    static_cast<uint32_t>(size))) {
+    return false;
+  }
+
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&loaded)) {
+    return false;
+  }
+  out_values[destination] = loaded;
+  return true;
+}
+
+bool StoreGuestValue(xe::Memory* memory, const Value* address,
+                     const Value* offset, const Value* source,
+                     const RuntimeValues& values, uint32_t flags) {
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !source) return false;
+  uint32_t guest_address = 0;
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
+  const size_t size = xe::cpu::hir::GetTypeSize(source->type);
+  RuntimeValue stored;
+  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
+    return false;
+  }
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&stored)) {
+    return false;
+  }
+
+  if (size == 4 && source->type == xe::cpu::hir::INT32_TYPE) {
+    const uint32_t logical_value = static_cast<uint32_t>(
+        ByteSwapUnsigned(stored.value.u32, xe::cpu::hir::INT32_TYPE));
+    if (WriteTitleGpuMmio(guest_address, logical_value)) return true;
+  }
+
+  const uint32_t probe_base = r360_ppc_probe_guest_base();
+  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
+  const uint64_t access_end = uint64_t(guest_address) + size;
+  const bool in_probe_window = guest_address >= probe_base &&
+                               access_end <= probe_end &&
+                               access_end <= 0x100000000ull;
+  uint8_t* host = nullptr;
+  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
+    std::memcpy(host, &stored.value, size);
+    // Keep a sparse alias coherent if one exists; probe-only memory need not
+    // have a sparse mapping, so mirroring failure is not a store failure here.
+    WriteSparseGuestMemory(guest_address, &stored.value,
+                           static_cast<uint32_t>(size));
+    return true;
+  }
+
+  return WriteSparseGuestMemory(guest_address, &stored.value,
+                                static_cast<uint32_t>(size));
+}
+'''\'''
+'''
+          s=s[:start]+replacement+s[end:]
+          p.write_text(s)
+
+          # An overlay script failing must abort the build. Previously set -uo
+          # let Python report a contract mismatch and then compilation continued
+          # with a subtly incomplete runtime.
+          p=Path('build-xenia-ppc-bootstrap.sh')
+          b=p.read_text()
+          if b.startswith('#!/usr/bin/env bash\nset -uo pipefail'):
+            b=b.replace('#!/usr/bin/env bash\nset -uo pipefail', '#!/usr/bin/env bash\nset -euo pipefail', 1)
+          elif 'set -euo pipefail' not in b:
+            raise SystemExit('build shell options marker changed')
+          p.write_text(b)
+
+          # Syntax-check the Python generator now, before committing it.
+          import py_compile
+          py_compile.compile('prepare-title-runtime-memory-overlay.py', doraise=True)
+          text=Path('prepare-title-runtime-memory-overlay.py').read_text()
+          for needle in ['LOAD_STORE_BYTE_SWAP','ReadSparseGuestMemory','ReadTitleGpuMmio','WriteTitleGpuMmio']:
+            if needle not in text: raise SystemExit(f'missing {needle}')
+          print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PATCHED')
+          print('BOOTSTRAP_OVERLAY_FAILURES=FAIL_CLOSED')
+          PY
+          git diff --check
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prepare-title-runtime-memory-overlay.py build-xenia-ppc-bootstrap.sh
+          git diff --cached --check
+          git commit -m 'fix: preserve sparse RAM MMIO in endian HIR overlay' || exit 0
+          git push origin HEAD:main

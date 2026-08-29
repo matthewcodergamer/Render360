@@ -9,7 +9,7 @@ const imports=wasi.getImportObject(mod);
 for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);
 const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be','r360_xenos_ring_capacity','r360_xenos_submit'];
+const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_import_reset','r360_kernel_import_register','r360_title_gpu_reset','r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status','r360_title_gpu_mmio_writes','r360_title_gpu_ring_word','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_protect','r360_sparse_guest_memory_write_u32_be','r360_xenos_ring_capacity','r360_xenos_submit'];
 for(const n of required)if(typeof pick(n)!=='function')throw new Error(`title GPU runtime missing export ${n}`);
 
 const p32be=(a,o,v)=>{a[o]=(v>>>24)&255;a[o+1]=(v>>>16)&255;a[o+2]=(v>>>8)&255;a[o+3]=v&255};
@@ -52,6 +52,18 @@ if((pick('r360_sparse_guest_memory_write_u32_be')(farCode,li(3,0x42))>>>0)!==1||
 const farResult=run([lis(11,0x3000),ori(11,11,0),mtctr11,bctrl,blr]);
 if(farResult!==0x42)throw new Error(`far sparse PPC call mismatch 0x${farResult.toString(16)}`);
 console.log('TITLE_RUNTIME_NESTED_CODE_OUTSIDE_64K=PASS');
+
+// A readable data page must not become executable merely because a translated
+// title branches into it. Seed valid-looking PPC while RW, remove execute, and
+// prove the far-call resolver fails closed instead of decoding .data as code.
+const nonExecCode=0x31000000;const nonExecBacking=pick('r360_sparse_guest_memory_alloc')(1)>>>0;if(!nonExecBacking)throw new Error('non-executable sparse backing allocation failed');
+if((pick('r360_sparse_guest_memory_map')(nonExecCode,1,nonExecBacking,0,3)>>>0)!==1)throw new Error('non-executable sparse mapping failed');
+if((pick('r360_sparse_guest_memory_write_u32_be')(nonExecCode,li(3,0x77))>>>0)!==1||(pick('r360_sparse_guest_memory_write_u32_be')(nonExecCode+4,blr)>>>0)!==1)throw new Error('non-executable sparse seed failed');
+if((pick('r360_sparse_guest_memory_protect')(nonExecCode,1,1)>>>0)!==1)throw new Error('non-executable sparse protection failed');
+let nonExecRejected=false;
+try{run([lis(11,0x3100),ori(11,11,0),mtctr11,bctrl,blr]);}catch{nonExecRejected=true;}
+if(!nonExecRejected)throw new Error('PPC pager executed a readable non-executable sparse page');
+console.log('TITLE_RUNTIME_NONEXEC_CODE_REJECTED=PASS');
 
 // Register the real xboxkrnl VdInitializeRingBuffer ordinal as unresolved. The
 // runtime itself must consume r3/r4 from the active translated PPC context.

@@ -3,6 +3,7 @@ const maybe=(e,n)=>typeof pick(e,n)==='function'?pick(e,n):null;
 
 function snapshot(e,type){
   const get=n=>maybe(e,n)?.()>>>0;
+  const exportComponent=maybe(e,'r360_xenos_shader_interpreter_last_export_component_bits');
   return {
     type,
     status:get('r360_xenos_shader_interpreter_status'),
@@ -19,7 +20,7 @@ function snapshot(e,type){
     valueExports:get('r360_xenos_shader_interpreter_value_exports'),
     lastExportRegister:get('r360_xenos_shader_interpreter_last_export_register'),
     lastExportMask:get('r360_xenos_shader_interpreter_last_export_mask'),
-    lastExportComponents:Array.from({length:4},(_,i)=>get('r360_xenos_shader_interpreter_last_export_component_bits')?pick(e,'r360_xenos_shader_interpreter_last_export_component_bits')(i)>>>0:0),
+    lastExportComponents:Array.from({length:4},(_,i)=>exportComponent?exportComponent(i)>>>0:0),
   };
 }
 

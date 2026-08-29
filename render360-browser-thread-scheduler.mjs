@@ -51,6 +51,7 @@ export async function createGuestThreadScheduler({
   let yieldedSlices=0;
   let completedThreads=0;
   let running=false;
+  let paused=false;
   let lastBlocker=null;
   let loopPromise=null;
 
@@ -97,9 +98,7 @@ export async function createGuestThreadScheduler({
     liveContext().set(snapshot);
   }
 
-  function saveThreadContext(handle){
-    snapshots.set(handle,copyLiveContext());
-  }
+  function saveThreadContext(handle){snapshots.set(handle,copyLiveContext());}
 
   function createThreadRecord({entry,context=0,stackSize=defaultStackSize,flags=0}={}){
     entry>>>=0;context>>>=0;stackSize>>>=0;flags>>>=0;
@@ -117,26 +116,17 @@ export async function createGuestThreadScheduler({
     const thread=inspectThread(handle);
     restoreThreadContext(handle);
     let result;
-    try{
-      result=await ppc.runFunctionSlice(thread.entry,{continuationKey:handle});
-    }catch(error){
-      saveThreadContext(handle);
-      lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};
-      throw error;
-    }
+    try{result=await ppc.runFunctionSlice(thread.entry,{continuationKey:handle});}
+    catch(error){saveThreadContext(handle);lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};throw error;}
     saveThreadContext(handle);
     sliceCount++;
     dispatchCounts.set(handle,(dispatchCounts.get(handle)??0)+1);
-    if(result.yielded){
-      yieldedSlices++;
-      yieldCounts.set(handle,(yieldCounts.get(handle)??0)+1);
-    }
+    if(result.yielded){yieldedSlices++;yieldCounts.set(handle,(yieldCounts.get(handle)??0)+1);}
     let terminated=false;
     if(terminateOnReturn&&!result.yielded&&result.guestReturned!==false){
       const exitCode=Number(BigInt.asUintN(32,result.r3));
       if((terminateThread(handle,exitCode)>>>0)!==1)throw new Error(`FAIL_CLOSED_THREAD_${handle.toString(16)}_TERMINATE`);
-      terminated=true;
-      completedThreads++;
+      terminated=true;completedThreads++;
     }
     return {...result,handle,thread,terminated};
   }
@@ -145,16 +135,11 @@ export async function createGuestThreadScheduler({
     if(!Number.isInteger(maxSlices)||maxSlices<1||maxSlices>32)throw new RangeError('maxSlices must be 1..32');
     const results=[];
     for(let i=0;i<maxSlices;i++){
-      const handle=nextRunnable()>>>0;
-      if(!handle)break;
-      const state=stateOf(handle)>>>0;
-      if(state!==1&&state!==2)continue;
-      const result=await runThreadSlice(handle);
-      results.push(result);
-      if(typeof onSlice==='function')await onSlice(result);
+      const handle=nextRunnable()>>>0;if(!handle)break;
+      const state=stateOf(handle)>>>0;if(state!==1&&state!==2)continue;
+      const result=await runThreadSlice(handle);results.push(result);if(typeof onSlice==='function')await onSlice(result);
     }
-    pumpCount++;
-    await ppc.yieldToBrowser();
+    pumpCount++;await ppc.yieldToBrowser();
     return {pumpCount,slices:results,totalSlices:sliceCount,yieldedSlices,completedThreads,lastBlocker};
   }
 
@@ -163,17 +148,14 @@ export async function createGuestThreadScheduler({
     running=true;
     loopPromise=(async()=>{
       while(running){
+        if(paused){await ppc.yieldToBrowser();continue;}
         try{
-          // Production loop intentionally executes one guest quantum before
-          // yielding back to Safari. Explicit pumpOnce callers may request more
-          // slices for tests or non-interactive batch work.
           const report=await pumpOnce({maxSlices:1,onSlice});
           if(typeof onPump==='function')await onPump(report);
           if(!report.slices.length)running=false;
         }catch(error){
           running=false;
-          if(typeof onError==='function')await onError(error,lastBlocker);
-          else throw error;
+          if(typeof onError==='function')await onError(error,lastBlocker);else throw error;
         }
       }
       return inspect();
@@ -181,67 +163,36 @@ export async function createGuestThreadScheduler({
     return loopPromise;
   }
 
-  function stop(){running=false;}
+  function pause(){paused=true;return true;}
+  function resume(){paused=false;return true;}
+  function stop(){running=false;paused=false;}
 
   function inspect(){
     return {
-      kind:'render360-cooperative-xbox-thread-scheduler',
-      running,
-      pumpCount,
-      sliceCount,
-      yieldedSlices,
-      completedThreads,
-      trackedContexts:snapshots.size,
-      lastBlocker,
+      kind:'render360-cooperative-xbox-thread-scheduler',running,paused,pumpCount,sliceCount,yieldedSlices,completedThreads,
+      trackedContexts:snapshots.size,lastBlocker,
       ppcSession:{kind:ppc.kind,functionCount:ppc.functionCount,sliceCount:ppc.sliceCount,yieldedSliceCount:ppc.yieldedSliceCount,kernelDispatches:ppc.kernelDispatches,nestedDispatches:ppc.nestedDispatches},
       contract:{
-        nativeXboxThreadRegistry:true,
-        perThreadPpcContextSnapshots:true,
-        perThreadCfgContinuation:true,
-        sparseGuardedGuestStacks:true,
-        cooperativeRoundRobin:true,
-        generatedWasmExecution:true,
-        browserYieldBetweenPumps:true,
-        productionSlicesPerBrowserYield:1,
-        preemptionBoundary:'cfg-block-boundary-or-guest-function-return',
-        midFunctionPreemption:true,
-        midFunctionPreemptionTier:'integer-cfg-fallback',
-        fullXboxThreadScheduler:false,
+        nativeXboxThreadRegistry:true,perThreadPpcContextSnapshots:true,perThreadCfgContinuation:true,sparseGuardedGuestStacks:true,
+        cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,productionSlicesPerBrowserYield:1,
+        preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',
+        pauseResume:true,fullXboxThreadScheduler:false,
       },
     };
   }
 
   return {
-    createThread:createThreadRecord,
-    inspectThread,
-    initializeThreadContext,
-    restoreThreadContext,
-    saveThreadContext,
-    runThreadSlice,
-    pumpOnce,
-    runLoop,
-    stop,
-    inspect,
-    session:ppc,
-    get running(){return running;},
-    get lastBlocker(){return lastBlocker;},
-    contract:inspect().contract,
+    createThread:createThreadRecord,inspectThread,initializeThreadContext,restoreThreadContext,saveThreadContext,
+    runThreadSlice,pumpOnce,runLoop,pause,resume,stop,inspect,session:ppc,
+    get running(){return running;},get paused(){return paused;},get lastBlocker(){return lastBlocker;},contract:inspect().contract,
   };
 }
 
 export function guestThreadSchedulerContract(){
   return {
-    nativeXboxThreadRegistry:true,
-    perThreadPpcContextSnapshots:true,
-    perThreadCfgContinuation:true,
-    sparseGuardedGuestStacks:true,
-    cooperativeRoundRobin:true,
-    generatedWasmExecution:true,
-    browserYieldBetweenPumps:true,
-    productionSlicesPerBrowserYield:1,
-    preemptionBoundary:'cfg-block-boundary-or-guest-function-return',
-    midFunctionPreemption:true,
-    midFunctionPreemptionTier:'integer-cfg-fallback',
-    fullXboxThreadScheduler:false,
+    nativeXboxThreadRegistry:true,perThreadPpcContextSnapshots:true,perThreadCfgContinuation:true,sparseGuardedGuestStacks:true,
+    cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,productionSlicesPerBrowserYield:1,
+    preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',
+    pauseResume:true,fullXboxThreadScheduler:false,
   };
 }

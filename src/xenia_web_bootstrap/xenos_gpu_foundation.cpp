@@ -169,6 +169,17 @@ ShaderCapture* ShaderForType(uint32_t shader_type) {
   return nullptr;
 }
 
+void ResetShaderCapture(ShaderCapture* shader) {
+  if (!shader) return;
+  // The payload buffer is intentionally not bulk-cleared on every reset.
+  // dword_count is authoritative, so old bytes are unreachable after this.
+  // Avoiding a large zero-assignment also keeps standalone wasm reset bounded.
+  shader->dword_count = 0;
+  shader->guest_address = 0;
+  shader->hash = 0;
+  shader->source = kShaderSourceNone;
+}
+
 bool CaptureShader(uint32_t shader_type, uint32_t guest_address,
                    const uint32_t* words, uint32_t dword_count,
                    uint32_t source) {
@@ -179,10 +190,6 @@ bool CaptureShader(uint32_t shader_type, uint32_t guest_address,
     return false;
   }
   std::memcpy(shader->words.data(), words, dword_count * sizeof(uint32_t));
-  if (dword_count < shader->words.size()) {
-    std::memset(shader->words.data() + dword_count, 0,
-                (shader->words.size() - dword_count) * sizeof(uint32_t));
-  }
   shader->dword_count = dword_count;
   shader->guest_address = guest_address;
   shader->hash = HashWords(words, dword_count);
@@ -198,17 +205,25 @@ bool CaptureShaderFromGuest(uint32_t shader_type, uint32_t guest_address,
                                                  : kStatusInvalid;
     return false;
   }
-  std::array<uint32_t, kShaderWordCapacity> words{};
+  ShaderCapture* shader = ShaderForType(shader_type);
+  if (!shader) {
+    g_status = kStatusInvalid;
+    return false;
+  }
   for (uint32_t i = 0; i < dword_count; ++i) {
     const uint64_t address = uint64_t(guest_address) + uint64_t(i) * 4u;
     if (address > 0xFFFFFFFCull ||
-        !ReadGuestWordBE(static_cast<uint32_t>(address), &words[i])) {
+        !ReadGuestWordBE(static_cast<uint32_t>(address), &shader->words[i])) {
       g_status = kStatusInvalid;
       return false;
     }
   }
-  return CaptureShader(shader_type, guest_address, words.data(), dword_count,
-                       kShaderSourceGuestMemory);
+  shader->dword_count = dword_count;
+  shader->guest_address = guest_address;
+  shader->hash = HashWords(shader->words.data(), dword_count);
+  shader->source = kShaderSourceGuestMemory;
+  ++g_shader_loads;
+  return true;
 }
 
 bool ExecuteDraw(uint32_t opcode, const uint32_t* payload, uint32_t count) {
@@ -608,8 +623,8 @@ void Reset() {
   g_regs.fill(0);
   g_ring.fill(0);
   g_frame.fill(0);
-  g_vertex_shader = {};
-  g_pixel_shader = {};
+  ResetShaderCapture(&g_vertex_shader);
+  ResetShaderCapture(&g_pixel_shader);
   ClearFrame(0x101018FFu);
   g_status = kStatusIdle;
   g_ring_words = g_packets = g_register_writes = g_draws = g_presents = 0;

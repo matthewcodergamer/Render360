@@ -22,6 +22,12 @@ bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count);
 bool ReadSparseGuestMemory(uint32_t virtual_address, void* out, uint32_t size);
 bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
                             uint32_t size);
+// Returns the contiguous readable+executable byte span beginning at
+// virtual_address, capped at max_size. This is a side-effect-free permission
+// query used by the bounded PPC code pager; data-only pages must never be
+// decoded as guest instructions.
+uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
+                                   uint32_t max_size);
 uint32_t SparseGuestMappedPageCount();
 uint32_t SparseGuestBackingPageCount();
 uint32_t SparseGuestLastFaultAddress();

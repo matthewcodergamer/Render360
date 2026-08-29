@@ -9,7 +9,7 @@ for obj in "${OBJECTS[@]}"; do [ -f "$obj" ] || { echo "MISSING object: $obj" >&
 EXPORTS=(
   _r360_ppc_context_size _r360_ppc_context_offset_gpr _r360_ppc_context_offset_fpr _r360_ppc_context_offset_vr _r360_ppc_context_offset_lr _r360_ppc_context_offset_ctr _r360_ppc_context_offset_reserved_val
   _r360_ppc_probe_assembled_functions _r360_ppc_probe_hir_block_count _r360_ppc_probe_hir_instruction_count _r360_ppc_probe_last_guest_address _r360_ppc_probe_correctness_status _r360_ppc_probe_correctness_instructions _r360_ppc_probe_correctness_r3
-  _r360_ppc_probe_reset _r360_ppc_probe_set_initial_gpr _r360_ppc_probe_write_guest_u32_be _r360_ppc_probe_read_guest_u32_be _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity _r360_ppc_probe_load _r360_ppc_probe_translate _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
+  _r360_ppc_probe_reset _r360_ppc_probe_set_initial_gpr _r360_ppc_probe_write_guest_u32_be _r360_ppc_probe_read_guest_u32_be _r360_ppc_probe_input_buffer _r360_ppc_probe_input_capacity _r360_ppc_probe_load _r360_ppc_probe_load_at _r360_ppc_probe_translate _r360_ppc_probe_status _r360_ppc_probe_guest_base _r360_ppc_probe_loaded_size
   _r360_wasm_backend_status _r360_wasm_backend_module_ptr _r360_wasm_backend_module_size _r360_wasm_backend_lowered_instructions _r360_wasm_backend_context_ptr
   _r360_wasm_backend_cfg_status _r360_wasm_backend_cfg_module_ptr _r360_wasm_backend_cfg_module_size _r360_wasm_backend_cfg_lowered_instructions _r360_wasm_backend_cfg_context_ptr
   _r360_wasm_backend_memory_status _r360_wasm_backend_memory_module_ptr _r360_wasm_backend_memory_module_size _r360_wasm_backend_memory_lowered_instructions _r360_wasm_backend_memory_context_ptr
@@ -25,6 +25,6 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 LINK_ARGS=(-O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -Wl,--error-limit=0 -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1 "-sEXPORTED_FUNCTIONS=$EXPORT_LIST")
 rm -f "$WASM" "$LOG" "$REPORT"
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
-  { echo "status=LINKED"; echo "wasm=$WASM"; echo "exports=${#EXPORTS[@]}"; echo "note=Real Xenia finalized HIR feeds the locked Hot WasmBackend and Sparse Xbox Memory foundations. V36 includes Xenia's upstream LZX/libmspack decoder plus Xenia's Rijndael AES implementation for genuine XEX session-key and CBC semantics in wasm32."; } | tee "$REPORT"; exit 0
+  { echo "status=LINKED"; echo "wasm=$WASM"; echo "exports=${#EXPORTS[@]}"; echo "note=Real Xenia finalized HIR feeds the locked Hot WasmBackend and Sparse Xbox Memory foundations. V36 includes Xenia's upstream LZX/libmspack decoder plus Xenia's Rijndael AES implementation for XEX session-key/CBC semantics, and permits the PPC probe to translate prepared code at a decoder-derived guest entry address."; } | tee "$REPORT"; exit 0
 fi
 { echo "status=BLOCKED"; echo "wasm=$WASM"; echo "note=Strict full-export runtime exposed a live dependency closure; unresolved symbols are intentionally not stubbed."; grep -E 'undefined symbol|wasm-ld: error|error: undefined' "$LOG" | head -n 500 || true; } | tee "$REPORT"; exit 1

@@ -4,7 +4,7 @@ const u64=(lo,hi)=>(hi>>>0)*0x100000000+(lo>>>0);
 
 function requireCore(core,names){for(const n of names)if(typeof core.exports[n]!=='function')throw new Error(`missing package-controller export ${n}`);}
 
-export async function handoffStfsPackage({core,bootstrap,packageBytes,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,maxRequests=4096}){
+export async function handoffStfsPackage({core,bootstrap,packageBytes,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,maxRequests=4096,implementedKernelExports={}}){
   const pkg=Buffer.from(packageBytes);
   if(!pkg.length||pkg.length>0xffffffff)throw new Error('STFS package size unsupported by current controller');
   const e=core.exports;
@@ -30,6 +30,6 @@ export async function handoffStfsPackage({core,bootstrap,packageBytes,encryptedS
   const xex=Buffer.alloc(total);
   while((e.r360_stfs_request_pending()>>>0)!==0){if(++requests>maxRequests)throw new Error('STFS extraction request guard exceeded');status=service(xex);}
   if(status!==2||(e.r360_stfs_extract_status()>>>0)!==2||(e.r360_stfs_extract_bytes_done()>>>0)!==total)throw new Error(`default.xex extraction failed status=${status} bytes=${e.r360_stfs_extract_bytes_done()>>>0}/${total}`);
-  const handoff=await handoffDefaultXex({core,bootstrap,defaultXex:xex,encryptedSecurityKey,useDevkitKey,entryBytes});
+  const handoff=await handoffDefaultXex({core,bootstrap,defaultXex:xex,encryptedSecurityKey,useDevkitKey,entryBytes,implementedKernelExports});
   return {...handoff,packageBytes:pkg.length,defaultXexBytes:total,stfsRequests:requests};
 }

@@ -94,6 +94,15 @@ uint32_t BeginPrepareNormalFrame(const uint8_t* staged_header,
                                  uint32_t file_length,
                                  ImageMetadata* metadata,
                                  PrepareState* state);
+// Same NORMAL framing semantics, but the XEX metadata must declare NORMAL
+// encryption and every chunk supplied to AcceptPrepareNormalFrameChunk must
+// already have passed through the verified XEX AES-CBC stream. This keeps the
+// encrypted route explicit rather than pretending encrypted metadata is NONE.
+uint32_t BeginPrepareNormalFrameAfterDecrypt(const uint8_t* staged_header,
+                                             uint32_t staged_length,
+                                             uint32_t file_length,
+                                             ImageMetadata* metadata,
+                                             PrepareState* state);
 uint32_t AcceptPrepareNormalFrameChunk(uint8_t* staged_chunk,
                                        uint32_t chunk_length,
                                        PrepareState* state);

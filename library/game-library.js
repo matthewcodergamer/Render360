@@ -37,44 +37,38 @@ export async function listGames(){
   const db=await openDatabase();
   const tx=db.transaction(GAME_STORE,'readonly');
   const games=await requestPromise(tx.objectStore(GAME_STORE).getAll());
-  await txDone(tx);
   return games.sort((a,b)=>(b.lastPlayed||b.importedAt||0)-(a.lastPlayed||a.importedAt||0));
 }
 
 export async function getGame(id){
   const db=await openDatabase();
   const tx=db.transaction(GAME_STORE,'readonly');
-  const game=await requestPromise(tx.objectStore(GAME_STORE).get(id));
-  await txDone(tx);
-  return game||null;
+  return (await requestPromise(tx.objectStore(GAME_STORE).get(id)))||null;
 }
 
 export async function putGame(game){
   if(!game?.id)throw new TypeError('GameRecord.id is required');
   const db=await openDatabase();
-  const tx=db.transaction(GAME_STORE,'readwrite');
+  const tx=db.transaction(GAME_STORE,'readwrite'),done=txDone(tx);
   tx.objectStore(GAME_STORE).put({...game,updatedAt:Date.now()});
-  await txDone(tx);
-  return game;
+  await done;return game;
 }
 
 export async function deleteGame(id){
+  const game=await getGame(id);
   const db=await openDatabase();
-  const tx=db.transaction([GAME_STORE,COVER_STORE],'readwrite');
-  const store=tx.objectStore(GAME_STORE);
-  const game=await requestPromise(store.get(id));
-  store.delete(id);
+  const tx=db.transaction([GAME_STORE,COVER_STORE],'readwrite'),done=txDone(tx);
+  tx.objectStore(GAME_STORE).delete(id);
   if(game?.coverKey)tx.objectStore(COVER_STORE).delete(game.coverKey);
-  await txDone(tx);
+  await done;
 }
 
 export async function putCover(blob,key=`cover-${makeGameId()}`){
   if(!(blob instanceof Blob))throw new TypeError('Cover artwork must be a Blob');
   const db=await openDatabase();
-  const tx=db.transaction(COVER_STORE,'readwrite');
+  const tx=db.transaction(COVER_STORE,'readwrite'),done=txDone(tx);
   tx.objectStore(COVER_STORE).put({key,blob,updatedAt:Date.now()});
-  await txDone(tx);
-  return key;
+  await done;return key;
 }
 
 export async function getCover(key){
@@ -82,16 +76,12 @@ export async function getCover(key){
   const db=await openDatabase();
   const tx=db.transaction(COVER_STORE,'readonly');
   const record=await requestPromise(tx.objectStore(COVER_STORE).get(key));
-  await txDone(tx);
   return record?.blob||null;
 }
 
 export async function markPlayed(id){
-  const game=await getGame(id);
-  if(!game)return null;
-  game.lastPlayed=Date.now();
-  await putGame(game);
-  return game;
+  const game=await getGame(id);if(!game)return null;
+  game.lastPlayed=Date.now();await putGame(game);return game;
 }
 
 export function sourceKindFromName(name=''){

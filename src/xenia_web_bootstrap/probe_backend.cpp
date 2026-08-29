@@ -21,13 +21,19 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/memory.h"
 
+extern "C" uint32_t r360_ppc_probe_guest_base();
+
 namespace render360::xenia_web {
 namespace {
 ProbeTelemetry g_probe_telemetry;
 ProbeBackend* g_probe_backend = nullptr;
-constexpr uint32_t kProbeGuestBase = 0x80000000u;
 constexpr uint32_t kProbeGuestSize = 64u * 1024u;
-constexpr uint32_t kProbeGuestEnd = 0x8000FFFCu;
+
+bool IsInActiveProbeWindow(uint32_t address) {
+  const uint32_t base = r360_ppc_probe_guest_base();
+  const uint64_t end = uint64_t(base) + kProbeGuestSize;
+  return address >= base && uint64_t(address) < end;
+}
 
 bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   // Registered kernel/XAM import thunks are resolved before the bounded probe
@@ -63,9 +69,10 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   }
   auto* frontend = g_probe_backend->processor()->frontend();
   if (!frontend) { std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n"); return false; }
-  std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X\n", address);
-  if (address < kProbeGuestBase || address > kProbeGuestEnd) {
-    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target outside probe window\n"); return false;
+  std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X active_base=0x%08X\n",
+               address, r360_ppc_probe_guest_base());
+  if (!IsInActiveProbeWindow(address)) {
+    std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target outside active probe window\n"); return false;
   }
   ProbeGuestFunction nested_function(module, address);
   xe::cpu::ppc::PPCScanner scanner(frontend);
@@ -117,10 +124,11 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
     g_probe_telemetry.last_guest_address = function ? function->address() : 0;
     BuildWasmBackendProbe(builder);
     BuildWasmBackendCfgProbe(builder);
-    uint8_t* guest_host_base = memory ? memory->TranslateVirtual<uint8_t*>(kProbeGuestBase) : nullptr;
-    BuildWasmBackendMemoryProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
-    BuildWasmBackendFpuProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
-    BuildWasmBackendVmxProbe(builder, guest_host_base, kProbeGuestBase, kProbeGuestSize);
+    const uint32_t active_base = r360_ppc_probe_guest_base();
+    uint8_t* guest_host_base = memory ? memory->TranslateVirtual<uint8_t*>(active_base) : nullptr;
+    BuildWasmBackendMemoryProbe(builder, guest_host_base, active_base, kProbeGuestSize);
+    BuildWasmBackendFpuProbe(builder, guest_host_base, active_base, kProbeGuestSize);
+    BuildWasmBackendVmxProbe(builder, guest_host_base, active_base, kProbeGuestSize);
 
     std::fprintf(stderr, "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n", GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(), GetWasmBackendProbeLoweredInstructions());
     std::fprintf(stderr, "R360_WASM_BACKEND_CFG status=%u module_bytes=%u lowered=%u\n", GetWasmBackendCfgProbeStatus(), GetWasmBackendCfgProbeModuleSize(), GetWasmBackendCfgProbeLoweredInstructions());

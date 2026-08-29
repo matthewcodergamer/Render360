@@ -21,7 +21,8 @@ const required = [
   'r360_xex_guest_mapper_finalize','r360_xex_guest_mapper_status',
   'r360_xex_guest_mapper_entry_address','r360_xex_guest_mapper_section_count',
   'r360_xex_guest_mapper_mapped_bytes','r360_xex_guest_mapper_input_buffer',
-  'r360_xex_guest_mapper_input_capacity','r360_sparse_guest_memory_read_u8',
+  'r360_xex_guest_mapper_input_capacity','r360_xex_guest_mapper_reserve_input',
+  'r360_xex_guest_mapper_input_max_capacity','r360_sparse_guest_memory_read_u8',
   'r360_sparse_guest_memory_write_u8','r360_sparse_guest_memory_last_fault_code'
 ];
 for (const n of required) if (typeof pick(n) !== 'function') throw new Error(`Missing XEX mapper export ${n}`);
@@ -30,9 +31,29 @@ const R=1,W=2,X=4;
 const ok=(v,msg)=>{ if ((v>>>0)!==1) throw new Error(msg); };
 const no=(v,msg)=>{ if ((v>>>0)!==0) throw new Error(msg); };
 const eq=(a,b,msg)=>{ if ((a>>>0)!==(b>>>0)) throw new Error(`${msg}: got 0x${(a>>>0).toString(16)}, expected 0x${(b>>>0).toString(16)}`); };
-const input=pick('r360_xex_guest_mapper_input_buffer')()>>>0;
-const capacity=pick('r360_xex_guest_mapper_input_capacity')()>>>0;
+let input=pick('r360_xex_guest_mapper_input_buffer')()>>>0;
+let capacity=pick('r360_xex_guest_mapper_input_capacity')()>>>0;
 if (!input || capacity < 16) throw new Error('XEX mapper staging buffer unavailable');
+
+// Regression for the first real Braid package blocker seen on iPhone: the
+// prepared PE is 11 MiB while the old fixed staging array was only 64 KiB.
+// Reserve must grow lazily, may grow WebAssembly.Memory, and callers must be
+// able to reacquire a potentially moved native pointer afterward.
+const braidPreparedBytes=11*1024*1024;
+const initialCapacity=capacity;
+const initialMemoryBytes=instance.exports.memory.buffer.byteLength;
+ok(pick('r360_xex_guest_mapper_reserve_input')(braidPreparedBytes),'reserve Braid-sized prepared PE staging');
+input=pick('r360_xex_guest_mapper_input_buffer')()>>>0;
+capacity=pick('r360_xex_guest_mapper_input_capacity')()>>>0;
+const maxCapacity=pick('r360_xex_guest_mapper_input_max_capacity')()>>>0;
+if(!input||capacity<braidPreparedBytes)throw new Error(`Braid PE staging did not grow: ${capacity}/${braidPreparedBytes}`);
+if(maxCapacity<256*1024*1024)throw new Error(`PE staging ceiling drifted below title bound: ${maxCapacity}`);
+const stageView=new Uint8Array(instance.exports.memory.buffer,input,braidPreparedBytes);
+stageView[0]=0x58;stageView[braidPreparedBytes-1]=0x45;
+if(stageView[0]!==0x58||stageView[braidPreparedBytes-1]!==0x45)throw new Error('grown PE staging is not writable end to end');
+pick('r360_xex_guest_mapper_reset')();
+if((pick('r360_xex_guest_mapper_input_capacity')()>>>0)!==capacity)throw new Error('mapper reset unexpectedly shrank prepared PE staging');
+console.log(`XEX_PE_STAGING_GROWTH=PASS initial=${initialCapacity} grown=${capacity} memory=${initialMemoryBytes}->${instance.exports.memory.buffer.byteLength}`);
 
 // Realistic Xbox 360 user image addresses: separate RX, R, and RW regions.
 pick('r360_xex_guest_mapper_reset')();

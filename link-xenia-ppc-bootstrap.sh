@@ -30,7 +30,10 @@ EXPORTS=(
   _r360_xex_crypto_buffer _r360_xex_crypto_capacity _r360_xex_crypto_status _r360_xex_crypto_bytes_done _r360_xex_crypto_reset _r360_xex_crypto_begin_session _r360_xex_crypto_decrypt_chunk
 )
 EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
-LINK_ARGS=(-O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -Wl,--error-limit=0 -sINITIAL_MEMORY=33554432 -sALLOW_MEMORY_GROWTH=1 "-sEXPORTED_FUNCTIONS=$EXPORT_LIST")
+# Xenos ExecuteBuffer has bounded nested command/constant scratch frames. Give
+# wasm32 an explicit 2 MiB stack so those frames cannot overwrite the sparse
+# guest-memory allocator while the source is being moved to static scratch.
+LINK_ARGS=(-O0 -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -Wl,--error-limit=0 -sINITIAL_MEMORY=33554432 -sSTACK_SIZE=2097152 -sALLOW_MEMORY_GROWTH=1 "-sEXPORTED_FUNCTIONS=$EXPORT_LIST")
 rm -f "$WASM" "$LOG" "$REPORT"
 if "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   { echo "status=LINKED"; echo "wasm=$WASM"; echo "exports=${#EXPORTS[@]}"; echo "note=Real Xenia finalized HIR feeds the locked Hot WasmBackend, Sparse Xbox Memory, kernel/runtime, real-title Xenos ring telemetry and bounded Xenos first-frame foundations in the same strict wasm bootstrap."; } | tee "$REPORT"; exit 0

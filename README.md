@@ -13,12 +13,14 @@ DISC / PACKAGE INPUT                         VERIFIED FOUNDATION
 RETAIL XEX PREP + PE MAPPING                VERIFIED FOUNDATION
 XENIA PPC/HIR + SPARSE GUEST MEMORY         VERIFIED FOUNDATION
 KERNEL / XAM IMPORT EXECUTION               VERIFIED FOUNDATION
+PERSISTENT PPC CONTEXT + FUNCTION SLICES    CI-PROVEN FOUNDATION
+MID-FUNCTION YIELD / XBOX THREAD SCHEDULER  NOT YET VERIFIED
 REAL TITLE RING + CP_RB_WPTR CONSUMPTION    CI-PROVEN FOUNDATION
 VdSwap -> REAL RING -> XE_SWAP               CI-PROVEN FOUNDATION
 TITLE SHADER / TEXTURE / RESOURCE CAPTURE   CI-PROVEN FOUNDATION
 UPSTREAM XENIA SHADER INTERPRETER           CI-PROVEN FOUNDATION
 XENIA XENOS -> SPIR-V                       CI-PROVEN FOUNDATION
-SPIR-V -> NAGA -> WGSL                      CI-PROVEN FOUNDATION
+SPIR-V -> NAGA -> WGSL                      CI-PROVEN + PUBLISHED
 WGSL -> WEBGPU SHADER MODULE                BROWSER-INTEGRATED / DEVICE-RUNTIME
 REAL VdSwap FRONTBUFFER SNAPSHOT             CI-PROVEN FOUNDATION
 TITLE-PRODUCED RASTER / EDRAM RESOLVE       GENERAL-TITLE PATH REMAINING
@@ -28,7 +30,9 @@ COMMERCIAL GAMEPLAY                         NOT YET VERIFIED
 
 There is intentionally no new overall percentage here. A browser emulator can have many individually complete foundations while still be blocked from commercial gameplay by one missing execution or rendering boundary. Render360 reports those boundaries directly.
 
-The shader acceleration status above is based on the fresh one-binding Xenia bootstrap, not the earlier Vulkan-shaped artifact that Naga rejected. Xenia Run `33255990207` built source commit `870bcd31f26cf8491f9b208a3a4d2ab7e3df5fba`, and the corresponding converter verification in Run `33256148726` reported:
+The old Naga `InvalidArrayBaseType` blocker is closed. The browser Xenia SPIR-V profile now exposes one logical shared-memory storage binding instead of the Vulkan-oriented array of unsized storage-buffer structs. The currently published converter metadata points to strict Xenia Run `33256702361`, source commit `f9f47a4643824beb9cf674706f5dea44daae5f0d`, and the chained `SPIR-V WGSL Browser Converter` Run `33256916644` completed successfully and published the verified Naga converter.
+
+The end-to-end semantic gate requires:
 
 ```text
 XENOS_VERTEX_SPIRV_TO_WGSL=PASS
@@ -37,7 +41,7 @@ XENOS_NAGA_WGSL_VALIDATED=PASS
 XENOS_WEBGPU_SHADER_TRANSLATION_PATH=PASS
 ```
 
-That converter run's original publication step lost a concurrent `main` push after the semantic gate passed. The publisher has since been hardened to retain the verified artifact first, reject stale source/runtime publication, and retry generated-artifact-only races.
+The generated converter publication is provenance-checked so a stale Xenia runtime cannot silently overwrite a newer source state.
 
 ## What is real today
 
@@ -67,7 +71,22 @@ Render360 uses Xenia's PPC scanner/HIR frontend rather than treating two staged 
 
 High 32-bit Xbox guest pointers are zero-extended in the relocated browser HLE path. This matters on PPC64: constructing addresses such as `0x9100FF00` with a sign-extending `lis` produces an invalid `0xFFFFFFFF9100FF00` host-side value. The browser HLE shims now build those addresses from zero with `oris` / `ori`.
 
-The remaining CPU-side playability boundary is **sustained/resumable title scheduling**, not basic PPC translation. The correctness executor already carries a real `PPCContext` through nested translated calls, and the Hot WasmBackend cache already exposes per-function callable Wasm modules, a shared PPC context and executable-page generations. Those pieces still need to be unified into the long-running title VM used by gameplay rather than relying on one-shot entry/correctness execution.
+Render360 now also has a browser-side **persistent Xenia PPC function session** built on the existing generated-Wasm call cache rather than a second interpreter. `render360-browser-ppc-session.mjs` keeps the same real Xenia `PPCContext` across separate browser slices, compiles the per-function modules already emitted by the Hot WasmBackend path, refreshes them when executable-page generations change, routes synchronous nested `guest_call` targets through the same context and fails closed on unknown targets.
+
+`Persistent PPC Browser Session` Run `33257247035` proves more than pointer existence. Its adversarial test:
+
+```text
+r3 = 5
+addi r3,r3,1 ; blr   -> r3 = 6
+same live context     -> r3 = 7
+replace executable with addi r3,r3,2 ; blr
+new page generation   -> r3 = 9
+unknown guest target  -> FAIL CLOSED
+```
+
+The browser may cooperatively yield between completed generated guest functions without losing architectural state. The modern ISO bridge retains this as `render360ModernTitle.ppcSession` / `persistentCpu` for explicit continuation and inspection. It intentionally does **not** blindly execute `default.xex` again after the one-shot handoff.
+
+This is not yet a complete Xbox title scheduler. The remaining CPU-side playability boundary is **mid-function continuation plus kernel wait/yield semantics and runnable Xbox thread scheduling**. Current safe preemption is at a completed guest-function return; long guest loops and blocking kernel calls still need a continuation-aware scheduler before Render360 can call the title VM continuously scheduled.
 
 ### Real Xenos ring path
 
@@ -154,7 +173,7 @@ captured Xenos vertex / pixel microcode
 
 `test-xenos-spirv-translation.mjs` requires both captured vertex and pixel Xenos shaders to produce real SPIR-V and verifies invalid input fails closed.
 
-For the WebGPU target, `prepare-xenia-spirv-browser-overlay.py` keeps Xenia's guest shared-memory arithmetic but advertises one **logical 512 MiB storage binding** during translation. Xenia's conservative 128 MiB Vulkan limit otherwise creates four descriptor bindings represented as an array of storage-buffer structs ending in runtime arrays. That descriptor shape is legal for the Vulkan backend but is not representable in WGSL; Naga correctly rejected it as `InvalidArrayBaseType`. The browser host still pages/uploads only title ranges that are actually needed—it does not allocate a literal 512 MiB iPhone GPU buffer just because the shader's logical address space spans Xbox shared memory.
+For the WebGPU target, `prepare-xenia-spirv-browser-overlay.py` keeps Xenia's guest shared-memory arithmetic but advertises one **logical 512 MiB storage binding** during translation. Xenia's conservative 128 MiB Vulkan limit otherwise creates four descriptor bindings represented as an array of storage-buffer structs ending in runtime arrays. That descriptor shape is legal for the Vulkan backend but is not representable in WGSL; Naga correctly rejected it as `InvalidArrayBaseType`. The browser host still pages/uploads only title ranges that are actually needed—it does not allocate a literal 512 MiB device buffer just because the shader's logical address space spans Xbox shared memory.
 
 ### Naga browser converter
 
@@ -166,13 +185,13 @@ For the WebGPU target, `prepare-xenia-spirv-browser-overlay.py` keeps Xenia's gu
 4. emits non-empty WGSL;
 5. returns full nested validation diagnostics instead of weakening validation or inventing output.
 
-`build-spirv-wgsl.sh` produces a browser `wasm-bindgen` module. `SPIR-V WGSL Browser Converter` CI builds it only against a verified Xenia bootstrap, runs Xenos -> SPIR-V -> WGSL end to end, uploads the verified converter artifact before publication, and only publishes when source provenance is still safe.
+`build-spirv-wgsl.sh` produces a browser `wasm-bindgen` module. `SPIR-V WGSL Browser Converter` CI builds it only against a verified Xenia bootstrap, runs Xenos -> SPIR-V -> WGSL end to end, uploads the verified converter artifact before publication, and only publishes when source provenance is still safe. Run `33256916644` is green and the root `render360_spirv_wgsl.meta.json` records its verified source Xenia Run `33256702361`.
 
 ### Browser WebGPU shader validation
 
 `render360-webgpu-title-shaders.mjs` takes a captured title shader through Xenia SPIR-V and Naga WGSL, passes the source to `GPUDevice.createShaderModule`, inspects WebGPU compilation messages and caches successful modules by Xenos shader identity.
 
-`render360-browser-modern-iso-bridge.mjs` now invokes that validator automatically when the real ISO path has captured and translated both title shader stages. The result is surfaced as `render360ModernTitle.shaderWebGPU` and in the live blocker/status text. A missing browser WebGPU implementation or converter remains an explicit blocker rather than causing a fake success.
+`render360-browser-modern-iso-bridge.mjs` invokes that validator automatically when the real ISO path has captured and translated both title shader stages. The result is surfaced as `render360ModernTitle.shaderWebGPU` and in the live blocker/status text. A missing browser WebGPU implementation or converter remains an explicit blocker rather than causing a fake success.
 
 A successfully translated or compiled shader **does not count as a frame**. The first-commercial-frame gate still requires title-produced pixels.
 
@@ -199,9 +218,9 @@ Neither route may fall back to the bounded triangle when claiming a commercial f
 
 Render360 does not promote a subsystem because code exists. A bounded contract is considered closed only when its implementation and regression/critic gates are green.
 
-The full `Xenia WASM32 Bootstrap` gate covers package/XEX preparation, LZX/AES, PE mapping, PPC/HIR, kernel imports/services, guest runtime, sparse memory, Xenos PM4, title shader/resources, shader interpreter, Xenia SPIR-V, the real-frontbuffer snapshot critic, EDRAM/frame foundations, title ring/MMIO and captured ring submission. Run `33255990207` is the first verified Xenia bootstrap built from the one-logical-shared-memory-binding source commit used by the green Naga semantic gate.
+The full `Xenia WASM32 Bootstrap` gate covers package/XEX preparation, LZX/AES, PE mapping, PPC/HIR, kernel imports/services, guest runtime, sparse memory, Xenos PM4, title shader/resources, shader interpreter, Xenia SPIR-V, the real-frontbuffer snapshot critic, EDRAM/frame foundations, title ring/MMIO and captured ring submission. The currently published Naga converter is tied to strict Xenia Run `33256702361` and source commit `f9f47a4643824beb9cf674706f5dea44daae5f0d`.
 
-The dedicated `Extracted XEX GPU Traffic Bridge` gate isolates the title-to-GPU path. The `SPIR-V WGSL Browser Converter` gate is responsible for the accelerated shader format bridge and retains its verified artifact even if publication is rejected as stale or races with another generated artifact commit.
+The dedicated `Extracted XEX GPU Traffic Bridge` gate isolates the title-to-GPU path. `SPIR-V WGSL Browser Converter` Run `33256916644` verifies and publishes the accelerated shader format bridge. `Persistent PPC Browser Session` Run `33257247035` separately proves live PPC architectural state across browser function slices, executable-generation refresh, and fail-closed unknown targets.
 
 Strict Wasm linking uses `ERROR_ON_UNDEFINED_SYMBOLS=1`. Missing Xenia shader semantics are added from the real pinned upstream source; they are not hidden with success stubs.
 
@@ -209,10 +228,13 @@ Strict Wasm linking uses `ERROR_ON_UNDEFINED_SYMBOLS=1`. Missing Xenia shader se
 
 - `render360-xdvdfs.mjs` — browser-native XDVDFS virtual disc reader.
 - `render360-iso-title-controller.mjs` — ISO -> retail XEX title handoff.
-- `render360-browser-title-runtime.mjs` — modern bootstrap loader and browser title runtime.
-- `render360-browser-modern-iso-bridge.mjs` — public ISO UI integration, WebGPU shader validation and exact blocker reporting.
+- `render360-browser-title-runtime.mjs` — modern bootstrap loader, runtime export validation and persistent PPC session factory.
+- `render360-browser-ppc-session.mjs` — persistent Xenia `PPCContext`, generation-aware generated-Wasm registry and function-boundary browser slices.
+- `test-persistent-ppc-session.mjs` — adversarial persistence / generation / fail-closed CPU gate.
+- `render360-browser-modern-iso-bridge.mjs` — public ISO UI integration, persistent CPU session exposure, WebGPU shader validation and exact blocker reporting.
 - `render360-browser-title-hle.mjs` — relocated browser HLE fallback shims.
 - `src/xenia_web_bootstrap/ppc_translation_probe.cpp` — Xenia PPC/scanned code-window bridge.
+- `src/xenia_web_bootstrap/wasm_backend_call_probe.cpp` — generated per-function Wasm modules, shared Xenia context and executable generations.
 - `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — sparse Xbox guest memory.
 - `src/xenia_web_bootstrap/kernel_import_probe.cpp` — real imported-thunk/kernel boundary.
 - `src/xenia_web_bootstrap/title_gpu_runtime.cpp` — native title ring/MMIO and `VdSwap` services.
@@ -247,17 +269,19 @@ Audio, save/storage, networking and title-specific compatibility may still affec
 
 ## Near-term engineering order
 
-The shader-format bridge and resolved-frontbuffer critic are no longer the lead blockers. The order to reach a first playable title is now:
+The shader-format bridge, resolved-frontbuffer critic and persistent function-boundary PPC context are no longer the lead blockers. The order to reach a first playable title is now:
 
 ```text
 1. run a small lawfully obtained commercial title/ISO through the modern browser path
 2. capture the first exact CPU/kernel/PM4/resource blocker from that real title
-3. make title execution sustained/resumable instead of one-shot entry execution
-4. use the CI-proven VdSwap frontbuffer fast path whenever the title supplies it
-5. otherwise bind real title vertex/index/constants/textures into WebGPU draws
-6. expand EDRAM render-target/resolve/depth/blend behavior from exact title blockers
-7. sustain repeated frames, input and timing through menu/gameplay
-8. add audio/save/title-specific services as the game reaches them
+3. add mid-function continuation points for long guest loops and blocking kernel calls
+4. schedule runnable Xbox guest threads across cooperative browser time slices
+5. keep CP_RB_WPTR / PM4 consumption advancing as those threads resume
+6. use the CI-proven VdSwap frontbuffer fast path whenever the title supplies it
+7. otherwise bind real title vertex/index/constants/textures into WebGPU draws
+8. expand EDRAM render-target/resolve/depth/blend behavior from exact title blockers
+9. sustain repeated frames, input and timing through menu/gameplay
+10. add audio/save/title-specific services as the game reaches them
 ```
 
 The game itself is the final compatibility test. Synthetic fixtures stay useful for regression coverage, but they cannot promote `FIRST COMMERCIAL-TITLE FRAME` or `COMMERCIAL GAMEPLAY`.

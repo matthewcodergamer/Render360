@@ -28,6 +28,17 @@ function playBadge(){
   return badge;
 }
 
+function neutralizeNativeCoverGesture(img){
+  if(!(img instanceof HTMLImageElement))return;
+  img.draggable=false;
+  img.setAttribute('draggable','false');
+  img.setAttribute('aria-hidden','true');
+  img.style.webkitTouchCallout='none';
+  img.style.webkitUserSelect='none';
+  img.style.userSelect='none';
+  img.style.pointerEvents='none';
+}
+
 function applyCachedCover(tile){
   const url=coverUrls.get(tile.dataset.gameId);
   if(!url)return;
@@ -35,12 +46,14 @@ function applyCachedCover(tile){
   shell.querySelector('.cover-placeholder')?.remove();
   let img=shell.querySelector('img');
   if(!img){img=document.createElement('img');img.alt=`${tile.querySelector('.game-tile-title')?.textContent||'Xbox 360 game'} cover`;shell.prepend(img);}
+  neutralizeNativeCoverGesture(img);
   if(img.src!==url)img.src=url;
 }
 
 function decorateTile(tile){
   if(!(tile instanceof HTMLElement))return;
   const shell=tile.querySelector('.cover-shell');if(!shell)return;
+  shell.querySelectorAll('img').forEach(neutralizeNativeCoverGesture);
   if(!shell.querySelector('.tile-play-badge'))shell.appendChild(playBadge());
   if(!tile.querySelector('.game-tile-hint')){
     const hint=document.createElement('span');hint.className='game-tile-hint';hint.textContent='Tap to play · hold for details';tile.appendChild(hint);
@@ -75,10 +88,10 @@ async function hydrateMissingArtwork(){
         game.coverSource=resolved.source||'network';
         await putGame(game);
         applyCoverToVisible(game,resolved.blob);
-        console.log(`[Render360 V42] Artwork cached for ${game.name} from ${game.coverSource}`);
-      }catch(error){console.warn(`[Render360 V42] Artwork lookup failed for ${game.name}: ${error.message}`);}
+        console.log(`[Render360 V43] Artwork cached for ${game.name} from ${game.coverSource}`);
+      }catch(error){console.warn(`[Render360 V43] Artwork lookup failed for ${game.name}: ${error.message}`);}
     }
-  }catch(error){console.warn(`[Render360 V42] Artwork backfill unavailable: ${error.message}`);}
+  }catch(error){console.warn(`[Render360 V43] Artwork backfill unavailable: ${error.message}`);}
   finally{artworkHydrationRunning=false;}
 }
 
@@ -101,6 +114,11 @@ function clearHoldTimer(state){if(state?.timer){clearTimeout(state.timer);state.
 
 function bindLibraryLaunchGestures(){
   const grid=$('gameGrid');if(!grid)return;
+
+  // Never hand an app-owned cover gesture to Safari's image preview / Live Text /
+  // Copy Subject stack. The tile itself remains the accessible pointer target.
+  grid.addEventListener('dragstart',event=>{if(event.target.closest?.('.game-tile'))event.preventDefault();},true);
+  grid.addEventListener('selectstart',event=>{if(event.target.closest?.('.game-tile'))event.preventDefault();},true);
 
   grid.addEventListener('pointerdown',event=>{
     const tile=event.target.closest?.('.game-tile');if(!tile)return;
@@ -139,23 +157,23 @@ function bindLibraryLaunchGestures(){
   },true);
 
   grid.addEventListener('contextmenu',event=>{
-    const tile=event.target.closest?.('.game-tile');if(!tile)return;event.preventDefault();
+    const tile=event.target.closest?.('.game-tile');if(!tile)return;event.preventDefault();event.stopPropagation();
     const state=holdState.get(tile)||{};clearHoldTimer(state);state.allowSyntheticDetails=true;state.blockTrustedUntil=Date.now()+500;holdState.set(tile,state);tile.click();
   },true);
 }
 
 function patchDiagnosticsRelease(){
-  setTimeout(()=>{const log=$('diagnosticsLog');if(log)log.textContent=log.textContent.replace('"release": 41','"release": 42');},0);
+  setTimeout(()=>{const log=$('diagnosticsLog');if(log)log.textContent=log.textContent.replace('"release": 41','"release": 43').replace('"release": 42','"release": 43');},0);
 }
 
-function bootV42Patch(){
+function bootV43Patch(){
   syncThemeChrome();
   new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   bindLibraryLaunchGestures();decorateTiles();
   const grid=$('gameGrid');if(grid)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(grid,{childList:true,subtree:true});
   $('diagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);$('appDiagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);
   setTimeout(hydrateMissingArtwork,450);
-  console.log('[Render360 V42] Direct-play library, hold-for-details, x360db artwork backfill, and iOS theme chrome active');
+  console.log('[Render360 V43] Direct-play library, app-owned hold-for-details, x360db artwork backfill, and iOS theme chrome active');
 }
 
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootV42Patch,{once:true});else bootV42Patch();
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootV43Patch,{once:true});else bootV43Patch();

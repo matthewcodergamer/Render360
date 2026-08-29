@@ -30,4 +30,4 @@ if(
 ) throw new Error(`runtime blocker was not surfaced exactly ${JSON.stringify(blocked)}`);
 console.log('ENTRY_RUNTIME_UNRESOLVED_CALL_BOUNDARY=PASS');
 console.log('FIRST_RUNTIME_BLOCKER_TELEMETRY=PASS');
-// Bootstrap rebuild trigger: endian-aware guest LOAD/STORE is now part of the native HIR path.
+// Bootstrap rebuild trigger: endian-aware guest LOAD/STORE plus constant-time sparse guest writes.

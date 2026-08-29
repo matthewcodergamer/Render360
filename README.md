@@ -8,27 +8,34 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-██████████░░░░░░░░░░  ~50%
+██████████░░░░░░░░░░  ~52%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, sparse memory, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff, controlled entry execution, XEX import discovery and the first automatic kernel-execution bridge are now closed CI contracts. Full xboxkrnl/XAM service coverage, guest threads/TLS, Xenos, EDRAM, WebGPU presentation and title compatibility remain major implementation work.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, sparse memory, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff, controlled entry execution, XEX import discovery, the automatic kernel-execution bridge, and the minimum PPC↔kernel ABI contract are now closed CI contracts. Real xboxkrnl/XAM service coverage, guest threads/TLS, Xenos, EDRAM, WebGPU presentation and title compatibility remain major implementation work.
 
 ## Latest authoritative gate
 
-**Run 369 — Actions ID `33232933395` — SUCCESS**
+**Run 373 — Actions ID `33235084799` — SUCCESS**
 
-Aggregate commit: `2c190baaa129b97f66ddfcbf6a4b4e3c75d8f8ed`
+Aggregate commit: `2a860d2aacc0e21a1d9fcda39d46d8df99c79e8a`
 
-Run 369 closes the **kernel execution foundation** for the controlled bring-up path. The aggregate gate proves that XEX import records are decoded through real PE RVA mapping, paired into function descriptors/thunks, registered automatically with the Wasm kernel bridge, and reached from translated PPC execution.
+Run 373 closes the **minimum kernel ABI contract** under an independent harsh critic. The implementation is not allowed to grade itself: a separate `test-kernel-abi-critic.mjs` adversarial gate must pass before promotion, and the complete locked regression matrix must remain green.
 
-The kernel critic proves both sides:
+The critic proves all of the following through the live PPC/HIR execution path:
 
-- a registered implemented kernel thunk returns through the PPC execution path and guest execution continues to a clean return;
-- an unimplemented kernel thunk stops fail-closed and reports the exact imported module, ordinal and thunk address instead of being mislabeled as a generic runtime failure.
+- PPC argument flow through `r3`/`r4` into the nested HLE service;
+- guest-visible memory mutation through the normal guest load/store path;
+- HLE return state flowing back through `r3`;
+- translated guest PPC continuing after the HLE return;
+- cross-boundary guest-pointer/range rejection;
+- 32-bit guest-address wraparound rejection;
+- recursive HLE-target rejection;
+- exact unsupported module/ordinal blocker telemetry;
+- no blanket-success behavior.
 
-Run 369 also replays the complete locked stack successfully: STFS/XEX, NONE/BASIC/NORMAL preparation, retail session-key/AES-CBC, upstream Xenia LZX, strict PE metadata, PE-to-guest mapping, prepared-entry handoff, one-call `default.xex`, one-call STFS package handoff, PPC/HIR, WasmBackend, SparseGuestMemory, runtime-boundary telemetry, PPC→kernel HLE dispatch and automatic XEX-import→kernel execution integration.
+Run 373 also replays the complete locked stack successfully: STFS/XEX, NONE/BASIC/NORMAL preparation, retail session-key/AES-CBC, upstream Xenia LZX, strict PE metadata, PE-to-guest mapping, prepared-entry handoff, one-call `default.xex`, one-call STFS package handoff, PPC/HIR, WasmBackend, SparseGuestMemory, runtime-boundary telemetry, PPC→kernel HLE dispatch and automatic XEX-import→kernel execution integration.
 
-This closes the bridge into kernel HLE. It does **not** mean every xboxkrnl/XAM API is implemented. The next work is the minimum real kernel ABI/service surface selected by the first genuine title blocker.
+This closes the ABI foundation. It does **not** mean every xboxkrnl/XAM API is implemented. The next work is the first real kernel service surface selected by genuine execution blockers, followed by guest runtime/thread/TLS requirements and then Xenos bring-up.
 
 ## Closed foundations and bring-up contracts
 
@@ -62,45 +69,55 @@ KERNEL IMPORT DESCRIPTOR / THUNK PAIRING         100% ✓
 PPC → KERNEL HLE DISPATCH BRIDGE                 100% ✓
 AUTOMATIC XEX IMPORT → KERNEL EXECUTION BRIDGE   100% ✓
 KERNEL EXECUTION FOUNDATION                      100% ✓
+MINIMUM PPC ↔ KERNEL ABI CONTRACT                100% ✓
+INDEPENDENT KERNEL ABI HARSH CRITIC              100% ✓
 ```
 
 These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility or complete xboxkrnl/XAM coverage.
 
-## What Run 369 proves
+## What Run 373 proves
 
 ```text
-STFS package / default.xex
+translated guest PPC
    ↓
-retail XEX preparation
+real PPCContext argument registers
    ↓
-strict PE decode + guest section mapping
+registered xboxkrnl / XAM HLE thunk
    ↓
-XEX import-library decode
+independent HLE ABI service body
    ↓
-guest VA → RVA → PE section → raw offset
+validated guest pointer/range
    ↓
-import descriptor / thunk pairing
+guest-visible memory read/write
    ↓
-automatic kernel-thunk registration
+r3 return ABI
    ↓
-PE-derived guest entry PC
+return to translated guest PPC
    ↓
-Xenia PPC scanner / frontend / finalized HIR
+continue execution
    ↓
-controlled execution
-   ├── implemented kernel thunk → return → continue guest execution
-   └── unimplemented kernel thunk → exact module + ordinal + thunk blocker
+next exact blocker
 ```
 
-The critics use controlled synthetic title content and fail-closed malformed/unbacked mapping cases. No broad success stub can satisfy the contract.
+The critic also deliberately supplies malformed boundary, wraparound, recursive-target and unsupported-import cases. A broad success stub cannot satisfy the gate.
 
 This is still controlled test content. It is **not yet a claim that a commercial title has booted**.
+
+## Critic promotion rule
+
+A subsystem is promoted to 100% only when:
+
+1. its implementation gate is green;
+2. an independent adversarial critic proves the exact contract and fail-closed cases;
+3. the complete locked regression matrix remains green.
+
+If any of those three conditions fail, the subsystem stays below 100% regardless of how good the happy path looks.
 
 ## Public progress board
 
 ```text
 OVERALL RENDER360
-██████████░░░░░░░░░░  ~50%  weighted engineering estimate
+██████████░░░░░░░░░░  ~52%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
@@ -122,9 +139,13 @@ XEX IMPORT LIBRARIES / KERNEL DEPENDENCY DISCOVERY
 ████████████████████  100% ✓
 KERNEL EXECUTION FOUNDATION
 ████████████████████  100% ✓
+MINIMUM PPC ↔ KERNEL ABI
+████████████████████  100% ✓
+INDEPENDENT ABI HARSH CRITIC
+████████████████████  100% ✓
 
-MINIMUM xboxkrnl / XAM ABI + SERVICES
-████░░░░░░░░░░░░░░░░  ← ACTIVE: implement only services reached by real execution
+REAL xboxkrnl / XAM SERVICES
+██░░░░░░░░░░░░░░░░░░  ← ACTIVE: implement only exports reached by genuine execution
 GUEST THREADS / TLS / RUNTIME
 ░░░░░░░░░░░░░░░░░░░░
 XENOS SEMANTIC LAYER
@@ -137,25 +158,25 @@ FIRST GENUINE GUEST FRAME
 ░░░░░░░░░░░░░░░░░░░░
 ```
 
-Partial bars are planning indicators only. A subsystem reaches 100% only when its exact aggregate critic is green.
+Partial bars are planning indicators only. A subsystem reaches 100% only when its implementation gate, independent critic and aggregate replay are all green.
 
-## Active implementation — minimum kernel ABI and first real services
+## Active implementation — first real kernel services
 
-The bridge is closed. The next controller path is:
+The ABI bridge is closed. The next controller path is:
 
 ```text
 user-supplied STFS / default.xex
   → decoded XEX import libraries
   → exact xboxkrnl.exe / xam.xex thunk + ordinal
   → translated guest PPC reaches kernel thunk
-  → dispatch through shared PPCContext
-  → execute the minimum implemented HLE service
-  → return ABI result to guest
-  → continue guest instructions
+  → validated arguments + guest pointers
+  → implement only that real HLE export
+  → return exact r3 / NTSTATUS / guest-visible state
+  → continue translated guest PPC
   → stop at the next exact missing dependency
 ```
 
-The immediate ABI contracts are integer return values/NTSTATUS through `r3`, argument passing through the PPC GPR ABI, guest pointer/range validation against sparse memory, and exact fail-closed handling for unsupported exports. After that, genuine title execution chooses the service order: thread/TLS, heap/virtual memory, filesystem, XAM startup, or whichever dependency appears first.
+Genuine execution chooses the service order: thread/TLS, heap/virtual memory, filesystem, XAM startup, synchronization, time, or whichever dependency appears first. Each newly promoted service layer should receive its own adversarial critic rather than relying only on a happy-path test.
 
 No copyrighted title binary belongs in this repository. Genuine-title testing consumes legally obtained runtime content supplied by the user.
 
@@ -163,11 +184,11 @@ No copyrighted title binary belongs in this repository. Genuine-title testing co
 
 ```text
 Guest PPC title execution
-  → minimum xboxkrnl/XAM services
+  → first real xboxkrnl/XAM services
   → guest threads / TLS / runtime
   → Xenos packets / ringbuffer
   → command processor
-  → shared Xenos semantics
+  → shared Xenos semantic layer
   → shaders / registers / resources
   → EDRAM / render targets
   → WebGPU + WGSL primary
@@ -190,6 +211,7 @@ A smaller homebrew/XBLA-class title remains the sensible first genuine bring-up 
 - `render360-kernel-imports.mjs` — import descriptor/thunk planning and kernel blocker identification.
 - `render360-title-controller.mjs` — one-call `default.xex` preparation, mapping, import registration and entry execution telemetry.
 - `render360-package-controller.mjs` — one-call STFS package extraction through title handoff.
+- `test-kernel-abi-critic.mjs` — independent adversarial judge for the minimum PPC↔kernel ABI contract.
 - `xenia_port/` — older port surface retained until migration is safe.
 - `docs/` — maintained project/release documentation.
 - `.github/workflows/` — aggregate regression gates.

@@ -1,4 +1,5 @@
-const KEY='render360.settings.v41';
+const KEY='render360.settings.v43';
+const LEGACY_KEYS=['render360.settings.v41'];
 
 const DEFAULTS=Object.freeze({
   appearance:'system',
@@ -15,9 +16,21 @@ const DEFAULTS=Object.freeze({
   developerMode:false,
 });
 
+function readJson(key){try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw):null;}catch{return null;}}
+
 export function loadAppSettings(){
-  try{const raw=localStorage.getItem(KEY);return raw?{...DEFAULTS,...JSON.parse(raw)}:{...DEFAULTS};}
-  catch{return {...DEFAULTS};}
+  try{
+    const current=readJson(KEY);if(current)return {...DEFAULTS,...current};
+    for(const legacyKey of LEGACY_KEYS){
+      const legacy=readJson(legacyKey);if(!legacy)continue;
+      // V43 ships the performance HUD as part of the normal player surface.
+      // A legacy hidden-HUD value should not make the new release look as if
+      // telemetry is missing; users may turn it off again after migration.
+      const migrated={...DEFAULTS,...legacy,performanceHud:true};
+      localStorage.setItem(KEY,JSON.stringify(migrated));return migrated;
+    }
+    return {...DEFAULTS};
+  }catch{return {...DEFAULTS};}
 }
 
 export function saveAppSettings(value){
@@ -26,7 +39,7 @@ export function saveAppSettings(value){
   return next;
 }
 
-export function resetAppSettings(){localStorage.removeItem(KEY);return {...DEFAULTS};}
+export function resetAppSettings(){localStorage.removeItem(KEY);for(const key of LEGACY_KEYS)localStorage.removeItem(key);return {...DEFAULTS};}
 export function appSettingDefaults(){return {...DEFAULTS};}
 
 export function resolveAppearance(appearance='system'){

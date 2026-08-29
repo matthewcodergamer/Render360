@@ -7,10 +7,12 @@ on:
       - 'render360-title-gpu-traffic.mjs'
       - 'render360-browser-title-hle.mjs'
       - 'test-browser-title-hle.mjs'
+      - 'test-title-gpu-runtime.mjs'
       - 'test-extracted-xex-gpu-traffic.mjs'
       - 'test-extracted-xex-gpu-traffic-critic.mjs'
       - 'render360-title-controller.mjs'
       - 'retail-xex-image-pipeline.mjs'
+      - 'prepare-title-runtime-memory-overlay.py'
       - 'src/xenia_web_bootstrap/**'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -38,7 +40,9 @@ jobs:
             -w /src \
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
-      - name: Verify relocated title HLE and real ring capture
+      - name: Verify real title ring MMIO and sparse guest memory bridge
+        run: node ./test-title-gpu-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify relocated title HLE fallback and ring capture
         run: node ./test-browser-title-hle.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify encrypted XEX pipeline produces Xenos traffic
         run: node ./test-extracted-xex-gpu-traffic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

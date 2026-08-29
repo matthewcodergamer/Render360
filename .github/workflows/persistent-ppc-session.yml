@@ -1,0 +1,26 @@
+name: Persistent PPC Browser Session
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-browser-ppc-session.mjs'
+      - 'test-persistent-ppc-session.mjs'
+      - 'xenia_ppc_bootstrap.wasm'
+      - '.github/workflows/persistent-ppc-session.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  persistent-ppc-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+      - name: Verify published Xenia bootstrap exists
+        run: test -s ./xenia_ppc_bootstrap.wasm
+      - name: Prove persistent PPCContext and generation-aware function slices
+        run: node ./test-persistent-ppc-session.mjs ./xenia_ppc_bootstrap.wasm

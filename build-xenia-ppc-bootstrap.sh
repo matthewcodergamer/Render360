@@ -19,14 +19,14 @@ LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then COMMON+=("-I$LLVM_INCLUDE"); echo "LLVM headers: $LLVM_INCLUDE"; fi
 SOURCES=(
   "third_party/fmt/src/format.cc"
-  "src/xenia/base/arena.cc" "src/xenia/base/cvar.cc" "src/xenia/base/utf8.cc" "src/xenia/base/filesystem_posix.cc" "src/xenia/base/memory_posix.cc" "src/xenia/base/mapped_memory_posix.cc" "src/xenia/base/mutex.cc" "src/xenia/base/string.cc" "src/xenia/base/string_buffer.cc"
+  "src/xenia/base/arena.cc" "src/xenia/base/cvar.cc" "src/xenia/base/utf8.cc" "src/xenia/base/filesystem_posix.cc" "src/xenia/base/memory.cc" "src/xenia/base/memory_posix.cc" "src/xenia/base/mapped_memory_posix.cc" "src/xenia/base/mutex.cc" "src/xenia/base/string.cc" "src/xenia/base/string_buffer.cc"
   "src/xenia/memory.cc" "src/xenia/cpu/cpu_flags.cc" "src/xenia/cpu/mmio_handler.cc" "src/xenia/cpu/entry_table.cc" "src/xenia/cpu/module.cc" "src/xenia/cpu/stack_walker_posix.cc" "src/xenia/cpu/thread_state.cc" "src/xenia/cpu/processor.cc" "src/xenia/cpu/lzx.cc"
   "src/xenia/cpu/backend/backend.cc" "src/xenia/cpu/backend/assembler.cc" "src/xenia/cpu/function.cc" "src/xenia/cpu/function_debug_info.cc"
   "src/xenia/cpu/hir/opcodes.cc" "src/xenia/cpu/hir/block.cc" "src/xenia/cpu/hir/instr.cc" "src/xenia/cpu/hir/value.cc" "src/xenia/cpu/hir/hir_builder.cc"
   "src/xenia/cpu/compiler/compiler.cc" "src/xenia/cpu/compiler/compiler_pass.cc"
   "src/xenia/cpu/compiler/passes/conditional_group_pass.cc" "src/xenia/cpu/compiler/passes/conditional_group_subpass.cc" "src/xenia/cpu/compiler/passes/constant_propagation_pass.cc" "src/xenia/cpu/compiler/passes/context_promotion_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_simplification_pass.cc" "src/xenia/cpu/compiler/passes/data_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/dead_code_elimination_pass.cc" "src/xenia/cpu/compiler/passes/finalization_pass.cc" "src/xenia/cpu/compiler/passes/memory_sequence_combination_pass.cc" "src/xenia/cpu/compiler/passes/register_allocation_pass.cc" "src/xenia/cpu/compiler/passes/simplification_pass.cc" "src/xenia/cpu/compiler/passes/validation_pass.cc" "src/xenia/cpu/compiler/passes/value_reduction_pass.cc"
   "src/xenia/cpu/ppc/ppc_context.cc" "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_lookup_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm.cc" "src/xenia/cpu/ppc/ppc_opcode_info.cc" "src/xenia/cpu/ppc/ppc_emit_alu.cc" "src/xenia/cpu/ppc/ppc_emit_control.cc" "src/xenia/cpu/ppc/ppc_emit_memory.cc" "src/xenia/cpu/ppc/ppc_emit_fpu.cc" "src/xenia/cpu/ppc/ppc_emit_altivec.cc" "src/xenia/cpu/ppc/ppc_scanner.cc" "src/xenia/cpu/ppc/ppc_hir_builder.cc" "src/xenia/cpu/ppc/ppc_translator.cc" "src/xenia/cpu/ppc/ppc_frontend.cc"
-  "src/xenia/gpu/register_file.cc" "src/xenia/gpu/ucode.cc" "src/xenia/gpu/shader.cc" "src/xenia/gpu/shader_interpreter.cc"
+  "src/xenia/gpu/register_file.cc" "src/xenia/gpu/ucode.cc" "src/xenia/gpu/shader.cc" "src/xenia/gpu/shader_translator.cc" "src/xenia/gpu/shader_interpreter.cc"
 )
 
 classify_failure() {

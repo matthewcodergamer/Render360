@@ -1,7 +1,7 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs';
-import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
-import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=43';
-import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=43';
+import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.1';
+import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs?v=44.1';
+import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=44.1';
+import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=44.1';
 installRender360Buffer();
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
@@ -43,7 +43,7 @@ export function validateBrowserBootstrap(instance){
   return {ok:true,exports:REQUIRED_BOOTSTRAP_EXPORTS.length,memoryBytes:instance.exports.memory.buffer.byteLength};
 }
 
-export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
+export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.1',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
   const response=await fetchImpl(url,{cache:'no-store'});
@@ -76,7 +76,7 @@ export async function createBrowserTitleThreadScheduler({bootstrap,session=null,
 
 export async function mountXboxIsoBrowser(file){
   if(!file||typeof file.slice!=='function'||!Number.isSafeInteger(Number(file.size)))throw new TypeError('Xbox ISO must be a browser File/Blob-like object');
-  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs');
+  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs?v=44.1');
   const volume=await mountXdvdfs(file);
   const node=await volume.stat('/default.xex');
   return {volume,defaultXex:node,layout:volume.layout,partitionOffset:volume.partitionOffset,telemetry:volume.telemetry};
@@ -96,7 +96,7 @@ export async function handoffXboxIsoBrowser({
   core,
   file,
   bootstrap=null,
-  bootstrapUrl='./xenia_ppc_bootstrap.wasm',
+  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.1',
   scanEntryFunction=true,
   productionThreadedExecution=true,
   primaryThreadContext=0,
@@ -106,14 +106,11 @@ export async function handoffXboxIsoBrowser({
 }){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
-  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs');
+  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs?v=44.1');
   const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
   const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
   if(!productionThreadedExecution)return {bootstrap:runtime,result};
 
-  // The compatibility tier has already executed the scanned Xenia HIR against
-  // the real mapped guest state. Do not overwrite that genuine boundary with
-  // the less informative "0 callable functions" scheduler error.
   if(result.compatibilityExecution?.used){
     const compatibility=result.compatibilityExecution;
     const completed=(result.executionStatus>>>0)===3;
@@ -177,7 +174,7 @@ export async function handoffXboxIsoBrowser({
 }
 
 export function browserTitleRuntimeContract(){return {
-  bootstrapUrl:'./xenia_ppc_bootstrap.wasm',
+  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.1',
   requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],
   input:'File/Blob XDVDFS ISO',
   wholeIsoCopy:false,

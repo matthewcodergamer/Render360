@@ -7,9 +7,12 @@ on:
       - 'xenia_ppc_bootstrap.meta.json'
       - 'render360-browser-title-runtime.mjs'
       - 'render360-browser-iso-hook.mjs'
+      - 'render360-browser-modern-iso-bridge.mjs'
+      - 'gpu-web.js'
       - 'render360-iso-title-controller.mjs'
       - 'render360-xdvdfs.mjs'
       - 'test-deployed-browser-bootstrap-critic.mjs'
+      - 'test-browser-modern-iso-bridge.mjs'
       - '.github/workflows/deployed-browser-bootstrap-critic.yml'
   workflow_dispatch:
 
@@ -27,3 +30,4 @@ jobs:
           node test-xdvdfs-virtual-mount.mjs
           node test-xdvdfs-virtual-mount-critic.mjs
           node test-browser-title-runtime.mjs
+          node test-browser-modern-iso-bridge.mjs

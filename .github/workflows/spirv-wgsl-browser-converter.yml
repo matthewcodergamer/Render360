@@ -67,7 +67,22 @@ jobs:
             exit 0
           fi
           git commit -m 'build: publish verified SPIR-V WGSL converter'
-          git push origin HEAD:main
+
+          # The Xenia bootstrap publisher and this converter are both triggered
+          # by the same successful Xenia run, so they may race to advance main.
+          # Rebase this generated-only commit onto the latest remote main and
+          # retry rather than failing a verified converter on a non-fast-forward.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Converter publish raced with another main update (attempt ${attempt}/3); retrying."
+            sleep $((attempt * 2))
+          done
+          echo 'Failed to publish verified converter after 3 race-safe retries.' >&2
+          exit 1
       - name: Upload converter artifact
         uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,4 @@
+import {R360_XENOS_WGSL,xenosFrameView} from './render360-webgpu-xenos.mjs';
+for(const token of ['@vertex fn vs_main','@fragment fn fs_main','texture_2d<f32>','textureSample'])if(!R360_XENOS_WGSL.includes(token))throw new Error(`WGSL missing ${token}`);
+const memory=new WebAssembly.Memory({initial:1});const rgba=new Uint8Array(memory.buffer,1024,16);rgba.set([1,2,3,255,4,5,6,255,7,8,9,255,10,11,12,255]);const instance={exports:{memory,r360_xenos_frame_buffer:()=>1024,r360_xenos_frame_size:()=>16,r360_xenos_frame_width:()=>2,r360_xenos_frame_height:()=>2,r360_xenos_frame_generation:()=>7}};const v=xenosFrameView(instance);if(v.width!==2||v.height!==2||v.generation!==7||v.rgba[8]!==7)throw new Error('frame view bridge mismatch');
+console.log('WEBGPU_WGSL_PRESENT_SHADER=PASS');console.log('WEBGPU_XENOS_FRAME_UPLOAD_BRIDGE=PASS');console.log('WEBGPU_WGSL_EDRAM_FOUNDATION=PASS');

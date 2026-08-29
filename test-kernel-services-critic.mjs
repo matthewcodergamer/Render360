@@ -1,0 +1,22 @@
+import fs from 'node:fs';
+import { WASI } from 'node:wasi';
+const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
+const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
+const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
+const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
+const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
+for(const n of ['r360_kernel_service_reset','r360_kernel_service_call','r360_kernel_service_status','r360_kernel_service_calls','r360_kernel_service_last_module','r360_kernel_service_last_ordinal','r360_kernel_runtime_reset','r360_guest_thread_create','r360_guest_thread_set_current'])if(typeof pick(n)!=='function')throw new Error(`missing service critic export ${n}`);
+const call=(m,o,...a)=>pick('r360_kernel_service_call')(m,o,...[...a,0,0,0,0,0,0,0,0].slice(0,8))>>>0;
+pick('r360_kernel_runtime_reset')();pick('r360_kernel_service_reset')();
+if(call(1,0x14A,'a'.charCodeAt(0))!=='A'.charCodeAt(0)||call(1,0x14A,'Z'.charCodeAt(0))!=='Z'.charCodeAt(0))throw new Error('RtlUpperChar mismatch');
+if(call(1,0x132,'Q'.charCodeAt(0))!=='q'.charCodeAt(0)||call(1,0x132,'7'.charCodeAt(0))!=='7'.charCodeAt(0))throw new Error('RtlLowerChar mismatch');
+if(call(1,0x83)!==50000000)throw new Error('KeQueryPerformanceFrequency mismatch');
+if(call(2,0x3CD)!==1)throw new Error('XGetLanguage mismatch');
+console.log('KERNEL_SERVICE_XENIA_ORDINALS=PASS');console.log('KERNEL_SERVICE_XBOXKRNL_SEMANTICS=PASS');console.log('KERNEL_SERVICE_XAM_SEMANTICS=PASS');
+const before=pick('r360_kernel_service_calls')()>>>0;if(call(1,0xFFFF)!==0||(pick('r360_kernel_service_status')()>>>0)!==2)throw new Error('unknown xboxkrnl export did not fail closed');if((pick('r360_kernel_service_calls')()>>>0)!==before+1)throw new Error('unsupported call telemetry missing');
+if(call(99,1)!==0||(pick('r360_kernel_service_status')()>>>0)!==2)throw new Error('unknown module did not fail closed');
+console.log('KERNEL_SERVICE_UNSUPPORTED_FAIL_CLOSED=PASS');
+// Prove real KeTls* service ordinals are backed by the guest runtime rather than constants.
+const t=pick('r360_guest_thread_create')(0x82000000,0x1234,0x4000,0)>>>0;if(!t||!(pick('r360_guest_thread_set_current')(t)>>>0))throw new Error('thread setup failed');
+const slot=call(1,0x152);if(slot===0xFFFFFFFF)throw new Error('KeTlsAlloc failed');if(call(1,0x155,slot,0xCAFEBABE)!==1)throw new Error('KeTlsSetValue failed');if(call(1,0x154,slot)!==0xCAFEBABE)throw new Error('KeTlsGetValue failed');if(call(1,0x153,slot)!==1)throw new Error('KeTlsFree failed');if(call(1,0x154,slot)!==0||(pick('r360_kernel_service_status')()>>>0)!==3)throw new Error('freed TLS slot did not fail closed');
+console.log('KERNEL_SERVICE_TLS_RUNTIME_INTEGRATION=PASS');console.log('KERNEL_SERVICES_HARSH_CRITIC=PASS');

@@ -14,7 +14,7 @@ Development order is implementation first, critic last:
 2. finish the implementation;
 3. pass its implementation tests;
 4. let a separate adversarial critic attack it;
-5. replay previously locked foundations;
+5. replay previously locked foundations where the aggregate stack is touched;
 6. only then promote the bounded contract to 100%.
 
 ## Verified closure ladder
@@ -43,9 +43,12 @@ Run 389  translated guest PPC → PM4 → Xenos → EDRAM frame + provenance cri
 WebGL2 Run 1  Xenos framebuffer → WebGL2 presentation + harsh critic
 Run 395  title-handoff startup-state support + full locked regression replay
 XEX GPU Traffic Run 10  encrypted XEX → relocated PPC PM4 → Xenos + harsh critic
+XDVDFS Title Input Run 6  virtual XISO/XGD mount → real default.xex + browser runtime
+Publish Browser Bootstrap Run 1  verified full bootstrap artifact → Pages/main
+Deployed Browser Bootstrap Critic Run 1  deployed-WASM hash/provenance/export closure
 ```
 
-Run 389 is Actions ID `33238490587` on aggregate commit `b5c540e7a5dd44eeca8cc3e277bd2a01a3f153ae`. WebGL2 Run 1 is Actions ID `33238538315` on `f1bbbd9acb9c0f74f191958628211ecec4fdcc13`. Run 395 is Actions ID `33239701901` on `31dca3ef29d7d7bb616377ee58b66eb908656876`. XEX GPU Traffic Run 10 is Actions ID `33239833760` on `a87495e4d6fe72660cf0d8287c30c8bfddd7dead`.
+Latest browser-title gates: XDVDFS Run 6 is Actions ID `33242096411`; Publish Browser Bootstrap Run 1 is `33242129180`; Deployed Browser Bootstrap Critic Run 1 is `33242318128`. The deployed bootstrap originates from full Xenia/WASM Run `33240071351`, source commit `1296c26eaabf85f0dd034321743c813626cc3a43`, and is provenance-checked before browser promotion.
 
 ## Closed V36 contracts
 
@@ -81,54 +84,47 @@ WEBGL2 XENOS FRAMEBUFFER FALLBACK                100% ✓
 INDEPENDENT WEBGL2 FALLBACK HARSH CRITIC         100% ✓
 ENCRYPTED XEX PIPELINE → XENOS TRAFFIC BRIDGE    100% ✓
 INDEPENDENT XEX→GPU TRAFFIC HARSH CRITIC         100% ✓
+XDVDFS VIRTUAL ISO INPUT                         100% ✓
+INDEPENDENT XDVDFS HARSH CRITIC                  100% ✓
+BROWSER TITLE RUNTIME / XEX SECURITY HANDOFF     100% ✓
+VERIFIED MODERN BOOTSTRAP DEPLOYMENT             100% ✓
+DEPLOYED BOOTSTRAP PROVENANCE/EXPORT CRITIC      100% ✓
 ```
 
 These are bounded contracts, not universal Xbox 360 compatibility claims.
 
-## Gate D3D — first genuine guest frame — CLOSED
-
-Translated PowerPC guest execution writes PM4 commands into guest memory, the Xenos parser consumes them, bounded raster semantics change circular EDRAM, and the resolved RGBA framebuffer receives a generation and hash. The independent provenance critic proves corrupt/truncated guest traffic cannot satisfy the frame gate.
-
-This is a genuine translated-guest-PPC-produced frame. It does **not** claim a commercial title has produced a frame.
-
-## Gate D3E — WebGL2 Xenos framebuffer fallback — CLOSED
-
-The fallback consumes the exact Xenos-resolved framebuffer already used by WebGPU, uploads only on generation changes, and fails closed on invalid state or unavailable WebGL2. It does not create a substitute framebuffer.
-
 ## Gate D4A0 — encrypted XEX title pipeline to Xenos traffic — CLOSED
 
-The new bounded bridge proves:
+A structurally valid encrypted retail-style XEX2 fixture reaches AES/session-key preparation, strict PE decode, relocated guest mapping, translated Xenia PPC/HIR, PPC-produced PM4 words, exact guest-memory provenance and the closed Xenos/EDRAM frame path. The fixture is **not a commercial game**.
+
+## Gate D4A1 — browser ISO / real title input — CLOSED
 
 ```text
-encrypted retail-style XEX2 fixture
+user-selected .iso File/Blob
         ↓
-AES/session-key image preparation
+XISO/XGD1/XGD2/XGD3 XDVDFS detection
         ↓
-strict PE decode + relocated guest mapping
+bounded directory reads
         ↓
-translated Xenia PPC/HIR entry
+real /default.xex discovery
         ↓
-startup GPR state at title handoff
+XEX2 encrypted image key from security-info + 0x150
         ↓
-PPC stores PM4 words into relocated guest memory
-        ↓
-exact word provenance + hash
-        ↓
-closed Xenos PM4 / EDRAM path
-        ↓
-draw + present + nonzero frame hash
+existing retail XEX / PE / PPC / kernel handoff
 ```
 
-The harsh critic independently checks corrupted primitive data, truncation, unsupported PM4 opcodes and wrapping guest ranges. All fail closed. Run 10 (`33239833760`) is green, and Run 395 (`33239701901`) proves the title-handoff implementation did not regress the locked Xenia/WASM stack.
+The ISO remains virtual; the browser does not copy a multi-gigabyte disc into Wasm. The harsh critic checks bounded reads, pointer/range corruption, exact `default.xex` provenance and no whole-image copy.
 
-This fixture is structurally valid and exercises the real encrypted XEX/PE/PPC pipeline, but it is **not a commercial game**.
+The modern `xenia_ppc_bootstrap.wasm` is now automatically published from a successful full Xenia/WASM artifact. A separate deployed-binary critic verifies SHA-256/size provenance and the required PPC/kernel/Xenos exports before this browser runtime contract is considered closed.
 
-## Gate D4A — genuine extracted title to real GPU traffic — ACTIVE
+## Gate D4B — genuine extracted title to real GPU traffic — ACTIVE
 
-This remains the primary milestone:
+This is now the primary milestone:
 
 ```text
-STFS / XDVDFS / default.xex from a genuine title
+real user-supplied ISO / STFS title
+        ↓
+virtual filesystem → genuine default.xex
         ↓
 retail XEX preparation + PE mapping
         ↓
@@ -136,67 +132,69 @@ Xenia PPC/HIR execution
         ↓
 real title kernel/runtime progress
         ↓
-actual title GPU MMIO / ringbuffer writes
+CAPTURE ACTUAL GPU MMIO / RINGBUFFER ADDRESS + WORDS
         ↓
 closed Xenos PM4 / EDRAM path
         ↓
 FIRST EXTRACTED-TITLE FRAME
 ```
 
-The implementation must capture the real GPU command address/range created by title execution rather than replacing it with a test PM4 sequence. The first unsupported command/register/shader/resource becomes the next implementation target, and unknown behavior continues to fail closed.
+The implementation must capture the GPU command address/range created by genuine title execution. It must not substitute a test PM4 stream. The first exact unsupported kernel call, MMIO register, PM4 command, shader instruction, texture/resource descriptor or EDRAM format becomes the next implementation target.
 
 ## Immediate implementation order
 
 ```text
-1. Add title-runtime GPU MMIO/ringbuffer capture at the Xenos-visible address/range.
-2. Feed genuine title-produced ringbuffer words into the existing provenance bridge.
-3. Record the first exact unsupported PM4 packet/register from genuine title execution.
-4. Port the corresponding upstream Xenia semantic behavior.
-5. Capture the first real vertex/pixel shader microcode and translate the reached subset to WGSL.
-6. Add vertex/index fetch and texture/resource descriptors reached by that title.
-7. Expand EDRAM/resolve formats only as real traffic requests them.
-8. Present the first extracted-title frame through WebGPU and verify the same frame through WebGL2 where supported.
-9. Run an extracted-title frame provenance critic before promotion.
+1. Exercise the deployed browser path with a lawful user-supplied Xbox 360 ISO/XEX.
+2. Extend translated title execution so GPU MMIO/ringbuffer setup writes are captured automatically.
+3. Follow the genuine command processor ringbuffer address/range from title state.
+4. Feed only those title-produced PM4 words into the existing Xenos provenance bridge.
+5. Record the first exact unsupported PM4 packet/register or shader/resource operation.
+6. Port the corresponding upstream Xenia semantic behavior.
+7. Capture real vertex/pixel shader microcode and translate the reached subset to WGSL.
+8. Add vertex/index fetch, textures/resources and EDRAM/resolve formats as the real trace demands.
+9. Present the first extracted-title frame via WebGPU and verify the same Xenos frame via WebGL2 where supported.
+10. Run a separate extracted-title frame provenance critic before promotion.
 ```
 
-Additional xboxkrnl/XAM, synchronization, filesystem, audio or input behavior is implemented only when real title execution asks for it.
+Additional xboxkrnl/XAM, synchronization, filesystem, audio or input behavior is implemented only when genuine title execution asks for it.
 
 ## ISO / GOD input track
 
-Render360 should not require ISO2GOD. The intended input route is:
+Render360 does not require ISO2GOD.
 
 ```text
-.iso → random-access XDVDFS mount → default.xex + game files
-GOD/STFS → STFS/GOD mount → default.xex + game files
-both → existing Render360 XEX / PE / PPC pipeline
+.iso → random-access XDVDFS File/Blob mount → default.xex + game files  ✓ CLOSED
+genuine STFS package → STFS mount → default.xex                        ✓ CLOSED
+both → existing Render360 XEX / PE / PPC pipeline                       ✓ CLOSED INPUT HANDOFF
 ```
 
-Large disc images should stay as browser `File`/`Blob` objects and be read in bounded ranges rather than duplicated wholesale into Wasm memory.
+The GOD-specific filesystem/container variants can be expanded when a real input requires behavior beyond the already-closed STFS path.
 
 ## Performance track
 
-Performance work should now be driven by real traces: keep hot execution in Wasm, minimize JS↔Wasm crossings, retain compiled PPC Wasm caching, use Wasm SIMD for VMX, batch Xenos command handling, cache translated shaders/resources, reduce EDRAM copies, use low internal resolution for mobile, and move shared queues/workers behind cross-origin-isolation capability checks.
+Performance work should be driven by real traces: keep hot execution in Wasm, minimize JS↔Wasm crossings, retain compiled PPC Wasm caching, use Wasm SIMD for VMX, batch Xenos command handling, cache translated shaders/resources, reduce EDRAM copies, use low internal resolution for mobile, and move shared queues/workers behind cross-origin-isolation capability checks.
 
 ## Compatibility ladder
 
 ```text
-CPU/browser foundations                         ✓ LOCKED
-STFS + XEX metadata                             ✓ LOCKED
-retail XEX preparation                          ✓ LOCKED
-strict PE decode + guest mapping                ✓ LOCKED
-prepared entry → Xenia PPC/HIR                  ✓ LOCKED
-kernel ABI + starter services                   ✓ LOCKED
-threads/TLS/runtime                             ✓ LOCKED
-Xenos first-frame semantic foundation           ✓ LOCKED
-WebGPU/WGSL/EDRAM presentation foundation       ✓ LOCKED
-first translated-guest-PPC frame                ✓ LOCKED BY PROVENANCE CRITIC
-WebGL2 Xenos framebuffer fallback               ✓ LOCKED BY HARSH CRITIC
-encrypted XEX pipeline → relocated Xenos traffic ✓ LOCKED BY HARSH CRITIC
-genuine extracted title → actual GPU traffic     ← ACTIVE
+CPU/browser foundations                           ✓ LOCKED
+STFS + XEX metadata                               ✓ LOCKED
+retail XEX preparation                            ✓ LOCKED
+strict PE decode + guest mapping                  ✓ LOCKED
+prepared entry → Xenia PPC/HIR                    ✓ LOCKED
+kernel ABI + starter services                     ✓ LOCKED
+threads/TLS/runtime                               ✓ LOCKED
+Xenos first-frame semantic foundation             ✓ LOCKED
+WebGPU/WGSL/EDRAM presentation foundation         ✓ LOCKED
+first translated-guest-PPC frame                  ✓ LOCKED BY PROVENANCE CRITIC
+WebGL2 Xenos framebuffer fallback                 ✓ LOCKED BY HARSH CRITIC
+encrypted XEX pipeline → relocated Xenos traffic  ✓ LOCKED BY HARSH CRITIC
+ISO/XDVDFS virtual mount + browser title handoff   ✓ LOCKED BY HARSH CRITIC
+verified modern bootstrap deployed to Pages       ✓ LOCKED BY DEPLOYMENT CRITIC
+genuine extracted title → actual GPU traffic       ← ACTIVE
 real shader / texture / resource translation
 first extracted-title frame
 performance / latency optimization
-ISO/XDVDFS virtual mount
 small homebrew / XBLA-class bring-up
 Braid-class playable target
 Portal-class bring-up

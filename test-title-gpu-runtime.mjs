@@ -14,7 +14,7 @@ for(const n of required)if(typeof pick(n)!=='function')throw new Error(`title GP
 
 const p32be=(a,o,v)=>{a[o]=(v>>>24)&255;a[o+1]=(v>>>16)&255;a[o+2]=(v>>>8)&255;a[o+3]=v&255};
 const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;
-const lis=(rt,imm)=>dform(15,rt,0,imm),ori=(ra,rs,imm)=>dform(24,rs,ra,imm),lwz=(rt,ra,d)=>dform(32,rt,ra,d),stw=(rs,ra,d)=>dform(36,rs,ra,d);
+const lis=(rt,imm)=>dform(15,rt,0,imm),li=(rt,imm)=>dform(14,rt,0,imm),ori=(ra,rs,imm)=>dform(24,rs,ra,imm),lwz=(rt,ra,d)=>dform(32,rt,ra,d),stw=(rs,ra,d)=>dform(36,rs,ra,d);
 const mtctr11=0x7D6903A6,bctrl=0x4E800421,blr=0x4E800020;
 const codeBase=0x20000000;
 const thunk=0x70004510;
@@ -40,6 +40,18 @@ if((pick('r360_sparse_guest_memory_write_u32_be')(dataBase,0x12345678)>>>0)!==1)
 const sparseLoad=run([lis(11,0x1000),lwz(3,11,0),blr]);
 if(sparseLoad!==0x12345678)throw new Error(`sparse HIR load mismatch 0x${sparseLoad.toString(16)}`);
 console.log('TITLE_RUNTIME_SPARSE_DATA_OUTSIDE_64K=PASS');
+
+// Prove nested title execution is no longer constrained to the active entry
+// window. The caller is staged at 0x20000000 while the callee lives solely in
+// executable sparse guest memory at 0x30000000. The resolver must page that
+// code into the bounded wasm32 translator window and continue on the same PPC
+// context, returning r3=0x42 to the already-running caller HIR.
+const farCode=0x30000000;const farBacking=pick('r360_sparse_guest_memory_alloc')(1)>>>0;if(!farBacking)throw new Error('far sparse code backing allocation failed');
+if((pick('r360_sparse_guest_memory_map')(farCode,1,farBacking,0,7)>>>0)!==1)throw new Error('far sparse code mapping failed');
+if((pick('r360_sparse_guest_memory_write_u32_be')(farCode,li(3,0x42))>>>0)!==1||(pick('r360_sparse_guest_memory_write_u32_be')(farCode+4,blr)>>>0)!==1)throw new Error('far sparse code seed failed');
+const farResult=run([lis(11,0x3000),ori(11,11,0),mtctr11,bctrl,blr]);
+if(farResult!==0x42)throw new Error(`far sparse PPC call mismatch 0x${farResult.toString(16)}`);
+console.log('TITLE_RUNTIME_NESTED_CODE_OUTSIDE_64K=PASS');
 
 // Register the real xboxkrnl VdInitializeRingBuffer ordinal as unresolved. The
 // runtime itself must consume r3/r4 from the active translated PPC context.

@@ -93,11 +93,12 @@ export function sourceKindFromName(name=''){
   if(lower.endsWith('.pirs'))return 'pirs';
   if(lower.endsWith('.con'))return 'con';
   // Xbox Live / STFS content is commonly stored on FATX-style media and shared
-  // from iOS Files using its 40-hex content filename with no extension. Treat
-  // that canonical content-addressed filename as an STFS package instead of
-  // rejecting a previously identified CON library entry as UNKNOWN. The core
-  // still validates the package magic and metadata before execution.
+  // from iOS Files using a content-addressed hexadecimal filename with no
+  // extension. Accept the practical 32..64-hex family (including Braid's
+  // 42-character content name) as STFS instead of rejecting a previously
+  // identified CON library entry as UNKNOWN. The core still validates package
+  // magic and metadata before execution.
   const base=lower.split(/[\\/]/).pop()||'';
-  if(/^[0-9a-f]{40}$/.test(base))return 'con';
+  if(/^[0-9a-f]{32,64}$/.test(base))return 'con';
   return 'unknown';
 }

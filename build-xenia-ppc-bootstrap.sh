@@ -98,6 +98,7 @@ compile_c "third_party/crypto/rijndael-alg-fst.c" "$XENIA/third_party/crypto/rij
 compile_one "render360/browser_logging.cpp" "$ROOT/src/xenia_web_bootstrap/browser_logging.cpp"
 compile_one "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap/browser_threading_sleep.cpp"
 compile_one "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
+compile_one "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
 compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"
 compile_one "render360/wasm_backend_memory_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_memory_probe.cpp"

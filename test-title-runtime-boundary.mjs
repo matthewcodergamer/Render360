@@ -20,6 +20,13 @@ console.log('ENTRY_RUNTIME_CLEAN_RETURN=PASS');
 // is deliberately outside the active bounded guest code window, so translation
 // succeeds while runtime resolution must stop at the unresolved call boundary.
 const blocked=await run([0x3D809000,0x7D8903A6,0x4E800421,0x4E800020],16,0x61,0x89000000);
-if(!blocked.hir||blocked.executionStatus!==1||blocked.runtimeBoundary!=='unsupported-hir-or-runtime-dependency')throw new Error(`runtime blocker was not surfaced ${JSON.stringify(blocked)}`);
+if(
+  !blocked.hir ||
+  blocked.executionStatus !== 1 ||
+  blocked.runtimeBoundary !== 'unresolved-guest-call' ||
+  blocked.executionBlockerKind !== 2 ||
+  blocked.executionBlockerOpcode !== 9 ||
+  blocked.executionBlockerAddress !== 0x89001008
+) throw new Error(`runtime blocker was not surfaced exactly ${JSON.stringify(blocked)}`);
 console.log('ENTRY_RUNTIME_UNRESOLVED_CALL_BOUNDARY=PASS');
 console.log('FIRST_RUNTIME_BLOCKER_TELEMETRY=PASS');

@@ -15,6 +15,7 @@ jobs:
       - name: Locate guest runtime stall
         run: |
           set -o pipefail
+          echo 'locator-v2'
           timeout --signal=TERM 45s node ./test-guest-runtime-hang-locator.mjs ./xenia_ppc_bootstrap.wasm 2>&1 | tee guest-runtime.log
       - name: Show diagnostic log
         if: always()

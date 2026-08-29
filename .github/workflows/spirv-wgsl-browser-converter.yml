@@ -26,6 +26,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = workflow_run ]; then
@@ -35,8 +36,6 @@ jobs:
             test -n "$run_id"
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Download verified Xenia bootstrap
         uses: actions/download-artifact@v4
         with:

@@ -17,6 +17,7 @@ enum PreparedEntryHandoffStatus : uint32_t {
 
 void ResetPreparedEntryHandoff();
 uint32_t TranslatePreparedPeEntry(uint32_t byte_count);
+uint32_t TranslatePreparedPeEntryScanned();
 uint32_t PreparedEntryHandoffStatusValue();
 uint32_t PreparedEntryHandoffAddress();
 uint32_t PreparedEntryHandoffBytes();
@@ -27,6 +28,7 @@ uint32_t PreparedEntryHandoffHIRInstructions();
 extern "C" {
 void r360_title_handoff_reset();
 uint32_t r360_title_handoff_translate_entry(uint32_t byte_count);
+uint32_t r360_title_handoff_translate_scanned_entry();
 uint32_t r360_title_handoff_status();
 uint32_t r360_title_handoff_entry_address();
 uint32_t r360_title_handoff_bytes();

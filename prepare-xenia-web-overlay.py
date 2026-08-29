@@ -73,10 +73,9 @@ utf8_u8_count = write_narrow_utf8_overlay(UTF8_SOURCE, UTF8_DEST, "utf8.cc")
 
 # memory.h / memory.cc: desktop Xenia reserves a 4.5 GiB host file mapping with
 # fixed aliased views. wasm32 cannot represent that host address-space model.
-# For the translation probe only, expose a bounded 64 KiB guest code window at
-# 0x80000000. This is intentionally NOT the final Xbox memory implementation;
-# it only gives the real PPC scanner/HIR builder a valid byte source while the
-# later sparse browser memory system is developed.
+# Expose only one bounded 64 KiB decoder window, while keeping Xenia's heap
+# descriptors/page sizes valid for translation-time protection queries. Real
+# title data remains authoritative in Render360 sparse guest memory.
 memory_h = MEMORY_HEADER_SOURCE.read_text(errors="strict")
 translate_anchor = '''  template <typename T = uint8_t*>
   inline T TranslateVirtual(uint32_t guest_address) const {
@@ -238,6 +237,32 @@ wasm_init = '''bool Memory::Initialize() {
   physical_membase_ = nullptr;
   mapping_base_ = nullptr;
   mapping_ = xe::memory::kFileMappingHandleInvalid;
+
+  // Preserve Xenia's guest address classification and page-size contracts even
+  // though wasm32 cannot reserve the desktop 4.5 GiB host mapping. Translation
+  // passes query these heaps (for example QueryProtect) while lowering guest
+  // loads/stores. Leaving page_size_ at zero causes a wasm integer divide trap.
+  // The page tables are metadata only and begin unallocated/no-access; actual
+  // browser title bytes and permissions remain owned by sparse guest memory.
+  heaps_.v00000000.Initialize(this, virtual_membase_, HeapType::kGuestVirtual,
+                              0x00000000, 0x40000000, 4096);
+  heaps_.v40000000.Initialize(this, virtual_membase_, HeapType::kGuestVirtual,
+                              0x40000000, 0x40000000 - 0x01000000, 64 * 1024);
+  heaps_.v80000000.Initialize(this, virtual_membase_, HeapType::kGuestXex,
+                              0x80000000, 0x10000000, 64 * 1024);
+  heaps_.v90000000.Initialize(this, virtual_membase_, HeapType::kGuestXex,
+                              0x90000000, 0x10000000, 4096);
+  heaps_.physical.Initialize(this, physical_membase_, HeapType::kGuestPhysical,
+                             0x00000000, 0x20000000, 4096);
+  heaps_.vA0000000.Initialize(this, virtual_membase_, HeapType::kGuestPhysical,
+                              0xA0000000, 0x20000000, 64 * 1024,
+                              &heaps_.physical);
+  heaps_.vC0000000.Initialize(this, virtual_membase_, HeapType::kGuestPhysical,
+                              0xC0000000, 0x20000000, 16 * 1024 * 1024,
+                              &heaps_.physical);
+  heaps_.vE0000000.Initialize(this, virtual_membase_, HeapType::kGuestPhysical,
+                              0xE0000000, 0x1FD00000, 4096,
+                              &heaps_.physical);
   return true;
 #else
 '''
@@ -292,6 +317,6 @@ print(f"cvar UTF-8 rule: normalized {cvar_u8_count} legacy u8 literals to identi
 print(f"Generated web utf8 source overlay: {UTF8_DEST}")
 print(f"utf8 UTF-8 rule: normalized {utf8_u8_count} legacy u8 literals to identical narrow byte literals")
 print(f"Generated web memory header/source overlay: {MEMORY_HEADER_DEST}, {MEMORY_DEST}")
-print("Memory rule: wasm32 translation probe exposes only a 64 KiB code window at guest 0x80000000; no fake full 4.5 GiB mapping")
+print("Memory rule: wasm32 keeps one 64 KiB decoder window plus valid Xenia heap metadata; no fake full 4.5 GiB host mapping")
 print(f"Generated web processor source overlay: {PROCESSOR_DEST}")
 print("Processor rule: wasm32 has no native exception-resume PC; translation/runtime logic is unchanged")

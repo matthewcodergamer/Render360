@@ -8,6 +8,27 @@ const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
 const maybe=(bootstrap,n)=>typeof pick(bootstrap,n)==='function'?pick(bootstrap,n):null;
 const moduleId=name=>name.toLowerCase()==='xboxkrnl.exe'?1:name.toLowerCase()==='xam.xex'?2:0;
 
+function hasNativeTitleGpuRuntime(bootstrap){
+  return ['r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status'].every(n=>!!maybe(bootstrap,n));
+}
+
+function readNativeTitleGpuTelemetry(bootstrap,entry){
+  if(!hasNativeTitleGpuRuntime(bootstrap))return null;
+  const get=n=>maybe(bootstrap,n)?.()>>>0;
+  const ringBase=get('r360_title_gpu_ring_base');
+  const ringSizeLog2=get('r360_title_gpu_ring_size_log2');
+  const ringBytes=get('r360_title_gpu_ring_bytes');
+  const ringWordCapacity=get('r360_title_gpu_ring_word_capacity');
+  const writePointer=get('r360_title_gpu_write_pointer');
+  const rptrWriteback=get('r360_title_gpu_rptr_writeback');
+  const rptrBlockSizeLog2=get('r360_title_gpu_rptr_block_size_log2');
+  const mmioWrites=get('r360_title_gpu_mmio_writes');
+  const status=get('r360_title_gpu_status');
+  const windowEnd=BigInt(entry>>>0)+65536n;
+  const ringInActiveWindow=!!ringBase&&ringBase>=(entry>>>0)&&BigInt(ringBase)+BigInt(Math.max(4,ringBytes||4))<=windowEnd;
+  return {kind:'native-wasm-title-gpu-runtime',ringInitialized:!!ringBase,ringBase,ringSizeLog2,ringBytes,ringWordCapacity,writePointer,rptrWriteback,rptrBlockSizeLog2,mmioWrites,status,ringInActiveWindow,producerObserved:status>=2&&writePointer>0};
+}
+
 function registerKernelImportPlan(bootstrap,kernelImports){
   const reset=maybe(bootstrap,'r360_kernel_import_reset');
   const register=maybe(bootstrap,'r360_kernel_import_register');
@@ -49,12 +70,12 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   if((pick(bootstrap,'r360_pe_guest_load')(input,prepared.length)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
 
-  // Install tiny PPC ABI shims inside the same relocated 64 KiB execution
-  // window before title translation. They run as genuine nested guest PPC with
-  // the caller's live r3-r10 context. This lets the browser preserve simple
-  // kernel semantics and capture the title's real Xenos ring configuration
-  // without inventing a ring address in JavaScript.
-  const browserHle=installDefaultBrowserHle?installBrowserTitleHle({bootstrap,entry}):null;
+  // Modern bootstraps route decoded real-title imports through the live PPC
+  // context directly into the native WASM kernel/Xenos service layer. Keep the
+  // relocated PPC shim implementation only for older published bootstraps that
+  // do not expose the native title-GPU runtime yet.
+  const nativeTitleGpu=hasNativeTitleGpuRuntime(bootstrap);
+  const browserHle=!nativeTitleGpu&&installDefaultBrowserHle?installBrowserTitleHle({bootstrap,entry}):null;
   const effectiveKernelExports=browserHle?{...browserHle.implementedKernelExports,...implementedKernelExports}:implementedKernelExports;
   const kernelImports=buildKernelImportPlan(xex,prepared,{implementedExports:effectiveKernelExports});
   const kernelRegistration=registerKernelImportPlan(bootstrap,kernelImports);
@@ -88,8 +109,9 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?'unsupported-hir-or-runtime-dependency':'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
   const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
+  const titleGpuTelemetry=nativeTitleGpu?readNativeTitleGpuTelemetry(bootstrap,entry):null;
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,startupGprCount,executionStatus,executionInstructions,executionR3Hex,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

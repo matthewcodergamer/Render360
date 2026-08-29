@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+import {WASI} from 'node:wasi';
+const wasmPath=process.argv[2]||'./xenia_ppc_bootstrap.wasm';
+const say=s=>{console.log(`CHECKPOINT ${s}`);process.stdout.write('');};
+say('read');
+const bytes=fs.readFileSync(wasmPath);say(`bytes ${bytes.length}`);
+const mod=await WebAssembly.compile(bytes);say('compile');
+const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
+const instance=await WebAssembly.instantiate(mod,imports);say('instantiate');wasi.initialize(instance);say('wasi');
+const e=instance.exports,pick=n=>e[n]??e[`_${n}`];
+for(const n of ['r360_kernel_runtime_reset','r360_guest_thread_create','r360_guest_thread_stack_base','r360_guest_thread_stack_top','r360_guest_thread_stack_mapped','r360_sparse_guest_memory_write_u8'])if(typeof pick(n)!=='function')throw new Error(`missing ${n}`);say('exports');
+pick('r360_kernel_runtime_reset')();say('reset');
+const a=pick('r360_guest_thread_create')(0x82001000,0x1111,1,0xA5)>>>0;say(`create-a ${a}`);
+const b=pick('r360_guest_thread_create')(0x82002000,0x2222,0x5000,0x5A)>>>0;say(`create-b ${b}`);
+const base=pick('r360_guest_thread_stack_base')(a)>>>0,top=pick('r360_guest_thread_stack_top')(a)>>>0;say(`stack ${base.toString(16)} ${top.toString(16)}`);
+const wr=pick('r360_sparse_guest_memory_write_u8')(base,0x7b)>>>0;say(`write ${wr}`);
+console.log('GUEST_RUNTIME_HANG_LOCATOR=PASS');

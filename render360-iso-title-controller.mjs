@@ -1,5 +1,5 @@
-import {mountXdvdfs} from './render360-xdvdfs.mjs';
-import {handoffDefaultXex} from './render360-title-controller.mjs';
+import {mountXdvdfs} from './render360-xdvdfs.mjs?v=44.1';
+import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.1';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
@@ -44,16 +44,9 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
   if(translationOnly){
     if((handoff.executionStatus>>>0)!==4)throw new Error(`title translation unexpectedly executed guest PPC (status ${handoff.executionStatus>>>0})`);
     const callableFunctionCount=typeof callableCountFn==='function'?(callableCountFn()>>>0):(handoff.translatedFunctionCount>>>0);
+    console.info(`[Render360] PPC translation-only entry 0x${(handoff.entry>>>0).toString(16)} produced ${callableFunctionCount} callable WASM functions`);
     if(!callableFunctionCount&&executeHirCompatibilityFallback){
-      // A commercial title may translate cleanly through Xenia while the
-      // generated-WASM emitter still lacks one or more HIR operations. Do not
-      // confuse that backend coverage gap with a PPC/XEX failure. Re-run the
-      // already extracted default.xex with the broader native HIR executor so
-      // the browser reaches the next genuine title dependency (kernel, guest
-      // memory, nested PPC, Xenos, etc.). This is deliberately a compatibility
-      // tier: generated WASM remains the preferred production path whenever a
-      // callable entry exists.
-      if(typeof setExecute!=='function')throw new Error('browser bootstrap cannot enable HIR compatibility execution');
+      if(typeof setExecute!=='function'||typeof getExecute!=='function')throw new Error('browser bootstrap cannot enable HIR compatibility execution');
       const beforeFallback=getExecute()>>>0;
       if((setExecute(1)>>>0)!==1)throw new Error('could not enable HIR compatibility execution');
       const translatedOnly={
@@ -64,6 +57,7 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
         executionInstructions:handoff.executionInstructions>>>0,
         translatedFunctionCount:handoff.translatedFunctionCount>>>0,
       };
+      console.info(`[Render360] Generated WASM entry unavailable; executing native HIR compatibility path for 0x${(handoff.entry>>>0).toString(16)}`);
       try{
         handoff=await handoffDefaultXex(handoffArgs);
       }finally{
@@ -79,6 +73,7 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
         runtimeBoundary:handoff.runtimeBoundary,
         reachedKernelBlocker:handoff.reachedKernelBlocker??null,
       };
+      console.info(`[Render360] Native HIR compatibility result status=${compatibilityExecution.executionStatus} instructions=${compatibilityExecution.executionInstructions} boundary=${compatibilityExecution.runtimeBoundary}`);
       handoff={...handoff,entryExecutedDuringTranslation:true,compatibilityExecution};
     }else{
       handoff={...handoff,runtimeBoundary:'translation-only',entryExecutedDuringTranslation:false,compatibilityExecution:null};

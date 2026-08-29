@@ -1,0 +1,21 @@
+name: Render360 guest runtime diagnostic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-guest-runtime-diagnostic.yml'
+  workflow_dispatch:
+
+jobs:
+  guest-runtime-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run guest runtime critic with hard timeout
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 45s node ./test-guest-runtime-critic.mjs ./xenia_ppc_bootstrap.wasm 2>&1 | tee guest-runtime.log
+      - name: Show diagnostic log
+        if: always()
+        run: cat guest-runtime.log || true

@@ -6,8 +6,10 @@ on:
     paths:
       - 'src/xenia_web_bootstrap/xenos_gpu_foundation.cpp'
       - 'render360-webgpu-xenos.mjs'
+      - 'render360-xenos-controller.mjs'
       - 'test-xenos-semantic-foundation.mjs'
       - 'test-webgpu-wgsl-edram-foundation.mjs'
+      - 'test-xenos-guest-memory-bridge.mjs'
       - 'test-xenos-harsh-critic.mjs'
       - '.github/workflows/xenos-foundations.yml'
   workflow_dispatch:
@@ -32,6 +34,8 @@ jobs:
             bash -lc 'em++ -std=c++20 -O2 src/xenia_web_bootstrap/xenos_gpu_foundation.cpp -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS='"'"'["_r360_xenos_reset","_r360_xenos_ring_buffer","_r360_xenos_ring_capacity","_r360_xenos_submit","_r360_xenos_status","_r360_xenos_packets","_r360_xenos_register_writes","_r360_xenos_draws","_r360_xenos_presents","_r360_xenos_last_opcode","_r360_xenos_last_fault_word","_r360_xenos_register","_r360_xenos_edram_tile_address","_r360_xenos_frame_buffer","_r360_xenos_frame_size","_r360_xenos_frame_width","_r360_xenos_frame_height","_r360_xenos_frame_generation","_r360_xenos_frame_hash"]'"'"' -o build/xenos/xenos_foundation.wasm'
       - name: Verify Xenos PM4 register draw and EDRAM semantics
         run: node ./test-xenos-semantic-foundation.mjs build/xenos/xenos_foundation.wasm
+      - name: Verify guest memory to Xenos EDRAM frame bridge
+        run: node ./test-xenos-guest-memory-bridge.mjs build/xenos/xenos_foundation.wasm
       - name: Verify WebGPU WGSL and Xenos frame upload bridge
         run: node ./test-webgpu-wgsl-edram-foundation.mjs
       - name: 'Harsh critic: Xenos bounds deterministic frame and fail-closed behavior'

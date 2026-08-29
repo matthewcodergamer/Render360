@@ -13,6 +13,7 @@ on:
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
+      - 'test-xex-pe-image.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -84,6 +85,9 @@ jobs:
 
       - name: Verify streaming NORMAL block/hash/chunk framing
         run: node ./test-xex-image-prepare-normal-frame.mjs
+
+      - name: Verify strict Xbox PE image metadata
+        run: node ./test-xex-pe-image.mjs
 
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh

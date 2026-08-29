@@ -1,0 +1,49 @@
+name: UI V40 Contract
+
+on:
+  push:
+    paths:
+      - 'index.html'
+      - 'ui-v40.css'
+      - 'app-v40.js'
+      - 'library/**'
+      - 'import/**'
+      - 'profiles/**'
+      - 'runtime/**'
+      - 'manifest.webmanifest'
+      - 'test-ui-v40-contract.mjs'
+      - '.github/workflows/ui-v40.yml'
+  pull_request:
+    paths:
+      - 'index.html'
+      - 'ui-v40.css'
+      - 'app-v40.js'
+      - 'library/**'
+      - 'import/**'
+      - 'profiles/**'
+      - 'runtime/**'
+      - 'manifest.webmanifest'
+      - 'test-ui-v40-contract.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  ui-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse V40 browser modules
+        run: |
+          node --check app-v40.js
+          node --check runtime/render360-runtime.js
+          node --check library/game-library.js
+          node --check library/cover-resolver.js
+          node --check import/zip-importer.js
+          node --check profiles/title-profile-store.js
+      - name: Enforce deployed UI contract
+        run: node test-ui-v40-contract.mjs

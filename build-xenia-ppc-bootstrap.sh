@@ -15,6 +15,7 @@ python3 "$ROOT/prepare-xenia-shader-interpreter-overlay.py"
 python3 "$ROOT/prepare-xenia-shader-translator-overlay.py"
 python3 "$ROOT/prepare-xenia-spirv-browser-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
+python3 "$ROOT/prepare-wasm-backend-cfg-overlay.py"
 COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include" -I"$XENIA/third_party/glslang")
 COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
@@ -113,7 +114,7 @@ compile_one "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/
 compile_one "render360/xenos_shader_interpreter_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_shader_interpreter_probe.cpp"
 compile_one "render360/xenos_spirv_translation_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_spirv_translation_probe.cpp"
 compile_one "render360/wasm_backend_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_probe.cpp"
-compile_one "render360/wasm_backend_cfg_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_cfg_probe.cpp"
+compile_one "render360/wasm_backend_cfg_probe.cpp" "$OVERLAY/render360/wasm_backend_cfg_probe.cpp"
 compile_one "render360/wasm_backend_memory_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_memory_probe.cpp"
 compile_one "render360/wasm_backend_call_probe.cpp" "$ROOT/src/xenia_web_bootstrap/wasm_backend_call_probe.cpp"
 compile_one "render360/wasm_backend_fpu_probe.cpp" "$OVERLAY/render360/wasm_backend_fpu_probe_v2.cpp"

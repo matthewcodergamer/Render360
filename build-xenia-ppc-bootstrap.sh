@@ -5,6 +5,7 @@ if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 if ! command -v "$CC" >/dev/null 2>&1; then echo "ERROR: $CC not found. Run inside Emscripten/emsdk." >&2; exit 2; fi
 python3 "$ROOT/prepare-xenia-web-overlay.py"
+python3 "$ROOT/prepare-xenia-relocatable-probe-memory-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
@@ -76,7 +77,7 @@ compile_c() {
     local category
     category="$(classify_failure "$log")"
     echo "BLOCKED ($category)"
-    printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
+    printf '%s\tBLOCKED\t%s\n' "$label" >> "$OUT/report.tsv"
     failed=$((failed + 1))
   fi
 }

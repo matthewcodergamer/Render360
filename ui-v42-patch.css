@@ -1,0 +1,24 @@
+/* Render360 V42 interaction and iOS theme polish. */
+
+/* The placeholder is absolutely positioned. Make the detail cover its containing block
+   so a missing cover can never expand over the whole Game Details view. */
+.detail-cover{position:relative}
+
+/* iOS Safari may paint outside the fixed app viewport from the root canvas. Keep every
+   non-runtime root surface on the selected appearance color. */
+html,body,#app{background-color:var(--bg)!important}
+:root[data-theme="light"],:root[data-theme="light"] body,:root[data-theme="light"] #app,:root[data-theme="light"] .view:not(.runtime-view){background-color:#f2f2f7!important}
+:root[data-theme="dark"],:root[data-theme="dark"] body,:root[data-theme="dark"] #app{background-color:#000!important}
+
+/* Library = launch surface in V42. */
+.game-tile .cover-shell{transition:transform .14s ease,box-shadow .18s ease,outline-color .18s ease}
+.game-tile:active .cover-shell{transform:scale(.985)}
+.game-tile.v42-holding .cover-shell{transform:scale(.975);outline:3px solid color-mix(in srgb,var(--blue) 72%,transparent);outline-offset:2px}
+.tile-play-badge{position:absolute;z-index:4;left:9px;bottom:9px;min-height:29px;display:flex;align-items:center;gap:5px;padding:0 10px;border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:11px;font-weight:800;letter-spacing:-.1px;box-shadow:0 5px 16px rgba(0,0,0,.24);-webkit-backdrop-filter:blur(14px) saturate(160%);backdrop-filter:blur(14px) saturate(160%);pointer-events:none}
+.tile-play-badge svg{width:10px;height:10px;fill:currentColor}
+.game-tile-hint{display:block;margin-top:3px;color:var(--muted2);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+:root[data-theme="light"] .cover-shell{box-shadow:0 8px 24px rgba(0,0,0,.12)}
+:root[data-theme="light"] .detail-cover{background:#e5e5ea;box-shadow:0 10px 28px rgba(0,0,0,.11)}
+
+@media(max-width:390px){.tile-play-badge{left:7px;bottom:7px;min-height:27px;padding:0 9px;font-size:10px}}

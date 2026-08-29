@@ -17,7 +17,7 @@ function refreshModernStaticCopy(){
   const support=document.querySelector('.support-note');
   if(support)support.innerHTML='<b>Real-title inputs:</b> XBLA titles can use LIVE/PIRS/CON. Disc titles can use a lawful Xbox 360 ISO directly; the browser mounts XDVDFS as a File/Blob, locates default.xex, prepares the retail image and enters PPC/kernel/Xenos without copying the whole disc into WASM memory.';
   const active=document.querySelector('#statusSheet .port-row.active p');
-  if(active)active.textContent='The modern browser bootstrap now has XDVDFS ISO input, retail XEX preparation/PE mapping, translated guest PPC, live kernel-import ABI routing, sparse guest RAM, Xenos MMIO, CP_RB_WPTR capture and fail-closed submission of the title-produced PM4 range. Commercial gameplay still depends on the next title-specific kernel/CPU/PM4/shader/resource blockers exposed by a real title.';
+  if(active)active.textContent='The modern browser bootstrap has XDVDFS ISO input, retail XEX preparation/PE mapping, translated guest PPC, live kernel-import ABI routing, sparse guest RAM, Xenos MMIO, CP_RB_WPTR capture and fail-closed submission of the title-produced PM4 range. Real XE_SWAP boundaries, shader uploads and fetch-resource state are tracked separately so a decoded draw cannot be mislabeled as a rendered commercial frame.';
 }
 function hostLog(level,message){
   const text=`${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}  ${level.toUpperCase()}  ${message}`;
@@ -42,17 +42,21 @@ async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender36
 function summarizeGpuTraffic(gpu){
   if(!gpu)return false;
   if(gpu.submitted){
-    setGate('gateGpu','ready',gpu.presents?'FRAME TRAFFIC':'PM4 ACCEPTED');
-    setText('frameGateState',gpu.presents?'TITLE GPU FRAME':'TITLE PM4 ACCEPTED');
-    setText('boundaryTitle',gpu.presents?'Real title GPU traffic reached a present':'Real title PM4 reached the Xenos decoder');
-    setText('boundaryText',`Submitted ${gpu.wordCount} genuinely produced ring words from ${fmtHex(gpu.guestAddress)} (CP_RB_WPTR ${gpu.writePointer}). Xenos accepted ${gpu.packets} packets, draws ${gpu.draws}, presents ${gpu.presents}, frame generation ${gpu.frameGeneration}. ${gpu.presents?'The next gate is real shader/resource fidelity and continued title execution.':'Continue guest execution until the next write pointer update or a concrete GPU/kernel blocker appears.'}`);
-    hostLog('ok',`Real title PM4 accepted · ${gpu.wordCount} words · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.presents} presents`);
+    const realFrame=gpu.realTitleFrameReady===true;
+    const realSwap=(gpu.swaps||0)>0;
+    setGate('gateGpu','ready',realFrame?'REAL FRAME':realSwap?'XE_SWAP SEEN':'PM4 ACCEPTED');
+    setText('frameGateState',realFrame?'FIRST EXTRACTED-TITLE FRAME':realSwap?'REAL TITLE SWAP':'TITLE PM4 ACCEPTED');
+    setText('boundaryTitle',realFrame?'A shader/resource-rendered title frame reached a real swap':realSwap?'Real title command traffic reached XE_SWAP':'Real title PM4 reached the Xenos decoder');
+    const state=`Xenos accepted ${gpu.packets} packets, draws ${gpu.draws}, swaps ${gpu.swaps||0}, shader loads ${gpu.shaderLoads||0}, fetch groups ${gpu.fetchConstantGroups?.length||0}, memory writes ${gpu.memoryWrites||0}.`;
+    const frame=realFrame?'The first extracted-title frame gate is genuinely satisfied.':realSwap?`Swap frontbuffer ${fmtHex(gpu.frontbufferPtr||0)} ${gpu.frontbufferWidth||0}×${gpu.frontbufferHeight||0} was produced by the title. The exported pixels are still the bounded bring-up raster, so shader/resource execution—not frame-boundary detection—is the remaining rendering gate.`:'Continue guest execution until XE_SWAP or a concrete GPU/kernel blocker appears.';
+    setText('boundaryText',`Submitted ${gpu.wordCount} genuinely produced ring words from ${fmtHex(gpu.guestAddress)} (CP_RB_WPTR ${gpu.writePointer}). ${state} ${frame}`);
+    hostLog('ok',`Real title PM4 accepted · ${gpu.wordCount} words · ${gpu.packets} packets · ${gpu.draws} draws · ${gpu.swaps||0} swaps`);
     return true;
   }
   if(gpu.ready&&gpu.lastFaultWord!==undefined){
     setGate('gateGpu','blocked',`PM4 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);setText('frameGateState','REAL PM4 BLOCKER');
     setText('boundaryTitle',`First real Xenos blocker: PM4 opcode 0x${(gpu.lastOpcode>>>0).toString(16).toUpperCase()}`);
-    setText('boundaryText',`The title produced ${gpu.wordCount} ring words and CP_RB_WPTR bounded the submission. Xenos stopped at word ${gpu.lastFaultWord} with status ${gpu.xenosStatus}; ${gpu.packets} packets were accepted first. This is now the exact GPU implementation target—no synthetic trace and no guessed command count.`);
+    setText('boundaryText',`The title produced ${gpu.wordCount} ring words and CP_RB_WPTR bounded the submission. Xenos stopped at word ${gpu.lastFaultWord} with status ${gpu.xenosStatus}; ${gpu.packets} packets were accepted first. This is the exact next GPU implementation target—no synthetic trace and no guessed command count.`);
     hostLog('warn',`Real PM4 blocker · opcode 0x${(gpu.lastOpcode>>>0).toString(16)} · word ${gpu.lastFaultWord} · status ${gpu.xenosStatus}`);
     return true;
   }
@@ -108,16 +112,13 @@ export async function runModernXboxIso(file){
   }catch(error){if(run===activeRun)showFailure(error);throw error}
 }
 
-export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,submitsOnlyCapturedProducerRange:true,failClosedOnUnsupportedPm4:true};}
+export function modernIsoBridgeContract(){return {input:'browser File/Blob .iso',filesystem:'XDVDFS',entryWindowBytes:ENTRY_WINDOW_BYTES,usesNativeTitleGpuTelemetry:true,submitsOnlyCapturedProducerRange:true,requiresRealXeSwapForFrameBoundary:true,requiresShaderResourceExecutionForRealFrame:true,failClosedOnUnsupportedPm4:true};}
 
 refreshModernStaticCopy();
 const input=$('gameInput');
 if(input){
   input.addEventListener('change',event=>{
     const file=event.target?.files?.[0];if(!file||!(/\.iso$/i.test(file.name||'')))return;
-    // This capture listener intentionally owns ISO selection before the legacy
-    // V32 UI handler can replace the result with its obsolete "future path"
-    // message. Non-ISO STFS/XEX inputs continue through the existing app.
     event.stopImmediatePropagation();
     runModernXboxIso(file).catch(()=>{});
   },true);

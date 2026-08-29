@@ -72,5 +72,9 @@ jobs:
           node --check profiles/title-profile-store.js
       - name: Enforce V41 deployed integration contract
         run: node test-ui-v41-contract.mjs
+      - name: Stage published bootstrap for scheduler test
+        run: |
+          mkdir -p build/xenia-ppc-bootstrap
+          cp xenia_ppc_bootstrap.wasm build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Regress guest scheduler
         run: node test-browser-thread-scheduler.mjs

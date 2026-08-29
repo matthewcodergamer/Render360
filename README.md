@@ -8,12 +8,46 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-███████████████░░░░░  ~72%
+███████████████░░░░░  ~74%
 ```
 
-The overall percentage is a weighted engineering estimate, not a title-compatibility score. CPU/WASM execution, sparse Xbox memory, STFS/XEX extraction and preparation, strict PE loading, real entry handoff, kernel import dispatch, starter xboxkrnl/XAM services, guest threads/TLS/runtime, bounded Xenos command semantics, EDRAM resolve, WebGPU/WGSL presentation, WebGL2 framebuffer presentation fallback, and the first translated-guest-PPC-produced framebuffer are now closed CI contracts.
+The overall percentage is a weighted engineering estimate, not a title-compatibility score. CPU/WASM execution, sparse Xbox memory, STFS/XEX extraction and preparation, strict PE loading, real entry handoff, kernel import dispatch, starter xboxkrnl/XAM services, guest threads/TLS/runtime, bounded Xenos command semantics, EDRAM resolve, WebGPU/WGSL presentation, WebGL2 framebuffer presentation fallback, the first translated-guest-PPC-produced framebuffer, and the bounded encrypted-XEX-title-pipeline → Xenos traffic bridge are closed CI contracts.
 
-The major remaining work is **real extracted-title GPU traffic and compatibility expansion**: broader Xenos packet/register behavior, real shader microcode/resource/texture translation, additional EDRAM/resolve formats, title-requested kernel/XAM APIs, browser VFS/ISO input, audio/input integration, performance, and title bring-up.
+The major remaining work is **genuine extracted-title GPU traffic and compatibility expansion**: capture the actual MMIO/ringbuffer stream produced by a real title, broader Xenos packet/register behavior, real shader microcode/resource/texture translation, additional EDRAM/resolve formats, title-requested kernel/XAM APIs, browser VFS/ISO input, audio/input integration, performance, and title bring-up.
+
+## Latest authoritative title-to-GPU bridge gate
+
+**Extracted XEX GPU Traffic Bridge Run 10 — Actions ID `33239833760` — SUCCESS**
+
+Code/critic head: `a87495e4d6fe72660cf0d8287c30c8bfddd7dead`
+
+The bounded bridge now proves this chain using a structurally valid encrypted retail-style XEX2 fixture:
+
+```text
+encrypted XEX2 image
+        ↓
+retail session-key / AES preparation
+        ↓
+PE decode + decoder-derived relocated guest mapping
+        ↓
+translated Xenia PPC/HIR title entry
+        ↓
+startup PPC GPR state preserved through title handoff
+        ↓
+PPC stw instructions produce PM4 words in relocated guest memory
+        ↓
+exact guest-produced words are read with provenance telemetry
+        ↓
+closed Xenos PM4 / register / EDRAM path
+        ↓
+draw + present + nonzero frame hash
+```
+
+The independent critic mutates the title-produced primitive, truncates the stream, injects an unsupported PM4 opcode and tests a wrapping 32-bit guest range. Each bad case fails closed and cannot generate a frame.
+
+The title-handoff startup-state change also replayed the complete previously locked Xenia/WASM stack in **Xenia WASM32 Bootstrap Run 395 — Actions ID `33239701901` — SUCCESS** on commit `31dca3ef29d7d7bb616377ee58b66eb908656876`.
+
+**Scope warning:** this closes the encrypted-XEX **pipeline-to-Xenos integration contract**. The fixture is not a commercial game. `EXTRACTED-TITLE → REAL GPU TRAFFIC` remains active until genuine game execution itself reaches GPU MMIO/ringbuffer traffic.
 
 ## Latest authoritative first-frame gate
 
@@ -47,7 +81,7 @@ frame becomes available to the browser presentation bridges
 
 The separate harsh provenance critic also proves that corrupting the guest-produced primitive or truncating the PM4 stream prevents the frame. A browser-side fake present therefore cannot satisfy this gate.
 
-**Scope warning:** this is a genuine **translated guest PPC → Xenos → EDRAM framebuffer** closure, but it is not yet a frame produced by an extracted commercial title. The next milestone is to make the existing STFS/XEX/title execution path reach real title-generated GPU MMIO/ringbuffer traffic and feed that traffic into the same closed path.
+**Scope warning:** this is a genuine **translated guest PPC → Xenos → EDRAM framebuffer** closure, but it is not yet a frame produced by an extracted commercial title.
 
 ## WebGL2 fallback closure
 
@@ -105,6 +139,8 @@ FIRST GENUINE GUEST FRAME                        100% ✓
 INDEPENDENT FIRST-FRAME PROVENANCE CRITIC        100% ✓
 WEBGL2 XENOS FRAMEBUFFER FALLBACK                100% ✓
 INDEPENDENT WEBGL2 FALLBACK HARSH CRITIC         100% ✓
+ENCRYPTED XEX PIPELINE → XENOS TRAFFIC BRIDGE    100% ✓
+INDEPENDENT XEX→GPU TRAFFIC HARSH CRITIC         100% ✓
 ```
 
 These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
@@ -124,7 +160,7 @@ The critic is the final judge, not the main development loop. Build first, then 
 
 ```text
 OVERALL RENDER360
-███████████████░░░░░  ~72%  weighted engineering estimate
+███████████████░░░░░  ~74%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
@@ -158,9 +194,11 @@ FIRST GENUINE GUEST FRAME
 ████████████████████  100% ✓
 WEBGL2 FALLBACK
 ████████████████████  100% ✓
+ENCRYPTED XEX PIPELINE → XENOS TRAFFIC BRIDGE
+████████████████████  100% ✓
 
 EXTRACTED-TITLE → REAL GPU TRAFFIC
-██░░░░░░░░░░░░░░░░░░  ← ACTIVE
+██░░░░░░░░░░░░░░░░░░  ← ACTIVE: requires genuine title trace
 REAL TITLE SHADERS / TEXTURES / RESOURCES
 ░░░░░░░░░░░░░░░░░░░░
 FIRST EXTRACTED-TITLE FRAME
@@ -170,9 +208,9 @@ FIRST EXTRACTED-TITLE FRAME
 ## Current verified GPU path
 
 ```text
-translated guest PPC
-  → guest-memory PM4 command production
-  → big-endian guest command words
+encrypted XEX2 fixture / mapped translated guest PPC
+  → relocated guest-memory PM4 command production
+  → exact big-endian guest command words + provenance hash
   → PM4 parser
   → Xenos register state
   → DRAW_INDX / DRAW_INDX_2
@@ -184,12 +222,13 @@ translated guest PPC
   → WebGL2 framebuffer fallback
 ```
 
-The next active integration replaces the controlled translated-PPC producer with GPU traffic reached while executing an extracted title through the already-closed package/XEX/PE/kernel/runtime path.
+The next active integration replaces the structurally valid encrypted-XEX fixture with GPU traffic reached while executing a genuine extracted title through the already-closed package/XEX/PE/kernel/runtime path.
 
 ## GPU implementation files
 
 - `src/xenia_web_bootstrap/xenos_gpu_foundation.cpp` — bounded PM4/register/draw/EDRAM semantic module.
 - `render360-xenos-controller.mjs` — big-endian guest-memory → Xenos command bridge.
+- `render360-title-gpu-traffic.mjs` — relocated mapped-XEX PPC guest-memory → Xenos traffic bridge with provenance telemetry.
 - `render360-webgpu-xenos.mjs` — frame view, WGSL present shader and WebGPU presenter.
 - `render360-webgl2-xenos.mjs` — WebGL2 framebuffer fallback consuming the same Xenos frame.
 - `test-xenos-semantic-foundation.mjs` — Xenos implementation gate.
@@ -200,6 +239,8 @@ The next active integration replaces the controlled translated-PPC producer with
 - `test-first-frame-provenance-critic.mjs` — independent no-fake-frame provenance critic.
 - `test-webgl2-xenos-fallback.mjs` — WebGL2 implementation gate.
 - `test-webgl2-fallback-critic.mjs` — independent WebGL2 critic.
+- `test-extracted-xex-gpu-traffic.mjs` — encrypted-XEX title pipeline → relocated guest PM4 → Xenos implementation gate.
+- `test-extracted-xex-gpu-traffic-critic.mjs` — independent corruption/truncation/unsupported-opcode/wraparound critic.
 
 ## ISO / GOD input direction
 
@@ -227,7 +268,8 @@ Large disc images should be mounted virtually and read in bounded ranges rather 
 ```text
 first translated-guest-PPC framebuffer                  ✓ LOCKED
 WebGL2 Xenos framebuffer fallback                       ✓ LOCKED
-extracted title → real GPU ringbuffer/MMIO traffic      ← ACTIVE
+encrypted XEX pipeline → relocated Xenos traffic         ✓ LOCKED BY HARSH CRITIC
+genuine extracted title → real GPU ringbuffer/MMIO       ← ACTIVE
 expand Xenos packets/registers from the first blocker
 translate real Xenos shader microcode → WGSL
 textures / vertex fetch / resources / resolves

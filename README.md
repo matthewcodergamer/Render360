@@ -8,22 +8,22 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-█████████░░░░░░░░░░░  ~46%
+██████████░░░░░░░░░░  ~48%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package, sparse-memory, ordinary retail XEX preparation, strict PE loading and the controlled PE-entry handoff are closed CI contracts. Genuine extracted-title execution, kernel/XAM/runtime behavior, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, package/STFS extraction, sparse memory, ordinary retail XEX preparation, strict PE loading and the controlled package-to-entry handoff are now closed CI contracts. Genuine runtime dependency handling, kernel/XAM services, guest threads/TLS, Xenos, EDRAM, WebGPU presentation and title compatibility remain the largest risks.
 
 ## Latest authoritative gate
 
-**Run 338 — Actions ID `33227956792` — SUCCESS**
+**Run 342 — Actions ID `33231158003` — SUCCESS**
 
-Aggregate commit: `ffee353216d248618d6bb30781a0dbe724046cfa`
+Aggregate commit: `04bab276e98efdf41f16913fa666997b0cd93692`
 
-Run 338 closes ordinary retail XEX image preparation across encrypted **NONE, BASIC and NORMAL** paths. The reusable `retail-xex-image-pipeline.mjs` validates XEX metadata, derives the title session key with Xenia-compatible retail/devkit AES semantics, decrypts the executable body with streaming AES-128-CBC, then routes the post-decryption bytes through the existing NONE, BASIC or NORMAL preparation path. NORMAL continues through the upstream Xenia LZX wasm32 decoder and is checked against the exact expected prepared image.
+Run 342 closes the first one-call package-to-entry controller. A complete controlled STFS package is mounted through the pull-driven package reader, `default.xex` is discovered and reconstructed, the XEX is routed through the verified encrypted retail preparation path, the prepared Xbox PE image is mapped into `SparseGuestMemory`, and bytes are read back from the decoder-derived executable entry before entering Xenia's PPC scanner/frontend/finalized HIR path.
 
-The same aggregate gate also replays the PE loader and the Run-335 prepared-PE entry handoff: bytes are loaded through strict PE section metadata into SparseGuestMemory, read back at the PE-derived executable entry, and fed into the relocated Xenia PPC scanner/frontend/HIR path. The handoff critic repeats at multiple Xbox guest bases so a hard-coded entry cannot pass.
+Run 341 immediately before it closed the direct one-call `default.xex` controller after Run 340 correctly rejected a malformed test fixture whose XEX image span did not contain the PE-derived entry. The critic was fixed by correcting the fixture's declared image span; the decoder was not weakened.
 
-DELTA compression remains a distinct patch-image feature and is intentionally fail-closed. It is not counted as ordinary retail executable preparation.
+Run 342 also replays the complete existing stack successfully: STFS/XEX, NONE/BASIC/NORMAL preparation, retail session-key/AES-CBC, upstream Xenia LZX, strict PE metadata, PE-to-guest mapping, prepared-entry handoff, PPC/HIR, WasmBackend and SparseGuestMemory.
 
 ## Closed foundations and bring-up contracts
 
@@ -49,24 +49,28 @@ FULL RETAIL XEX IMAGE PREPARATION                100% ✓
 STRICT XBOX PE IMAGE DECODER                     100% ✓
 PREPARED PE IMAGE → GUEST MEMORY                 100% ✓
 PREPARED PE ENTRY → XENIA PPC / HIR              100% ✓
+ONE-CALL default.xex → XENIA ENTRY HANDOFF       100% ✓
+ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF      100% ✓
 ```
 
 These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
 
-## What Run 338 proves
+## What Run 342 proves
 
 ```text
-XEX2 metadata
+STFS package bytes
    ↓
-encryption/compression routing
+pull-driven mount / directory walk
    ↓
-retail/devkit session-key derivation
+exact default.xex reconstruction
    ↓
-streaming AES-128-CBC executable-body decryption
+XEX2 header/body split
    ↓
-NONE ───────────────→ exact prepared image
-BASIC ──────────────→ data + zero-fill prepared image
-NORMAL → framing → upstream Xenia LZX → exact prepared image
+retail NONE / BASIC / NORMAL preparation
+   ↓
+session-key + streaming AES-CBC where required
+   ↓
+NORMAL framing + upstream Xenia LZX where required
    ↓
 strict Xbox PE decode
    ↓
@@ -79,15 +83,15 @@ bytes read back from mapped guest memory
 Xenia PPC scanner / frontend / finalized HIR
 ```
 
-The retail critic changes session keys, ciphertext and guest bases to prevent a fixed-vector or fixed-address implementation from passing. Corrupt or unsupported formats remain fail closed.
+The controller critic repeats with changed keys and relocated Xbox image bases so fixed ciphertext, fixed prepared bytes or a hard-coded guest address cannot pass.
 
-This is still controlled test content. It is **not yet a claim that an extracted commercial `default.xex` has booted**.
+This is still controlled test content. It is **not yet a claim that a commercial title has booted**.
 
 ## Public progress board
 
 ```text
 OVERALL RENDER360
-█████████░░░░░░░░░░░  ~46%  weighted engineering estimate
+██████████░░░░░░░░░░  ~48%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
@@ -101,8 +105,10 @@ PREPARED IMAGE → REAL GUEST SECTION MAPPING
 ████████████████████  100% ✓
 PREPARED PE ENTRY → XENIA PPC / HIR
 ████████████████████  100% ✓
+ONE-CALL STFS PACKAGE → XENIA ENTRY HANDOFF
+████████████████████  100% ✓
 
-REAL EXTRACTED TITLE HANDOFF / ENTRY
+ENTRY EXECUTION / FIRST RUNTIME BLOCKER
 ████████░░░░░░░░░░░░  ← ACTIVE NEXT
 KERNEL / xboxkrnl / XAM
 ░░░░░░░░░░░░░░░░░░░░
@@ -120,28 +126,25 @@ FIRST GENUINE GUEST FRAME
 
 Partial bars are planning indicators only. A subsystem reaches 100% only when its exact aggregate critic is green.
 
-## Active implementation — one-call genuine extracted-title handoff
+## Active implementation — execution telemetry and exact blocker
 
-The next milestone replaces manual test-to-test wiring with one runtime controller around user-supplied title content:
+The next milestone extends the now-closed package controller beyond successful translation:
 
 ```text
 user-supplied STFS package / default.xex
-  → full STFS extraction
-  → XEX2 decode
-  → choose NONE / BASIC / NORMAL preparation
-  → decrypt retail body when required
-  → strict PE decode
-  → prepared PE section loader
-  → SparseGuestMemory RX / R / RW mappings
+  → verified package/XEX preparation
+  → verified PE guest mapping
   → genuine decoded entry PC
   → initial PPCContext
   → Xenia PPCScanner / frontend / finalized HIR
   → Hot WasmBackend cache / dispatch
-  → execute genuine title instructions
-  → FIRST_RUNTIME_BLOCKER=<exact dependency>
+  → execute entry instructions
+  → FIRST_RUNTIME_BLOCKER=<exact dependency or boundary>
 ```
 
-No copyrighted title binary belongs in this repository. The genuine-title gate consumes legally obtained content supplied at runtime and must report the first actual blocker instead of hiding it behind broad success stubs.
+The controller must expose execution status and the exact first unsupported dependency. A clean guest return in a controlled workload must be distinguishable from an unresolved call, unsupported HIR operation, missing xboxkrnl/XAM import, TLS/thread setup, memory/VFS request or the first GPU/Xenos initialization boundary.
+
+No copyrighted title binary belongs in this repository. Genuine-title testing consumes legally obtained runtime content supplied by the user.
 
 ## What comes after the first genuine failure
 
@@ -166,13 +169,15 @@ The first-frame milestone should be a tiny guest-generated graphics workload who
 
 Once the first genuine frame exists, keep that guest-frame workload permanently in CI and then optimize aggressively: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches and EDRAM traffic optimization.
 
-Portal and Portal 2 remain later compatibility targets. The immediate target is **genuine extracted title instructions → exact first runtime blocker → minimum runtime → Xenos → first guest frame**.
+Portal and Portal 2 remain later compatibility targets. The immediate target is **genuine entry execution → exact first runtime blocker → minimum runtime → Xenos → first guest frame**.
 
 ## Repository organization
 
 - `src/xenia_web_bootstrap/` — active browser-native title bring-up and verified integration layers.
 - `src/xenia_web_shims/` — browser/WASM portability shims.
 - `retail-xex-image-pipeline.mjs` — unified retail NONE/BASIC/NORMAL preparation adapter.
+- `render360-title-controller.mjs` — one-call `default.xex` preparation/map/entry handoff.
+- `render360-package-controller.mjs` — one-call STFS package extraction through title handoff.
 - `xenia_port/` — older port surface retained until migration is safe.
 - `docs/` — maintained project/release documentation.
 - `.github/workflows/` — aggregate regression gates.

@@ -14,6 +14,8 @@ on:
       - 'test-kernel-import-plan.mjs'
       - 'test-kernel-hle-bridge.mjs'
       - 'test-kernel-abi-critic.mjs'
+      - 'test-kernel-services-critic.mjs'
+      - 'test-guest-runtime-critic.mjs'
       - 'test-title-kernel-import-integration.mjs'
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
@@ -138,6 +140,10 @@ jobs:
         run: node ./test-kernel-hle-bridge.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: "Harsh critic: verify minimum kernel ABI contract"
         run: node ./test-kernel-abi-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: "Harsh critic: verify xboxkrnl and XAM starter services in main wasm"
+        run: node ./test-kernel-services-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: "Harsh critic: verify guest threads TLS and runtime in main wasm"
+        run: node ./test-guest-runtime-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify automatic XEX import to kernel execution bridge
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up

@@ -1,0 +1,125 @@
+name: Render360 V44 opcode39 hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-v44-opcode39-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch HIR guest memory, worker startup and blocker dedupe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Native HIR compatibility executor: support the byte-swapped LOAD/STORE
+          # contract used by big-endian Xbox 360 guest memory.
+          p = Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
+          s = p.read_text()
+          marker = '''uint64_t ByteSwapUnsigned(uint64_t value, TypeName type) {'''
+          if marker not in s:
+              raise SystemExit('ByteSwapUnsigned marker missing')
+          insert_after = '''  }\n}\n\ndouble RoundFloating'''
+          helper = '''  }\n}\n\nbool ByteSwapRuntimeValue(RuntimeValue* value) {\n  if (!value) return false;\n  if (IsIntegerType(value->type)) {\n    uint64_t raw = 0;\n    if (!GetUnsigned(*value, &raw)) return false;\n    SetUnsigned(value, value->type, ByteSwapUnsigned(raw, value->type));\n    return true;\n  }\n  if (value->type == xe::cpu::hir::FLOAT32_TYPE) {\n    uint32_t raw = 0;\n    std::memcpy(&raw, &value->value.f32, sizeof(raw));\n    raw = static_cast<uint32_t>(ByteSwapUnsigned(raw, xe::cpu::hir::INT32_TYPE));\n    std::memcpy(&value->value.f32, &raw, sizeof(raw));\n    return true;\n  }\n  if (value->type == xe::cpu::hir::FLOAT64_TYPE) {\n    uint64_t raw = 0;\n    std::memcpy(&raw, &value->value.f64, sizeof(raw));\n    raw = ByteSwapUnsigned(raw, xe::cpu::hir::INT64_TYPE);\n    std::memcpy(&value->value.f64, &raw, sizeof(raw));\n    return true;\n  }\n  if (value->type == xe::cpu::hir::VEC128_TYPE) {\n    for (size_t i = 0; i < 4; ++i) {\n      value->value.v128.u32[i] = static_cast<uint32_t>(\n          ByteSwapUnsigned(value->value.v128.u32[i], xe::cpu::hir::INT32_TYPE));\n    }\n    return true;\n  }\n  return false;\n}\n\ndouble RoundFloating'''
+          if 'bool ByteSwapRuntimeValue(RuntimeValue* value)' not in s:
+              if insert_after not in s:
+                  raise SystemExit('ByteSwapUnsigned end marker missing')
+              s = s.replace(insert_after, helper, 1)
+
+          old_load = '''bool LoadGuestValue(xe::Memory* memory, Value* destination,\n                    const Value* address, const Value* offset,\n                    const RuntimeValues& values, RuntimeValues& out_values,\n                    uint32_t flags) {\n  if (flags != 0 || !destination) return false;'''
+          new_load = '''bool LoadGuestValue(xe::Memory* memory, Value* destination,\n                    const Value* address, const Value* offset,\n                    const RuntimeValues& values, RuntimeValues& out_values,\n                    uint32_t flags) {\n  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !destination) return false;'''
+          if old_load in s:
+              s = s.replace(old_load, new_load, 1)
+          elif new_load not in s:
+              raise SystemExit('LoadGuestValue flags guard not found')
+
+          old_load_tail = '''  RuntimeValue loaded;\n  loaded.type = destination->type;\n  std::memcpy(&loaded.value, host, size);\n  out_values[destination] = loaded;\n  return true;'''
+          new_load_tail = '''  RuntimeValue loaded;\n  loaded.type = destination->type;\n  std::memcpy(&loaded.value, host, size);\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&loaded)) {\n    return false;\n  }\n  out_values[destination] = loaded;\n  return true;'''
+          if old_load_tail in s:
+              s = s.replace(old_load_tail, new_load_tail, 1)
+          elif new_load_tail not in s:
+              raise SystemExit('LoadGuestValue body not found')
+
+          old_store = '''bool StoreGuestValue(xe::Memory* memory, const Value* address,\n                     const Value* offset, const Value* source,\n                     const RuntimeValues& values, uint32_t flags) {\n  if (flags != 0 || !source) return false;'''
+          new_store = '''bool StoreGuestValue(xe::Memory* memory, const Value* address,\n                     const Value* offset, const Value* source,\n                     const RuntimeValues& values, uint32_t flags) {\n  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !source) return false;'''
+          if old_store in s:
+              s = s.replace(old_store, new_store, 1)
+          elif new_store not in s:
+              raise SystemExit('StoreGuestValue flags guard not found')
+
+          old_store_tail = '''  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  return StoreResolvedValue(source, values, host, size);'''
+          new_store_tail = '''  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n  std::memcpy(host, &stored.value, size);\n  return true;'''
+          if old_store_tail in s:
+              s = s.replace(old_store_tail, new_store_tail, 1)
+          elif new_store_tail not in s:
+              raise SystemExit('StoreGuestValue body not found')
+          p.write_text(s)
+
+          # 2) iPhone/WebKit can take >8 s to instantiate the worker/WASM while the
+          # main runtime is also loading. Don't report a dead worker while it is
+          # demonstrably still booting and later becomes ready.
+          p = Path('runtime-host-v32.js')
+          s = p.read_text()
+          old = "const timeout = setTimeout(() => reject(new Error('Runtime worker startup timed out')), 8000);"
+          new = "const timeout = setTimeout(() => reject(new Error('Runtime worker startup timed out after 30 seconds')), 30000);"
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('runtime worker timeout marker missing')
+          p.write_text(s)
+
+          # 3) Fatal blockers are persistent state, not a 4 Hz event stream. Keep
+          # the card live but emit one console row until the blocker actually changes.
+          p = Path('developer-console-v44.js')
+          s = p.read_text()
+          old = "let lastLogAt=0;"
+          new = "let lastLogAt=0;\nlet lastBlockerFingerprint='';"
+          if old in s and "let lastBlockerFingerprint=''" not in s:
+              s = s.replace(old, new, 1)
+          old = "lastStageKey='source';lastBlocker=null;"
+          new = "lastStageKey='source';lastBlocker=null;lastBlockerFingerprint='';"
+          if old in s:
+              s = s.replace(old, new, 1)
+          old = "function markBlocked(blocker,source='runtime'){\n  const summary=blockerSummary(blocker),stage=blockerStage(blocker);lastBlocker={at:Date.now(),stage,summary,raw:blocker};\n  completeBefore(stage);setStage(stage,'blocked',summary);addLog('error',`BLOCKED · ${summary}`,{source,stage,data:blocker,force:true});updateBlockerCard();setBlockedBadge(true);\n}"
+          new = "function markBlocked(blocker,source='runtime'){\n  const summary=blockerSummary(blocker),stage=blockerStage(blocker),fingerprint=`${stage}|${summary}`;\n  const changed=fingerprint!==lastBlockerFingerprint;lastBlockerFingerprint=fingerprint;\n  lastBlocker={at:Date.now(),stage,summary,raw:blocker};\n  completeBefore(stage);setStage(stage,'blocked',summary);if(changed)addLog('error',`BLOCKED · ${summary}`,{source,stage,data:blocker,force:true});updateBlockerCard();setBlockedBadge(true);\n}"
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('markBlocked marker missing')
+          s = s.replace("if(detail.realFrame){lastBlocker=null;setBlockedBadge(false);}","if(detail.realFrame){lastBlocker=null;lastBlockerFingerprint='';setBlockedBadge(false);}")
+          s = s.replace("lastBlocker=null;setBlockedBadge(false);addLog('ok',`Frame presented", "lastBlocker=null;lastBlockerFingerprint='';setBlockedBadge(false);addLog('ok',`Frame presented")
+          p.write_text(s)
+
+          # Guard the exact regression that caused the Braid entry blocker.
+          checks = {
+              'src/xenia_web_bootstrap/hir_correctness_executor.cpp': [
+                  'LOAD_STORE_BYTE_SWAP', 'ByteSwapRuntimeValue', 'OPCODE_LOAD', 'OPCODE_STORE'],
+              'runtime-host-v32.js': ['30000'],
+              'developer-console-v44.js': ['lastBlockerFingerprint', 'if(changed)addLog'],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text()
+              missing = [n for n in needles if n not in text]
+              if missing:
+                  raise SystemExit(f'{path}: missing {missing}')
+          print('R360_V44_OPCODE39_ENDIAN_LOAD_STORE=PATCHED')
+          print('R360_V44_WORKER_STARTUP_TIMEOUT=PATCHED')
+          print('R360_V44_BLOCKER_DEDUPE=PATCHED')
+          PY
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/hir_correctness_executor.cpp runtime-host-v32.js developer-console-v44.js
+          git diff --cached --check
+          git commit -m 'fix: execute byte-swapped guest memory loads' || exit 0
+          git push origin HEAD:main

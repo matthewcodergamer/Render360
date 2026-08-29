@@ -1,6 +1,7 @@
 import {Render360Core,containerName} from '../wasm-core-v32.js';
 import {RuntimeHost} from '../runtime-host-v32.js';
 import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
+import {mountXdvdfs} from '../render360-xdvdfs.mjs';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
@@ -30,7 +31,20 @@ export class Render360Runtime extends EventTarget{
   async inspectFile(file){
     if(!this.ready)throw new Error('Render360 core is not ready');
     const lower=String(file.name||'').toLowerCase();
-    if(lower.endsWith('.iso'))return {sourceType:'iso',displayType:'Xbox 360 Disc / XDVDFS',name:stripExtension(file.name),titleId:0,mediaId:0,probe:null};
+    if(lower.endsWith('.iso')){
+      try{
+        this.emit('importProgress',{phase:'inspect',done:0,total:file.size,name:'Mounting XDVDFS'});
+        const volume=await mountXdvdfs(file);
+        const node=await volume.stat('/default.xex');
+        if(node.isDirectory||node.size<0x18)throw new Error('Disc default.xex is invalid');
+        if(node.size>256*1024*1024)throw new Error('Disc default.xex exceeds browser metadata limit');
+        const bytes=await volume.readDefaultXex({maxBytes:256*1024*1024});
+        const xexFile=new File([bytes],'default.xex',{type:'application/octet-stream'});
+        const probe=await this.core.probeFile(xexFile);
+        this.emit('importProgress',{phase:'inspect',done:file.size,total:file.size,name:'default.xex metadata'});
+        return {sourceType:'iso',displayType:'Xbox 360 Disc / XDVDFS',name:stripExtension(file.name),titleId:probe.xex?.titleId||0,mediaId:0,probe,discLayout:volume.layout,defaultXexBytes:node.size};
+      }catch(error){return {sourceType:'iso',displayType:'Xbox 360 Disc / XDVDFS',name:stripExtension(file.name),titleId:0,mediaId:0,probe:null,inspectionWarning:error.message};}
+    }
     const probe=await this.core.probeFile(file);
     let titleId=probe.xex?.titleId||probe.stfs?.titleId||0,mediaId=probe.stfs?.mediaId||0,name=stripExtension(file.name),displayType=containerName(probe.kind);
     if(probe.kind>=10&&probe.kind<=12){

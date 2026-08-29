@@ -8,31 +8,34 @@
 
 ```text
 OVERALL RENDER360 — WEIGHTED ENGINEERING ESTIMATE
-████████████░░░░░░░░  ~60%
+██████████████░░░░░░  ~68%
 ```
 
-The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, sparse memory, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff, controlled entry execution, import discovery, kernel dispatch/ABI, the bounded first-frame xboxkrnl/XAM starter-service surface, and the bounded guest thread/TLS/runtime foundation are now closed CI contracts. Xenos semantics, EDRAM, shader/resource translation, WebGPU presentation, browser VFS expansion, later title-specific kernel APIs and title compatibility remain major implementation work.
+The overall percentage is an engineering estimate, not a title-compatibility score. CPU/WASM, sparse memory, package/STFS extraction, retail XEX preparation, strict PE loading, package-to-entry handoff, controlled entry execution, import discovery, kernel dispatch/ABI, the bounded first-frame xboxkrnl/XAM starter-service surface, guest thread/TLS/runtime, bounded Xenos command semantics, EDRAM resolve behavior, and the WebGPU/WGSL presentation bridge are now closed CI contracts. A genuine title-produced frame, broad shader/resource translation, fuller Xenos behavior, browser VFS expansion, later title-specific kernel APIs and compatibility remain major work.
 
-## Latest authoritative gate
+## Latest authoritative GPU gate
 
-**Run 379 — Actions ID `33236768472` — SUCCESS**
+**Xenos WebGPU Foundations Run 3 — Actions ID `33237507899` — SUCCESS**
 
-Aggregate commit: `a350df341289352326bfe188ce58460a17ce8414`
+Aggregate commit: `8355d007b4b265eeab572b9ba27abe41900cd6bc`
 
-Run 379 closes the two remaining bounded pre-GPU foundations in the **main strict Xenia wasm**, not in a sidecar build:
+This gate closes two explicitly bounded GPU foundations and the bridge between guest memory and them:
 
-- **REAL xboxkrnl / XAM STARTER SERVICES — 100% ✓** for the explicitly tested first-frame service surface;
-- **GUEST THREADS / TLS / RUNTIME FOUNDATION — 100% ✓** for the explicitly tested cooperative runtime contract.
+- **XENOS FIRST-FRAME SEMANTIC FOUNDATION — 100% ✓**
+- **WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION — 100% ✓**
+- **GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE — 100% ✓**
 
-The runtime/service implementation is compiled into `xenia_ppc_bootstrap.wasm`, exported by the strict linker, judged by two independent harsh critics against that same main wasm, and followed by the complete locked regression replay.
+The implementation parses bounded Xenos PM4 command streams, handles type-0 register writes and type-2 NOPs, recognizes the Xenia-matched `PM4_DRAW_INDX` (`0x22`) and `PM4_DRAW_INDX_2` (`0x36`) draw opcodes, tracks register/draw/present telemetry, implements circular 2048-tile EDRAM addressing, produces a deterministic EDRAM-backed RGBA frame after a decoded draw, and rejects malformed/unsupported packets fail-closed.
 
-The service critic proves Xenia-matched starter semantics for `KeQueryPerformanceFrequency`, `RtlLowerChar`, `RtlUpperChar`, `KeTlsAlloc`, `KeTlsFree`, `KeTlsGetValue`, `KeTlsSetValue`, and the bounded XAM `XGetLanguage` starter path. Unknown modules/ordinals fail closed instead of becoming blanket success.
+The browser bridge consumes Xbox big-endian command words from guest memory, submits them to the Xenos semantic module, resolves the resulting frame, and exposes a WebGPU presenter with WGSL vertex/fragment stages and generation-based texture uploads.
 
-The runtime critic proves generation-tagged guest thread handles, deterministic stack alignment, per-thread TLS isolation, suspend/resume/current-thread transitions, termination/exit telemetry, stale-handle rejection, TLS exhaustion/free behavior, and a bounded cooperative runnable-thread selection path.
+The independent Xenos critic proves deterministic output, no fake present before a draw, truncated-packet rejection, unsupported-primitive rejection, ring bounds, circular EDRAM addressing and fail-closed unsupported PM4 behavior.
 
-Run 379 also replays every earlier package/XEX, retail image preparation, PE mapping, PPC/HIR, WasmBackend, SparseGuestMemory, kernel import/ABI and harsh-critic gate successfully.
+**Full-stack regression remained green too:** Xenia WASM32 Bootstrap **Run 381 — Actions ID `33237342332` — SUCCESS** after the Xenos implementation landed, preserving all previously locked CPU/WASM/package/XEX/kernel/runtime contracts.
 
-**Scope warning:** 100% here means the exact first-frame runtime contracts above are closed. It does **not** mean every xboxkrnl/XAM export, every scheduler primitive, every synchronization object or every commercial title requirement is implemented. A later title requesting an export outside this surface becomes a new exact blocker.
+**Scope warning:** these 100% values are first-frame foundations. They do not mean the complete Xbox 360 Xenos GPU, every shader instruction, every texture/resource format, every resolve mode or every commercial title's rendering path is implemented.
+
+Most importantly, **FIRST GENUINE GUEST FRAME is not being falsely promoted yet.** The current CI workload feeds a controlled guest-memory PM4 stream into the real Render360 Xenos path. The final frame milestone requires the command stream to originate from translated guest/title execution through the emulator GPU boundary.
 
 ## Closed foundations and bring-up contracts
 
@@ -72,9 +75,13 @@ REAL xboxkrnl / XAM STARTER SERVICES             100% ✓
 INDEPENDENT KERNEL SERVICES HARSH CRITIC         100% ✓
 GUEST THREADS / TLS / RUNTIME FOUNDATION         100% ✓
 INDEPENDENT GUEST RUNTIME HARSH CRITIC           100% ✓
+XENOS FIRST-FRAME SEMANTIC FOUNDATION            100% ✓
+INDEPENDENT XENOS HARSH CRITIC                   100% ✓
+WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION    100% ✓
+GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE       100% ✓
 ```
 
-These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility or complete xboxkrnl/XAM coverage.
+These percentages close defined CI contracts. They do **not** mean universal Xbox 360 compatibility.
 
 ## Critic promotion rule
 
@@ -85,13 +92,13 @@ A subsystem is promoted to 100% only when:
 3. an independent adversarial critic proves the contract and fail-closed cases;
 4. the complete locked regression matrix remains green.
 
-The critic is the final judge, not the main development loop. Build the subsystem first; run the critic after the implementation is complete enough to be judged.
+The critic is the final judge, not the main development loop. Build first, then let the critic try to break the finished bounded implementation.
 
 ## Public progress board
 
 ```text
 OVERALL RENDER360
-████████████░░░░░░░░  ~60%  weighted engineering estimate
+██████████████░░░░░░  ~68%  weighted engineering estimate
 
 CPU / WASM / MEMORY FOUNDATIONS
 ████████████████████  100% ✓
@@ -117,43 +124,54 @@ REAL xboxkrnl / XAM STARTER SERVICES
 ████████████████████  100% ✓
 GUEST THREADS / TLS / RUNTIME FOUNDATION
 ████████████████████  100% ✓
+XENOS FIRST-FRAME SEMANTIC FOUNDATION
+████████████████████  100% ✓
+WEBGPU / WGSL / EDRAM PRESENTATION FOUNDATION
+████████████████████  100% ✓
+GUEST MEMORY → XENOS → EDRAM FRAME BRIDGE
+████████████████████  100% ✓
 
-XENOS SEMANTIC LAYER
-██░░░░░░░░░░░░░░░░░░  ← ACTIVE: first guest GPU packets / ringbuffer / command semantics
-WEBGPU / WGSL / EDRAM
-░░░░░░░░░░░░░░░░░░░░
+FIRST GENUINE GUEST FRAME
+█████░░░░░░░░░░░░░░░  ← ACTIVE: connect translated guest/title GPU traffic to the closed Xenos bridge
 WEBGL2 FALLBACK
 ░░░░░░░░░░░░░░░░░░░░
-FIRST GENUINE GUEST FRAME
-░░░░░░░░░░░░░░░░░░░░
 ```
 
-Partial bars are planning indicators only. A subsystem reaches 100% only after its bounded implementation and critics are green.
+The partial first-frame bar means infrastructure is present; it does not claim a genuine title-produced frame has happened.
 
-## Active implementation — Xenos to first guest frame
-
-The main pre-GPU bring-up chain is now closed far enough to make the GPU boundary the primary development target:
+## Current GPU path
 
 ```text
-user-supplied title / controlled guest workload
-  → package / XEX / PE preparation
-  → PPC / HIR / Wasm execution
-  → bounded kernel services + guest thread/TLS runtime
-  → first Xenos packet / register traffic
-  → ringbuffer / command processor
-  → shader + resource semantics
-  → EDRAM / render targets
-  → WebGPU / WGSL
-  → FIRST GENUINE GUEST-PRODUCED FRAME
+translated guest/title execution
+  → guest-memory Xenos command stream
+  → big-endian command-word bridge
+  → PM4 ringbuffer parser
+  → register state
+  → DRAW_INDX / DRAW_INDX_2 event
+  → bounded Xenos raster semantics
+  → circular EDRAM target
+  → RGBA resolve
+  → generation-tracked frame
+  → WebGPU texture upload
+  → WGSL presentation
 ```
 
-The first frame must originate from guest GPU work. A JavaScript or browser-side triangle by itself does not count.
+CI currently proves the path beginning with a controlled guest-memory command stream. The next implementation target is to make the existing translated title/runtime path write or expose the actual Xenos ringbuffer/MMIO state that feeds this bridge. When that produces a frame from guest execution, the first-frame critic can judge provenance and the **FIRST GENUINE GUEST FRAME** bar can be promoted.
 
-Additional xboxkrnl/XAM, filesystem, synchronization or runtime behavior is added when genuine execution demands it. Those later additions do not retroactively invalidate the closed first-frame foundation; they become new title-compatibility contracts with their own critics.
+## GPU implementation files
+
+- `src/xenia_web_bootstrap/xenos_gpu_foundation.cpp` — bounded PM4/register/draw/EDRAM semantic module.
+- `render360-xenos-controller.mjs` — big-endian guest-memory → Xenos command bridge.
+- `render360-webgpu-xenos.mjs` — frame view, WGSL present shader and WebGPU presenter.
+- `test-xenos-semantic-foundation.mjs` — implementation gate.
+- `test-xenos-guest-memory-bridge.mjs` — guest-memory provenance bridge gate.
+- `test-webgpu-wgsl-edram-foundation.mjs` — WebGPU/WGSL bridge gate.
+- `test-xenos-harsh-critic.mjs` — independent adversarial Xenos critic.
+- `.github/workflows/xenos-foundations.yml` — dedicated GPU foundation CI gate.
 
 ## ISO / GOD input direction
 
-Render360 should not require ISO2GOD. The intended browser input architecture is:
+Render360 should not require ISO2GOD. The intended browser input architecture remains:
 
 ```text
 Xbox 360 .iso
@@ -170,19 +188,16 @@ both
   → existing Render360 XEX / PE / PPC pipeline
 ```
 
-Large disc images should be mounted virtually and read in bounded ranges rather than copied wholesale into Wasm memory. ISO/XDVDFS remains a future input-layer milestone and is separate from the current Xenos-first-frame push.
+Large disc images should be mounted virtually and read in bounded ranges rather than copied wholesale into Wasm memory. ISO/XDVDFS is separate from the current first-frame push.
 
 ## Road to playable software
 
 ```text
-Xenos packets / ringbuffer
-  → command processor
-  → shared Xenos semantics
-  → shaders / registers / resources
-  → EDRAM / render targets
-  → WebGPU + WGSL primary
+translated title → actual Xenos ringbuffer/MMIO traffic
   → FIRST GENUINE GUEST FRAME
-  → permanent first-frame regression critic
+  → permanent first-frame provenance/regression critic
+  → expand shaders / textures / resources / resolve modes from real blockers
+  → WebGL2 fallback where practical
   → performance work from real traces
   → small homebrew / XBLA-class bring-up
   → Braid-class target
@@ -192,27 +207,9 @@ Xenos packets / ringbuffer
 
 Once the first genuine frame exists, optimize from measured traces: compiled Wasm reuse, VMX/Wasm SIMD, fewer JS↔Wasm transitions, streamed title data, workers/shared queues where isolation permits, low internal resolution, shader/resource caches, and EDRAM traffic reduction.
 
-## Repository organization
-
-- `src/xenia_web_bootstrap/` — active browser-native title bring-up, execution, kernel/runtime and GPU-boundary layers.
-- `src/xenia_web_bootstrap/kernel_runtime_foundation.cpp` — bounded xboxkrnl/XAM starter services plus guest thread/TLS/runtime foundation.
-- `src/xenia_web_shims/` — browser/WASM portability shims.
-- `retail-xex-image-pipeline.mjs` — unified retail NONE/BASIC/NORMAL preparation adapter.
-- `render360-xex-imports.mjs` — Xenia-compatible XEX import-library parser.
-- `render360-kernel-imports.mjs` — import descriptor/thunk planning and kernel blocker identification.
-- `render360-title-controller.mjs` — one-call `default.xex` preparation, mapping, import registration and entry execution telemetry.
-- `render360-package-controller.mjs` — one-call STFS package extraction through title handoff.
-- `test-kernel-abi-critic.mjs` — independent adversarial judge for the minimum PPC↔kernel ABI contract.
-- `test-kernel-services-critic.mjs` — independent starter xboxkrnl/XAM service critic.
-- `test-guest-runtime-critic.mjs` — independent guest thread/TLS/runtime critic.
-- `.github/workflows/kernel-runtime-critics.yml` — fast isolated harsh-critic gate.
-- `.github/workflows/xenia-wasm32-bootstrap.yml` — authoritative full-stack replay.
-
-See [`ROADMAP.md`](ROADMAP.md), [`docs/releases/V36_BRINGUP.md`](docs/releases/V36_BRINGUP.md), and [`docs/PROJECT_LAYOUT.md`](docs/PROJECT_LAYOUT.md).
-
 ## Engineering rule
 
-Never report `REAL TITLE ENTRY`, `FIRST DRAW`, `FIRST PRESENT`, `PLAYABLE`, title FPS or title boot unless that event came from genuine execution through the corresponding emulator subsystem.
+Never report `REAL TITLE ENTRY`, `FIRST DRAW`, `FIRST PRESENT`, `FIRST GENUINE GUEST FRAME`, `PLAYABLE`, title FPS or title boot unless that event came from genuine execution through the corresponding emulator subsystem.
 
 ## License
 

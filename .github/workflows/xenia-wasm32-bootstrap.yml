@@ -11,6 +11,7 @@ on:
       - 'test-package-xex-foundation.mjs'
       - 'test-xex-image-decode.mjs'
       - 'test-xex-import-libraries.mjs'
+      - 'test-kernel-import-plan.mjs'
       - 'test-xex-image-prepare-none.mjs'
       - 'test-xex-image-prepare-basic.mjs'
       - 'test-xex-image-prepare-normal-frame.mjs'
@@ -26,6 +27,7 @@ on:
       - 'render360-title-controller.mjs'
       - 'render360-package-controller.mjs'
       - 'render360-xex-imports.mjs'
+      - 'render360-kernel-imports.mjs'
       - 'test-xenia-lzx-wasm.mjs'
       - 'test-xex-normal-lzx-end-to-end.mjs'
       - 'test-xex-crypto-wasm.mjs'
@@ -87,6 +89,8 @@ jobs:
         run: node ./test-xex-image-decode.mjs
       - name: Verify XEX import library decoding
         run: node ./test-xex-import-libraries.mjs
+      - name: Verify kernel import descriptors and first blocker plan
+        run: node ./test-kernel-import-plan.mjs
       - name: Verify streaming unencrypted/uncompressed XEX preparation
         run: node ./test-xex-image-prepare-none.mjs
       - name: Verify streaming BASIC XEX preparation

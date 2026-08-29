@@ -1,7 +1,7 @@
 #include "xex_guest_mapper.h"
 
-#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include "sparse_guest_memory.h"
@@ -12,7 +12,13 @@ namespace {
 constexpr uint32_t kPageSize = 4096u;
 constexpr uint32_t kPageMask = kPageSize - 1u;
 constexpr uint32_t kValidProtection = kGuestRead | kGuestWrite | kGuestExecute;
-constexpr uint32_t kInputCapacity = 64u * 1024u;
+constexpr uint32_t kInitialInputCapacity = 64u * 1024u;
+constexpr uint32_t kInputGrowthQuantum = 64u * 1024u;
+// Keep the staging ceiling aligned with the browser title-controller's bounded
+// default.xex limit. Memory is committed lazily via realloc, so an iPhone only
+// pays for the prepared image it actually launches rather than a giant static
+// Wasm data segment on every boot.
+constexpr uint32_t kMaxInputCapacity = 256u * 1024u * 1024u;
 
 struct XexMappedSection {
   uint32_t address = 0;
@@ -22,7 +28,8 @@ struct XexMappedSection {
 };
 
 std::vector<XexMappedSection> g_sections;
-std::array<uint8_t, kInputCapacity> g_input{};
+uint8_t* g_input = nullptr;
+uint32_t g_input_capacity = 0;
 uint32_t g_status = kXexMapperReset;
 uint32_t g_entry_address = 0;
 bool g_entry_set = false;
@@ -67,18 +74,44 @@ bool EntryInsideExecutableSection() {
   return false;
 }
 
+uint32_t RoundInputCapacity(uint32_t required_capacity) {
+  const uint64_t rounded =
+      (uint64_t(required_capacity) + kInputGrowthQuantum - 1u) &
+      ~uint64_t(kInputGrowthQuantum - 1u);
+  if (!rounded || rounded > kMaxInputCapacity) return 0;
+  return static_cast<uint32_t>(rounded);
+}
+
 }  // namespace
 
 void ResetXexGuestMapper() {
   ResetSparseGuestMemory();
   g_sections.clear();
-  // g_input is caller-facing staging memory. Mapping reset must not erase it:
-  // higher-level loaders may stage a prepared image here and then reset only
-  // the guest mapping state before decoding/copying those bytes.
+  // g_input is caller-facing staging memory. Mapping reset must not erase or
+  // shrink it: higher-level loaders may stage a prepared image here and then
+  // reset only the guest mapping state before decoding/copying those bytes.
   g_status = kXexMapperReset;
   g_entry_address = 0;
   g_entry_set = false;
   g_mapped_bytes = 0;
+}
+
+bool ReserveXexGuestInput(uint32_t required_capacity) {
+  if (!required_capacity || required_capacity > kMaxInputCapacity) {
+    return Fail(kXexMapperInvalidArgument);
+  }
+  if (g_input && g_input_capacity >= required_capacity) return true;
+
+  const uint32_t target = RoundInputCapacity(
+      required_capacity < kInitialInputCapacity ? kInitialInputCapacity
+                                                : required_capacity);
+  if (!target) return Fail(kXexMapperInvalidArgument);
+
+  void* resized = std::realloc(g_input, target);
+  if (!resized) return Fail(kXexMapperStagingAllocationFailed);
+  g_input = static_cast<uint8_t*>(resized);
+  g_input_capacity = target;
+  return true;
 }
 
 bool MapXexGuestSection(uint32_t virtual_address, uint32_t virtual_size,
@@ -161,8 +194,15 @@ uint32_t XexGuestSectionCount() {
   return static_cast<uint32_t>(g_sections.size());
 }
 uint32_t XexGuestMappedBytes() { return g_mapped_bytes; }
-uint8_t* XexGuestInputBuffer() { return g_input.data(); }
-uint32_t XexGuestInputCapacity() { return kInputCapacity; }
+uint8_t* XexGuestInputBuffer() {
+  if (!g_input && !ReserveXexGuestInput(kInitialInputCapacity)) return nullptr;
+  return g_input;
+}
+uint32_t XexGuestInputCapacity() {
+  if (!g_input && !ReserveXexGuestInput(kInitialInputCapacity)) return 0;
+  return g_input_capacity;
+}
+uint32_t XexGuestInputMaxCapacity() { return kMaxInputCapacity; }
 
 }  // namespace render360::xenia_web
 
@@ -192,6 +232,10 @@ uint32_t r360_xex_guest_mapper_set_entry(uint32_t entry_address) {
 uint32_t r360_xex_guest_mapper_finalize() {
   return render360::xenia_web::FinalizeXexGuestMapping() ? 1u : 0u;
 }
+uint32_t r360_xex_guest_mapper_reserve_input(uint32_t required_capacity) {
+  return render360::xenia_web::ReserveXexGuestInput(required_capacity) ? 1u
+                                                                       : 0u;
+}
 uint32_t r360_xex_guest_mapper_status() {
   return render360::xenia_web::XexGuestMapperStatusValue();
 }
@@ -210,5 +254,8 @@ uint32_t r360_xex_guest_mapper_input_buffer() {
 }
 uint32_t r360_xex_guest_mapper_input_capacity() {
   return render360::xenia_web::XexGuestInputCapacity();
+}
+uint32_t r360_xex_guest_mapper_input_max_capacity() {
+  return render360::xenia_web::XexGuestInputMaxCapacity();
 }
 }

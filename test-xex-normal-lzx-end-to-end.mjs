@@ -22,7 +22,7 @@ const imports=wasi.getImportObject(bmod);
 for(const imp of WebAssembly.Module.imports(bmod))if(imp.module==='env'&&imp.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const b=await WebAssembly.instantiate(bmod,imports);wasi.initialize(b);
 const pick=n=>b.exports[n]??b.exports[`_${n}`];
-const breq=['memory','r360_lzx_input_buffer','r360_lzx_input_capacity','r360_lzx_output_buffer','r360_lzx_output_capacity','r360_lzx_reset','r360_lzx_decompress','r360_lzx_output_size','r360_xex_guest_mapper_reset','r360_xex_guest_mapper_map_section','r360_xex_guest_mapper_load','r360_xex_guest_mapper_set_entry','r360_xex_guest_mapper_finalize','r360_xex_guest_mapper_entry_address','r360_xex_guest_mapper_section_count','r360_xex_guest_mapper_mapped_bytes','r360_xex_guest_mapper_input_buffer','r360_sparse_guest_memory_read_u8','r360_sparse_guest_memory_write_u8'];
+const breq=['memory','r360_lzx_input_buffer','r360_lzx_input_capacity','r360_lzx_output_buffer','r360_lzx_output_capacity','r360_lzx_reset','r360_lzx_decompress','r360_lzx_output_size','r360_xex_guest_mapper_reset','r360_xex_guest_mapper_map_section','r360_xex_guest_mapper_load','r360_xex_guest_mapper_set_entry','r360_xex_guest_mapper_finalize','r360_xex_guest_mapper_entry_address','r360_xex_guest_mapper_section_count','r360_xex_guest_mapper_mapped_bytes','r360_xex_guest_mapper_input_buffer','r360_sparse_guest_memory_read_u8','r360_sparse_guest_memory_write_u8','r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_status','r360_ppc_probe_guest_base','r360_ppc_probe_loaded_size','r360_ppc_probe_assembled_functions','r360_ppc_probe_hir_block_count','r360_ppc_probe_hir_instruction_count','r360_ppc_probe_last_guest_address','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_instructions','r360_ppc_probe_correctness_r3'];
 for(const n of breq)if(!pick(n))throw new Error(`missing bootstrap export ${n}`);
 const bmem=pick('memory'),bin=pick('r360_lzx_input_buffer')()>>>0,bincap=pick('r360_lzx_input_capacity')()>>>0,bout=pick('r360_lzx_output_buffer')()>>>0,boutcap=pick('r360_lzx_output_capacity')()>>>0;
 const bheap=()=>new Uint8Array(bmem.buffer);
@@ -44,7 +44,7 @@ function header(blockHash,blockSize,{base=0x91000000,window=0x8000}={}){
   p32(x,s,0x19c);p32(x,s+4,0x1000);p32(x,s+0x110,base);p32(x,s+0x178,0xffffffff);p32(x,s+0x17c,0x08000000);p32(x,s+0x180,1);p32(x,s+0x184,0x10|1);
   return x;
 }
-function makeImage(seed){const image=Buffer.alloc(0x1000);for(let i=0;i<image.length;i++)image[i]=(seed+i*29+(i>>>3)*7)&255;image[0x20]=0x38;image[0x21]=0x60;image[0x22]=0x00;image[0x23]=0x01;return image}
+function makeImage(seed){const image=Buffer.alloc(0x1000);for(let i=0;i<image.length;i++)image[i]=(seed+i*29+(i>>>3)*7)&255;p32(image,0x20,0x38600001);p32(image,0x24,0x4E800020);return image}
 function frame(h,block){
   stage(h);let st=c.r360_xex_prepare_normal_frame_begin(h.length,h.length+block.length)>>>0;if(st!==1)throw new Error(`frame begin failed ${st}`);
   if((c.r360_xex_prepare_normal_window_size()>>>0)!==0x8000)throw new Error('window mismatch');
@@ -63,7 +63,12 @@ function mapPrepared(h,prepared){
   if((pick('r360_xex_guest_mapper_entry_address')()>>>0)!==entry)throw new Error('mapped entry mismatch');if((pick('r360_xex_guest_mapper_section_count')()>>>0)!==count)throw new Error('mapped section count mismatch');if((pick('r360_xex_guest_mapper_mapped_bytes')()>>>0)!==total)throw new Error('mapped byte total mismatch');
   if((pick('r360_sparse_guest_memory_read_u8')(entry)>>>0)!==prepared[0x20]||(pick('r360_sparse_guest_memory_read_u8')((entry+1)>>>0)>>>0)!==prepared[0x21])throw new Error('entry bytes did not survive preparation→mapping');if((pick('r360_sparse_guest_memory_write_u8')(first,0xAA)>>>0)!==0)throw new Error('final RX mapping remained writable');return entry;
 }
-function run(seed,base){const expected=makeImage(seed),stream=makeLzxUncompressed(expected),block=normalBlock(stream),h=header(sha(block),block.length,{base});const framed=frame(h,block);if(framed.status!==2)throw new Error(`NORMAL frame failed ${framed.status}`);if(!framed.deblocked.equals(stream))throw new Error('framing did not reproduce exact LZX stream');if((c.r360_xex_prepare_output_done()>>>0)!==stream.length||(c.r360_xex_prepare_output_bytes()>>>0)!==stream.length)throw new Error('framing accounting mismatch');const got=lzx(framed.deblocked,expected.length);if(!got.equals(expected))throw new Error('prepared executable mismatch');const entry=mapPrepared(h,got);if(entry!==((base+0x20)>>>0))throw new Error('entry was not decoder-derived');return {expected,stream,block,h,entry}}
+function translatePreparedEntry(prepared,entry){
+  const program=prepared.subarray(0x20,0x28),input=pick('r360_ppc_probe_input_buffer')()>>>0;pick('r360_ppc_probe_reset')();bheap().set(program,input);const loaded=pick('r360_ppc_probe_load_at')(entry,input,program.length)>>>0;if(loaded!==program.length)throw new Error(`load-at-entry failed ${loaded}`);const translated=pick('r360_ppc_probe_translate')()>>>0;
+  const status=pick('r360_ppc_probe_status')()>>>0,base=pick('r360_ppc_probe_guest_base')()>>>0,loadedSize=pick('r360_ppc_probe_loaded_size')()>>>0,assembled=pick('r360_ppc_probe_assembled_functions')()>>>0,blocks=pick('r360_ppc_probe_hir_block_count')()>>>0,hir=pick('r360_ppc_probe_hir_instruction_count')()>>>0,last=pick('r360_ppc_probe_last_guest_address')()>>>0,correctness=pick('r360_ppc_probe_correctness_status')()>>>0,correctnessInstructions=pick('r360_ppc_probe_correctness_instructions')()>>>0,r3=BigInt.asUintN(64,pick('r360_ppc_probe_correctness_r3')());
+  if(status!==3||base!==entry||loadedSize!==program.length||translated===0||assembled===0||blocks===0||hir===0||last!==entry)throw new Error('decoder-derived entry did not complete Xenia PPC→HIR translation');if(correctness!==3||correctnessInstructions===0||r3!==1n)throw new Error(`prepared entry HIR execution mismatch r3=${r3}`);return {hir,r3};
+}
+function run(seed,base){const expected=makeImage(seed),stream=makeLzxUncompressed(expected),block=normalBlock(stream),h=header(sha(block),block.length,{base});const framed=frame(h,block);if(framed.status!==2)throw new Error(`NORMAL frame failed ${framed.status}`);if(!framed.deblocked.equals(stream))throw new Error('framing did not reproduce exact LZX stream');if((c.r360_xex_prepare_output_done()>>>0)!==stream.length||(c.r360_xex_prepare_output_bytes()>>>0)!==stream.length)throw new Error('framing accounting mismatch');const got=lzx(framed.deblocked,expected.length);if(!got.equals(expected))throw new Error('prepared executable mismatch');const entry=mapPrepared(h,got);if(entry!==((base+0x20)>>>0))throw new Error('entry was not decoder-derived');const translated=translatePreparedEntry(got,entry);return {expected,stream,block,h,entry,translated}}
 
 const a=run(0x21,0x91000000),bcase=run(0x7B,0x92000000);if(a.expected.equals(bcase.expected)||a.entry===bcase.entry)throw new Error('changed-input/relocation critic ineffective');
 console.log('XEX_NORMAL_FRAME_TO_LZX_STREAM=PASS');
@@ -73,6 +78,9 @@ console.log('XEX_PREPARED_IMAGE_TO_SPARSE_MAPPER=PASS');
 console.log('XEX_PREPARED_ENTRY_BYTES_PRESERVED=PASS');
 console.log('XEX_PREPARED_MAPPING_PERMISSIONS=PASS');
 console.log('XEX_PREPARED_IMAGE_RELOCATION_REUSE=PASS');
+console.log('XEX_PREPARED_ENTRY_XENIA_TRANSLATION=PASS');
+console.log('XEX_PREPARED_ENTRY_HIR_EXECUTION=PASS');
+console.log('XEX_PREPARED_ENTRY_RELOCATION_REUSE=PASS');
 
 const corrupt=Buffer.from(a.block);corrupt[40]^=0x80;const bad=frame(a.h,corrupt);if(bad.status!==110)throw new Error(`corrupt framed block must fail hash, got ${bad.status}`);
 console.log('XEX_NORMAL_END_TO_END_HASH_FAIL_CLOSED=PASS');
@@ -80,3 +88,4 @@ const badLzx=Buffer.from(a.stream);badLzx[1]=0;pick('r360_lzx_reset')();bheap().
 console.log('XEX_NORMAL_END_TO_END_LZX_FAIL_CLOSED=PASS');
 console.log('XEX_NORMAL_UNENCRYPTED_END_TO_END=PASS');
 console.log('XEX_PREPARED_REAL_MAPPER_INTEGRATION=PASS');
+console.log('XEX_PREPARED_ENTRY_PIPELINE=PASS');

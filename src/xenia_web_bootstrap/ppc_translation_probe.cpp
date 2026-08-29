@@ -135,6 +135,17 @@ uint32_t PageSparseCodeWindow(uint32_t target_address) {
   const uint32_t window_base = target_address & ~(kSparsePageBytes - 1u);
   if (uint64_t(window_base) + kProbeMaxBytes > 0x100000000ull) return 0;
 
+  // Fail closed on PE section permissions. A readable .data/.rdata page is not
+  // guest code just because its bytes are addressable. Only the contiguous
+  // readable+executable sparse span containing the target may enter the PPC
+  // decoder window.
+  const uint32_t executable_bytes =
+      SparseGuestExecutableSpan(window_base, kProbeMaxBytes);
+  if (!executable_bytes ||
+      uint64_t(target_address) >= uint64_t(window_base) + executable_bytes) {
+    return 0;
+  }
+
   // A nested guest call may move the one physical wasm32 code backing window.
   // Emitted caller HIR no longer depends on its instruction bytes; title data
   // accesses use sparse-memory fallback, so the window can safely follow the
@@ -145,16 +156,17 @@ uint32_t PageSparseCodeWindow(uint32_t target_address) {
   std::memset(guest, 0, kProbeMaxBytes);
 
   uint32_t loaded = 0;
-  for (uint32_t offset = 0; offset < kProbeMaxBytes;
+  for (uint32_t offset = 0; offset < executable_bytes;
        offset += kSparsePageBytes) {
+    const uint32_t page_bytes =
+        executable_bytes - offset < kSparsePageBytes
+            ? executable_bytes - offset
+            : kSparsePageBytes;
     if (!ReadSparseGuestMemory(window_base + offset, guest + offset,
-                               kSparsePageBytes)) {
-      // The target page itself must exist. A later hole merely terminates the
-      // executable window and leaves zero-filled guard bytes after it.
-      if (offset == 0) return 0;
-      break;
+                               page_bytes)) {
+      return 0;
     }
-    loaded += kSparsePageBytes;
+    loaded += page_bytes;
   }
   if (!loaded || target_address >= window_base + loaded) return 0;
 

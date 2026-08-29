@@ -21,6 +21,7 @@ on:
       - 'test-xenos-guest-memory-bridge.mjs'
       - 'test-webgpu-wgsl-edram-foundation.mjs'
       - 'test-xenos-harsh-critic.mjs'
+      - 'test-first-genuine-guest-frame.mjs'
       - 'render360-xenos-controller.mjs'
       - 'render360-webgpu-xenos.mjs'
       - 'test-xex-image-prepare-none.mjs'
@@ -158,6 +159,8 @@ jobs:
         run: node ./test-webgpu-wgsl-edram-foundation.mjs
       - name: "Harsh critic: verify bounded Xenos first-frame semantics in main wasm"
         run: node ./test-xenos-harsh-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify translated PPC produces the first genuine guest frame
+        run: node ./test-first-genuine-guest-frame.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify automatic XEX import to kernel execution bridge
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and V36 XEX bring-up

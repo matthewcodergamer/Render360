@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'index.html'
+      - 'app-v41.js'
+      - 'app-v42-patch.js'
       - 'render360-browser-features.mjs'
       - 'render360-sw.js'
       - 'render360-webgl2-xenos.mjs'
@@ -14,6 +17,9 @@ on:
       - '.github/workflows/r360-browser-features.yml'
   pull_request:
     paths:
+      - 'index.html'
+      - 'app-v41.js'
+      - 'app-v42-patch.js'
       - 'render360-browser-features.mjs'
       - 'render360-sw.js'
       - 'render360-webgl2-xenos.mjs'
@@ -38,5 +44,7 @@ jobs:
           node --check render360-browser-features.mjs
           node --check render360-sw.js
           node --check render360-webgl2-xenos.mjs
+          node --check app-v41.js
+          node --check app-v42-patch.js
       - name: Browser feature contract
         run: node test-browser-features-contract.mjs

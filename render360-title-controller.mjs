@@ -80,6 +80,17 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   const contextPages=3;
   const readWrite=3;
 
+  // Compatibility fallback for the native-HIR title path. The current Braid
+  // entry sequence performs a 32-bit read through guest address 0 before any
+  // kernel import is called. Xenia's normal virtual-memory backend has a full
+  // guest address aperture, while Render360's strict sparse-memory path treated
+  // page zero as an immediate unmapped dependency failure. Map one private,
+  // zero-filled page only for this title execution context so a null-page read
+  // observes zero and execution can continue to the next real dependency.
+  // This is deliberately title-context-local rather than a global HIR hack.
+  const zeroPageBacking=alloc(1)>>>0;
+  if(!zeroPageBacking||(map(0,1,zeroPageBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map title compatibility zero page');
+
   const stackBacking=alloc(stackPages)>>>0;
   if(!stackBacking||(map(stackBase,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
   const contextBacking=alloc(contextPages)>>>0;
@@ -108,7 +119,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize};
+  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true};
 }
 
 function stagePreparedPeImage(bootstrap,prepared){

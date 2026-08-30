@@ -7,45 +7,26 @@ text = path.read_text()
 
 include_anchor = '#include "hir_correctness_executor.h"\n'
 include_replacement = '''#include "hir_correctness_executor.h"\n\n#include "sparse_guest_memory.h"\n#include "title_gpu_runtime.h"\n\nextern "C" uint32_t r360_ppc_probe_guest_base();\n'''
-if include_anchor not in text:
-    raise SystemExit('title runtime memory overlay: include anchor changed')
-text = text.replace(include_anchor, include_replacement, 1)
+if 'include "sparse_guest_memory.h"' not in text:
+    if include_anchor not in text:
+        raise SystemExit('title runtime memory overlay: include anchor changed')
+    text = text.replace(include_anchor, include_replacement, 1)
 
-old = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
+# Replace the complete guest-memory implementation by function boundaries rather
+# than matching an old source snapshot. This intentionally survives changes in
+# the base executor such as adding LOAD_STORE_BYTE_SWAP support.
+start = text.find('bool LoadGuestValue(xe::Memory* memory, Value* destination,')
+end = text.find('\nbool ExecuteIndirect(', start)
+if start < 0 or end < 0:
+    raise SystemExit('title runtime memory overlay: guest load/store boundaries changed')
+
+replacement = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
                     const Value* address, const Value* offset,
                     const RuntimeValues& values, RuntimeValues& out_values,
                     uint32_t flags) {
-  if (flags != 0 || !destination) return false;
-  uint32_t guest_address = 0;
-  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
-  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
-  uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
-  RuntimeValue loaded;
-  loaded.type = destination->type;
-  std::memcpy(&loaded.value, host, size);
-  out_values[destination] = loaded;
-  return true;
-}
-
-bool StoreGuestValue(xe::Memory* memory, const Value* address,
-                     const Value* offset, const Value* source,
-                     const RuntimeValues& values, uint32_t flags) {
-  if (flags != 0 || !source) return false;
-  uint32_t guest_address = 0;
-  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
-  const size_t size = xe::cpu::hir::GetTypeSize(source->type);
-  uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
-  return StoreResolvedValue(source, values, host, size);
-}
-'''
-
-new = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
-                    const Value* address, const Value* offset,
-                    const RuntimeValues& values, RuntimeValues& out_values,
-                    uint32_t flags) {
-  if (flags != 0 || !destination) return false;
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !destination) {
+    return false;
+  }
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
@@ -53,25 +34,25 @@ new = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
   loaded.type = destination->type;
   loaded.value = {};
 
-  // Match Xenia's GPU MMIO aperture before ordinary guest RAM. The HIR memory
-  // path stores big-endian guest bytes in little-endian host integers, so MMIO
-  // logical register values are byte-swapped into the same representation and
-  // the normal PPC BYTE_SWAP HIR remains authoritative.
+  // Xenos MMIO exposes logical register values. Convert to the raw host-side
+  // byte representation first, then apply the HIR load byte-swap flag exactly
+  // once below just as we do for ordinary Xbox big-endian guest RAM.
   if (size == 4 && destination->type == xe::cpu::hir::INT32_TYPE) {
     uint32_t mmio_value = 0;
     if (ReadTitleGpuMmio(guest_address, &mmio_value)) {
       loaded.value.u32 = static_cast<uint32_t>(
           ByteSwapUnsigned(mmio_value, xe::cpu::hir::INT32_TYPE));
+      if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+          !ByteSwapRuntimeValue(&loaded)) {
+        return false;
+      }
       out_values[destination] = loaded;
       return true;
     }
   }
 
-  // Memory::TranslateVirtual is deliberately backed by only one movable 64 KiB
-  // wasm32 window. Calling it with arbitrary Xbox virtual addresses is not a
-  // harmless miss: the bounded overlay may trap while translating an address
-  // that doesn't belong to the current window. Check the guest range first and
-  // go directly to sparse title RAM everywhere else.
+  // The wasm32 Xenia Memory object only owns the movable 64 KiB translation
+  // window. Title memory outside it is authoritative in SparseGuestMemory.
   const uint32_t probe_base = r360_ppc_probe_guest_base();
   const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
   const uint64_t access_end = uint64_t(guest_address) + size;
@@ -79,18 +60,15 @@ new = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
                                access_end <= probe_end &&
                                access_end <= 0x100000000ull;
   uint8_t* host = nullptr;
-  if (in_probe_window &&
-      TranslateGuestRange(memory, guest_address, size, &host)) {
+  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
     std::memcpy(&loaded.value, host, size);
-    out_values[destination] = loaded;
-    return true;
+  } else if (!ReadSparseGuestMemory(guest_address, &loaded.value,
+                                    static_cast<uint32_t>(size))) {
+    return false;
   }
 
-  // The PE/XEX mapper already owns an authoritative sparse 32-bit guest address
-  // space. Falling back to it removes the old 64 KiB data-access wall without
-  // allocating a 4 GiB browser heap.
-  if (!ReadSparseGuestMemory(guest_address, &loaded.value,
-                             static_cast<uint32_t>(size))) {
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&loaded)) {
     return false;
   }
   out_values[destination] = loaded;
@@ -100,19 +78,27 @@ new = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
 bool StoreGuestValue(xe::Memory* memory, const Value* address,
                      const Value* offset, const Value* source,
                      const RuntimeValues& values, uint32_t flags) {
-  if (flags != 0 || !source) return false;
+  if ((flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP) != 0 || !source) {
+    return false;
+  }
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(source->type);
-  RuntimeValue resolved;
-  if (!ResolveRuntimeValue(source, values, &resolved) ||
-      resolved.type != source->type) {
+  RuntimeValue stored;
+  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
+    return false;
+  }
+
+  // Convert the logical PPC value to the raw big-endian memory representation
+  // before dispatching to MMIO or writing guest RAM.
+  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
+      !ByteSwapRuntimeValue(&stored)) {
     return false;
   }
 
   if (size == 4 && source->type == xe::cpu::hir::INT32_TYPE) {
     const uint32_t logical_value = static_cast<uint32_t>(
-        ByteSwapUnsigned(resolved.value.u32, xe::cpu::hir::INT32_TYPE));
+        ByteSwapUnsigned(stored.value.u32, xe::cpu::hir::INT32_TYPE));
     if (WriteTitleGpuMmio(guest_address, logical_value)) return true;
   }
 
@@ -123,24 +109,18 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
                                access_end <= probe_end &&
                                access_end <= 0x100000000ull;
   uint8_t* host = nullptr;
-  if (in_probe_window &&
-      TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::memcpy(host, &resolved.value, size);
-    // Keep mapped PE/sparse aliases coherent when this address also exists in
-    // sparse guest RAM. Synthetic probe-only addresses are allowed to have no
-    // sparse mapping, so a failed mirror is not itself a store failure.
-    WriteSparseGuestMemory(guest_address, &resolved.value,
+  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
+    std::memcpy(host, &stored.value, size);
+    WriteSparseGuestMemory(guest_address, &stored.value,
                            static_cast<uint32_t>(size));
     return true;
   }
 
-  return WriteSparseGuestMemory(guest_address, &resolved.value,
+  return WriteSparseGuestMemory(guest_address, &stored.value,
                                 static_cast<uint32_t>(size));
 }
 '''
 
-if old not in text:
-    raise SystemExit('title runtime memory overlay: guest load/store source contract changed')
-text = text.replace(old, new, 1)
+text = text[:start] + replacement + text[end:]
 path.write_text(text)
-print('Title runtime memory overlay: bounded code window + sparse guest RAM + Xenos MMIO enabled')
+print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PASS')

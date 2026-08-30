@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Render360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101311"/>
+      <stop offset=".55" stop-color="#050706"/>
+      <stop offset="1" stop-color="#000"/>
+    </linearGradient>
+    <linearGradient id="green" x1=".15" y1=".05" x2=".88" y2=".95">
+      <stop offset="0" stop-color="#7CFF76"/>
+      <stop offset=".42" stop-color="#30D158"/>
+      <stop offset="1" stop-color="#079B3F"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#30D158" stop-opacity=".34"/>
+      <stop offset=".6" stop-color="#30D158" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#30D158" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect x="34" y="34" width="956" height="956" rx="198" fill="none" stroke="#202520" stroke-width="4"/>
+  <circle cx="512" cy="512" r="348" fill="url(#glow)" filter="url(#soft)"/>
+  <circle cx="512" cy="512" r="278" fill="none" stroke="#16251A" stroke-width="82"/>
+  <path d="M329 303a278 278 0 1 1-83 286" fill="none" stroke="url(#green)" stroke-width="82" stroke-linecap="round"/>
+  <path d="M407 356 512 297l105 59v126L512 542 407 482Z" fill="#0B0F0C" stroke="#65F46D" stroke-width="18" stroke-linejoin="round"/>
+  <path d="m512 298 105 58-105 61-105-61Z" fill="#18381F"/>
+  <path d="M512 417v125" stroke="#30D158" stroke-width="18" stroke-linecap="round"/>
+  <path d="M407 356 512 417l105-61" fill="none" stroke="#43DB5E" stroke-width="18" stroke-linejoin="round"/>
+  <circle cx="304" cy="699" r="18" fill="#7CFF76"/>
+  <circle cx="356" cy="746" r="14" fill="#30D158"/>
+  <circle cx="416" cy="775" r="10" fill="#079B3F"/>
+</svg>

@@ -54,7 +54,7 @@ function applyInitialGprs(bootstrap,initialGprs){
   return applied;
 }
 
-function prepareBrowserMainThreadContext(bootstrap){
+function prepareBrowserMainThreadContext(bootstrap,entry){
   const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
   const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
   const write8=maybe(bootstrap,'r360_sparse_guest_memory_write_u8');
@@ -67,7 +67,13 @@ function prepareBrowserMainThreadContext(bootstrap){
   const stackBase=0x70000000;
   const stackPages=128;
   const stackLimit=stackBase;
-  const stackTop=(stackBase+stackPages*pageSize-0x100)&~0xF;
+  // Xenia ThreadState starts r1 at the high stack boundary. Processor::Execute
+  // then reserves 64 + 112 bytes before entering guest code. We previously
+  // entered default.xex with an invented -0x100 stack pointer, which is not the
+  // Xenia/Xbox entry ABI and can make title prologues consume zeroed slots.
+  const stackBasePointer=(stackBase+stackPages*pageSize)>>>0;
+  const xeniaCallFrameBytes=64+112;
+  const stackTop=(stackBasePointer-xeniaCallFrameBytes)&~0xF;
   const pcrAddress=0x50000000;
   const tlsAddress=0x50001000;
   const threadAddress=0x50002000;
@@ -90,17 +96,19 @@ function prepareBrowserMainThreadContext(bootstrap){
 
   be32(pcrAddress+0x000,tlsAddress);
   be32(pcrAddress+0x030,pcrAddress);
-  be32(pcrAddress+0x070,stackTop);
+  be32(pcrAddress+0x070,stackBasePointer);
   be32(pcrAddress+0x074,stackLimit);
   be32(pcrAddress+0x100,threadAddress);
   be32(pcrAddress+0x150,0);
 
-  be32(threadAddress+0x05C,stackTop);
+  be32(threadAddress+0x05C,stackBasePointer);
   be32(threadAddress+0x060,stackLimit);
   be32(threadAddress+0x068,tlsAddress);
+  be32(threadAddress+0x0D0,stackBase);
   be32(threadAddress+0x14C,1);
+  be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackTop,pcrAddress,tlsAddress,threadAddress,stackBytes:stackPages*pageSize};
+  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize};
 }
 
 function stagePreparedPeImage(bootstrap,prepared){
@@ -162,7 +170,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
 
   pick(bootstrap,'r360_title_handoff_reset')();
   if(prepareMainThreadContext){const warm=maybe(bootstrap,'r360_ppc_probe_page_sparse_code');if(typeof warm==='function'&&(warm(entry)>>>0)===0)throw new Error('unable to initialize Xenia title decoder before main-thread context');pick(bootstrap,'r360_title_handoff_reset')();}
-  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;
+  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap,entry):null;
   let startupGprCount=0;
   if(mainThreadContext){
     startupGprCount+=applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress});

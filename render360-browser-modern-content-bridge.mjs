@@ -1,6 +1,6 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.4';
 import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.5';
-import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.4';
+import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.6';
 import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.4';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.4';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44.4';
@@ -87,7 +87,7 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
   if((setExecute(1)>>>0)!==1)throw new Error('Unable to enable native HIR compatibility execution');
   let result;
   try{
-    result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});
+    result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true});
   }finally{
     setExecute(previous?1:0);
   }

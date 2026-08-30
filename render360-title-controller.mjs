@@ -54,6 +54,55 @@ function applyInitialGprs(bootstrap,initialGprs){
   return applied;
 }
 
+function prepareBrowserMainThreadContext(bootstrap){
+  const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
+  const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
+  const write8=maybe(bootstrap,'r360_sparse_guest_memory_write_u8');
+  if(!alloc||!map||!write8)throw new Error('published browser bootstrap is missing sparse guest-memory main-thread support');
+
+  // Match the important parts of Xenia's real ThreadState/XThread startup.
+  // Xbox user stacks live in 0x70000000-0x7F000000 and r13 points at the
+  // per-thread PCR. The fallback used to enter the XEX with every GPR zero.
+  const pageSize=4096;
+  const stackBase=0x70000000;
+  const stackPages=128;
+  const stackLimit=stackBase;
+  const stackTop=(stackBase+stackPages*pageSize-0x100)&~0xF;
+  const pcrAddress=0x50000000;
+  const tlsAddress=0x50001000;
+  const threadAddress=0x50002000;
+  const contextPages=3;
+  const readWrite=3;
+
+  const stackBacking=alloc(stackPages)>>>0;
+  if(!stackBacking||(map(stackBase,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
+  const contextBacking=alloc(contextPages)>>>0;
+  if(!contextBacking||(map(pcrAddress,contextPages,contextBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread PCR/TLS');
+
+  const be32=(address,value)=>{
+    const v=Number(value)>>>0;
+    for(let i=0;i<4;i++){
+      if((write8((address+i)>>>0,(v>>>(24-i*8))&0xFF)>>>0)!==1){
+        throw new Error(`unable to initialize Xbox thread memory @ 0x${(address+i).toString(16)}`);
+      }
+    }
+  };
+
+  be32(pcrAddress+0x000,tlsAddress);
+  be32(pcrAddress+0x030,pcrAddress);
+  be32(pcrAddress+0x070,stackTop);
+  be32(pcrAddress+0x074,stackLimit);
+  be32(pcrAddress+0x100,threadAddress);
+  be32(pcrAddress+0x150,0);
+
+  be32(threadAddress+0x05C,stackTop);
+  be32(threadAddress+0x060,stackLimit);
+  be32(threadAddress+0x068,tlsAddress);
+  be32(threadAddress+0x14C,1);
+
+  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackTop,pcrAddress,tlsAddress,threadAddress,stackBytes:stackPages*pageSize};
+}
+
 function stagePreparedPeImage(bootstrap,prepared){
   const inputBuffer=pick(bootstrap,'r360_xex_guest_mapper_input_buffer');
   const inputCapacity=pick(bootstrap,'r360_xex_guest_mapper_input_capacity');
@@ -88,7 +137,7 @@ function stagePreparedPeImage(bootstrap,prepared){
   return {input,capacity:cap,stagingGrew};
 }
 
-export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true}){
+export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true,prepareMainThreadContext=false}){
   const xex=Buffer.from(defaultXex);
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
   const headerSize=be32(xex,8);
@@ -112,7 +161,12 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelRegistration=registerKernelImportPlan(bootstrap,kernelImports);
 
   pick(bootstrap,'r360_title_handoff_reset')();
-  const startupGprCount=applyInitialGprs(bootstrap,initialGprs);
+  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;
+  let startupGprCount=0;
+  if(mainThreadContext){
+    startupGprCount+=applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress});
+  }
+  startupGprCount+=applyInitialGprs(bootstrap,initialGprs);
   const scannedEntry=maybe(bootstrap,'r360_title_handoff_translate_scanned_entry');
   if(scanEntryFunction&&!scannedEntry)throw new Error('browser bootstrap is missing scanned title-entry execution');
   const hir=scanEntryFunction?(scannedEntry()>>>0):(pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0);
@@ -153,5 +207,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

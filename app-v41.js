@@ -1,4 +1,4 @@
-import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js?v=44.5';
+import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js?v=44.6';
 import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js?v=44';
 import {resolveTitleCover} from './library/cover-resolver.js?v=44';
 import {prepareZipGame} from './import/zip-importer.js?v=44';

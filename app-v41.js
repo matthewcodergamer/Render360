@@ -3,7 +3,7 @@ import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPl
 import {resolveTitleCover} from './library/cover-resolver.js?v=44';
 import {prepareZipGame} from './import/zip-importer.js?v=44';
 import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js?v=44';
-import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js?v=44';
+import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js?v=44.11';
 import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory} from './storage/game-storage.js?v=44';
 
 const $=id=>document.getElementById(id);

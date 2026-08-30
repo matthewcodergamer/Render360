@@ -1,162 +1,36 @@
-name: Render360 V44 HIR sparse-memory runtime fix
+name: Render360 V44 opcode39 runtime gate
 
 on:
   push:
     paths:
       - '.github/workflows/r360-v44-hir-sparse-memory-runtime-fix.yml'
+      - 'tools/r360_opcode39_authoritative_memory_fix.py'
+      - 'test-opcode39-main-thread.mjs'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  patch-runtime:
+  patch-build-test-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fix opcode 39 guest-memory execution path
-        shell: bash
+      - name: Patch production title memory path
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          # The previous fix changed the base executor, but the production build
-          # replaces LoadGuestValue/StoreGuestValue with the title-memory overlay.
-          # Make BOTH paths authoritative on SparseGuestMemory. The 64 KiB Xenia
-          # memory window is an instruction-decoder cache, not title RAM.
-          p=Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
-          s=p.read_text()
-          old='''  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    uint8_t* host = nullptr;\n    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n    std::memcpy(&loaded.value, host, size);\n  }'''
-          new='''  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    const uint32_t sparse_fault = SparseGuestLastFaultCode();\n    const uint64_t access_end = uint64_t(guest_address) + size;\n    // Xenia enters user code with a mapped downward-growing stack. If a browser\n    // title handoff lost one stack page during lazy runtime initialization, repair\n    // only that dedicated main-thread stack arena instead of pretending an\n    // arbitrary unmapped Xbox address contains zeroes.\n    if (sparse_fault == 1u && guest_address >= 0x70000000u &&\n        access_end <= 0x70100000ull) {\n      const uint32_t page = guest_address & ~0xFFFu;\n      const uint32_t backing = AllocateSparseGuestBacking(1);\n      if (backing && MapSparseGuestMemory(page, 1, backing, 0,\n                                          kGuestRead | kGuestWrite) &&\n          ReadSparseGuestMemory(guest_address, &loaded.value,\n                                static_cast<uint32_t>(size))) {\n        std::fprintf(stderr,\n                     "R360_HIR_STACK_PAGE_REPAIRED address=0x%08X size=%u\\n",\n                     guest_address, static_cast<unsigned>(size));\n      } else {\n        uint8_t* host = nullptr;\n        if (!TranslateGuestRange(memory, guest_address, size, &host)) {\n          std::fprintf(stderr,\n                       "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u size=%u\\n",\n                       guest_address, SparseGuestLastFaultCode(),\n                       static_cast<unsigned>(size));\n          return false;\n        }\n        std::memcpy(&loaded.value, host, size);\n      }\n    } else {\n      uint8_t* host = nullptr;\n      if (!TranslateGuestRange(memory, guest_address, size, &host)) {\n        std::fprintf(stderr,\n                     "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u size=%u\\n",\n                     guest_address, sparse_fault, static_cast<unsigned>(size));\n        return false;\n      }\n      std::memcpy(&loaded.value, host, size);\n    }\n  }'''
-          if old in s:
-            s=s.replace(old,new,1)
-          elif 'R360_HIR_MEMORY_FAIL op=load' not in s:
-            raise SystemExit('base LOAD body contract changed')
-          if '#include <cstdio>' not in s:
-            s=s.replace('#include <cmath>\n','#include <cmath>\n#include <cstdio>\n',1)
-          p.write_text(s)
-
-          # Production overlay: sparse title RAM FIRST. The probe window is only
-          # a decoder fallback for synthetic fixtures and must never shadow real
-          # PE/data/stack mappings.
-          p=Path('prepare-title-runtime-memory-overlay.py')
-          s=p.read_text()
-          old=r'''  uint8_t* host = nullptr;
-  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::memcpy(&loaded.value, host, size);
-  } else if (!ReadSparseGuestMemory(guest_address, &loaded.value,
-                                    static_cast<uint32_t>(size))) {
-    return false;
-  }
-'''
-          new=r'''  uint8_t* host = nullptr;
-  if (!ReadSparseGuestMemory(guest_address, &loaded.value,
-                             static_cast<uint32_t>(size))) {
-    const uint32_t sparse_fault = SparseGuestLastFaultCode();
-    const uint64_t stack_access_end = uint64_t(guest_address) + size;
-    bool repaired_stack = false;
-    if (sparse_fault == 1u && guest_address >= 0x70000000u &&
-        stack_access_end <= 0x70100000ull) {
-      const uint32_t page = guest_address & ~0xFFFu;
-      const uint32_t backing = AllocateSparseGuestBacking(1);
-      repaired_stack = backing &&
-          MapSparseGuestMemory(page, 1, backing, 0, kGuestRead | kGuestWrite) &&
-          ReadSparseGuestMemory(guest_address, &loaded.value,
-                                static_cast<uint32_t>(size));
-      if (repaired_stack) {
-        std::fprintf(stderr,
-                     "R360_HIR_STACK_PAGE_REPAIRED address=0x%08X size=%u\n",
-                     guest_address, static_cast<unsigned>(size));
-      }
-    }
-    if (!repaired_stack) {
-      if (!(in_probe_window &&
-            TranslateGuestRange(memory, guest_address, size, &host))) {
-        std::fprintf(stderr,
-                     "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u size=%u\n",
-                     guest_address, sparse_fault, static_cast<unsigned>(size));
-        return false;
-      }
-      std::memcpy(&loaded.value, host, size);
-    }
-  }
-'''
-          if old not in s and 'R360_HIR_MEMORY_FAIL op=load' not in s:
-            raise SystemExit('title overlay LOAD body contract changed')
-          if old in s:s=s.replace(old,new,1)
-
-          old=r'''  uint8_t* host = nullptr;
-  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::memcpy(host, &stored.value, size);
-    WriteSparseGuestMemory(guest_address, &stored.value,
-                           static_cast<uint32_t>(size));
-    return true;
-  }
-
-  return WriteSparseGuestMemory(guest_address, &stored.value,
-                                static_cast<uint32_t>(size));
-'''
-          new=r'''  // Sparse title RAM is authoritative for stores too. Only use the
-  // decoder window for synthetic probe fixtures that have no sparse mapping.
-  if (WriteSparseGuestMemory(guest_address, &stored.value,
-                             static_cast<uint32_t>(size))) {
-    return true;
-  }
-  const uint32_t sparse_fault = SparseGuestLastFaultCode();
-  uint8_t* host = nullptr;
-  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::memcpy(host, &stored.value, size);
-    return true;
-  }
-  std::fprintf(stderr,
-               "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u size=%u\n",
-               guest_address, sparse_fault, static_cast<unsigned>(size));
-  return false;
-'''
-          if old not in s and 'R360_HIR_MEMORY_FAIL op=store' not in s:
-            raise SystemExit('title overlay STORE body contract changed')
-          if old in s:s=s.replace(old,new,1)
-          p.write_text(s)
-
-          # Force lazy Xenia Processor/Memory initialization before allocating the
-          # main title thread stack/PCR. This removes any ordering ambiguity between
-          # runtime creation and sparse title-thread mappings.
-          p=Path('render360-title-controller.mjs')
-          s=p.read_text()
-          old="  pick(bootstrap,'r360_title_handoff_reset')();\n  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;"
-          new="  pick(bootstrap,'r360_title_handoff_reset')();\n  if(prepareMainThreadContext){const warm=maybe(bootstrap,'r360_ppc_probe_page_sparse_code');if(warm&&(warm(entry)>>>0)===0)throw new Error('unable to initialize Xenia title decoder before main-thread context');pick(bootstrap,'r360_title_handoff_reset')();}\n  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;"
-          if old in s:s=s.replace(old,new,1)
-          elif 'unable to initialize Xenia title decoder before main-thread context' not in s:
-            raise SystemExit('main-thread warmup anchor changed')
-          p.write_text(s)
-
-          # Bump every browser module URL that can retain the old HIR runtime.
-          files={
-            'render360-browser-modern-content-bridge.mjs': [('render360-browser-title-runtime.mjs?v=44.5','render360-browser-title-runtime.mjs?v=44.7'),('render360-title-controller.mjs?v=44.6','render360-title-controller.mjs?v=44.7')],
-            'runtime/render360-runtime.js': [('render360-browser-modern-content-bridge.mjs?v=44.6','render360-browser-modern-content-bridge.mjs?v=44.7')],
-            'app-v41.js': [('runtime/render360-runtime.js?v=44.6','runtime/render360-runtime.js?v=44.7')],
-            'index.html': [('app-v41.js?v=44.6','app-v41.js?v=44.7'),('app-v42-patch.js?v=44.6','app-v42-patch.js?v=44.7')],
-            'render360-browser-title-runtime.mjs': [('xenia_ppc_bootstrap.wasm?v=44.5','xenia_ppc_bootstrap.wasm?v=44.7')],
-          }
-          for name,pairs in files.items():
-            p=Path(name); t=p.read_text()
-            for a,b in pairs:t=t.replace(a,b)
-            p.write_text(t)
-
-          for name in ['src/xenia_web_bootstrap/hir_correctness_executor.cpp','prepare-title-runtime-memory-overlay.py','render360-title-controller.mjs']:
-            if 'R360_HIR_MEMORY_FAIL' not in Path(name).read_text() and 'title-controller' not in name:
-              raise SystemExit(f'{name}: runtime memory repair marker missing')
-          print('R360_OPCODE39_SPARSE_MEMORY_AUTHORITATIVE=PATCHED')
-          print('R360_MAIN_THREAD_WARMUP_ORDER=PATCHED')
-          print('R360_BROWSER_CACHE_CHAIN=44.7')
-          PY
+          python3 tools/r360_opcode39_authoritative_memory_fix.py
+          python3 -m py_compile tools/r360_opcode39_authoritative_memory_fix.py prepare-title-runtime-memory-overlay.py
+          node --check render360-title-controller.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check render360-browser-title-runtime.mjs
+          node --check runtime/render360-runtime.js
+          node --check app-v41.js
           git diff --check
 
-      - name: Build and validate wasm32 browser bootstrap
-        shell: bash
+      - name: Build and link browser bootstrap
         run: |
           docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:4.0.10 bash -lc '
             set -o pipefail
@@ -168,69 +42,52 @@ jobs:
             if [ "$status" -ne 0 ]; then
               report=build/xenia-ppc-bootstrap/report.tsv
               cat build/xenia-ppc-bootstrap/render360_hir_correctness_executor.cpp.o.log || true
-              if ! grep -q $'"'"'^render360/hir_correctness_executor.cpp\tPASS\t'"'"' "$report"; then exit "$status"; fi
+              if ! grep -q $'"'"'^render360/hir_correctness_executor.cpp\tPASS\t'"'"' "$report"; then
+                exit "$status"
+              fi
               unexpected=$(awk -F $'"'"'\t'"'"' '"'"'$2=="BLOCKED" && $1!="src/xenia/cpu/compiler/passes/data_flow_analysis_pass.cc" && $1!="src/xenia/cpu/compiler/passes/value_reduction_pass.cc" {print $1}'"'"' "$report")
-              if [ -n "$unexpected" ]; then echo "$unexpected"; exit "$status"; fi
+              if [ -n "$unexpected" ]; then
+                echo "Unexpected wasm32 blockers:"
+                echo "$unexpected"
+                exit "$status"
+              fi
               echo R360_COMPILE_MATRIX=PASS_WITH_2_KNOWN_HOST_ONLY_PASSES
             fi
             bash ./link-xenia-ppc-bootstrap.sh
           '
 
-      - name: Run opcode39 main-thread and runtime critics
-        shell: bash
+      - name: Run opcode39 and runtime critics
         run: |
           node test-sparse-guest-memory.mjs
-          cat > test-opcode39-main-thread-ci.mjs <<'NODE'
-          import fs from 'node:fs';
-          import {WASI} from 'node:wasi';
-          const bytes=fs.readFileSync('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm');
-          const mod=await WebAssembly.compile(bytes);const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
-          const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
-          const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const p=n=>e[n]??e[`_${n}`];
-          p('r360_sparse_guest_memory_reset')();p('r360_ppc_probe_reset')();
-          const backing=p('r360_sparse_guest_memory_alloc')(128)>>>0;if(!backing)throw new Error('stack backing alloc failed');
-          if((p('r360_sparse_guest_memory_map')(0x70000000,128,backing,0,3)>>>0)!==1)throw new Error('stack map failed');
-          const stack=0x7007ff00;if((p('r360_ppc_probe_set_initial_gpr')(1,BigInt(stack))>>>0)!==1)throw new Error('r1 init failed');
-          const value=0x12345678;if((p('r360_sparse_guest_memory_write_u32_be')(stack+0x58,value)>>>0)!==1)throw new Error('stack data write failed');
-          const words=[0x38610058,0x80830000,0x38640000,0x4E800020];const code=Uint8Array.from(words.flatMap(w=>[w>>>24,(w>>>16)&255,(w>>>8)&255,w&255]));
-          const input=p('r360_ppc_probe_input_buffer')()>>>0;new Uint8Array(e.memory.buffer,input,code.length).set(code);
-          if((p('r360_ppc_probe_load_at')(0x80000000,input,code.length)>>>0)!==code.length)throw new Error('fixture load failed');
-          if(!(p('r360_ppc_probe_translate')()>>>0))throw new Error('fixture translation failed');
-          const status=p('r360_ppc_probe_correctness_status')()>>>0;const got=Number(BigInt.asUintN(32,p('r360_ppc_probe_correctness_r3')()))>>>0;
-          if(status!==3||got!==value)throw new Error(`opcode39 stack load failed status=${status} r3=0x${got.toString(16)} blocker=${p('r360_ppc_probe_correctness_blocker_opcode')()>>>0}`);
-          console.log('BRAID_OPCODE39_MAIN_THREAD_STACK_LOAD=PASS');
-          NODE
-          node test-opcode39-main-thread-ci.mjs
-          rm test-opcode39-main-thread-ci.mjs
+          node test-opcode39-main-thread.mjs
           python3 - <<'PY'
           from pathlib import Path
-          src=Path('test-guest-runtime-critic.mjs').read_text();tail="await import('./test-browser-thread-scheduler.mjs');"
+          src=Path('test-guest-runtime-critic.mjs').read_text()
+          tail="await import('./test-browser-thread-scheduler.mjs');"
+          if tail not in src:
+              raise SystemExit('guest runtime critic scheduler marker missing')
           Path('test-guest-runtime-critic-core.ci.mjs').write_text(src.replace(tail,'',1))
           PY
           node test-guest-runtime-critic-core.ci.mjs
           rm test-guest-runtime-critic-core.ci.mjs
           node test-browser-thread-scheduler.mjs
           node test-title-scanned-entry-runtime.mjs
-          node --check render360-title-controller.mjs
-          node --check render360-browser-modern-content-bridge.mjs
-          node --check render360-browser-title-runtime.mjs
-          node --check runtime/render360-runtime.js
-          node --check app-v41.js
 
-      - name: Publish rebuilt runtime and cache-busted browser
-        shell: bash
+      - name: Publish rebuilt runtime
         run: |
           cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm
           python3 - <<'PY'
           import json
           from pathlib import Path
-          p=Path('xenia_ppc_bootstrap.meta.json');data=json.loads(p.read_text()) if p.exists() else {}
-          data['runtimeFix']='opcode39-authoritative-sparse-stack-v3';data['browserCache']='44.7'
+          p=Path('xenia_ppc_bootstrap.meta.json')
+          data=json.loads(p.read_text()) if p.exists() else {}
+          data['runtimeFix']='opcode39-authoritative-sparse-memory-v4'
+          data['browserCache']='44.7'
           p.write_text(json.dumps(data,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/xenia_web_bootstrap/hir_correctness_executor.cpp prepare-title-runtime-memory-overlay.py render360-title-controller.mjs render360-browser-modern-content-bridge.mjs render360-browser-title-runtime.mjs runtime/render360-runtime.js app-v41.js index.html xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
           git diff --cached --check
-          git commit -m 'fix: make title HIR memory authoritative and repair opcode39 stack load' || exit 0
+          git commit -m 'fix: execute opcode39 against authoritative title memory' || exit 0
           git push origin HEAD:main

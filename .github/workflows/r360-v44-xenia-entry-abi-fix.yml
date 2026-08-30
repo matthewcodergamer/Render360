@@ -1,0 +1,106 @@
+name: Render360 V44 Xenia entry ABI fix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-v44-xenia-entry-abi-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Match Xenia Processor Execute main-thread ABI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('render360-title-controller.mjs')
+          s=p.read_text()
+
+          s=s.replace('function prepareBrowserMainThreadContext(bootstrap){','function prepareBrowserMainThreadContext(bootstrap,entry){',1)
+
+          old='''  const stackLimit=stackBase;\n  const stackTop=(stackBase+stackPages*pageSize-0x100)&~0xF;'''
+          new='''  const stackLimit=stackBase;\n  // Xenia ThreadState starts r1 at the high stack boundary. Processor::Execute\n  // then reserves 64 + 112 bytes before entering guest code. We previously\n  // entered default.xex with an invented -0x100 stack pointer, which is not the\n  // Xenia/Xbox entry ABI and can make title prologues consume zeroed slots.\n  const stackBasePointer=(stackBase+stackPages*pageSize)>>>0;\n  const xeniaCallFrameBytes=64+112;\n  const stackTop=(stackBasePointer-xeniaCallFrameBytes)&~0xF;'''
+          if old in s:
+              s=s.replace(old,new,1)
+          elif 'const xeniaCallFrameBytes=64+112;' not in s:
+              raise SystemExit('stack ABI anchor changed')
+
+          s=s.replace('be32(pcrAddress+0x070,stackTop);','be32(pcrAddress+0x070,stackBasePointer);',1)
+          s=s.replace('be32(threadAddress+0x05C,stackTop);','be32(threadAddress+0x05C,stackBasePointer);',1)
+
+          thread_anchor='''  be32(threadAddress+0x068,tlsAddress);\n  be32(threadAddress+0x14C,1);'''
+          thread_new='''  be32(threadAddress+0x068,tlsAddress);\n  be32(threadAddress+0x0D0,stackBase);\n  be32(threadAddress+0x14C,1);\n  be32(threadAddress+0x150,entry>>>0);'''
+          if thread_anchor in s:
+              s=s.replace(thread_anchor,thread_new,1)
+          elif 'be32(threadAddress+0x150,entry>>>0);' not in s:
+              raise SystemExit('KTHREAD startup anchor changed')
+
+          old_return="return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackTop,pcrAddress,tlsAddress,threadAddress,stackBytes:stackPages*pageSize};"
+          new_return="return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize};"
+          if old_return in s:
+              s=s.replace(old_return,new_return,1)
+          elif new_return not in s:
+              raise SystemExit('main-thread telemetry return anchor changed')
+
+          s=s.replace('prepareBrowserMainThreadContext(bootstrap):null','prepareBrowserMainThreadContext(bootstrap,entry):null',1)
+
+          # Cache-bust every module layer that can retain the previous title controller.
+          replacements={
+            'render360-browser-modern-content-bridge.mjs': [('render360-title-controller.mjs?v=44.7','render360-title-controller.mjs?v=44.8'),('render360-browser-title-runtime.mjs?v=44.7','render360-browser-title-runtime.mjs?v=44.8')],
+            'runtime/render360-runtime.js': [('render360-browser-modern-content-bridge.mjs?v=44.7','render360-browser-modern-content-bridge.mjs?v=44.8')],
+            'app-v41.js': [('runtime/render360-runtime.js?v=44.7','runtime/render360-runtime.js?v=44.8')],
+            'index.html': [('app-v41.js?v=44.7','app-v41.js?v=44.8'),('app-v42-patch.js?v=44.7','app-v42-patch.js?v=44.8')],
+          }
+          for name,pairs in replacements.items():
+              q=Path(name); t=q.read_text()
+              for a,b in pairs:t=t.replace(a,b)
+              q.write_text(t)
+
+          p.write_text(s)
+
+          # Regression guards tied to upstream Xenia behavior:
+          # ThreadState uses stack_base for r1; Processor::Execute reserves 176 bytes.
+          required=[
+            'const stackBasePointer=(stackBase+stackPages*pageSize)>>>0;',
+            'const xeniaCallFrameBytes=64+112;',
+            'be32(pcrAddress+0x070,stackBasePointer);',
+            'be32(threadAddress+0x05C,stackBasePointer);',
+            'be32(threadAddress+0x150,entry>>>0);',
+            'prepareBrowserMainThreadContext(bootstrap,entry)',
+          ]
+          text=p.read_text()
+          missing=[x for x in required if x not in text]
+          if missing: raise SystemExit(f'missing ABI markers: {missing}')
+          print('R360_XENIA_ENTRY_STACK_BASE=0x70080000')
+          print('R360_XENIA_PROCESSOR_EXECUTE_RESERVE=176')
+          print('R360_XENIA_ENTRY_R1=0x7007FF50')
+          print('R360_KPCR_KTHREAD_STACK_METADATA=PATCHED')
+          print('R360_KTHREAD_START_ADDRESS=PATCHED')
+          print('R360_BROWSER_CACHE_CHAIN=44.8')
+          PY
+
+          node --check render360-title-controller.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check runtime/render360-runtime.js
+          node --check app-v41.js
+          git diff --check
+
+      - name: Commit entry ABI fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add render360-title-controller.mjs render360-browser-modern-content-bridge.mjs runtime/render360-runtime.js app-v41.js index.html
+          git diff --cached --check
+          git commit -m 'fix: enter titles with Xenia Processor stack ABI' || exit 0
+          git push origin HEAD:main

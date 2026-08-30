@@ -68,6 +68,7 @@ uint32_t g_service_status = kStatusIdle;
 uint32_t g_service_calls = 0;
 uint32_t g_last_module = 0;
 uint32_t g_last_ordinal = 0;
+uint32_t g_next_notify_handle = 0x37000001u;
 
 uint32_t MakeHandle(uint32_t index, uint16_t generation) {
   return 0x36000000u | (uint32_t(generation) << 8) | (index + 1u);
@@ -330,7 +331,7 @@ uint32_t TlsGet(uint32_t handle, uint32_t slot) {
 }
 
 uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
-                     uint32_t r3, uint32_t r4, uint32_t, uint32_t,
+                     uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6,
                      uint32_t, uint32_t, uint32_t, uint32_t) {
   ++g_service_calls;
   g_last_module = module;
@@ -385,6 +386,34 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
 
   if (module == kModuleXam) {
     switch (ordinal) {
+      case 0x028A: {  // XamNotifyCreateListener
+        // Xenia returns a kernel object handle. The browser runtime does not
+        // yet need queued dashboard notifications during title startup, but it
+        // must return a stable non-zero listener handle so titles can poll it.
+        const uint32_t handle = g_next_notify_handle++;
+        if (!g_next_notify_handle) g_next_notify_handle = 0x37000001u;
+        return handle;
+      }
+      case 0x028B: {  // XNotifyGetNext
+        // Match Xenia's empty-queue behavior: zero optional param first, require
+        // an id pointer for output, zero id, then report no dequeued event.
+        // Guest pointers are Xbox virtual addresses, so use sparse guest memory
+        // and preserve big-endian dword representation.
+        const uint32_t zero = 0;
+        if (r6 && !WriteSparseGuestMemory(r6, &zero, sizeof(zero))) {
+          g_service_status = kStatusInvalid;
+          return 0;
+        }
+        if (!r5) return 0;
+        if (!WriteSparseGuestMemory(r5, &zero, sizeof(zero))) {
+          g_service_status = kStatusInvalid;
+          return 0;
+        }
+        return 0;
+      }
+      case 0x028C:  // XNotifyPositionUI - ignored by Xenia.
+      case 0x028D:  // XNotifyDelayUI - ignored by Xenia.
+        return 0;
       case 0x03CD:  // XGetLanguage - XLanguage::kEnglish in Xenia default path.
         return 1u;
       default:

@@ -12,7 +12,10 @@ if(call(1,0x14A,'a'.charCodeAt(0))!=='A'.charCodeAt(0)||call(1,0x14A,'Z'.charCod
 if(call(1,0x132,'Q'.charCodeAt(0))!=='q'.charCodeAt(0)||call(1,0x132,'7'.charCodeAt(0))!=='7'.charCodeAt(0))throw new Error('RtlLowerChar mismatch');
 if(call(1,0x83)!==50000000)throw new Error('KeQueryPerformanceFrequency mismatch');
 if(call(2,0x3CD)!==1)throw new Error('XGetLanguage mismatch');
-console.log('KERNEL_SERVICE_XENIA_ORDINALS=PASS');console.log('KERNEL_SERVICE_XBOXKRNL_SEMANTICS=PASS');console.log('KERNEL_SERVICE_XAM_SEMANTICS=PASS');
+const notifyHandle=call(2,0x28A,0,0);if(!notifyHandle)throw new Error('XamNotifyCreateListener returned null handle');
+if(call(2,0x28B,notifyHandle,0,0,0)!==0||(pick('r360_kernel_service_status')()>>>0)!==1)throw new Error('XNotifyGetNext empty-queue semantics mismatch');
+if(call(2,0x28C,0)!==0||call(2,0x28D,0)!==0)throw new Error('XNotify UI stub semantics mismatch');
+console.log('KERNEL_SERVICE_XENIA_ORDINALS=PASS');console.log('KERNEL_SERVICE_XBOXKRNL_SEMANTICS=PASS');console.log('KERNEL_SERVICE_XAM_NOTIFY_SEMANTICS=PASS');console.log('KERNEL_SERVICE_XAM_SEMANTICS=PASS');
 const before=pick('r360_kernel_service_calls')()>>>0;if(call(1,0xFFFF)!==0||(pick('r360_kernel_service_status')()>>>0)!==2)throw new Error('unknown xboxkrnl export did not fail closed');if((pick('r360_kernel_service_calls')()>>>0)!==before+1)throw new Error('unsupported call telemetry missing');
 if(call(99,1)!==0||(pick('r360_kernel_service_status')()>>>0)!==2)throw new Error('unknown module did not fail closed');
 console.log('KERNEL_SERVICE_UNSUPPORTED_FAIL_CLOSED=PASS');

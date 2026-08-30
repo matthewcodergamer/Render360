@@ -1,0 +1,42 @@
+name: Render360 Browser Feature Critic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-browser-features.mjs'
+      - 'render360-sw.js'
+      - 'render360-webgl2-xenos.mjs'
+      - 'render360-app-icon.svg'
+      - 'manifest.webmanifest'
+      - 'settings/app-settings-store.js'
+      - 'test-browser-features-contract.mjs'
+      - '.github/workflows/r360-browser-features.yml'
+  pull_request:
+    paths:
+      - 'render360-browser-features.mjs'
+      - 'render360-sw.js'
+      - 'render360-webgl2-xenos.mjs'
+      - 'render360-app-icon.svg'
+      - 'manifest.webmanifest'
+      - 'settings/app-settings-store.js'
+      - 'test-browser-features-contract.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  browser-feature-critic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse browser modules
+        run: |
+          node --check render360-browser-features.mjs
+          node --check render360-sw.js
+          node --check render360-webgl2-xenos.mjs
+      - name: Browser feature contract
+        run: node test-browser-features-contract.mjs

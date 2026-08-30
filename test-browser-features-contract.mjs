@@ -5,6 +5,9 @@ const feature=readFileSync('render360-browser-features.mjs','utf8');
 const sw=readFileSync('render360-sw.js','utf8');
 const manifest=JSON.parse(readFileSync('manifest.webmanifest','utf8'));
 const settings=readFileSync('settings/app-settings-store.js','utf8');
+const app=readFileSync('app-v41.js','utf8');
+const patch=readFileSync('app-v42-patch.js','utf8');
+const index=readFileSync('index.html','utf8');
 const gl=readFileSync('render360-webgl2-xenos.mjs','utf8');
 const icon=readFileSync('render360-app-icon.svg','utf8');
 
@@ -27,6 +30,10 @@ assert.ok(sw.includes('navigationPreload.enable'),'service worker must enable na
 assert.ok(sw.includes('isMutableRuntime'),'service worker must separate mutable runtime assets');
 assert.ok(sw.includes("cache:'no-store'"),'mutable JS/WASM must remain network-first/no-store');
 assert.ok(settings.includes("render360-browser-features.mjs?v=44.11"),'app settings store must load browser feature bridge');
+assert.ok(app.includes("app-settings-store.js?v=44.11"),'app entrypoint must cache-bust browser settings dependency');
+assert.ok(patch.includes("render360-browser-features.mjs?v=44.11"),'V44 patch must directly load browser feature bridge');
+assert.ok(index.includes('app-v41.js?v=44.11')&&index.includes('app-v42-patch.js?v=44.11'),'HTML entrypoints must be cache-busted');
+assert.ok(index.includes('manifest.webmanifest?v=44.11'),'manifest URL must be cache-busted');
 assert.ok(gl.includes('EXT_disjoint_timer_query_webgl2'),'WebGL2 presenter must support GPU timer queries');
 assert.ok(icon.includes('<svg')&&icon.includes('#30D158'),'Render360 vector app icon missing');
 assert.ok(Array.isArray(manifest.icons)&&manifest.icons.some(i=>i.src.includes('render360-app-icon.svg')),'manifest must advertise app icon');

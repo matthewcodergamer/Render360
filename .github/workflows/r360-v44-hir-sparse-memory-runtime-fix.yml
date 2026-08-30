@@ -1,0 +1,85 @@
+name: Render360 V44 HIR sparse-memory runtime fix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/r360-v44-hir-sparse-memory-runtime-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Route native HIR guest loads/stores through title sparse memory
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
+          s=p.read_text()
+
+          inc='#include "xenia/memory.h"\n'
+          if '#include "sparse_guest_memory.h"' not in s:
+            if inc not in s: raise SystemExit('memory include anchor missing')
+            s=s.replace(inc, inc+'#include "sparse_guest_memory.h"\n', 1)
+
+          old='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  std::memcpy(&loaded.value, host, size);'''
+          new='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  loaded.value = {};\n\n  // Commercial XEX images, title stacks and PCR/TLS state are mapped by the\n  // browser sparse guest-memory layer. xe::Memory::TranslateVirtual does not\n  // own those mappings, so using it exclusively made ordinary HIR LOAD (39)\n  // look like an unsupported opcode even when the address was valid. Prefer\n  // the authoritative sparse title map, while retaining xe::Memory as the\n  // correctness-test / upstream-memory fallback.\n  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    uint8_t* host = nullptr;\n    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n    std::memcpy(&loaded.value, host, size);\n  }'''
+          if old in s:
+            s=s.replace(old,new,1)
+          elif new not in s:
+            raise SystemExit('LOAD body anchor missing')
+
+          old='''  const size_t size = xe::cpu::hir::GetTypeSize(source->type);\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n  std::memcpy(host, &stored.value, size);\n  return true;'''
+          new='''  const size_t size = xe::cpu::hir::GetTypeSize(source->type);\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n\n  // Keep guest writes coherent with the same sparse map used by the XEX\n  // loader, stack/PCR setup and executable-content invalidation.\n  if (WriteSparseGuestMemory(guest_address, &stored.value,\n                             static_cast<uint32_t>(size))) {\n    return true;\n  }\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  std::memcpy(host, &stored.value, size);\n  return true;'''
+          if old in s:
+            s=s.replace(old,new,1)
+          elif new not in s:
+            raise SystemExit('STORE body anchor missing')
+
+          p.write_text(s)
+          print('R360_HIR_SPARSE_LOAD=PATCHED')
+          print('R360_HIR_SPARSE_STORE=PATCHED')
+          PY
+
+          git diff --check
+
+          # Existing source-level runtime tests must remain green.
+          node test-sparse-guest-memory.mjs
+          node test-guest-runtime-critic.mjs
+          node test-title-scanned-entry-runtime.mjs
+
+      - name: Build and validate wasm32 browser bootstrap
+        shell: bash
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:4.0.10 bash -lc '
+            ./fetch-xenia.sh &&
+            ./build-xenia-ppc-bootstrap.sh &&
+            ./link-xenia-ppc-bootstrap.sh
+          '
+
+      - name: Publish rebuilt bootstrap and commit fix
+        shell: bash
+        run: |
+          cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('xenia_ppc_bootstrap.meta.json')
+          data=json.loads(p.read_text()) if p.exists() else {}
+          data['runtimeFix']='hir-sparse-memory-load-store-v1'
+          p.write_text(json.dumps(data,indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/hir_correctness_executor.cpp xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
+          git diff --cached --check
+          git commit -m 'fix: execute title HIR memory ops on sparse guest map' || exit 0
+          git push origin HEAD:main

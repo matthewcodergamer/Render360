@@ -28,15 +28,17 @@ replacement = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
     return false;
   }
   uint32_t guest_address = 0;
-  if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
+  if (!ResolveGuestAddress(address, offset, values, &guest_address)) {
+    std::fprintf(stderr, "R360_HIR_MEMORY_FAIL op=resolve-load source=0x%08X\n",
+                 guest_address);
+    return false;
+  }
   const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
   RuntimeValue loaded;
   loaded.type = destination->type;
   loaded.value = {};
 
-  // Xenos MMIO exposes logical register values. Convert to the raw host-side
-  // byte representation first, then apply the HIR load byte-swap flag exactly
-  // once below just as we do for ordinary Xbox big-endian guest RAM.
+  // Xenos MMIO is not ordinary sparse RAM.
   if (size == 4 && destination->type == xe::cpu::hir::INT32_TYPE) {
     uint32_t mmio_value = 0;
     if (ReadTitleGpuMmio(guest_address, &mmio_value)) {
@@ -51,22 +53,23 @@ replacement = r'''bool LoadGuestValue(xe::Memory* memory, Value* destination,
     }
   }
 
-  // The wasm32 Xenia Memory object only owns the movable 64 KiB translation
-  // window. Title memory outside it is authoritative in SparseGuestMemory.
-  const uint32_t probe_base = r360_ppc_probe_guest_base();
-  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
-  const uint64_t access_end = uint64_t(guest_address) + size;
-  const bool in_probe_window = guest_address >= probe_base &&
-                               access_end <= probe_end &&
-                               access_end <= 0x100000000ull;
-  uint8_t* host = nullptr;
-  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
+  // SparseGuestMemory is the authoritative Xbox address space. xe::Memory is
+  // only the movable 64 KiB decoder window and may be used solely as a fallback
+  // for synthetic probe fixtures that don't have a sparse mapping.
+  if (!ReadSparseGuestMemory(guest_address, &loaded.value,
+                             static_cast<uint32_t>(size))) {
+    const uint32_t sparse_fault = SparseGuestLastFaultCode();
+    const uint32_t sparse_fault_address = SparseGuestLastFaultAddress();
+    uint8_t* host = nullptr;
+    if (!TranslateGuestRange(memory, guest_address, size, &host)) {
+      std::fprintf(stderr,
+                   "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
+                   guest_address, sparse_fault, sparse_fault_address,
+                   static_cast<unsigned>(size));
+      return false;
+    }
     std::memcpy(&loaded.value, host, size);
-  } else if (!ReadSparseGuestMemory(guest_address, &loaded.value,
-                                    static_cast<uint32_t>(size))) {
-    return false;
   }
-
   if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
       !ByteSwapRuntimeValue(&loaded)) {
     return false;
@@ -88,9 +91,6 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
   if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
     return false;
   }
-
-  // Convert the logical PPC value to the raw big-endian memory representation
-  // before dispatching to MMIO or writing guest RAM.
   if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
       !ByteSwapRuntimeValue(&stored)) {
     return false;
@@ -102,23 +102,24 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
     if (WriteTitleGpuMmio(guest_address, logical_value)) return true;
   }
 
-  const uint32_t probe_base = r360_ppc_probe_guest_base();
-  const uint64_t probe_end = uint64_t(probe_base) + 64u * 1024u;
-  const uint64_t access_end = uint64_t(guest_address) + size;
-  const bool in_probe_window = guest_address >= probe_base &&
-                               access_end <= probe_end &&
-                               access_end <= 0x100000000ull;
-  uint8_t* host = nullptr;
-  if (in_probe_window && TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::memcpy(host, &stored.value, size);
-    WriteSparseGuestMemory(guest_address, &stored.value,
-                           static_cast<uint32_t>(size));
+  if (WriteSparseGuestMemory(guest_address, &stored.value,
+                             static_cast<uint32_t>(size))) {
     return true;
   }
-
-  return WriteSparseGuestMemory(guest_address, &stored.value,
-                                static_cast<uint32_t>(size));
+  const uint32_t sparse_fault = SparseGuestLastFaultCode();
+  const uint32_t sparse_fault_address = SparseGuestLastFaultAddress();
+  uint8_t* host = nullptr;
+  if (!TranslateGuestRange(memory, guest_address, size, &host)) {
+    std::fprintf(stderr,
+                 "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
+                 guest_address, sparse_fault, sparse_fault_address,
+                 static_cast<unsigned>(size));
+    return false;
+  }
+  std::memcpy(host, &stored.value, size);
+  return true;
 }
+
 '''
 
 text = text[:start] + replacement + text[end:]

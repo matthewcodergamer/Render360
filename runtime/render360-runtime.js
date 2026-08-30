@@ -1,7 +1,7 @@
 import {Render360Core,containerName} from '../wasm-core-v32.js?v=44';
 import {RuntimeHost} from '../runtime-host-v32.js?v=44.5';
 import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs?v=44.2';
-import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=44.6';
+import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=44.7';
 import {mountXdvdfs} from '../render360-xdvdfs.mjs';
 import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 

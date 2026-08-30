@@ -43,7 +43,7 @@ export function validateBrowserBootstrap(instance){
   return {ok:true,exports:REQUIRED_BOOTSTRAP_EXPORTS.length,memoryBytes:instance.exports.memory.buffer.byteLength};
 }
 
-export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.5',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
+export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.7',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
   const response=await fetchImpl(url,{cache:'no-store'});
@@ -96,7 +96,7 @@ export async function handoffXboxIsoBrowser({
   core,
   file,
   bootstrap=null,
-  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.5',
+  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.7',
   scanEntryFunction=true,
   productionThreadedExecution=true,
   primaryThreadContext=0,
@@ -209,7 +209,7 @@ export async function handoffXboxIsoBrowser({
 }
 
 export function browserTitleRuntimeContract(){return {
-  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.5',
+  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.7',
   requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],
   input:'File/Blob XDVDFS ISO',
   wholeIsoCopy:false,

@@ -3,5 +3,6 @@
   "sourceRun": "33287076598",
   "sha256": "25d6ae3625180644a2b6612d76e6100d0db3dabf1a4d806a735600e56e2da8c1",
   "bytes": 2576978,
-  "runtimeFix": "hir-sparse-memory-load-store-v2"
+  "runtimeFix": "opcode39-authoritative-sparse-memory-v4",
+  "browserCache": "44.7"
 }

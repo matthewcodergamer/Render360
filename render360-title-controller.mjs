@@ -161,6 +161,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelRegistration=registerKernelImportPlan(bootstrap,kernelImports);
 
   pick(bootstrap,'r360_title_handoff_reset')();
+  if(prepareMainThreadContext){const warm=maybe(bootstrap,'r360_ppc_probe_page_sparse_code');if(typeof warm==='function'&&(warm(entry)>>>0)===0)throw new Error('unable to initialize Xenia title decoder before main-thread context');pick(bootstrap,'r360_title_handoff_reset')();}
   const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;
   let startupGprCount=0;
   if(mainThreadContext){

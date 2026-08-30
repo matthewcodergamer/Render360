@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/r360-v44-main-thread-context-hotfix.yml'
+      - 'tools/r360_main_thread_context_hotfix.py'
   workflow_dispatch:
 
 permissions:
@@ -16,136 +17,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Seed a real Xbox main-thread stack and PCR before native HIR execution
-        shell: bash
+      - name: Patch Xbox main-thread runtime context
+        run: python3 tools/r360_main_thread_context_hotfix.py
+      - name: Validate browser modules
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p=Path('render360-title-controller.mjs')
-          s=p.read_text()
-
-          anchor="""function stagePreparedPeImage(bootstrap,prepared){"""
-          helper=r'''function prepareBrowserMainThreadContext(bootstrap){
-  const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
-  const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
-  const write8=maybe(bootstrap,'r360_sparse_guest_memory_write_u8');
-  if(!alloc||!map||!write8)throw new Error('published browser bootstrap is missing sparse guest-memory main-thread support');
-
-  // Match the important parts of Xenia's real ThreadState/XThread startup.
-  // Xbox user stacks live in 0x70000000-0x7F000000 and r13 points at the
-  // per-thread PCR. The commercial-title fallback previously entered the XEX
-  // with every GPR zero, so its first ordinary LOAD dereferenced an invalid
-  // address before a kernel import or GPU packet could ever be reached.
-  const pageSize=4096;
-  const stackBase=0x70000000;
-  const stackPages=128; // 512 KiB, same order as a normal title main thread.
-  const stackLimit=stackBase;
-  const stackTop=(stackBase+stackPages*pageSize-0x100)&~0xF;
-  const pcrAddress=0x50000000;
-  const tlsAddress=0x50001000;
-  const threadAddress=0x50002000;
-  const contextPages=3;
-  const readWrite=3;
-
-  const stackBacking=alloc(stackPages)>>>0;
-  if(!stackBacking||(map(stackBase,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
-  const contextBacking=alloc(contextPages)>>>0;
-  if(!contextBacking||(map(pcrAddress,contextPages,contextBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread PCR/TLS');
-
-  const be32=(address,value)=>{
-    const v=Number(value)>>>0;
-    for(let i=0;i<4;i++)if((write8((address+i)>>>0,(v>>>(24-i*8))&0xFF)>>>0)!==1)throw new Error(`unable to initialize Xbox thread memory @ 0x${(address+i).toString(16)}`);
-  };
-
-  // X_KPCR fields used by title code and common inlined Win32/XAM helpers.
-  be32(pcrAddress+0x000,tlsAddress);     // tls_ptr
-  be32(pcrAddress+0x030,pcrAddress);     // pcr_ptr
-  be32(pcrAddress+0x070,stackTop);       // stack_base_ptr
-  be32(pcrAddress+0x074,stackLimit);     // stack_end_ptr
-  be32(pcrAddress+0x100,threadAddress);  // current_thread
-  be32(pcrAddress+0x150,0);              // dpc_active
-
-  // Minimum KTHREAD state that title startup code commonly reads through r13.
-  be32(threadAddress+0x05C,stackTop);
-  be32(threadAddress+0x060,stackLimit);
-  be32(threadAddress+0x068,tlsAddress);
-  be32(threadAddress+0x14C,1);           // main thread id
-
-  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackTop,pcrAddress,tlsAddress,threadAddress,stackBytes:stackPages*pageSize};
-}
-
-'''
-          if 'function prepareBrowserMainThreadContext(bootstrap)' not in s:
-            if anchor not in s: raise SystemExit('stagePreparedPeImage anchor missing')
-            s=s.replace(anchor,helper+anchor,1)
-
-          old="export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true}){"
-          new="export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true,prepareMainThreadContext=false}){"
-          if old in s: s=s.replace(old,new,1)
-          elif new not in s: raise SystemExit('handoff signature marker missing')
-
-          old="""  pick(bootstrap,'r360_title_handoff_reset')();\n  const startupGprCount=applyInitialGprs(bootstrap,initialGprs);"""
-          new="""  pick(bootstrap,'r360_title_handoff_reset')();\n  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap):null;\n  let startupGprCount=0;\n  if(mainThreadContext){\n    // Xenia ThreadState initializes r1 to stack_base and r13 to PCR. Seed those\n    // before executing the title entry; explicit caller GPRs are applied last.\n    startupGprCount+=applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress});\n  }\n  startupGprCount+=applyInitialGprs(bootstrap,initialGprs);"""
-          if old in s: s=s.replace(old,new,1)
-          elif new not in s: raise SystemExit('startup GPR marker missing')
-
-          old="entryExecutionMode,startupGprCount,executionStatus"
-          new="entryExecutionMode,startupGprCount,mainThreadContext,executionStatus"
-          if old in s: s=s.replace(old,new,1)
-          elif new not in s: raise SystemExit('controller return telemetry marker missing')
-          p.write_text(s)
-
-          p=Path('render360-browser-modern-content-bridge.mjs')
-          s=p.read_text()
-          old="result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});"
-          new="result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true});"
-          # There are two calls. Only the native-HIR fallback (second occurrence)
-          # must allocate runtime thread state; translation-only stays side-effect free.
-          if s.count(old)!=2 and new not in s:
-            raise SystemExit(f'expected two title handoff calls, found {s.count(old)}')
-          if new not in s:
-            first=s.find(old)
-            second=s.find(old,first+len(old))
-            if second<0: raise SystemExit('native HIR handoff marker missing')
-            s=s[:second]+s[second:].replace(old,new,1)
-          s=s.replace("./render360-title-controller.mjs?v=44.4","./render360-title-controller.mjs?v=44.6")
-          p.write_text(s)
-
-          # Bust the entire Safari module chain. The previous run proved this is
-          # now a real execution issue, not a stale-page diagnosis.
-          replacements={
-            'runtime/render360-runtime.js': [('render360-browser-modern-content-bridge.mjs?v=44.5','render360-browser-modern-content-bridge.mjs?v=44.6')],
-            'app-v41.js': [('runtime/render360-runtime.js?v=44.5','runtime/render360-runtime.js?v=44.6')],
-            'index.html': [('app-v41.js?v=44.5','app-v41.js?v=44.6'),('app-v42-patch.js?v=44.5','app-v42-patch.js?v=44.6')],
-          }
-          for name,pairs in replacements.items():
-            path=Path(name); text=path.read_text()
-            for a,b in pairs:
-              if a in text: text=text.replace(a,b)
-            path.write_text(text)
-
-          # Fail closed if the runtime contract wasn't actually installed.
-          controller=Path('render360-title-controller.mjs').read_text()
-          bridge=Path('render360-browser-modern-content-bridge.mjs').read_text()
-          for needle in ['prepareBrowserMainThreadContext','r360_sparse_guest_memory_alloc','stackTop','pcrAddress','prepareMainThreadContext=false','mainThreadContext']:
-            if needle not in controller: raise SystemExit(f'controller missing {needle}')
-          for needle in ['prepareMainThreadContext:true','render360-title-controller.mjs?v=44.6']:
-            if needle not in bridge: raise SystemExit(f'bridge missing {needle}')
-          print('R360_MAIN_THREAD_R1_STACK=PATCHED')
-          print('R360_MAIN_THREAD_R13_PCR=PATCHED')
-          print('R360_MAIN_THREAD_SPARSE_MEMORY=PATCHED')
-          PY
-
           node --check render360-title-controller.mjs
           node --check render360-browser-modern-content-bridge.mjs
           node --check runtime/render360-runtime.js
           node --check app-v41.js
           git diff --check
-
       - name: Commit runtime hotfix
-        shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

@@ -1,0 +1,199 @@
+/* Render360 V44.13 — Apple-native visual grammar informed by XeniOS reference UI.
+   This layer changes presentation only; emulator/runtime contracts remain untouched. */
+
+:root{
+  --ios-bg-dark:#000000;
+  --ios-group-dark:#1c1c1e;
+  --ios-group-dark-2:#2c2c2e;
+  --ios-bg-light:#f2f2f7;
+  --ios-group-light:#ffffff;
+  --ios-separator-dark:rgba(84,84,88,.60);
+  --ios-separator-light:rgba(60,60,67,.20);
+  --ios-blue:#0a84ff;
+  --ios-green:#30d158;
+  --ios-red:#ff453a;
+  --ios-label:#f5f5f7;
+  --ios-secondary:#98989d;
+}
+
+html,body,#app{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,sans-serif}
+button,select,input{font-family:inherit}
+
+/* ----- Library / navigation ----- */
+.navbar{
+  background:color-mix(in srgb,var(--bg) 90%,transparent);
+  -webkit-backdrop-filter:blur(30px) saturate(180%);
+  backdrop-filter:blur(30px) saturate(180%);
+  padding-bottom:8px;
+}
+.nav-row{min-height:46px}
+.r360-brand{display:flex;align-items:center;gap:9px;min-width:0}
+.r360-brand>.nav-title{font-size:19px;font-weight:700;letter-spacing:-.42px;white-space:nowrap}
+.r360-brand .runtime-sync{min-height:0;margin:1px 0 0;padding:0;gap:5px;font-size:11px;line-height:1;color:var(--muted)}
+.r360-brand .sync-dot{width:7px;height:7px;box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 13%,transparent)}
+.nav-title.large{font-size:32px;font-weight:700;letter-spacing:-1.05px;margin:12px 0 13px}
+.nav-actions{gap:6px;align-items:center}
+.ios-icon-button{
+  width:36px;height:36px;border-radius:10px;background:transparent!important;
+  color:var(--muted);display:grid;place-items:center;padding:0;box-shadow:none!important;
+}
+.ios-icon-button svg{width:23px;height:23px;stroke:currentColor;stroke-width:1.65;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.ios-icon-button#importButton{color:var(--blue)}
+.ios-icon-button:active{background:color-mix(in srgb,var(--surface3) 34%,transparent)!important;transform:scale(.92)}
+
+#libraryView:not(.has-games) .search-wrap{display:none}
+.search-wrap{margin:2px 0 14px}
+.search-input{height:36px;border-radius:10px;background:color-mix(in srgb,var(--surface3) 56%,transparent);font-size:15px}
+
+.library-content{max-width:920px;margin:0}
+.game-grid{
+  grid-template-columns:repeat(auto-fill,minmax(132px,152px));
+  justify-content:start;gap:24px 18px;padding-top:4px;
+}
+.cover-shell{border-radius:8px;border:0;box-shadow:0 5px 15px rgba(0,0,0,.18);background:var(--surface)}
+.game-tile-title{font-size:15px;font-weight:600;letter-spacing:-.18px;margin-top:8px}
+.game-tile-meta{font-size:11px;margin-top:4px;gap:5px;color:var(--muted)}
+.game-tile-hint{display:none!important}
+.tile-play-badge{display:none!important}
+.empty-library{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);margin:0;width:min(330px,80vw);color:var(--muted);pointer-events:none}
+.empty-library .empty-icon{display:none}
+.empty-library h2{font-size:14px;font-weight:600;color:var(--muted);margin:0 0 4px}
+.empty-library p{font-size:12px;line-height:1.35;margin:0;color:var(--muted2)}
+.empty-library .primary{display:none}
+
+/* ----- Native iOS-style centered navigation ----- */
+.detail-nav.r360-centered-nav{
+  display:grid;grid-template-columns:minmax(72px,1fr) auto minmax(72px,1fr);
+  align-items:center;gap:8px;min-height:48px;
+}
+.detail-nav.r360-centered-nav>*:first-child{justify-self:start}
+.detail-nav.r360-centered-nav>*:last-child{justify-self:end}
+.nav-center-title{font-size:17px;line-height:1.2;font-weight:600;letter-spacing:-.25px;text-align:center;white-space:nowrap}
+.text-button{font-size:17px;font-weight:400;padding:8px 2px;color:var(--blue)}
+.text-button.strong{font-weight:600}
+
+/* ----- Settings: closer to UIKit / SwiftUI grouped forms ----- */
+.settings-body{width:min(680px,100%);margin-top:7px}
+#gameSettingsView .settings-header h1,#appSettingsView .settings-header h1{display:none}
+.settings-header{padding:2px 16px 8px}
+.settings-kicker{font-size:12px;line-height:1.35;color:var(--muted);font-weight:500}
+.settings-note{font-size:12px;line-height:1.42;color:var(--muted);max-width:620px;margin-top:4px}
+.group-title{margin:25px 16px 7px;font-size:12px;line-height:1.2;letter-spacing:.02em;color:var(--muted);font-weight:500}
+.group{border-radius:12px;background:var(--surface);box-shadow:none}
+.row{min-height:52px;padding:10px 16px;font-size:15px;letter-spacing:-.12px;border-bottom-color:var(--separator)}
+.setting-copy{gap:3px}
+.setting-copy>span,.row>span:first-child{font-weight:450}
+.setting-copy small{font-size:11px;line-height:1.32;color:var(--muted)}
+.setting-tail{gap:4px}
+.settings-select{font-size:15px;color:var(--blue);font-weight:450}
+.switch{width:51px;height:31px}
+.switch span{background:#39393d}
+.switch input:checked+span{background:#34c759}
+.switch span:after{width:27px;height:27px;box-shadow:0 1px 3px rgba(0,0,0,.32)}
+.row-button .chev{font-size:0;width:8px;height:8px;border-top:1.5px solid var(--muted2);border-right:1.5px solid var(--muted2);transform:rotate(45deg);margin-right:3px}
+.capability{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.035em}
+
+:root[data-theme="light"] .group{background:#fff}
+:root[data-theme="light"] .switch span{background:#e9e9eb}
+:root[data-theme="light"] .navbar,:root[data-theme="light"] .detail-nav{background:rgba(242,242,247,.90)}
+
+/* ----- XeniOS-style compact upper-right performance monitor ----- */
+.performance-hud{
+  right:max(8px,calc(var(--safe-right) + 5px));top:max(7px,calc(var(--safe-top) + 4px));
+  width:178px;padding:5px 6px 5px;border-radius:4px;
+  background:rgba(0,0,0,.54);border:1px solid rgba(255,255,255,.20);
+  box-shadow:0 1px 3px rgba(0,0,0,.26);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  font:700 8px/1.08 ui-monospace,"SFMono-Regular",Menlo,Monaco,monospace;
+  color:#f5f5f7;font-variant-numeric:tabular-nums;letter-spacing:-.12px;
+}
+.x-hud-top,.x-hud-sub{display:flex;align-items:baseline;justify-content:space-between;gap:5px;white-space:nowrap}
+.x-hud-top{font-weight:800;margin-bottom:1px}
+.x-hud-top span:first-child{overflow:hidden;text-overflow:ellipsis;max-width:105px}
+.x-hud-sub{color:#d8d8dc;font-weight:650;margin-bottom:2px}
+.x-hud-sub .hud-state{color:#a7a7ad;overflow:hidden;text-overflow:ellipsis;max-width:74px;text-align:center}
+.x-hud-table{display:grid;grid-template-columns:28px 39px 1fr;column-gap:4px;row-gap:0;align-items:baseline}
+.x-hud-table>.label{color:#b7b7bc;font-weight:700}
+.x-hud-table>b{color:#fff;font-weight:800;text-align:right}
+.x-hud-table>.detail{color:#8e8e93;font-weight:650;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.x-hud-table .fps-now{color:#f5f5f7}
+.x-hud-table .cpu-now{color:#5ac8fa}
+.x-hud-table .mem-now{color:#30d158}
+.hud-canvas{width:100%;height:27px;margin-top:3px;border:1px solid rgba(255,255,255,.16);background:rgba(8,8,10,.62)}
+.r360-hud-hidden-compat{display:none!important}
+
+/* ----- Touch controller: neutral iOS glass with XeniOS geometry ----- */
+.runtime-back{display:none!important}
+.control{
+  color:rgba(255,255,255,.86);font-size:12px;font-weight:600;
+  background:rgba(26,26,30,calc(.12 + var(--controller-alpha)))!important;
+  border:1px solid rgba(255,255,255,.28);box-shadow:0 1px 2px rgba(0,0,0,.18)!important;
+  -webkit-backdrop-filter:blur(11px) saturate(115%);backdrop-filter:blur(11px) saturate(115%);
+}
+.control:active,.control.pressed{background:rgba(255,255,255,.17)!important;transform:scale(.96)}
+.top-control{border-radius:17px;font-weight:600}
+.top-controls>div:first-child .top-control{border-color:rgba(255,214,10,.60);box-shadow:inset 0 0 0 .5px rgba(255,214,10,.24)!important}
+.stick{
+  background:rgba(26,26,30,.18);border:1.4px solid rgba(255,255,255,.38);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:none;
+}
+.stick-knob{background:rgba(255,255,255,.035);border:0;box-shadow:none}
+.stick-label{font-size:12px;font-weight:600;color:rgba(255,255,255,.70)}
+.r360-stick-guide{position:absolute;color:rgba(255,255,255,.74);font-size:28px;font-weight:300;line-height:1;pointer-events:none}
+.r360-stick-guide.up{left:50%;top:7%;transform:translateX(-50%)}
+.r360-stick-guide.down{left:50%;bottom:7%;transform:translateX(-50%)}
+.r360-stick-guide.left{left:8%;top:50%;transform:translateY(-53%)}
+.r360-stick-guide.right{right:8%;top:50%;transform:translateY(-53%)}
+.face{font-weight:600;background:rgba(26,26,30,.16)!important}
+.face.y{color:#f5f5f7;border-color:rgba(255,214,10,.42)}
+.face.x{color:#f5f5f7;border-color:rgba(90,200,250,.42)}
+.face.b{color:#f5f5f7;border-color:rgba(255,69,58,.40)}
+.face.a{color:#f5f5f7;border-color:rgba(48,209,88,.42)}
+
+@media(orientation:landscape){
+  .performance-hud{top:max(5px,var(--safe-top));right:max(7px,var(--safe-right));width:174px}
+  .top-controls{left:max(18px,var(--safe-left));right:max(18px,var(--safe-right));top:max(13px,var(--safe-top));height:50px;display:block}
+  .top-controls>div{position:absolute;top:0;display:flex;gap:18px;padding:0!important}
+  .top-controls>div:first-child{left:2%}
+  .top-controls>div:nth-child(2){left:50%;transform:translateX(-50%)}
+  .top-controls>div:last-child{right:10%}
+  .top-control{height:45px;min-width:105px;padding:0 22px}
+  .top-controls>div:first-child .top-control{min-width:132px}
+  .top-controls>div:last-child .top-control{min-width:92px}
+  .left-controls{left:max(36px,calc(var(--safe-left) + 20px));bottom:max(24px,calc(var(--safe-bottom) + 10px));width:260px;height:300px;transform:none}
+  .right-controls{right:max(36px,calc(var(--safe-right) + 20px));bottom:max(24px,calc(var(--safe-bottom) + 10px));width:260px;height:300px;transform:none}
+  .trigger{top:0;width:132px;height:48px;border-radius:17px}
+  .left-controls .trigger{left:24px}.right-controls .trigger{right:24px}
+  .stick{left:0;bottom:0;width:220px;height:220px}
+  .stick-knob{width:70px;height:70px;left:75px;top:75px}
+  .face-grid{right:0;bottom:0;width:205px;height:190px}
+  .face{width:67px;height:67px;font-size:13px}
+  .face.y{left:69px;top:0}.face.x{left:0;top:60px}.face.b{right:0;top:60px}.face.a{left:69px;bottom:0}
+}
+
+@media(orientation:landscape) and (max-height:520px){
+  .top-controls{top:max(7px,var(--safe-top))}
+  .top-control{height:39px;min-width:90px;padding:0 17px;font-size:11px}
+  .top-controls>div:first-child .top-control{min-width:118px}
+  .top-controls>div:last-child{right:9%}.top-controls>div:last-child .top-control{min-width:76px}
+  .left-controls,.right-controls{width:210px;height:220px;bottom:max(10px,var(--safe-bottom));transform:none}
+  .left-controls{left:max(26px,var(--safe-left))}.right-controls{right:max(26px,var(--safe-right))}
+  .trigger{width:108px;height:41px}.left-controls .trigger{left:16px}.right-controls .trigger{right:16px}
+  .stick{width:168px;height:168px}.stick-knob{width:54px;height:54px;left:57px;top:57px}
+  .face-grid{width:160px;height:150px}.face{width:55px;height:55px}.face.y{left:53px}.face.x{top:47px}.face.b{top:47px}.face.a{left:53px}
+  .r360-stick-guide{font-size:23px}
+}
+
+@media(orientation:portrait){
+  .performance-hud{top:max(58px,calc(var(--safe-top) + 46px));width:156px;font-size:7.3px}
+  .r360-stick-guide{font-size:22px}
+}
+
+@media(min-width:900px){
+  .game-grid{grid-template-columns:repeat(auto-fill,154px)}
+  .library-content{max-width:1040px}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .control,.game-tile .cover-shell,.ios-icon-button{transition:none!important}
+}

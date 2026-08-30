@@ -4,7 +4,7 @@ const VS=`#version 300 es
 precision highp float;
 const vec2 P[3]=vec2[3](vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
 out vec2 v_uv;
-void main(){vec2 p=P[gl_VerID];gl_Position=vec4(p,0.0,1.0);v_uv=(p+1.0)*0.5;}`;
+void main(){vec2 p=P[gl_VertexID];gl_Position=vec4(p,0.0,1.0);v_uv=(p+1.0)*0.5;}`;
 const FS=`#version 300 es
 precision highp float;
 uniform sampler2D u_frame;

@@ -90,7 +90,18 @@ jobs:
         shell: bash
         run: |
           node test-sparse-guest-memory.mjs
-          node test-guest-runtime-critic.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('test-guest-runtime-critic.mjs').read_text()
+          tail="await import('./test-browser-thread-scheduler.mjs');"
+          if tail not in src:
+            raise SystemExit('guest runtime critic scheduler import marker missing')
+          Path('/tmp/test-guest-runtime-critic-core.mjs').write_text(src.replace(tail, '', 1))
+          PY
+          cp /tmp/test-guest-runtime-critic-core.mjs ./test-guest-runtime-critic-core.ci.mjs
+          node test-guest-runtime-critic-core.ci.mjs
+          rm test-guest-runtime-critic-core.ci.mjs
+          node test-browser-thread-scheduler.mjs
           node test-title-scanned-entry-runtime.mjs
 
       - name: Publish rebuilt bootstrap and commit fix

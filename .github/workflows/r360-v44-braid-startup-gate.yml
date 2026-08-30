@@ -115,7 +115,6 @@ jobs:
           console.log('XAM_028B_REACHED=PASS');
           console.log('BRAID_STARTUP_INTEGRATION_CRITIC=PASS');
           '''
-          # Dedent the workflow heredoc indentation from the JS source.
           lines=critic.splitlines()
           cleaned='\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n'
           Path('test-braid-startup-critic.mjs').write_text(cleaned)
@@ -123,9 +122,7 @@ jobs:
           # 2) Lock the critic into the authoritative wasm32 gate.
           p=Path('.github/workflows/xenia-wasm32-bootstrap.yml')
           text=p.read_text()
-          path_anchor="      - 'test-opcode39-main-thread.mjs'\n"
           if "      - 'test-braid-startup-critic.mjs'" not in text:
-              # test-opcode39 wasn't previously in the path list, anchor near sparse memory instead.
               anchor="      - 'test-sparse-guest-memory.mjs'\n"
               if anchor not in text: raise SystemExit('wasm32 path anchor changed')
               text=text.replace(anchor, "      - 'test-braid-startup-critic.mjs'\n      - 'test-opcode39-main-thread.mjs'\n"+anchor, 1)
@@ -165,3 +162,5 @@ jobs:
           git diff --cached --check
           git commit -m 'fix: lock Braid zero-page startup into wasm32 gate' || exit 0
           git push origin HEAD:main
+
+# armed 2026-08-30

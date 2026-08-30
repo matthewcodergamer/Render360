@@ -51,11 +51,6 @@ jobs:
 
           git diff --check
 
-          # Existing source-level runtime tests must remain green.
-          node test-sparse-guest-memory.mjs
-          node test-guest-runtime-critic.mjs
-          node test-title-scanned-entry-runtime.mjs
-
       - name: Build and validate wasm32 browser bootstrap
         shell: bash
         run: |
@@ -64,6 +59,13 @@ jobs:
             ./build-xenia-ppc-bootstrap.sh &&
             ./link-xenia-ppc-bootstrap.sh
           '
+
+      - name: Run sparse-memory and title runtime tests
+        shell: bash
+        run: |
+          node test-sparse-guest-memory.mjs
+          node test-guest-runtime-critic.mjs
+          node test-title-scanned-entry-runtime.mjs
 
       - name: Publish rebuilt bootstrap and commit fix
         shell: bash

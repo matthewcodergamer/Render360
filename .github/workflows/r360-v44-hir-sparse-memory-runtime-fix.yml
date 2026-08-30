@@ -55,9 +55,9 @@ jobs:
         shell: bash
         run: |
           docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:4.0.10 bash -lc '
-            ./fetch-xenia.sh &&
-            ./build-xenia-ppc-bootstrap.sh &&
-            ./link-xenia-ppc-bootstrap.sh
+            bash ./fetch-xenia.sh &&
+            bash ./build-xenia-ppc-bootstrap.sh &&
+            bash ./link-xenia-ppc-bootstrap.sh
           '
 
       - name: Run sparse-memory and title runtime tests

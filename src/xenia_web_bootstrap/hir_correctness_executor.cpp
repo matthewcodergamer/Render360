@@ -17,6 +17,8 @@
 #include "xenia/cpu/hir/value.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/memory.h"
+#include "sparse_guest_memory.h"
+#include "title_gpu_runtime.h"
 
 namespace render360::xenia_web {
 namespace {
@@ -677,11 +679,16 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(destination->type);
-  uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   RuntimeValue loaded;
   loaded.type = destination->type;
-  std::memcpy(&loaded.value, host, size);
+  loaded.value = {};
+
+  if (!ReadSparseGuestMemory(guest_address, &loaded.value,
+                             static_cast<uint32_t>(size))) {
+    uint8_t* host = nullptr;
+    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
+    std::memcpy(&loaded.value, host, size);
+  }
   if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&
       !ByteSwapRuntimeValue(&loaded)) {
     return false;
@@ -697,8 +704,6 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
   uint32_t guest_address = 0;
   if (!ResolveGuestAddress(address, offset, values, &guest_address)) return false;
   const size_t size = xe::cpu::hir::GetTypeSize(source->type);
-  uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   RuntimeValue stored;
   if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {
     return false;
@@ -707,6 +712,13 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
       !ByteSwapRuntimeValue(&stored)) {
     return false;
   }
+
+  if (WriteSparseGuestMemory(guest_address, &stored.value,
+                             static_cast<uint32_t>(size))) {
+    return true;
+  }
+  uint8_t* host = nullptr;
+  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;
   std::memcpy(host, &stored.value, size);
   return true;
 }

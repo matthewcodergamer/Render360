@@ -2,5 +2,6 @@
   "sourceCommit": "6f97f8d9fd0abe72f9f59df9022146ba93f1cd67",
   "sourceRun": "33287076598",
   "sha256": "25d6ae3625180644a2b6612d76e6100d0db3dabf1a4d806a735600e56e2da8c1",
-  "bytes": 2576978
+  "bytes": 2576978,
+  "runtimeFix": "hir-sparse-memory-load-store-v2"
 }

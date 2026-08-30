@@ -31,14 +31,14 @@ jobs:
             s=s.replace(inc, inc+'#include "sparse_guest_memory.h"\n', 1)
 
           old='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  std::memcpy(&loaded.value, host, size);'''
-          new='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  loaded.value = {};\n\n  // Commercial XEX images, title stacks and PCR/TLS state are mapped by the\n  // browser sparse guest-memory layer. xe::Memory::TranslateVirtual does not\n  // own those mappings, so using it exclusively made ordinary HIR LOAD (39)\n  // look like an unsupported opcode even when the address was valid. Prefer\n  // the authoritative sparse title map, while retaining xe::Memory as the\n  // correctness-test / upstream-memory fallback.\n  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    uint8_t* host = nullptr;\n    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n    std::memcpy(&loaded.value, host, size);\n  }'''
+          new='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  loaded.value = {};\n\n  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    uint8_t* host = nullptr;\n    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n    std::memcpy(&loaded.value, host, size);\n  }'''
           if old in s:
             s=s.replace(old,new,1)
           elif new not in s:
             raise SystemExit('LOAD body anchor missing')
 
           old='''  const size_t size = xe::cpu::hir::GetTypeSize(source->type);\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n  std::memcpy(host, &stored.value, size);\n  return true;'''
-          new='''  const size_t size = xe::cpu::hir::GetTypeSize(source->type);\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n\n  // Keep guest writes coherent with the same sparse map used by the XEX\n  // loader, stack/PCR setup and executable-content invalidation.\n  if (WriteSparseGuestMemory(guest_address, &stored.value,\n                             static_cast<uint32_t>(size))) {\n    return true;\n  }\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  std::memcpy(host, &stored.value, size);\n  return true;'''
+          new='''  const size_t size = xe::cpu::hir::GetTypeSize(source->type);\n  RuntimeValue stored;\n  if (!ResolveRuntimeValue(source, values, &stored) || stored.type != source->type) {\n    return false;\n  }\n  if ((flags & xe::cpu::hir::LOAD_STORE_BYTE_SWAP) &&\n      !ByteSwapRuntimeValue(&stored)) {\n    return false;\n  }\n\n  if (WriteSparseGuestMemory(guest_address, &stored.value,\n                             static_cast<uint32_t>(size))) {\n    return true;\n  }\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  std::memcpy(host, &stored.value, size);\n  return true;'''
           if old in s:
             s=s.replace(old,new,1)
           elif new not in s:
@@ -55,8 +55,17 @@ jobs:
         shell: bash
         run: |
           docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:4.0.10 bash -lc '
-            bash ./fetch-xenia.sh &&
-            bash ./build-xenia-ppc-bootstrap.sh &&
+            set -o pipefail
+            bash ./fetch-xenia.sh
+            set +e
+            bash ./build-xenia-ppc-bootstrap.sh
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
+              echo "--- HIR executor compiler diagnostics ---"
+              cat build/xenia-ppc-bootstrap/render360_hir_correctness_executor.cpp.o.log || true
+              exit "$status"
+            fi
             bash ./link-xenia-ppc-bootstrap.sh
           '
 

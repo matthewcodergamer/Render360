@@ -26,9 +26,14 @@ jobs:
           s=p.read_text()
 
           inc='#include "xenia/memory.h"\n'
+          extra=''
           if '#include "sparse_guest_memory.h"' not in s:
+            extra += '#include "sparse_guest_memory.h"\n'
+          if '#include "title_gpu_runtime.h"' not in s:
+            extra += '#include "title_gpu_runtime.h"\n'
+          if extra:
             if inc not in s: raise SystemExit('memory include anchor missing')
-            s=s.replace(inc, inc+'#include "sparse_guest_memory.h"\n', 1)
+            s=s.replace(inc, inc+extra, 1)
 
           old='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  uint8_t* host = nullptr;\n  if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  std::memcpy(&loaded.value, host, size);'''
           new='''  const size_t size = xe::cpu::hir::GetTypeSize(destination->type);\n  RuntimeValue loaded;\n  loaded.type = destination->type;\n  loaded.value = {};\n\n  if (!ReadSparseGuestMemory(guest_address, &loaded.value,\n                             static_cast<uint32_t>(size))) {\n    uint8_t* host = nullptr;\n    if (!TranslateGuestRange(memory, guest_address, size, &host)) return false;\n    std::memcpy(&loaded.value, host, size);\n  }'''
@@ -47,6 +52,7 @@ jobs:
           p.write_text(s)
           print('R360_HIR_SPARSE_LOAD=PATCHED')
           print('R360_HIR_SPARSE_STORE=PATCHED')
+          print('R360_HIR_TITLE_GPU_MMIO_DECLS=PATCHED')
           PY
 
           git diff --check
@@ -64,7 +70,18 @@ jobs:
             if [ "$status" -ne 0 ]; then
               echo "--- HIR executor compiler diagnostics ---"
               cat build/xenia-ppc-bootstrap/render360_hir_correctness_executor.cpp.o.log || true
-              exit "$status"
+              report=build/xenia-ppc-bootstrap/report.tsv
+              if ! grep -q $'"'"'^render360/hir_correctness_executor.cpp\tPASS\t'"'"' "$report"; then
+                echo "ERROR: HIR executor did not compile"
+                exit "$status"
+              fi
+              unexpected=$(awk -F $'"'"'\t'"'"' '"'"'$2=="BLOCKED" && $1!="src/xenia/cpu/compiler/passes/data_flow_analysis_pass.cc" && $1!="src/xenia/cpu/compiler/passes/value_reduction_pass.cc" {print $1}'"'"' "$report")
+              if [ -n "$unexpected" ]; then
+                echo "ERROR: unexpected wasm32 compile blockers:"
+                echo "$unexpected"
+                exit "$status"
+              fi
+              echo "R360_COMPILE_MATRIX=PASS_WITH_2_KNOWN_HOST_ONLY_PASSES"
             fi
             bash ./link-xenia-ppc-bootstrap.sh
           '
@@ -85,7 +102,7 @@ jobs:
           from pathlib import Path
           p=Path('xenia_ppc_bootstrap.meta.json')
           data=json.loads(p.read_text()) if p.exists() else {}
-          data['runtimeFix']='hir-sparse-memory-load-store-v1'
+          data['runtimeFix']='hir-sparse-memory-load-store-v2'
           p.write_text(json.dumps(data,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'

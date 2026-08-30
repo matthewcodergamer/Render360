@@ -5,91 +5,36 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/r360-v44-braid-startup-gate.yml'
+      - 'test-braid-startup-critic.mjs'
+      - 'test-opcode39-main-thread.mjs'
+      - 'xenia_ppc_bootstrap.wasm'
+      - 'xenia_ppc_bootstrap.meta.json'
+      - 'render360-title-controller.mjs'
+      - 'render360-browser-title-runtime.mjs'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  integrate:
+  published-startup-critic:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Install Braid startup critic and cache-safe browser chain
+          node-version: '22'
+      - name: Verify published opcode39 main-thread path
+        run: node ./test-opcode39-main-thread.mjs ./xenia_ppc_bootstrap.wasm
+      - name: Verify published Braid startup integration
+        run: node ./test-braid-startup-critic.mjs ./xenia_ppc_bootstrap.wasm
+      - name: Verify browser cache chain points at synchronized runtime
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          replacements = {
-              'index.html': [('app-v41.js?v=44.9','app-v41.js?v=44.10'),('app-v42-patch.js?v=44.9','app-v42-patch.js?v=44.10')],
-              'app-v41.js': [('runtime/render360-runtime.js?v=44.9','runtime/render360-runtime.js?v=44.10'),('runtime/render360-runtime.js?v=44.8','runtime/render360-runtime.js?v=44.10')],
-              'runtime/render360-runtime.js': [('render360-browser-modern-content-bridge.mjs?v=44.9','render360-browser-modern-content-bridge.mjs?v=44.10'),('render360-browser-modern-content-bridge.mjs?v=44.8','render360-browser-modern-content-bridge.mjs?v=44.10')],
-              'render360-browser-modern-content-bridge.mjs': [('render360-browser-title-runtime.mjs?v=44.9','render360-browser-title-runtime.mjs?v=44.10'),('render360-browser-title-runtime.mjs?v=44.8','render360-browser-title-runtime.mjs?v=44.10'),('render360-title-controller.mjs?v=44.9','render360-title-controller.mjs?v=44.10'),('render360-title-controller.mjs?v=44.8','render360-title-controller.mjs?v=44.10')],
-              'render360-browser-title-runtime.mjs': [('xenia_ppc_bootstrap.wasm?v=44.7','xenia_ppc_bootstrap.wasm?v=44.10'),('xenia_ppc_bootstrap.wasm?v=44.8','xenia_ppc_bootstrap.wasm?v=44.10'),('xenia_ppc_bootstrap.wasm?v=44.9','xenia_ppc_bootstrap.wasm?v=44.10')],
-          }
-          for name,pairs in replacements.items():
-              p=Path(name); text=p.read_text()
-              for old,new in pairs: text=text.replace(old,new)
-              p.write_text(text)
-
-          critic="""import fs from 'node:fs';
-          import {WASI} from 'node:wasi';
-          const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
-          const controller=fs.readFileSync('render360-title-controller.mjs','utf8');
-          const titleRuntime=fs.readFileSync('render360-browser-title-runtime.mjs','utf8');
-          for(const marker of [\"map(0,1,zeroPageBacking,0,readWrite)\",\"applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress})\",\"r360_ppc_probe_page_sparse_code\",\"xenia-main-thread-context\"]) if(!controller.includes(marker)) throw new Error(`missing Braid startup invariant: ${marker}`);
-          if(!titleRuntime.includes(\"xenia_ppc_bootstrap.wasm?v=44.10\")) throw new Error('browser bootstrap cache key is not synchronized');
-          const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
-          const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
-          const imports=wasi.getImportObject(mod);
-          for(const im of WebAssembly.Module.imports(mod)){if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{};}}
-          const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);
-          const e=instance.exports,p=n=>e[n]??e[`_${n}`];
-          for(const n of ['r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_kernel_service_call','r360_kernel_service_status']) if(typeof p(n)!=='function') throw new Error(`missing Braid critic export ${n}`);
-          p('r360_sparse_guest_memory_reset')();p('r360_ppc_probe_reset')();
-          const zeroBacking=p('r360_sparse_guest_memory_alloc')(1)>>>0;
-          if(!zeroBacking||(p('r360_sparse_guest_memory_map')(0,1,zeroBacking,0,3)>>>0)!==1)throw new Error('ZERO_PAGE_MAPPED failed');
-          if((p('r360_ppc_probe_set_initial_gpr')(1,BigInt(0x7007ff50))>>>0)!==1)throw new Error('MAIN_THREAD_R1_VALID failed');
-          if((p('r360_ppc_probe_set_initial_gpr')(13,BigInt(0x50000000))>>>0)!==1)throw new Error('MAIN_THREAD_R13_VALID failed');
-          const words=[0x38600000,0x80830000,0x38640000,0x4E800020];
-          const code=Uint8Array.from(words.flatMap(w=>[w>>>24,(w>>>16)&255,(w>>>8)&255,w&255]));
-          const input=p('r360_ppc_probe_input_buffer')()>>>0;new Uint8Array(e.memory.buffer,input,code.length).set(code);
-          if((p('r360_ppc_probe_load_at')(0x80000000,input,code.length)>>>0)!==code.length)throw new Error('entry fixture load failed');
-          if(!(p('r360_ppc_probe_translate')()>>>0))throw new Error('entry fixture translation failed');
-          const status=p('r360_ppc_probe_correctness_status')()>>>0;const r3=Number(BigInt.asUintN(32,p('r360_ppc_probe_correctness_r3')()))>>>0;
-          if(status!==3||r3!==0)throw new Error(`ENTRY_LOAD_ZERO_PAGE failed status=${status} r3=0x${r3.toString(16)}`);
-          p('r360_kernel_service_call')(2,0x28B,0,0,0,0,0,0,0,0);const svc=p('r360_kernel_service_status')()>>>0;
-          if(svc!==1)throw new Error(`XAM_028B_REACHED failed service_status=${svc}`);
-          console.log('ZERO_PAGE_MAPPED=PASS');console.log('MAIN_THREAD_R1_VALID=PASS');console.log('MAIN_THREAD_R13_VALID=PASS');console.log('ENTRY_LOAD_ZERO_PAGE=PASS');console.log('XAM_028B_REACHED=PASS');console.log('BRAID_STARTUP_INTEGRATION_CRITIC=PASS');
-          """
-          lines=critic.splitlines(); Path('test-braid-startup-critic.mjs').write_text('\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n')
-          for name,needles in {
-            'index.html':['app-v41.js?v=44.10','app-v42-patch.js?v=44.10'],
-            'app-v41.js':['runtime/render360-runtime.js?v=44.10'],
-            'runtime/render360-runtime.js':['render360-browser-modern-content-bridge.mjs?v=44.10'],
-            'render360-browser-modern-content-bridge.mjs':['render360-browser-title-runtime.mjs?v=44.10','render360-title-controller.mjs?v=44.10'],
-            'render360-browser-title-runtime.mjs':['xenia_ppc_bootstrap.wasm?v=44.10'],
-          }.items():
-              text=Path(name).read_text();missing=[n for n in needles if n not in text]
-              if missing:raise SystemExit(f'{name}: missing {missing}')
-          print('R360_BRAID_STARTUP_GATE=PATCHED');print('R360_BROWSER_CACHE_CHAIN=44.10')
-          PY
-          node --check test-braid-startup-critic.mjs
-          git diff --check
-
-      - name: Commit browser integration changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'render360-ci'
-          git config user.email 'render360-ci@users.noreply.github.com'
-          git add index.html app-v41.js runtime/render360-runtime.js render360-browser-modern-content-bridge.mjs render360-browser-title-runtime.mjs test-braid-startup-critic.mjs
-          git diff --cached --check
-          git commit -m 'fix: synchronize Braid startup browser runtime' || exit 0
-          git push origin HEAD:main
+          grep -q 'app-v41.js?v=44.10' index.html
+          grep -q 'app-v42-patch.js?v=44.10' index.html
+          grep -q 'runtime/render360-runtime.js?v=44.10' app-v41.js
+          grep -q 'render360-browser-modern-content-bridge.mjs?v=44.10' runtime/render360-runtime.js
+          grep -q 'render360-browser-title-runtime.mjs?v=44.10' render360-browser-modern-content-bridge.mjs
+          grep -q 'render360-title-controller.mjs?v=44.10' render360-browser-modern-content-bridge.mjs
+          grep -q 'xenia_ppc_bootstrap.wasm?v=44.10' render360-browser-title-runtime.mjs
+          echo 'R360_BROWSER_CACHE_CHAIN=PASS'

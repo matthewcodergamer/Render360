@@ -4,7 +4,7 @@ const VS=`#version 300 es
 precision highp float;
 const vec2 P[3]=vec2[3](vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
 out vec2 v_uv;
-void main(){vec2 p=P[gl_VertexID];gl_Position=vec4(p,0.0,1.0);v_uv=(p+1.0)*0.5;}`;
+void main(){vec2 p=P[gl_VerID];gl_Position=vec4(p,0.0,1.0);v_uv=(p+1.0)*0.5;}`;
 const FS=`#version 300 es
 precision highp float;
 uniform sampler2D u_frame;
@@ -26,7 +26,7 @@ export function createXenosWebGL2Presenter(canvas,instance){
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   const loc=gl.getUniformLocation(p,'u_frame');if(loc!==null)gl.uniform1i(loc,0);
 
-  const timerExt=browserFeaturePref('webglGpuTiming',true)?gl.getExtension('EXT_disjoint_timer_query_webgl2'):null;
+  const timerExt=browserFeaturePref('webglGpuTiming',true)&&typeof gl.getExtension==='function'?gl.getExtension('EXT_disjoint_timer_query_webgl2'):null;
   const timingState={supported:!!timerExt,lastGpuMs:0,samples:0,disjoint:false};
   const pendingQueries=[];
   globalThis.render360WebGLGpuTiming=timingState;

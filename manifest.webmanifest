@@ -1,11 +1,24 @@
 {
+  "id": "./",
   "name": "Render360",
   "short_name": "Render360",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#000000",
-  "description": "Render360 V41 is a responsive Xbox 360 game library and browser emulator runtime with ISO, XEX and STFS launch adapters, per-game profiles and persistent browser game storage."
+  "description": "Render360 V44 is a browser-native Xbox 360 emulator project with WebGPU/WebGL2 rendering, Xenia-derived WebAssembly runtime foundations, per-game profiles, controller support and persistent browser game storage.",
+  "icons": [
+    {
+      "src": "./render360-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }

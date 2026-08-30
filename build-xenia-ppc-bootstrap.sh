@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"; XENIA="$ROOT/upstream/xenia"; OVERLAY="$ROOT/build/xenia-web-overlay"; OUT="$ROOT/build/xenia-ppc-bootstrap"; CXX="${CXX:-em++}"; CC="${CC:-emcc}"; mkdir -p "$OUT"
 if [ ! -d "$XENIA/src/xenia" ]; then echo "ERROR: upstream Xenia missing. Run ./fetch-xenia.sh first." >&2; exit 2; fi
 if ! command -v "$CXX" >/dev/null 2>&1; then echo "ERROR: $CXX not found. Run inside Emscripten/emsdk." >&2; exit 2; fi

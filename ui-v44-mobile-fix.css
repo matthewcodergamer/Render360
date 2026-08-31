@@ -1,4 +1,4 @@
-/* Render360 V44.17 — mobile runtime + concise settings pass. */
+/* Rendr360 V44.18 — mobile runtime + concise settings pass. */
 
 /* Safari can report a stale layout viewport while rotating/fullscreening. The
    JS layer refreshes --r360-vh/--r360-vw from visualViewport several times
@@ -81,6 +81,59 @@ html,body,#app{
   stroke-linejoin:round!important;
 }
 #importButton svg{width:27px!important;height:27px!important;stroke-width:1.9!important}
+
+/* XeniOS-style header hierarchy: brand on the first line, runtime status below
+   it. The 360 suffix uses the same green as the runtime/theme accent. */
+#libraryView .nav-row{align-items:flex-start!important}
+#libraryView .r360-brand{
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:flex-start!important;
+  justify-content:center!important;
+  gap:3px!important;
+  min-width:0!important;
+  padding-top:1px;
+}
+#libraryView .r360-brand>.nav-title{
+  display:flex!important;
+  align-items:baseline;
+  min-height:23px;
+  font-size:0!important;
+  line-height:1!important;
+  letter-spacing:0!important;
+  white-space:nowrap;
+}
+#libraryView .r360-brand>.nav-title::before{
+  content:"Rendr";
+  color:var(--text);
+  font-size:20px;
+  line-height:1.05;
+  font-weight:750;
+  letter-spacing:-.5px;
+}
+#libraryView .r360-brand>.nav-title::after{
+  content:"360";
+  color:var(--green,#30d158);
+  font-size:20px;
+  line-height:1.05;
+  font-weight:750;
+  letter-spacing:-.5px;
+}
+#libraryView .r360-brand .runtime-sync{
+  width:100%!important;
+  min-height:15px!important;
+  margin:0!important;
+  padding:0!important;
+  gap:6px!important;
+  font-size:11px!important;
+  line-height:1.2!important;
+  color:var(--muted)!important;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+#libraryView .r360-brand .sync-dot{flex:0 0 auto}
+#libraryView .nav-actions{padding-top:0}
 
 /* Xenia-like hierarchy: common choices first; compatibility/developer controls
    are one deliberate tap away instead of one very long settings page. */

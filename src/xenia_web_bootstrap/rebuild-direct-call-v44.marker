@@ -1,0 +1,3 @@
+Render360 V44 runtime rebuild marker.
+Reason: publish the current hir_correctness_executor.cpp symbol-less direct-call resolver into xenia_ppc_bootstrap.wasm after the pre-profile rollback.
+Expected device proof: R360_DIRECT_CALL_FALLBACK source=0x8236EF40 ... followed by execution beyond the previous opcode-7 blocker.

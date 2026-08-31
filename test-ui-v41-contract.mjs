@@ -48,13 +48,14 @@ must(has(app,'APP_SETTINGS')&&has(app,'GAME_SETTINGS'),'base shell must use dedi
 must(has(app,'workerHz')&&has(app,'swaps')&&has(app,'hudPm4')&&has(app,'hudDraws'),'HUD must display real runtime counters rather than a decorative FPS-only value');
 must(has(app,'await a.action?.()')&&has(app,"showAlert('Action Failed'"),'iOS alerts must await asynchronous destructive actions and surface failures');
 
-must(has(patch,'developer-console-v44.js?v=44.'),'active V44 patch must load the live developer console');
+must(has(patch,'developer-console-v44.js?v=44.'),'active V44 patch must retain the live developer console as an on-demand module');
 must(has(patch,'rendr360-mobile-runtime-fix.mjs?v=44.23'),'active V44 patch must load the iPhone rotation/runtime recovery layer');
 must(has(patch,'scheduleAutoPlay')&&has(patch,"$('playGameButton')?.click()"),'library tap must launch through the existing Play path');
 must(has(patch,'state.held=true')&&has(patch,'500'),'press-and-hold must remain reserved for details');
 must(has(patch,'coverSurface(')&&has(patch,'convertNativeCoverImages')&&has(patch,'img.replaceWith(coverSurface'),'V44 must replace native cover IMG elements with app-owned surfaces on iOS interaction views');
 must(has(patch,"grid.addEventListener('dragstart'")&&has(patch,"grid.addEventListener('selectstart'")&&has(patch,"grid.addEventListener('contextmenu'"),'V44 must suppress native image drag, selection and context-menu paths');
-must(has(patch,'hydrateMissingArtwork')&&has(patch,'resolveTitleCover'),'artwork backfill must remain active for existing library entries');
+must(has(patch,'hydrateMissingArtwork')&&has(patch,'resolveTitleCover'),'artwork backfill implementation must remain available for existing library entries');
+must(!has(patch,'scheduleDeferredTools()')&&has(patch,'render360:fatalError')&&has(patch,'render360:runtimeBlocker'),'diagnostics must stay off startup and wake only after an explicit/runtime failure path');
 must(has(patch,'syncThemeChrome')&&has(patch,'apple-mobile-web-app-status-bar-style'),'patch must synchronize iOS outer chrome with appearance');
 must(has(patch,'Render360 V44')&&has(patch,'clearGameCopiesV44')&&has(patch,'clearGamesDirectory'),'V44 patch must identify the release and own reliable game-copy deletion');
 
@@ -84,11 +85,13 @@ must(has(runtime,'REQUIRED_CORE_BUILD=30')&&has(runtime,'REQUIRED_ABI=0x00030002
 must(has(runtime,'coreSource')&&has(runtime,'stfsExtraction'),'runtime diagnostics must expose which core and extraction path Safari actually loaded');
 must(has(runtime,'render360:${type}')&&has(runtime,'globalThis.dispatchEvent'),'runtime must mirror structured emulator events onto the global developer-console bus');
 
-const networkPos=coreLoader.indexOf('const response=await fetchWithTimeout(this.url');
+const networkPos=coreLoader.indexOf('const response=await fetchWithTimeout(this.url,12000)');
 const embeddedPos=coreLoader.indexOf('const embeddedBase64=await loadEmbeddedCore()');
 must(networkPos>=0&&embeddedPos>networkPos,'package core loader must try the bounded cache-busted network artifact before lazy embedded fallback');
-must(has(coreLoader,"cache:'no-store'")&&has(coreLoader,"render360_xenia_core.wasm?v=44.27"),'package core loader must avoid stale Safari core artifacts');
-must(has(coreLoader,"import('./render360_xenia_core_embedded.js?v=44.27')")&&!coreLoader.startsWith("import {CORE_WASM_GZIP_BASE64"),'embedded WASM must be lazy-loaded so startup does not parse the large base64 module on the main path');
+must(has(coreLoader,"cache:'no-store'")&&has(coreLoader,"render360_xenia_core.wasm?v=44.28"),'package core loader must avoid stale Safari core artifacts');
+must(has(coreLoader,"import('./render360_xenia_core_embedded.js?v=44.28')")&&!coreLoader.startsWith("import {CORE_WASM_GZIP_BASE64"),'embedded WASM must remain lazy-loaded so startup does not parse the large base64 module on the main path');
+must(has(coreLoader,'isIOSLike()')&&has(coreLoader,'RENDER360_ALLOW_EMBEDDED_CORE_FALLBACK'),'iPhone must avoid the expensive embedded-core decode unless explicitly opted in');
+must(has(coreLoader,'yieldToBrowser')&&has(coreLoader,'performance.now()-lastYield>=8'),'STFS preparation must yield within a short Safari main-thread budget');
 must(has(coreLoader,'extractStfsEntryBrowser')&&has(coreLoader,'stfsExtractionMode'),'package core must recover STFS extraction when a legacy mounted core lacks the native V32 extractor');
 must(has(extractor,'HASH_ACTIVE_INDEX_BIT')&&has(extractor,'END_OF_CHAIN')&&has(extractor,'visited.has(next)'),'browser STFS fallback must preserve hash-table selection, end-of-chain and cycle guards');
 must(has(extractor,'nativePreferred:true')&&has(extractor,'version:44'),'STFS compatibility contract must identify V44 and keep native extraction preferred');
@@ -101,6 +104,7 @@ must(has(bridge,'submitCapturedTitleGpuTraffic')&&has(bridge,'captureTitleFrontb
 must(has(storage,"ROOT_DIR='Render360'")&&has(storage,"GAMES_DIR='Games'"),'persistent game folder must remain compatible with existing Render360/Games storage');
 must(has(storage,'navigator.storage.getDirectory')&&has(storage,'createWritable'),'storage must use OPFS and streaming writes');
 must(has(settings,"const KEY='render360.settings.v44'")&&has(settings,"appearance:'system'")&&has(settings,'autoPersistImports:true')&&has(settings,'performanceHud:true'),'V44 settings must migrate to a synchronized key with HUD enabled by default');
+must(!has(settings,'render360-browser-features.mjs'),'settings storage must not pull browser feature probing into startup');
 must(has(profile,"renderer:'inherit'")&&has(profile,'schedulerQuantum:1'),'per-game profile schema must include runtime overrides');
 must(has(css,'--app-height:100dvh')&&has(css,'overflow-y:auto')&&has(css,'@media(orientation:portrait)'),'base CSS must remain portrait-safe and independently scrollable');
 must(has(css,':root[data-theme="light"]'),'light theme must exist');

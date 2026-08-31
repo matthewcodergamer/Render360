@@ -15,6 +15,12 @@
   "description": "Rendr360 V44 is a browser-native Xbox 360 emulator project with WebGPU/WebGL2 rendering, Xenia-derived WebAssembly runtime foundations, per-game profiles, controller support and persistent browser game storage.",
   "icons": [
     {
+      "src": "./rendr360-apple-touch-icon.png?v=44.23",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "./render360-app-icon.svg?v=44.12",
       "sizes": "any",
       "type": "image/svg+xml",

@@ -8,17 +8,19 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Render360">
   <title>Render360 · Xbox 360 Emulator</title>
-  <link rel="icon" href="render360-app-icon.svg?v=44.12" type="image/svg+xml">
-  <link rel="mask-icon" href="render360-app-icon.svg?v=44.12" color="#30D158">
-  <link rel="manifest" href="manifest.webmanifest?v=44.12">
-  <link rel="stylesheet" href="ui-v41.css?v=44.2">
-  <link rel="stylesheet" href="ui-v42-patch.css?v=44.2">
+  <link rel="icon" href="render360-app-icon.svg" type="image/svg+xml">
+  <link rel="mask-icon" href="render360-app-icon.svg" color="#30D158">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/interactions.css">
+  <link rel="stylesheet" href="styles/xenios.css" data-r360-ui="xenios">
+  <link rel="stylesheet" href="styles/controller.css" data-r360-ui="controller">
 </head>
 <body>
 <div id="app">
   <section id="libraryView" class="view">
     <div class="navbar">
-      <div class="nav-row"><div class="nav-title">Render360</div><div class="nav-actions"><button id="settingsButton" class="ios-icon-button" type="button" aria-label="Settings"><span class="r360-sf-symbol r360-sf-gear" data-symbol-name="gearshape" aria-hidden="true">&#x1008CC;</span></button><button id="importButton" class="ios-icon-button" type="button" aria-label="Import Game"><span class="r360-sf-symbol r360-sf-plus" data-symbol-name="plus" aria-hidden="true">&#x100185;</span></button></div></div>
+      <div class="nav-row"><div class="nav-title">Render360</div><div class="nav-actions"><button id="settingsButton" class="ios-icon-button" type="button" aria-label="Settings"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25"/><path d="M19.1 13.3c.1-.4.1-.9.1-1.3s0-.9-.1-1.3l2-1.55-2-3.45-2.48 1a7.8 7.8 0 0 0-2.25-1.3L14 2.75h-4l-.38 2.65a7.8 7.8 0 0 0-2.25 1.3l-2.47-1-2 3.45 2 1.55c-.07.43-.1.87-.1 1.3s.03.87.1 1.3l-2 1.55 2 3.45 2.47-1a7.8 7.8 0 0 0 2.25 1.3L10 21.25h4l.37-2.65a7.8 7.8 0 0 0 2.25-1.3l2.48 1 2-3.45-2-1.55Z"/></svg></button><button id="importButton" class="ios-icon-button" type="button" aria-label="Import Game"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button></div></div>
       <div class="nav-title large">Library</div>
       <div class="search-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg><input id="librarySearch" class="search-input" type="search" placeholder="Search Games" autocomplete="off"></div>
     </div>
@@ -36,7 +38,7 @@
   <input id="importInput" type="file" accept=".zip,.iso,.xex,.live,.pirs,.con,application/zip,application/octet-stream" hidden><input id="relinkInput" type="file" accept=".zip,.iso,.xex,.live,.pirs,.con,application/zip,application/octet-stream" hidden><input id="coverInput" type="file" accept="image/png,image/jpeg" hidden>
   <div id="scrim" class="scrim hidden"></div><section id="importSheet" class="sheet hidden" aria-label="Importing game"><div class="sheet-handle"></div><div class="sheet-head"><b id="importTitle">Preparing game…</b></div><div class="sheet-content"><div class="import-progress"><div class="progress-track"><div id="importProgressFill" class="progress-fill"></div></div><div class="progress-meta"><span id="importProgressMeta">Reading file…</span><span id="importProgressPercent">0%</span></div></div></div></section><section id="pauseSheet" class="sheet hidden" aria-label="Game paused"><div class="sheet-handle"></div><div class="sheet-head"><b>Paused</b></div><button id="resumeButton" class="sheet-action primary-action" type="button">Resume</button><button id="leaveGameButton" class="sheet-action" type="button">Return to Game Details</button></section><section id="diagnosticsSheet" class="sheet hidden" aria-label="Diagnostics"><div class="sheet-handle"></div><div class="sheet-head"><b>Diagnostics</b></div><div class="sheet-content"><div id="diagnosticsLog" class="diagnostics-log"></div></div><button class="sheet-action" data-close-sheet type="button">Done</button></section><section id="iosAlert" class="alert hidden" role="alertdialog" aria-modal="true"><div class="alert-body"><h3 id="alertTitle">Render360</h3><p id="alertMessage"></p></div><div id="alertActions" class="alert-actions"></div></section>
 </div>
-<script type="module" src="app-v41.js?v=44.16"></script>
-<script type="module" src="app-v42-patch.js?v=44.16"></script>
+<script type="module" src="app.js"></script>
+<script type="module" src="ui-behavior.js"></script>
 </body>
 </html>

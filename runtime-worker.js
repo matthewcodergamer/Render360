@@ -1,4 +1,4 @@
-import { Render360Core } from './wasm-core-v32.js';
+import { Render360Core } from './wasm-core.js';
 const wasmUrl=new URL('./render360_xenia_core.wasm',import.meta.url).href;
 const core=new Render360Core(wasmUrl);
 let running=true,timer=0,lastTick=performance.now(),reportStart=lastTick,reportTicks=0;

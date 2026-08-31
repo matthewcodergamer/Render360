@@ -5,8 +5,8 @@ on:
     branches: [main]
     paths:
       - 'index.html'
-      - 'app-v41.js'
-      - 'app-v42-patch.js'
+      - 'app.js'
+      - 'ui-behavior.js'
       - 'render360-browser-features.mjs'
       - 'render360-sw.js'
       - 'render360-webgl2-xenos.mjs'
@@ -18,8 +18,8 @@ on:
   pull_request:
     paths:
       - 'index.html'
-      - 'app-v41.js'
-      - 'app-v42-patch.js'
+      - 'app.js'
+      - 'ui-behavior.js'
       - 'render360-browser-features.mjs'
       - 'render360-sw.js'
       - 'render360-webgl2-xenos.mjs'
@@ -44,7 +44,7 @@ jobs:
           node --check render360-browser-features.mjs
           node --check render360-sw.js
           node --check render360-webgl2-xenos.mjs
-          node --check app-v41.js
-          node --check app-v42-patch.js
+          node --check app.js
+          node --check ui-behavior.js
       - name: Browser feature contract
         run: node test-browser-features-contract.mjs

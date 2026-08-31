@@ -1,4 +1,4 @@
-const VERSION='44.11';
+const VERSION='44';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
@@ -66,9 +66,6 @@ self.addEventListener('fetch',event=>{
   const request=event.request;
   if(request.method!=='GET'||!sameOrigin(request))return;
   if(request.mode==='navigate'){event.respondWith(navigation(event));return;}
-  // Emulator JavaScript and WebAssembly are deliberately network-first and
-  // never stored in the shell cache. This prevents an old service worker from
-  // resurrecting stale PPC/Xenos binaries after a Render360 deployment.
   if(isMutableRuntime(request)){event.respondWith(networkFirstNoStore(request));return;}
   if(isShellAsset(request))event.respondWith(shellAsset(request));
 });

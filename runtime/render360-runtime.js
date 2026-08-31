@@ -1,7 +1,7 @@
-import {Render360Core,containerName} from '../wasm-core-v32.js?v=44';
-import {RuntimeHost} from '../runtime-host-v32.js?v=44.5';
-import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs?v=44.2';
-import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs?v=44.10';
+import {Render360Core,containerName} from '../wasm-core.js';
+import {RuntimeHost} from '../runtime-host.js';
+import {runModernXboxIso} from '../render360-browser-modern-iso-bridge.mjs';
+import {runModernXboxContent,modernContentBridgeContract} from '../render360-browser-modern-content-bridge.mjs';
 import {mountXdvdfs} from '../render360-xdvdfs.mjs';
 import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 
@@ -42,10 +42,6 @@ export class Render360Runtime extends EventTarget{
   }
   emit(type,detail={}){
     this.dispatchEvent(new CustomEvent(type,{detail}));
-    // Mirror emulator events onto window so diagnostics can subscribe without
-    // reaching into the private app/runtime instance. High-frequency extraction
-    // progress is compacted to 5% milestones only on this diagnostic mirror;
-    // internal runtime/UI listeners still receive every native progress event.
     try{if(this.shouldMirrorDiagnosticEvent(type,detail))globalThis.dispatchEvent(new CustomEvent(`render360:${type}`,{detail}));}catch{}
   }
   async init(){

@@ -1,18 +1,18 @@
-name: UI V44 Integration
+name: Render360 Browser Integration
 
-# V44 release gate: validates the iOS shell, storage/import layers, exact
-# checked-in package WASM artifact, live developer console, and browser
-# compatibility paths used by commercial title launch.
 on:
   push:
+    branches: [main]
     paths:
       - 'index.html'
-      - 'ui-v41.css'
-      - 'ui-v42-patch.css'
-      - 'app-v41.js'
-      - 'app-v42-patch.js'
-      - 'developer-console-v44.js'
-      - 'wasm-core-v32.js'
+      - 'app.js'
+      - 'ui.js'
+      - 'ui-behavior.js'
+      - 'developer-console.js'
+      - 'styles/**'
+      - 'wasm-core.js'
+      - 'runtime-host.js'
+      - 'runtime-worker.js'
       - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
       - 'import/**'
@@ -32,20 +32,23 @@ on:
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'manifest.webmanifest'
+      - 'render360-sw.js'
       - 'VERSION'
-      - 'test-ui-v41-contract.mjs'
+      - 'test-ui-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
       - 'test-package-core-artifact-contract.mjs'
-      - '.github/workflows/ui-v41.yml'
+      - '.github/workflows/ui.yml'
   pull_request:
     paths:
       - 'index.html'
-      - 'ui-v41.css'
-      - 'ui-v42-patch.css'
-      - 'app-v41.js'
-      - 'app-v42-patch.js'
-      - 'developer-console-v44.js'
-      - 'wasm-core-v32.js'
+      - 'app.js'
+      - 'ui.js'
+      - 'ui-behavior.js'
+      - 'developer-console.js'
+      - 'styles/**'
+      - 'wasm-core.js'
+      - 'runtime-host.js'
+      - 'runtime-worker.js'
       - 'render360-stfs-browser-extractor.mjs'
       - 'library/**'
       - 'import/**'
@@ -65,11 +68,12 @@ on:
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'manifest.webmanifest'
+      - 'render360-sw.js'
       - 'VERSION'
-      - 'test-ui-v41-contract.mjs'
+      - 'test-ui-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
       - 'test-package-core-artifact-contract.mjs'
-      - '.github/workflows/ui-v41.yml'
+      - '.github/workflows/ui.yml'
 
 permissions:
   contents: read
@@ -83,12 +87,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Parse V44 browser modules
+      - name: Parse browser modules
         run: |
-          node --check app-v41.js
-          node --check app-v42-patch.js
-          node --check developer-console-v44.js
-          node --check wasm-core-v32.js
+          node --check app.js
+          node --check ui.js
+          node --check ui-behavior.js
+          node --check developer-console.js
+          node --check wasm-core.js
+          node --check runtime-host.js
+          node --check runtime-worker.js
           node --check render360-stfs-browser-extractor.mjs
           node --check runtime/render360-runtime.js
           node --check runtime/title-controls.js
@@ -100,11 +107,11 @@ jobs:
           node --check library/cover-resolver.js
           node --check import/zip-importer.js
           node --check profiles/title-profile-store.js
-      - name: Enforce V44 deployed integration contract
-        run: node test-ui-v41-contract.mjs
+      - name: Enforce canonical browser contract
+        run: node test-ui-contract.mjs
       - name: Verify checked-in package WASM artifact
         run: node test-package-core-artifact-contract.mjs
-      - name: Regress legacy-core STFS extraction compatibility
+      - name: Regress STFS extraction compatibility
         run: node test-stfs-browser-extractor.mjs
       - name: Stage published bootstrap for scheduler test
         run: |

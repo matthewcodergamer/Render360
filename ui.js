@@ -6,12 +6,12 @@ const ICONS={
   profile:`<svg class="r360-svg-icon r360-profile-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.25"/><circle cx="12" cy="9" r="3.1"/><path d="M5.8 18.5c1.35-3.1 3.45-4.65 6.2-4.65s4.85 1.55 6.2 4.65"/></svg>`
 };
 
-function addStyle(){
-  const sheets=[['base','./ui-v44-xenios.css?v=44.18'],['reference','./ui-v44-xenios-v16.css?v=44.18']];
+function ensureStyles(){
+  const sheets=[['xenios','./styles/xenios.css'],['controller','./styles/controller.css']];
   for(const [key,href] of sheets){
-    const old=document.querySelector(`link[data-r360-xenios-ui="${key}"]`);
+    const old=document.querySelector(`link[data-r360-ui="${key}"]`);
     if(old){if(old.getAttribute('href')!==href)old.setAttribute('href',href);continue;}
-    const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.dataset.r360XeniosUi=key;document.head.appendChild(link);
+    const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.dataset.r360Ui=key;document.head.appendChild(link);
   }
 }
 
@@ -36,7 +36,7 @@ function installProfile(){
   }
   if(!$('profileSheet')){
     const sheet=document.createElement('section');sheet.id='profileSheet';sheet.className='sheet r360-profile-sheet hidden';sheet.setAttribute('aria-label','Profile');
-    sheet.innerHTML=`<div class="sheet-handle"></div><div class="sheet-head"><b>Profile</b></div><div class="sheet-content"><div class="r360-profile-avatar">${ICONS.profile}</div><div class="r360-profile-name">Local Player</div><div class="r360-profile-sub">Local Rendr360 profile · no account required</div><div class="group r360-profile-group"><div class="row"><span>Game Library</span><span class="value">On this device</span></div><div class="row"><span>Cloud Account</span><span class="value">Not connected</span></div></div></div><button id="profileSettingsShortcut" class="sheet-action" type="button">Settings</button><button id="profileDone" class="sheet-action" type="button">Done</button>`;
+    sheet.innerHTML=`<div class="sheet-handle"></div><div class="sheet-head"><b>Profile</b></div><div class="sheet-content"><div class="r360-profile-avatar">${ICONS.profile}</div><div class="r360-profile-name">Local Player</div><div class="r360-profile-sub">Local Render360 profile · no account required</div><div class="group r360-profile-group"><div class="row"><span>Game Library</span><span class="value">On this device</span></div><div class="row"><span>Cloud Account</span><span class="value">Not connected</span></div></div></div><button id="profileSettingsShortcut" class="sheet-action" type="button">Settings</button><button id="profileDone" class="sheet-action" type="button">Done</button>`;
     $('app')?.appendChild(sheet);
     $('profileDone')?.addEventListener('click',closeProfile);
     $('profileSettingsShortcut')?.addEventListener('click',()=>{closeProfile();$('settingsButton')?.click();});
@@ -106,9 +106,6 @@ function recordHudActivity(t,guestPresented,fps){
   let value=fps;
   if(nextMode==='cpu'){
     const now=performance.now(),workerHz=Math.max(0,Number(t.workerHz||0)),slices=Math.max(0,Number(t.threadSlices||0)),sliceDelta=Math.max(0,slices-lastHudSlices),cadence=lastTelemetryAt?Math.max(0,now-lastTelemetryAt):250;
-    // Every term is measured runtime activity: worker pump frequency, newly
-    // executed guest slices, and telemetry scheduling pressure. No fake FPS or
-    // random noise is introduced merely to animate the graph.
     const cadencePressure=Math.min(12,Math.abs(cadence-250)*.08);
     value=workerHz+Math.min(30,sliceDelta*2)+cadencePressure;
     lastHudSlices=slices;lastTelemetryAt=now;
@@ -123,5 +120,5 @@ async function detectGpuLabel(){const target=$('hudGpuName');if(!target)return;l
 function estimateRefreshRate(){if(!globalThis.requestAnimationFrame)return;const samples=[];let prev=0;const tick=now=>{if(prev){const d=now-prev;if(d>3&&d<45)samples.push(d);}prev=now;if(samples.length<32)return requestAnimationFrame(tick);samples.sort((a,b)=>a-b);const mid=samples[Math.floor(samples.length/2)]||16.67,hz=Math.max(24,Math.min(240,Math.round(1000/mid))),el=$('hudRefresh');if(el)el.textContent=`${hz}Hz`;};requestAnimationFrame(tick);}
 function bindTelemetry(){globalThis.addEventListener('render360:telemetry',event=>onTelemetry(event.detail||{}));globalThis.addEventListener('render360:bootStage',event=>{if(String(event.detail?.stage||'').toLowerCase()==='launch')resetHudRange();});}
 
-function boot(){addStyle();installSystemIcons();installProfile();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();console.log('[Render360 V44.18] Settings/Profile UI + truthful CPU/FPS activity graph active');}
+function boot(){ensureStyles();installSystemIcons();installProfile();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();console.log('[Render360] XeniOS-style UI active');}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

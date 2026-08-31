@@ -1,4 +1,4 @@
-/* Render360 V44.17 interaction and iOS fidelity polish. */
+/* Render360 interaction and iOS fidelity layer. */
 .detail-cover{position:relative}
 html,body,#app{background-color:var(--bg)!important}
 :root[data-theme="light"],:root[data-theme="light"] body,:root[data-theme="light"] #app,:root[data-theme="light"] .view:not(.runtime-view){background-color:#f2f2f7!important}
@@ -9,14 +9,13 @@ html,body,#app{background-color:var(--bg)!important}
 .game-tile{-webkit-user-drag:none!important;touch-action:pan-y}
 .game-tile .cover-shell{transition:transform .14s ease,box-shadow .18s ease,outline-color .18s ease}
 .game-tile:active .cover-shell{transform:scale(.985)}
-.game-tile.v42-holding .cover-shell{transform:scale(.975);outline:3px solid color-mix(in srgb,var(--blue) 72%,transparent);outline-offset:2px}
+.game-tile.library-holding .cover-shell{transform:scale(.975);outline:3px solid color-mix(in srgb,var(--blue) 72%,transparent);outline-offset:2px}
 .tile-play-badge{position:absolute;z-index:4;left:9px;bottom:9px;min-height:29px;display:flex;align-items:center;gap:5px;padding:0 10px;border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:11px;font-weight:800;letter-spacing:-.1px;box-shadow:0 5px 16px rgba(0,0,0,.24);-webkit-backdrop-filter:blur(14px) saturate(160%);backdrop-filter:blur(14px) saturate(160%);pointer-events:none}
 .tile-play-badge svg{width:10px;height:10px;fill:currentColor}
 .game-tile-hint{display:block;margin-top:3px;color:var(--muted2);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :root[data-theme="light"] .cover-shell{box-shadow:0 8px 24px rgba(0,0,0,.12)}
 :root[data-theme="light"] .detail-cover{background:#e5e5ea;box-shadow:0 10px 28px rgba(0,0,0,.11)}
 
-/* Deterministic toolbar icons. These replace the private SF-glyph path. */
 #libraryView .r360-svg-icon{width:27px;height:27px;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;vector-effect:non-scaling-stroke}
 #libraryView #settingsButton,#libraryView #profileButton,#libraryView #importButton{width:40px!important;height:40px!important;min-width:40px!important;padding:0!important;border:0!important;border-radius:12px!important;background:transparent!important;display:grid!important;place-items:center!important;position:relative!important;inset:auto!important;transform:none;box-shadow:none!important}
 #libraryView #settingsButton,#libraryView #profileButton{color:#8e8e93!important}
@@ -25,7 +24,6 @@ html,body,#app{background-color:var(--bg)!important}
 #libraryView #settingsButton:active,#libraryView #profileButton:active,#libraryView #importButton:active{background:rgba(118,118,128,.16)!important;transform:scale(.94)!important}
 #libraryView .r360-profile-svg{stroke-width:1.55}
 
-/* Profile sheet is local-only and deliberately does not load diagnostics/reporting. */
 .r360-profile-sheet{max-height:min(560px,78dvh)}
 .r360-profile-sheet .sheet-content{text-align:center;padding-top:18px}
 .r360-profile-avatar{width:78px;height:78px;margin:0 auto 10px;color:#8e8e93}
@@ -34,7 +32,6 @@ html,body,#app{background-color:var(--bg)!important}
 .r360-profile-sub{font-size:12px;color:var(--muted);margin:5px auto 18px;max-width:270px}
 .r360-profile-group{text-align:left;margin-top:14px}
 
-/* Reference-frame palette sampled from the supplied 1792×828 XeniOS capture. */
 html body #runtimeView #pauseButton{background:#33281b!important;border-color:#9b784b!important}
 html body #runtimeView [data-key="BACK"],html body #runtimeView [data-key="START"]{background:#18181c!important;border-color:#48454f!important}
 html body #runtimeView [data-key="LB"],html body #runtimeView [data-key="RB"]{background:#13191f!important;border-color:#2b3b4d!important}
@@ -47,7 +44,6 @@ html body #runtimeView .face.b{background:#1e1519!important;border-color:#583544
 html body #runtimeView .face.a{background:#151c1b!important;border-color:#2e4b47!important}
 html body #runtimeView .control,html body #runtimeView .stick{color:rgba(245,245,247,.9)!important;box-shadow:0 1px 2px rgba(0,0,0,.18)!important}
 
-/* Keep the controller composition stable across Safari viewport changes. */
 @media(orientation:landscape){
   html body #runtimeView .controller-layer{inset:0!important;width:100%!important;height:100%!important;transform-origin:center center!important}
   html body #runtimeView .runtime-stage{inset:0!important;width:100%!important;height:100%!important}

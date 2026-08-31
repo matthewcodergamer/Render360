@@ -30,9 +30,9 @@ cpp_path.write_text(cpp)
 
 test_path = Path('test-title-kernel-import-integration.mjs')
 test = test_path.read_text()
-if 'result.kernelCalls !== 2' not in test:
+if 'blocked.kernelCalls!==2' not in test:
     raise SystemExit('expected duplicate kernel-call test state was not found')
-test = test.replace('result.kernelCalls !== 2', 'result.kernelCalls !== 1', 1)
+test = test.replace('blocked.kernelCalls!==2', 'blocked.kernelCalls!==1', 1)
 test = test.replace("console.log('TITLE_DIRECT_CALL_FALLBACK_UNRESOLVED_RETRY=PASS');", "console.log('TITLE_DIRECT_CALL_SINGLE_KERNEL_RESOLUTION=PASS');")
 test_path.write_text(test)
 
@@ -61,7 +61,7 @@ ui_test_path.write_text(ui_test)
 assert 'if (instr->src1.symbol) {' in cpp
 assert 'if (instr->src2.symbol) {' in cpp
 assert 'R360_DIRECT_CALL_FALLBACK' in cpp
-assert 'result.kernelCalls !== 1' in test
+assert 'blocked.kernelCalls!==1' in test
 assert 'TITLE_DIRECT_CALL_SINGLE_KERNEL_RESOLUTION=PASS' in test
 assert 'UNRESOLVED_RETRY' not in test
 assert "ctx.strokeStyle='#30d158'" in ui

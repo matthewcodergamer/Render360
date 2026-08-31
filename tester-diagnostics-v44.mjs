@@ -1,3 +1,4 @@
+import './tester-diagnostics-admin-v44.mjs?v=44.18';
 // Render360 V44 tester diagnostics.
 //
 // Goal: make every tester run produce a small, privacy-conscious technical

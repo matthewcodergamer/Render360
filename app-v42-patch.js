@@ -1,5 +1,5 @@
 import './developer-console-v44.js?v=44.5';
-import './tester-diagnostics-v44.mjs?v=44.17';
+import './tester-diagnostics-v44.mjs?v=44.18';
 import './render360-browser-features.mjs?v=44.11';
 import './render360-xenios-ui.mjs?v=44.16';
 import {listGames,putGame,putCover} from './library/game-library.js?v=44';

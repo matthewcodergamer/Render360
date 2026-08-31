@@ -138,3 +138,7 @@ foundation gate                                     ○
 ```
 
 The percentage is a scoped engineering estimate, not source-code coverage and not a claim of retail-title compatibility.
+
+## V44.15 retail-title CALL verification
+
+The browser bootstrap is being rebuilt from the current source closure after the Braid startup trace reached HIR `CALL` at `0x8236EF40`. The rebuild includes recursive direct/address guest-call resolution, active title-module preservation for address-decoded calls, and the `R360_CALL_RESOLVERS_READY` provenance marker so a deployed browser trace can prove that the verified WASM contains the current resolver path.

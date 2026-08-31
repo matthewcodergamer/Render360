@@ -82,8 +82,8 @@ html,body,#app{
 }
 #importButton svg{width:27px!important;height:27px!important;stroke-width:1.9!important}
 
-/* XeniOS-style header hierarchy: brand on the first line, runtime status below
-   it. The 360 suffix uses the same green as the runtime/theme accent. */
+/* Stable XeniOS-style header. Use the real DOM text, not generated pseudo text,
+   so the Rendr360 wordmark cannot disappear when late stylesheets are loaded. */
 #libraryView .nav-row{align-items:flex-start!important}
 #libraryView .r360-brand{
   display:flex!important;
@@ -96,28 +96,23 @@ html,body,#app{
 }
 #libraryView .r360-brand>.nav-title{
   display:flex!important;
-  align-items:baseline;
-  min-height:23px;
-  font-size:0!important;
-  line-height:1!important;
-  letter-spacing:0!important;
-  white-space:nowrap;
+  align-items:baseline!important;
+  min-height:23px!important;
+  font-size:20px!important;
+  line-height:1.05!important;
+  font-weight:750!important;
+  letter-spacing:-.5px!important;
+  white-space:nowrap!important;
+  visibility:visible!important;
+  opacity:1!important;
 }
-#libraryView .r360-brand>.nav-title::before{
-  content:"Rendr";
-  color:var(--text);
-  font-size:20px;
-  line-height:1.05;
-  font-weight:750;
-  letter-spacing:-.5px;
+#libraryView .r360-brand>.nav-title::before,
+#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
+#libraryView .r360-brand>.nav-title .r360-name{
+  display:inline!important;color:var(--text,#f5f5f7)!important;font-size:20px!important
 }
-#libraryView .r360-brand>.nav-title::after{
-  content:"360";
-  color:var(--green,#30d158);
-  font-size:20px;
-  line-height:1.05;
-  font-weight:750;
-  letter-spacing:-.5px;
+#libraryView .r360-brand>.nav-title .r360-360{
+  display:inline!important;color:var(--green,#30d158)!important;font-size:20px!important
 }
 #libraryView .r360-brand .runtime-sync{
   width:100%!important;
@@ -133,29 +128,31 @@ html,body,#app{
   text-overflow:ellipsis;
 }
 #libraryView .r360-brand .sync-dot{flex:0 0 auto}
-#libraryView .nav-actions{padding-top:0;align-items:center;gap:4px!important}
-#libraryView .nav-actions>#settingsButton{order:1!important}
-#libraryView .nav-actions::after{order:2!important}
-#libraryView .nav-actions>#importButton{order:3!important}
 
-/* Reference-matched profile glyph: directly to the RIGHT of Settings, like
-   XeniOS. Explicit flex ordering prevents the import button from separating it
-   during the initial DOM pass before Import is moved beside Library. */
-#libraryView .nav-actions::after{
-  content:"";
-  display:block;
-  width:34px;
-  height:34px;
-  flex:0 0 34px;
-  border:2px solid var(--muted);
-  border-radius:50%;
-  opacity:.82;
-  background:
-    radial-gradient(circle at 50% 34%, transparent 0 3.6px,var(--muted) 3.8px 5.7px,transparent 5.9px),
-    radial-gradient(ellipse at 50% 88%, transparent 0 10px,var(--muted) 10.2px 12px,transparent 12.2px);
-  box-sizing:border-box;
+/* Exact requested order: Settings first, Profile second. Explicit order values
+   avoid the profile button's default flex order placing it before Settings. */
+#libraryView .nav-actions{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:center!important;
+  gap:4px!important;
+  padding-top:0!important;
 }
-:root[data-theme="light"] #libraryView .nav-actions::after{opacity:.66}
+#libraryView .nav-actions>#settingsButton{order:1!important}
+#libraryView .nav-actions>#profileButton{order:2!important}
+#libraryView .nav-actions>#importButton{order:3!important}
+#libraryView .nav-actions::after{content:none!important;display:none!important}
+
+#profileButton{
+  display:grid!important;place-items:center!important;width:36px!important;height:36px!important;
+  flex:0 0 36px!important;padding:0!important;border:0!important;background:transparent!important;
+  color:var(--muted,#98989d)!important;border-radius:10px!important
+}
+#profileButton svg{
+  display:block!important;width:28px!important;height:28px!important;fill:none!important;
+  stroke:currentColor!important;stroke-width:1.65!important;stroke-linecap:round!important;stroke-linejoin:round!important
+}
+#profileButton:active{background:color-mix(in srgb,var(--surface3,#2c2c2e) 30%,transparent)!important;transform:scale(.93)}
 
 /* Xenia-like hierarchy: common choices first; compatibility/developer controls
    are one deliberate tap away instead of one very long settings page. */

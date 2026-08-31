@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { WASI } from 'node:wasi';
 const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
 const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const pick=n=>e[n]??e[`_${n}`];
@@ -23,6 +24,14 @@ const c=pick('r360_guest_thread_create')(0x82003000,0,0x4000,0)>>>0;if(!c||c===a
 console.log('GUEST_RUNTIME_STALE_HANDLE_FAIL_CLOSED=PASS');console.log('GUEST_RUNTIME_THREAD_STACK_REUSE=PASS');
 const next=pick('r360_guest_thread_next_runnable')()>>>0;if(!next)throw new Error('scheduler found no runnable thread');
 console.log('GUEST_RUNTIME_COOPERATIVE_SCHEDULER=PASS');console.log('GUEST_THREADS_TLS_RUNTIME_HARSH_CRITIC=PASS');
-// The browser scheduler gets a fresh WASM instance so the native thread registry,
-// translated-function cache and PPCContext start from a production-clean state.
-await import('./test-browser-thread-scheduler.mjs');
+
+// Do not instantiate a second WASI/Xenia runtime inside this already-live Node
+// process. Node 24 can crash natively while two WASI-backed instances with this
+// C++ runtime coexist, even though both WebAssembly instances are individually
+// valid. The browser-scheduler critic is deliberately process-isolated so it
+// still starts from a completely fresh WASM/native-static state and any failure
+// is reported as a normal child exit instead of taking down the parent critic.
+const schedulerRun=spawnSync(process.execPath,['./test-browser-thread-scheduler.mjs',wasmPath],{stdio:'inherit'});
+if(schedulerRun.error)throw schedulerRun.error;
+if(schedulerRun.status!==0)throw new Error(`browser thread scheduler critic failed with exit ${schedulerRun.status}${schedulerRun.signal?` signal ${schedulerRun.signal}`:''}`);
+console.log('BROWSER_THREAD_SCHEDULER_PROCESS_ISOLATION=PASS');

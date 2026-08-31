@@ -5,6 +5,7 @@ on:
     paths:
       - 'tester-diagnostics-admin-v44.mjs'
       - 'tester-diagnostics-v44.mjs'
+      - 'test-tester-diagnostics.mjs'
       - 'test-tester-diagnostics-admin.mjs'
       - 'app-v42-patch.js'
       - 'index.html'

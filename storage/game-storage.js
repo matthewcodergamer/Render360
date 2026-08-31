@@ -62,7 +62,10 @@ export async function openPersistentSource(opfsPath,sourceName='Xbox 360 Game'){
   for(const part of parts.slice(0,-1))dir=await dir.getDirectoryHandle(part);
   const handle=await dir.getFileHandle(parts.at(-1));
   const stored=await handle.getFile();
-  return new File([stored],sourceName||stored.name,{type:stored.type||'application/octet-stream',lastModified:stored.lastModified||Date.now()});
+  // Returning the OPFS File directly avoids wrapping/copying a potentially large
+  // game blob every time Rendr360 starts. The runtime only requires the Blob/File
+  // interface, so the original stored filename is safe here.
+  return stored;
 }
 
 export async function deletePersistentSource(opfsPath){

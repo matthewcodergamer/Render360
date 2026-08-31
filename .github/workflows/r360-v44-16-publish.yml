@@ -1,0 +1,69 @@
+name: Render360 V44.16 UI Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r360-v44-16-publish.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish cache-busted V44.16 UI and first-paint Apple glyphs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          patch=Path('app-v42-patch.js')
+          s=patch.read_text()
+          old="import './render360-xenios-ui.mjs?v=44.15';"
+          new="import './render360-xenios-ui.mjs?v=44.16';"
+          if old not in s:
+              raise SystemExit('app-v42-patch V44.15 import marker missing')
+          patch.write_text(s.replace(old,new,1))
+
+          index=Path('index.html')
+          h=index.read_text()
+          replacements={
+              'app-v41.js?v=44.15':'app-v41.js?v=44.16',
+              'app-v42-patch.js?v=44.15':'app-v42-patch.js?v=44.16',
+          }
+          for old,new in replacements.items():
+              if old not in h:
+                  raise SystemExit(f'index cache marker missing: {old}')
+              h=h.replace(old,new,1)
+
+          settings_pattern=r'<button id="settingsButton" class="ios-icon-button" type="button" aria-label="Render360 settings">.*?</button>'
+          settings_replacement='<button id="settingsButton" class="ios-icon-button" type="button" aria-label="Settings"><span class="r360-sf-symbol r360-sf-gear" data-symbol-name="gearshape" aria-hidden="true">&#x1008CC;</span></button>'
+          h,n=re.subn(settings_pattern,settings_replacement,h,count=1,flags=re.S)
+          if n!=1:
+              raise SystemExit('settings first-paint SVG marker missing')
+
+          import_pattern=r'<button id="importButton" class="ios-icon-button" type="button" aria-label="Import game">.*?</button>'
+          import_replacement='<button id="importButton" class="ios-icon-button" type="button" aria-label="Import Game"><span class="r360-sf-symbol r360-sf-plus" data-symbol-name="plus" aria-hidden="true">&#x100185;</span></button>'
+          h,n=re.subn(import_pattern,import_replacement,h,count=1,flags=re.S)
+          if n!=1:
+              raise SystemExit('import first-paint SVG marker missing')
+          index.write_text(h)
+          PY
+
+      - name: Verify V44.16 UI contract
+        run: |
+          node --check render360-xenios-ui.mjs
+          node --check app-v42-patch.js
+          node test-xenios-ui-contract.mjs
+
+      - name: Commit V44.16 publication
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/r360-v44-16-publish.yml
+          git add app-v42-patch.js index.html
+          git commit -m 'ui: publish V44.16 XeniOS fidelity pass'
+          git push origin HEAD:main

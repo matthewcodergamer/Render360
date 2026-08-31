@@ -12,25 +12,30 @@ function decodeBase64(s){const bin=globalThis.atob(s),out=new Uint8Array(bin.len
 async function gunzip(bytes){if(typeof DecompressionStream!=='function')throw new Error('Browser DecompressionStream is unavailable');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Uint8Array(await new Response(stream).arrayBuffer());}
 function validateInstance(instance,label){const e=instance?.exports||{};const missing=BASE_EXPORTS.filter(name=>name==='memory'?!e.memory:typeof e[name]!=='function');if(missing.length)throw new Error(`${label} core is missing required ABI exports: ${missing.join(', ')}`);return instance;}
 function yieldToBrowser(){return new Promise(resolve=>setTimeout(resolve,0));}
-async function fetchWithTimeout(url,timeoutMs=3500){
+function isIOSLike(){return /iPhone|iPad|iPod/i.test(navigator?.userAgent||'')||(navigator?.platform==='MacIntel'&&Number(navigator?.maxTouchPoints||0)>1);}
+async function fetchWithTimeout(url,timeoutMs=12000){
   const controller=typeof AbortController==='function'?new AbortController():null;
   const timer=setTimeout(()=>controller?.abort(),timeoutMs);
   try{return await fetch(url,{cache:'no-store',signal:controller?.signal});}
   finally{clearTimeout(timer);}
 }
 async function loadEmbeddedCore(){
+  // The embedded base64 core is intentionally not a normal iPhone fallback:
+  // parsing/decoding that multi-megabyte JS module can monopolize Safari's UI
+  // thread. Cached/network WASM is the responsive mobile path.
+  if(isIOSLike()&&globalThis.RENDER360_ALLOW_EMBEDDED_CORE_FALLBACK!==true)return '';
   await yieldToBrowser();
-  const module=await import('./render360_xenia_core_embedded.js?v=44.27');
+  const module=await import('./render360_xenia_core_embedded.js?v=44.28');
   return module.CORE_WASM_GZIP_BASE64||'';
 }
 
 export class Render360Core {
-  constructor(url='./render360_xenia_core.wasm?v=44.27') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
+  constructor(url='./render360_xenia_core.wasm?v=44.28') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
 
   async init() {
     let result=null,networkError=null,embeddedError=null;
     try{
-      const response=await fetchWithTimeout(this.url,3500);if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const response=await fetchWithTimeout(this.url,12000);if(!response.ok)throw new Error(`HTTP ${response.status}`);
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
       validateInstance(result.instance,'Network');this.source='network';
     }catch(error){networkError=error;result=null;}
@@ -40,7 +45,7 @@ export class Render360Core {
         if(embeddedBase64){result=await WebAssembly.instantiate(await gunzip(decodeBase64(embeddedBase64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
       }catch(error){embeddedError=error;result=null;}
     }
-    if(!result)throw new Error(`Render360 core could not start${networkError?` · network: ${networkError.message}`:''}${embeddedError?` · embedded: ${embeddedError.message}`:''}`);
+    if(!result)throw new Error(`Render360 core could not start${networkError?` · network: ${networkError.message}`:''}${embeddedError?` · embedded: ${embeddedError.message}`:''}${isIOSLike()?' · mobile fallback intentionally skipped to keep Safari responsive':''}`);
     this.networkError=networkError;this.instance=result.instance;this.exports=this.instance.exports;return this;
   }
 
@@ -78,14 +83,14 @@ export class Render360Core {
   async extractStfsEntry(file,entryIndex,{maxRequests=65536,captureLimit=32*1024*1024,onProgress=null}={}){
     const e=this.exports;
     if(typeof e.r360_stfs_extract_begin!=='function'){const entries=this.readStfsEntries(),entry=entries[entryIndex>>>0];if(!entry)throw new Error(`STFS entry ${entryIndex>>>0} is unavailable after mount`);return extractStfsEntryBrowser(file,{entry,stfs:this.readStfsSnapshot(),captureLimit,maxRequests,onProgress});}
-    e.r360_stfs_extract_begin(entryIndex>>>0);let snap=this.readStfsExtractSnapshot(),requestCount=0,totalBytesRead=0;const captureBytes=Math.min(snap.bytesTotal,Math.max(0,Number(captureLimit)||0)),captured=new Uint8Array(captureBytes);
-    while((e.r360_stfs_request_pending()>>>0)!==0){if(++requestCount>maxRequests){e.r360_stfs_extract_reset?.();throw new Error(`STFS extraction exceeded ${maxRequests} native read requests`);}const offset=this.combineU64(e.r360_stfs_request_offset_lo(),e.r360_stfs_request_offset_hi()),size=e.r360_stfs_request_size()>>>0,dest=e.r360_stfs_extract_bytes_done()>>>0;if(size===0||size>this.ioCapacity())throw new Error(`Invalid native STFS extraction read size ${size}`);const staged=await this.stageSlice(file,offset,size);totalBytesRead+=staged.bytesRead;if(staged.bytesRead!==size)throw new Error(`Short STFS extraction browser read at 0x${offset.toString(16)} (${staged.bytesRead}/${size})`);if(dest<captured.length){const take=Math.min(staged.bytes.length,captured.length-dest);captured.set(staged.bytes.subarray(0,take),dest);}e.r360_stfs_submit_read(staged.bytesRead);snap=this.readStfsExtractSnapshot();onProgress?.(snap);}
+    e.r360_stfs_extract_begin(entryIndex>>>0);let snap=this.readStfsExtractSnapshot(),requestCount=0,totalBytesRead=0,lastYield=performance.now();const captureBytes=Math.min(snap.bytesTotal,Math.max(0,Number(captureLimit)||0)),captured=new Uint8Array(captureBytes);
+    while((e.r360_stfs_request_pending()>>>0)!==0){if(++requestCount>maxRequests){e.r360_stfs_extract_reset?.();throw new Error(`STFS extraction exceeded ${maxRequests} native read requests`);}const offset=this.combineU64(e.r360_stfs_request_offset_lo(),e.r360_stfs_request_offset_hi()),size=e.r360_stfs_request_size()>>>0,dest=e.r360_stfs_extract_bytes_done()>>>0;if(size===0||size>this.ioCapacity())throw new Error(`Invalid native STFS extraction read size ${size}`);const staged=await this.stageSlice(file,offset,size);totalBytesRead+=staged.bytesRead;if(staged.bytesRead!==size)throw new Error(`Short STFS extraction browser read at 0x${offset.toString(16)} (${staged.bytesRead}/${size})`);if(dest<captured.length){const take=Math.min(staged.bytes.length,captured.length-dest);captured.set(staged.bytes.subarray(0,take),dest);}e.r360_stfs_submit_read(staged.bytesRead);snap=this.readStfsExtractSnapshot();onProgress?.(snap);if(performance.now()-lastYield>=8){await yieldToBrowser();lastYield=performance.now();}}
     snap=this.readStfsExtractSnapshot();return {...snap,complete:snap.status===2,requestCount,totalBytesRead,captured,fullyCaptured:captured.length===snap.bytesTotal,fallback:null};
   }
 
   async mountStfs(file,{maxRequests=4096,extractDefaultXex=true,onExtractProgress=null}={}){
-    const e=this.exports,{lo,hi}=this.splitU64(file.size);e.r360_stfs_mount_begin(lo,hi);let requestCount=0,totalBytesRead=0;
-    while((e.r360_stfs_request_pending()>>>0)!==0){if(++requestCount>maxRequests){e.r360_stfs_mount_reset();throw new Error(`STFS mount exceeded ${maxRequests} native read requests`);}const offset=this.combineU64(e.r360_stfs_request_offset_lo(),e.r360_stfs_request_offset_hi()),size=e.r360_stfs_request_size()>>>0,kind=e.r360_stfs_request_kind()>>>0;if(size===0||size>this.ioCapacity())throw new Error(`Invalid native STFS read size ${size}`);const staged=await this.stageSlice(file,offset,size);totalBytesRead+=staged.bytesRead;if(staged.bytesRead!==size)throw new Error(`Short STFS browser read at 0x${offset.toString(16)} (${staged.bytesRead}/${size}, request kind ${kind})`);e.r360_stfs_submit_read(staged.bytesRead);}
+    const e=this.exports,{lo,hi}=this.splitU64(file.size);e.r360_stfs_mount_begin(lo,hi);let requestCount=0,totalBytesRead=0,lastYield=performance.now();
+    while((e.r360_stfs_request_pending()>>>0)!==0){if(++requestCount>maxRequests){e.r360_stfs_mount_reset();throw new Error(`STFS mount exceeded ${maxRequests} native read requests`);}const offset=this.combineU64(e.r360_stfs_request_offset_lo(),e.r360_stfs_request_offset_hi()),size=e.r360_stfs_request_size()>>>0,kind=e.r360_stfs_request_kind()>>>0;if(size===0||size>this.ioCapacity())throw new Error(`Invalid native STFS read size ${size}`);const staged=await this.stageSlice(file,offset,size);totalBytesRead+=staged.bytesRead;if(staged.bytesRead!==size)throw new Error(`Short STFS browser read at 0x${offset.toString(16)} (${staged.bytesRead}/${size}, request kind ${kind})`);e.r360_stfs_submit_read(staged.bytesRead);if(performance.now()-lastYield>=8){await yieldToBrowser();lastYield=performance.now();}}
     const stfs=this.readStfsSnapshot(),entries=this.readStfsEntries(),mounted=stfs.status===2||stfs.status===3;let defaultXex=null;if(stfs.defaultXexIndex!==0xFFFFFFFF&&stfs.defaultXexIndex<entries.length)defaultXex=entries[stfs.defaultXexIndex];
     const result={mounted,partial:stfs.status===3,stfs,entries,defaultXex,defaultXexKind:stfs.defaultXexKind,requestCount,totalBytesRead,chainComplete:stfs.status===2,defaultXexExtract:null,defaultXexInspection:null,extractionMode:this.stfsExtractionMode};
     if(mounted&&extractDefaultXex&&defaultXex){result.defaultXexExtract=await this.extractStfsEntry(file,defaultXex.index,{onProgress:onExtractProgress});if(result.defaultXexExtract.captured?.byteLength>=24){try{result.defaultXexInspection=this.inspectXexBytes(result.defaultXexExtract.captured)}catch{}}result.stfs=this.readStfsSnapshot();}

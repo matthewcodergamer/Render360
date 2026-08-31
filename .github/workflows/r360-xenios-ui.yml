@@ -5,18 +5,31 @@ on:
     branches: [main]
     paths:
       - 'render360-xenios-ui.mjs'
+      - 'rendr360-mobile-runtime-fix.mjs'
       - 'ui-v44-xenios.css'
+      - 'ui-v44-mobile-fix.css'
+      - 'ui-v44-mobile-fix-v24.css'
+      - 'manifest.webmanifest'
+      - 'render360-sw.js'
       - 'app-v42-patch.js'
       - 'app-v41.js'
       - 'test-xenios-ui-contract.mjs'
+      - 'test-rendr360-mobile-v24.mjs'
       - '.github/workflows/r360-xenios-ui.yml'
   pull_request:
     paths:
       - 'render360-xenios-ui.mjs'
+      - 'rendr360-mobile-runtime-fix.mjs'
       - 'ui-v44-xenios.css'
+      - 'ui-v44-mobile-fix.css'
+      - 'ui-v44-mobile-fix-v24.css'
+      - 'manifest.webmanifest'
+      - 'render360-sw.js'
       - 'app-v42-patch.js'
       - 'app-v41.js'
       - 'test-xenios-ui-contract.mjs'
+      - 'test-rendr360-mobile-v24.mjs'
+      - '.github/workflows/r360-xenios-ui.yml'
 
 permissions:
   contents: read
@@ -32,6 +45,9 @@ jobs:
       - name: Parse UI modules
         run: |
           node --check render360-xenios-ui.mjs
+          node --check rendr360-mobile-runtime-fix.mjs
           node --check app-v42-patch.js
       - name: Verify UI integration contract
-        run: node test-xenios-ui-contract.mjs
+        run: |
+          node test-xenios-ui-contract.mjs
+          node test-rendr360-mobile-v24.mjs

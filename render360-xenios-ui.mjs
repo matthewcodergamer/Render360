@@ -1,18 +1,18 @@
 const $=id=>document.getElementById(id);
 
 const ICONS={
-  // Browser-safe vector drawn to the same thin, rounded visual grammar as iOS
-  // gearshape. A web page can't invoke UIKit's UIImage(systemName:) directly.
-  settings:`<svg class="r360-sf-gear" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M10.28 2.55h3.44l.46 2.08c.54.18 1.05.4 1.52.68l1.8-1.12 2.43 2.43-1.12 1.8c.28.47.5.98.68 1.52l2.08.46v3.44l-2.08.46c-.18.54-.4 1.05-.68 1.52l1.12 1.8-2.43 2.43-1.8-1.12c-.47.28-.98.5-1.52.68l-.46 2.08h-3.44l-.46-2.08a8.35 8.35 0 0 1-1.52-.68l-1.8 1.12-2.43-2.43 1.12-1.8a8.35 8.35 0 0 1-.68-1.52l-2.08-.46V10.4l2.08-.46c.18-.54.4-1.05.68-1.52l-1.12-1.8L6.5 4.19l1.8 1.12c.47-.28.98-.5 1.52-.68l.46-2.08Z"/>
-    <circle cx="12" cy="12.12" r="3.02"/>
-  </svg>`,
-  plus:`<svg class="r360-sf-plus" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.35v15.3M4.35 12h15.3"/></svg>`
+  // Browser pages cannot call UIKit UIImage(systemName:). Let the Apple
+  // system font renderer draw native glyphs instead of bundling lookalike SVGs.
+  settings:`<span class="r360-native-ios-symbol r360-native-gear" aria-hidden="true">⚙︎</span>`,
+  plus:`<span class="r360-native-ios-symbol r360-native-plus" aria-hidden="true">＋</span>`
 };
 
 function addStyle(){
-  if(document.querySelector('link[data-r360-xenios-ui]'))return;
-  const link=document.createElement('link');link.rel='stylesheet';link.href='./ui-v44-xenios.css?v=44.14';link.dataset.r360XeniosUi='1';document.head.appendChild(link);
+  const sheets=[['base','./ui-v44-xenios.css?v=44.14'],['reference','./ui-v44-xenios-v15.css?v=44.15']];
+  for(const [key,href] of sheets){
+    if(document.querySelector(`link[data-r360-xenios-ui="${key}"]`))continue;
+    const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.dataset.r360XeniosUi=key;document.head.appendChild(link);
+  }
 }
 
 function installSystemIcons(){
@@ -99,17 +99,12 @@ function resolutionFromTelemetry(t){
   return w&&h?`[${Math.round(w)}×${Math.round(h)}]`:'[—×—]';
 }
 function onTelemetry(t={}){
-  const fps=Number(t.fps||0);
-  if(fps>0){
-    minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);
-    if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;
-  }else{
-    // A blocked title has zero guest presentations. Show 0.0 rather than a
-    // misleading host refresh rate or an em dash.
-    if($('hudFps'))$('hudFps').textContent='0.0';
-    if($('hudFpsRange')&&!Number.isFinite(minFps))$('hudFpsRange').textContent='0.0 / 0.0';
-  }
+  const guestPresented=Boolean(t.realFrame)||Number(t.swaps||0)>0;
+  const fps=guestPresented?Number(t.fps||0):0;
+  if(fps>0){minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;}
+  else if(!guestPresented&&$('hudFpsRange'))$('hudFpsRange').textContent='— / —';
   if($('hudResolution'))$('hudResolution').textContent=resolutionFromTelemetry(t);
+  if($('hudPipeline'))$('hudPipeline').textContent=`${Number(t.pm4Packets||0).toLocaleString()} PM4`;
 }
 
 async function detectGpuLabel(){
@@ -148,7 +143,7 @@ function bindTelemetry(){
 
 function boot(){
   addStyle();installSystemIcons();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();
-  console.log('[Render360 V44.14] XeniOS reference geometry, iOS-style chrome, corrected telemetry HUD, and centered developer control active');
+  console.log('[Render360 V44.15] XeniOS reference geometry, iOS-style chrome, corrected telemetry HUD, and centered developer control active');
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

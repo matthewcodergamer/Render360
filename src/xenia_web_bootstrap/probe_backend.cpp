@@ -34,6 +34,7 @@ namespace render360::xenia_web {
 namespace {
 ProbeTelemetry g_probe_telemetry;
 ProbeBackend* g_probe_backend = nullptr;
+xe::cpu::Module* g_active_probe_module = nullptr;
 bool g_execute_correctness_on_assemble = true;
 constexpr uint32_t kProbeGuestSize = 64u * 1024u;
 
@@ -99,7 +100,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   return translated;
 }
 bool ResolveNestedGuestCall(xe::cpu::Function* function) { return function && TranslateNestedGuestAddress(function->address(), function->module()); }
-bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAddress(address, nullptr); }
+bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAddress(address, g_active_probe_module); }
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
@@ -119,6 +120,7 @@ ProbeAssembler::~ProbeAssembler() = default;
 bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HIRBuilder* builder,
                               uint32_t, std::unique_ptr<xe::cpu::FunctionDebugInfo> debug_info) {
   const bool nested_execution = IsHIRCorrectnessExecutionActive();
+  if (!nested_execution && function) g_active_probe_module = function->module();
   const bool execute_correctness =
       nested_execution || GetProbeExecuteCorrectnessOnAssemble();
   uint32_t block_count = 0, instruction_count = 0;
@@ -200,6 +202,7 @@ ProbeBackend::~ProbeBackend() = default;
 bool ProbeBackend::Initialize(xe::cpu::Processor* processor) {
   if (!xe::cpu::backend::Backend::Initialize(processor)) return false;
   g_probe_backend = this; SetHIRCorrectnessCallResolver(&ResolveNestedGuestCall); SetHIRCorrectnessAddressResolver(&ResolveNestedGuestAddress);
+  std::fprintf(stderr, "R360_CALL_RESOLVERS_READY call=1 address=1 active_module=1\n");
   machine_info_.supports_extended_load_store = false;
   auto& gprs = machine_info_.register_sets[0]; gprs.id=0; std::strcpy(gprs.name,"gpr"); gprs.types=xe::cpu::backend::MachineInfo::RegisterSet::INT_TYPES; gprs.count=7;
   auto& vecs = machine_info_.register_sets[1]; vecs.id=1; std::strcpy(vecs.name,"vec"); vecs.types=xe::cpu::backend::MachineInfo::RegisterSet::FLOAT_TYPES|xe::cpu::backend::MachineInfo::RegisterSet::VEC_TYPES; vecs.count=12;

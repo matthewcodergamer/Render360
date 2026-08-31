@@ -1,6 +1,3 @@
-import './developer-console-v44.js?v=44.5';
-import './tester-diagnostics-v44.mjs?v=44.18';
-import './render360-browser-features.mjs?v=44.11';
 import './render360-xenios-ui.mjs?v=44.16';
 import './rendr360-mobile-runtime-fix.mjs?v=44.23';
 import {listGames,putGame,putCover} from './library/game-library.js?v=44';
@@ -12,9 +9,24 @@ const holdState=new WeakMap();
 const coverUrls=new Map();
 let artworkHydrationRunning=false;
 let storageClearRunning=false;
+let deferredToolsPromise=null;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const hex8=value=>(Number(value||0)>>>0).toString(16).toUpperCase().padStart(8,'0');
 const fmtBytes=value=>{const n=Number(value)||0;if(n<1024)return`${n} B`;if(n<1048576)return`${(n/1024).toFixed(1)} KB`;if(n<1073741824)return`${(n/1048576).toFixed(1)} MB`;return`${(n/1073741824).toFixed(2)} GB`;};
+
+function loadDeferredTools(){
+  if(deferredToolsPromise)return deferredToolsPromise;
+  deferredToolsPromise=Promise.allSettled([
+    import('./developer-console-v44.js?v=44.5'),
+    import('./tester-diagnostics-v44.mjs?v=44.18'),
+    import('./render360-browser-features.mjs?v=44.11'),
+  ]);
+  return deferredToolsPromise;
+}
+function scheduleDeferredTools(){
+  const run=()=>void loadDeferredTools();
+  if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:2500});else setTimeout(run,1800);
+}
 
 function syncThemeChrome(){const root=document.documentElement,light=root.dataset.theme==='light',bg=light?'#f2f2f7':'#000000';root.style.backgroundColor=bg;root.style.colorScheme=light?'light':'dark';if(document.body)document.body.style.backgroundColor=bg;$('app')?.style.setProperty('background-color',bg,'important');document.querySelector('meta[name="theme-color"]')?.setAttribute('content',bg);document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.setAttribute('content',light?'default':'black-translucent');}
 function playBadge(){const badge=document.createElement('span');badge.className='tile-play-badge';badge.innerHTML='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 1.2v9.6L10 6 2.2 1.2Z"/></svg><span>Play</span>';return badge;}
@@ -26,6 +38,7 @@ function decorateTile(tile){if(!(tile instanceof HTMLElement))return;const shell
 function decorateTiles(){document.querySelectorAll('#gameGrid .game-tile').forEach(decorateTile);convertNativeCoverImages(document);}
 function applyCoverToVisible(game,blob){let url=coverUrls.get(game.id);if(!url){url=URL.createObjectURL(blob);coverUrls.set(game.id,url);}document.querySelectorAll('#gameGrid .game-tile').forEach(tile=>{if(tile.dataset.gameId===game.id)applyCachedCover(tile);});const detailTid=$('detailTitleId')?.textContent?.trim();if(!document.getElementById('detailView')?.classList.contains('hidden')&&detailTid===hex8(game.titleId)){const cover=$('detailCover');if(cover)setCoverSurface(cover,url,`${game.name||'Xbox 360 game'} cover`);}}
 async function hydrateMissingArtwork(){if(artworkHydrationRunning)return;artworkHydrationRunning=true;try{const games=await listGames();for(const game of games.filter(g=>!g.coverKey&&Number(g.titleId)).slice(0,12)){try{const resolved=await resolveTitleCover({titleId:game.titleId,timeoutMs:6500});if(!resolved?.blob)continue;game.coverKey=await putCover(resolved.blob);if(resolved.name&&(!game.name||game.name===game.sourceName))game.name=resolved.name;game.coverSource=resolved.source||'network';await putGame(game);applyCoverToVisible(game,resolved.blob);console.log(`[Render360 V44] Artwork cached for ${game.name} from ${game.coverSource}`);}catch(error){console.warn(`[Render360 V44] Artwork lookup failed for ${game.name}: ${error.message}`);}}}catch(error){console.warn(`[Render360 V44] Artwork backfill unavailable: ${error.message}`);}finally{artworkHydrationRunning=false;}}
+function scheduleArtworkHydration(){const run=()=>void hydrateMissingArtwork();if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:6000});else setTimeout(run,3500);}
 
 async function scheduleAutoPlay(tile){const gameId=tile.dataset.gameId;if(!gameId)return;let expected=null;try{expected=(await listGames()).find(game=>game.id===gameId)||null;}catch{}const expectedTid=expected?.titleId?hex8(expected.titleId):null;for(let i=0;i<100;i++){await sleep(20);if(document.body.dataset.state!=='GAME_DETAILS')continue;const sameGame=expectedTid?$('detailTitleId')?.textContent?.trim()===expectedTid:(!$('detailName')||$('detailName').textContent===tile.querySelector('.game-tile-title')?.textContent);if(!sameGame)continue;$('playGameButton')?.click();return;}}
 function clearHoldTimer(state){if(state?.timer){clearTimeout(state.timer);state.timer=null;}}
@@ -47,6 +60,12 @@ async function refreshStorageNumbers(){const info=await storageInfo();if($('stor
 async function clearGameCopiesV44(){if(storageClearRunning)return;storageClearRunning=true;try{const games=await listGames();let affected=0;await clearGamesDirectory();for(const game of games){if(!String(game.opfsPath||'').startsWith('Render360/Games/'))continue;game.opfsPath=null;game.persistentSource=false;game.needsRelink=true;affected++;await putGame(game);}await refreshStorageNumbers();patchAlert('Game Copies Cleared',affected?`${affected} stored game cop${affected===1?'y was':'ies were'} removed. Library entries and covers were kept. Reload Render360 now so no deleted file remains linked in memory.`:'Render360/Games is empty. No stored game copies were found.',[{label:'Done',action:()=>location.reload()}]);}finally{storageClearRunning=false;}}
 function bindReliableStorageClear(){const button=$('clearGameStorage');if(!button)return;button.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();patchAlert('Clear Game Copies?','Delete files stored inside Render360/Games? Library entries and artwork stay, but affected games will need their original file selected again.',[{label:'Cancel'},{label:'Clear',action:clearGameCopiesV44}]);},true);}
 
-function patchDiagnosticsRelease(){setTimeout(()=>{const log=$('diagnosticsLog');if(log)log.textContent=log.textContent.replace('"release": 41','"release": 44').replace('"release": 42','"release": 44').replace('"release": 43','"release": 44');},0);}
-function bootV44Patch(){syncThemeChrome();new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});bindLibraryLaunchGestures();bindGlobalCoverProtection();bindReliableStorageClear();decorateTiles();const app=$('app');if(app)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(app,{childList:true,subtree:true});$('diagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);$('appDiagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);setTimeout(hydrateMissingArtwork,450);console.log('[Render360 V44] Direct-play library, live developer console, reliable storage management, app-owned covers, iOS chrome, and runtime compatibility fixes active');}
+function patchDiagnosticsRelease(){void loadDeferredTools();setTimeout(()=>{const log=$('diagnosticsLog');if(log)log.textContent=log.textContent.replace('"release": 41','"release": 44').replace('"release": 42','"release": 44').replace('"release": 43','"release": 44');},0);}
+function installScopedDecorators(){
+  const queue=()=>queueMicrotask(decorateTiles);
+  const grid=$('gameGrid'),detail=$('detailView');
+  if(grid)new MutationObserver(queue).observe(grid,{childList:true,subtree:true});
+  if(detail)new MutationObserver(queue).observe(detail,{childList:true,subtree:true});
+}
+function bootV44Patch(){syncThemeChrome();new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});bindLibraryLaunchGestures();bindGlobalCoverProtection();bindReliableStorageClear();decorateTiles();installScopedDecorators();$('diagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);$('appDiagnosticsButton')?.addEventListener('click',patchDiagnosticsRelease);scheduleDeferredTools();scheduleArtworkHydration();console.log('[Render360 V44] Responsive direct-play library and runtime compatibility fixes active');}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootV44Patch,{once:true});else bootV44Patch();

@@ -1,0 +1,128 @@
+name: Fix Symbol-less Direct Call
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-symbol-less-direct-call.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply narrow resolver and HUD fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cpp_path = Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
+          cpp = cpp_path.read_text()
+
+          old_call = '''        supported = g_call_resolver && instr->src1.symbol &&
+                    g_call_resolver(instr->src1.symbol);
+        if (!supported && g_address_resolver) {'''
+          new_call = '''        if (instr->src1.symbol) {
+          // A real HIR symbol is authoritative. If its resolver says the target
+          // is unsupported (for example an unimplemented kernel import), do not
+          // resolve the same target a second time through the address path.
+          supported = g_call_resolver && g_call_resolver(instr->src1.symbol);
+        } else if (g_address_resolver) {'''
+
+          old_call_true = '''          supported = g_call_resolver && instr->src2.symbol &&
+                      g_call_resolver(instr->src2.symbol);
+          if (!supported && g_address_resolver) {'''
+          new_call_true = '''          if (instr->src2.symbol) {
+            // Keep known-symbol calls on the authoritative resolver. The PPC
+            // branch decoder below exists only for symbol-less direct calls.
+            supported = g_call_resolver && g_call_resolver(instr->src2.symbol);
+          } else if (g_address_resolver) {'''
+
+          if cpp.count(old_call) != 1:
+              raise SystemExit(f'expected exactly one OPCODE_CALL resolver block, found {cpp.count(old_call)}')
+          if cpp.count(old_call_true) != 1:
+              raise SystemExit(f'expected exactly one OPCODE_CALL_TRUE resolver block, found {cpp.count(old_call_true)}')
+          cpp = cpp.replace(old_call, new_call, 1).replace(old_call_true, new_call_true, 1)
+          cpp_path.write_text(cpp)
+
+          test_path = Path('test-title-kernel-import-integration.mjs')
+          test = test_path.read_text()
+          if 'result.kernelCalls !== 2' not in test:
+              raise SystemExit('kernel integration test is not in the expected duplicate-resolution state')
+          test = test.replace('result.kernelCalls !== 2', 'result.kernelCalls !== 1', 1)
+          test = test.replace("console.log('TITLE_DIRECT_CALL_FALLBACK_UNRESOLVED_RETRY=PASS');", "console.log('TITLE_DIRECT_CALL_SINGLE_KERNEL_RESOLUTION=PASS');")
+          test_path.write_text(test)
+
+          ui_path = Path('render360-xenios-ui.mjs')
+          ui = ui_path.read_text()
+          old_color = "ctx.strokeStyle=guestPresented?'#30d158':'#5ac8fa';"
+          if old_color not in ui:
+              raise SystemExit('expected V44.18 HUD graph color selector not found')
+          ui = ui.replace(old_color, "ctx.strokeStyle='#30d158';", 1)
+          ui = ui.replace('44.18', '44.19')
+          ui_path.write_text(ui)
+
+          patch_path = Path('app-v42-patch.js')
+          patch = patch_path.read_text()
+          if "render360-xenios-ui.mjs?v=44.18" not in patch:
+              raise SystemExit('expected V44.18 XeniOS UI import not found')
+          patch = patch.replace('render360-xenios-ui.mjs?v=44.18', 'render360-xenios-ui.mjs?v=44.19', 1)
+          patch_path.write_text(patch)
+
+          ui_test_path = Path('test-xenios-ui-contract.mjs')
+          ui_test = ui_test_path.read_text().replace('44.18', '44.19')
+          marker = "assert.ok(!ui.includes('Math.random'),'HUD activity graph must never synthesize fake movement/noise');"
+          if marker not in ui_test:
+              raise SystemExit('truthful HUD assertion marker not found')
+          ui_test = ui_test.replace(marker, marker + "\nassert.ok(ui.includes(\"ctx.strokeStyle='#30d158'\"),'measured HUD activity line must use the Xenia-style green trace');")
+          ui_test_path.write_text(ui_test)
+          PY
+
+      - name: Verify source shape and UI contracts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          cpp = Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp').read_text()
+          assert 'if (instr->src1.symbol) {' in cpp
+          assert 'if (instr->src2.symbol) {' in cpp
+          assert 'R360_DIRECT_CALL_FALLBACK' in cpp
+          test = Path('test-title-kernel-import-integration.mjs').read_text()
+          assert 'result.kernelCalls !== 1' in test
+          assert 'TITLE_DIRECT_CALL_SINGLE_KERNEL_RESOLUTION=PASS' in test
+          assert 'UNRESOLVED_RETRY' not in test
+          ui = Path('render360-xenios-ui.mjs').read_text()
+          assert "ctx.strokeStyle='#30d158'" in ui
+          assert 'Math.random' not in ui
+          PY
+          node --check app-v42-patch.js
+          node --check render360-xenios-ui.mjs
+          node --check test-title-kernel-import-integration.mjs
+          node test-xenios-ui-contract.mjs
+
+      - name: Commit the real fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-symbol-less-direct-call.yml
+          git add src/xenia_web_bootstrap/hir_correctness_executor.cpp test-title-kernel-import-integration.mjs render360-xenios-ui.mjs app-v42-patch.js test-xenios-ui-contract.mjs
+          git commit -m 'fix: keep direct-call fallback symbol-less'
+          git push origin HEAD:main
+
+      - name: Force fresh browser bootstrap build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 2
+          gh workflow run xenia-wasm32-bootstrap.yml --ref main

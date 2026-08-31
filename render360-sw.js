@@ -1,5 +1,6 @@
-const VERSION='44.25';
+const VERSION='44.26';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
+const RUNTIME_CACHE=`render360-runtime-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
   './manifest.webmanifest',
@@ -7,6 +8,9 @@ const SHELL_ASSETS=[
   './rendr360-apple-touch-icon.png',
   './rendr360-apple-touch-icon.svg',
   './ui-v44-mobile-fix-v25.css',
+  './app-v41.js?v=44.16',
+  './app-v42-patch.js?v=44.18',
+  './rendr360-mobile-runtime-fix.mjs?v=44.23',
 ];
 
 self.addEventListener('install',event=>{
@@ -20,56 +24,68 @@ self.addEventListener('install',event=>{
 self.addEventListener('activate',event=>{
   event.waitUntil((async()=>{
     const names=await caches.keys();
-    await Promise.all(names.filter(name=>name.startsWith('render360-shell-v')&&name!==SHELL_CACHE).map(name=>caches.delete(name)));
+    await Promise.all(names.filter(name=>(name.startsWith('render360-shell-v')||name.startsWith('render360-runtime-v'))&&!name.endsWith(VERSION)).map(name=>caches.delete(name)));
     if(self.registration.navigationPreload)await self.registration.navigationPreload.enable().catch(()=>{});
     await self.clients.claim();
   })());
 });
 
-function sameOrigin(request){
-  try{return new URL(request.url).origin===self.location.origin;}catch{return false;}
-}
-function isMutableRuntime(request){
-  const pathname=new URL(request.url).pathname.toLowerCase();
-  return /\.(?:m?js|wasm)$/.test(pathname);
-}
-function isShellAsset(request){
-  const pathname=new URL(request.url).pathname.toLowerCase();
-  return /\.(?:css|svg|webmanifest|png|jpg|jpeg|webp)$/.test(pathname);
-}
-async function networkFirstNoStore(request){
-  return fetch(new Request(request,{cache:'no-store'}));
-}
-async function shellAsset(request){
-  const cache=await caches.open(SHELL_CACHE);
+function sameOrigin(request){try{return new URL(request.url).origin===self.location.origin;}catch{return false;}}
+function isMutableRuntime(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:m?js|wasm)$/.test(pathname);}
+function isShellAsset(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:css|svg|webmanifest|png|jpg|jpeg|webp)$/.test(pathname);}
+function timeout(ms){return new Promise((_,reject)=>setTimeout(()=>reject(new Error('network timeout')),ms));}
+async function fetchBounded(request,ms=2500){return Promise.race([fetch(new Request(request,{cache:'no-store'})),timeout(ms)]);}
+
+async function runtimeAsset(request){
+  const cache=await caches.open(RUNTIME_CACHE);
+  const cached=await cache.match(request);
+  if(cached){
+    fetchBounded(request,3500).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
+    return cached;
+  }
   try{
-    const response=await fetch(new Request(request,{cache:'no-store'}));
+    const response=await fetchBounded(request,4000);
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
   }catch{
-    return await cache.match(request)||Response.error();
+    return Response.error();
   }
 }
-async function navigation(event){
+
+async function shellAsset(request){
   const cache=await caches.open(SHELL_CACHE);
-  const preload=await event.preloadResponse;
-  if(preload){
-    if(preload.ok)cache.put('./index.html',preload.clone()).catch(()=>{});
-    return preload;
+  const cached=await cache.match(request);
+  if(cached){
+    fetchBounded(request,2500).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
+    return cached;
   }
   try{
-    const response=await fetch(new Request(event.request,{cache:'no-store'}));
-    if(response.ok)cache.put('./index.html',response.clone()).catch(()=>{});
+    const response=await fetchBounded(request,3000);
+    if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
-  }catch{
-    return await cache.match('./index.html')||await cache.match('./')||Response.error();
-  }
+  }catch{return Response.error();}
+}
+
+async function navigation(event){
+  const cache=await caches.open(SHELL_CACHE);
+  const cached=await cache.match('./index.html')||await cache.match('./');
+  const network=(async()=>{
+    try{
+      const preload=await Promise.race([event.preloadResponse,timeout(1200)]).catch(()=>null);
+      if(preload?.ok){cache.put('./index.html',preload.clone()).catch(()=>{});return preload;}
+      const response=await fetchBounded(event.request,2200);
+      if(response?.ok)cache.put('./index.html',response.clone()).catch(()=>{});
+      return response;
+    }catch{return null;}
+  })();
+  if(cached){network.catch(()=>{});return cached;}
+  return await network||Response.error();
 }
 
 self.addEventListener('fetch',event=>{
   const request=event.request;
   if(request.method!=='GET'||!sameOrigin(request))return;
   if(request.mode==='navigate'){event.respondWith(navigation(event));return;}
-  if(isMutableRuntime(request)){event.respondWith(networkFirstNoStore(request));return;}
+  if(isMutableRuntime(request)){event.respondWith(runtimeAsset(request));return;}
   if(isShellAsset(request))event.respondWith(shellAsset(request));
 });

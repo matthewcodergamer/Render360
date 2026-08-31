@@ -3,7 +3,7 @@ import fs from 'node:fs';
 const src=fs.readFileSync(new URL('./tester-diagnostics-v44.mjs',import.meta.url),'utf8');
 const app=fs.readFileSync(new URL('./app-v42-patch.js',import.meta.url),'utf8');
 const checks=[
-  ['WIRED_IN_APP',app.includes("import './tester-diagnostics-v44.mjs?v=44.17';")],
+  ['WIRED_IN_APP',app.includes("import './tester-diagnostics-v44.mjs?v=44.18';")],
   ['NO_EMBEDDED_GITHUB_AUTH_HEADER',!src.includes("headers:{'authorization'")&&!src.includes('Authorization: `Bearer')],
   ['OWNER_CONTROLLED_HTTPS_ENDPOINT',src.includes('RENDER360_DIAGNOSTICS_ENDPOINT')&&src.includes("/^https:\\/\\//i")],
   ['GITHUB_ISSUE_FALLBACK',src.includes(`https://github.com/${'${REPO}'}/issues/new`)],

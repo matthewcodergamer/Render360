@@ -11,7 +11,7 @@ body.r360-runtime-active #runtimeView{display:block!important;visibility:visible
 body.r360-rotating #runtimeView .boot-overlay,body.r360-rotating #runtimeView .controller-layer{transition:none!important}
 
 #libraryView .navbar{overflow:visible!important}
-#libraryView .nav-row{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:start!important;column-gap:18px!important;min-height:72px!important;overflow:visible!important}
+#libraryView .nav-row{display:grid!important;grid-template-columns:minmax(0,1fr) 96px!important;align-items:start!important;column-gap:18px!important;min-height:72px!important;overflow:visible!important}
 #libraryView .r360-brand{display:flex!important;min-width:0!important;width:100%!important;flex-direction:column!important;align-items:stretch!important;gap:8px!important;padding-top:1px!important;overflow:visible!important}
 #libraryView .r360-brand>.nav-title{display:flex!important;align-items:baseline!important;min-height:26px!important;margin:0!important;padding:0!important;font-size:20px!important;line-height:1.05!important;font-weight:750!important;letter-spacing:-.5px!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important;overflow:visible!important;color:var(--text,#f5f5f7)!important}
 #libraryView .r360-brand>.nav-title::before,#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
@@ -19,7 +19,7 @@ body.r360-rotating #runtimeView .boot-overlay,body.r360-rotating #runtimeView .c
 #libraryView .r360-360{display:inline!important;color:var(--green,#30d158)!important}
 
 /* The source text remains intact for runtime logic; only the compact mirror is visible. */
-#libraryView .r360-brand .runtime-sync{position:relative!important;display:flex!important;align-items:center!important;gap:8px!important;width:min(100%,680px)!important;max-width:none!important;min-width:0!important;min-height:36px!important;margin:0!important;padding:7px 12px!important;box-sizing:border-box!important;border:0!important;border-radius:12px!important;background:rgba(118,118,128,.22)!important;color:#a7a7ad!important;overflow:hidden!important}
+#libraryView .r360-brand .runtime-sync{position:relative!important;display:flex!important;align-items:center!important;gap:8px!important;width:100%!important;max-width:none!important;min-width:0!important;min-height:36px!important;margin:0!important;padding:7px 12px!important;box-sizing:border-box!important;border:0!important;border-radius:12px!important;background:rgba(118,118,128,.22)!important;color:#a7a7ad!important;overflow:hidden!important}
 :root[data-theme="light"] #libraryView .r360-brand .runtime-sync{background:rgba(118,118,128,.13)!important;color:#6e6e73!important}
 #libraryView .r360-brand .sync-dot{width:8px!important;height:8px!important;flex:0 0 8px!important;border-radius:50%!important;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 10%,transparent)!important}
 #libraryView #runtimeSyncText{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;pointer-events:none!important}
@@ -36,5 +36,5 @@ body.r360-rotating #runtimeView .boot-overlay,body.r360-rotating #runtimeView .c
 #settingsButton svg{width:25px!important;height:25px!important;stroke-width:1.8!important}
 #profileButton svg{width:29px!important;height:29px!important;stroke-width:1.65!important}
 
-@media (max-width:430px){#libraryView .nav-row{column-gap:12px!important}#libraryView .r360-brand .runtime-sync{width:calc(100vw - 132px)!important;min-width:280px!important;max-width:calc(100vw - 132px)!important}}
+@media (max-width:430px){#libraryView .nav-row{column-gap:12px!important}}
 @media (orientation:landscape) and (max-height:520px){#runtimeView .boot-card{width:min(390px,58vw)!important;max-width:58vw!important;padding:10px 16px!important}}

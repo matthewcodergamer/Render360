@@ -1,0 +1,23 @@
+name: Render360 tester diagnostics gate
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tester-diagnostics-v44.mjs'
+      - 'test-tester-diagnostics.mjs'
+      - 'app-v42-patch.js'
+      - '.github/workflows/r360-tester-diagnostics-gate.yml'
+permissions:
+  contents: read
+jobs:
+  tester-diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check browser diagnostic module
+        run: node --check tester-diagnostics-v44.mjs
+      - name: Harsh critic — privacy, wiring, queue and submission path
+        run: node test-tester-diagnostics.mjs

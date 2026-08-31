@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Render360",
-  "short_name": "Render360",
+  "name": "Rendr360",
+  "short_name": "Rendr360",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -12,7 +12,7 @@
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#000000",
-  "description": "Render360 V44 is a browser-native Xbox 360 emulator project with WebGPU/WebGL2 rendering, Xenia-derived WebAssembly runtime foundations, per-game profiles, controller support and persistent browser game storage.",
+  "description": "Rendr360 V44 is a browser-native Xbox 360 emulator project with WebGPU/WebGL2 rendering, Xenia-derived WebAssembly runtime foundations, per-game profiles, controller support and persistent browser game storage.",
   "icons": [
     {
       "src": "./render360-app-icon.svg?v=44.12",

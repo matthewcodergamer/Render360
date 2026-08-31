@@ -1,211 +1,48 @@
-/* Rendr360 V44.20 — mobile runtime + concise settings pass. */
+/* Rendr360 V44.21 — mobile runtime + concise settings pass. */
+html,body,#app{width:100%;height:var(--r360-vh,var(--app-height,100dvh));min-height:0}
+#runtimeView.runtime-view{position:absolute!important;inset:0!important;width:100%!important;height:var(--r360-vh,var(--app-height,100dvh))!important;min-height:0!important;overflow:hidden!important;padding:0!important;background:#000!important}
+#runtimeView .runtime-stage{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;overflow:hidden!important}
+#runtimeView #gpuCanvas,#runtimeView #titleFrameCanvas{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important}
+#runtimeView .boot-overlay{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;display:grid;place-items:center;z-index:8!important;padding:max(14px,var(--safe-top)) max(18px,var(--safe-right)) max(14px,var(--safe-bottom)) max(18px,var(--safe-left));overflow:hidden}
+#runtimeView .boot-card{width:min(420px,82vw);max-width:82vw!important;max-height:78vh;margin:auto;overflow:hidden}
+@media (orientation:landscape) and (max-height:520px){#runtimeView .boot-card{width:min(390px,58vw);padding:10px 16px!important}#runtimeView .spinner{width:28px;height:28px;margin-bottom:10px}#runtimeView .boot-title{font-size:16px;line-height:1.15}#runtimeView .boot-message{font-size:11px;line-height:1.3;margin-top:5px}#runtimeView .boot-stage{font-size:9px;margin-top:6px}}
 
-/* Safari can report a stale layout viewport while rotating/fullscreening. The
-   JS layer refreshes --r360-vh/--r360-vw from visualViewport several times
-   around an orientation change so the runtime never keeps portrait geometry. */
-html,body,#app{
-  width:100%;
-  height:var(--r360-vh,var(--app-height,100dvh));
-  min-height:0;
-}
-#runtimeView.runtime-view{
-  position:absolute!important;
-  inset:0!important;
-  width:100%!important;
-  height:var(--r360-vh,var(--app-height,100dvh))!important;
-  min-height:0!important;
-  overflow:hidden!important;
-  padding:0!important;
-  background:#000!important;
-}
-#runtimeView .runtime-stage{
-  position:absolute!important;
-  inset:0!important;
-  width:100%!important;
-  height:100%!important;
-  min-width:0!important;
-  min-height:0!important;
-  overflow:hidden!important;
-}
-#runtimeView #gpuCanvas,
-#runtimeView #titleFrameCanvas{
-  position:absolute!important;
-  inset:0!important;
-  width:100%!important;
-  height:100%!important;
-  max-width:none!important;
-  max-height:none!important;
-}
-
-/* Keep startup information visible until telemetry proves a genuine guest
-   frame. Controller/developer chrome may sit above it, but the canvas may not. */
-#runtimeView .boot-overlay{
-  position:absolute!important;
-  inset:0!important;
-  width:100%!important;
-  height:100%!important;
-  min-height:0!important;
-  display:grid;
-  place-items:center;
-  z-index:8!important;
-  padding:max(14px,var(--safe-top)) max(18px,var(--safe-right)) max(14px,var(--safe-bottom)) max(18px,var(--safe-left));
-  overflow:hidden;
-}
-#runtimeView .boot-card{
-  width:min(420px,82vw);
-  max-width:82vw!important;
-  max-height:78vh;
-  margin:auto;
-  overflow:hidden;
-}
-
-@media (orientation:landscape) and (max-height:520px){
-  #runtimeView .boot-card{width:min(390px,58vw);padding:10px 16px!important}
-  #runtimeView .spinner{width:28px;height:28px;margin-bottom:10px}
-  #runtimeView .boot-title{font-size:16px;line-height:1.15}
-  #runtimeView .boot-message{font-size:11px;line-height:1.3;margin-top:5px}
-  #runtimeView .boot-stage{font-size:9px;margin-top:6px}
-}
-
-/* Deterministic SVG toolbar icons. Never rely on SF Symbols private Unicode
-   code points in Safari — unsupported code points render as stacked/tofu bars. */
-#settingsButton svg,#importButton svg{
-  display:block!important;
-  width:24px!important;
-  height:24px!important;
-  overflow:visible;
-  fill:none!important;
-  stroke:currentColor!important;
-  stroke-width:1.8!important;
-  stroke-linecap:round!important;
-  stroke-linejoin:round!important;
-}
+#settingsButton svg,#profileButton svg,#importButton svg{display:block!important;overflow:visible;fill:none!important;stroke:currentColor!important;stroke-linecap:round!important;stroke-linejoin:round!important}
+#settingsButton svg{width:24px!important;height:24px!important;stroke-width:1.8!important}
+#profileButton svg{width:28px!important;height:28px!important;stroke-width:1.65!important}
 #importButton svg{width:27px!important;height:27px!important;stroke-width:1.9!important}
 
-/* Stable XeniOS-style header. Use the real DOM text, not generated pseudo text,
-   so the Rendr360 wordmark cannot disappear when late stylesheets are loaded. */
-#libraryView .nav-row{align-items:flex-start!important}
-#libraryView .r360-brand{
-  display:flex!important;
-  flex-direction:column!important;
-  align-items:flex-start!important;
-  justify-content:center!important;
-  gap:3px!important;
-  min-width:0!important;
-  padding-top:1px;
-}
-#libraryView .r360-brand>.nav-title{
-  display:flex!important;
-  align-items:baseline!important;
-  min-height:23px!important;
-  font-size:20px!important;
-  line-height:1.05!important;
-  font-weight:750!important;
-  letter-spacing:-.5px!important;
-  white-space:nowrap!important;
-  visibility:visible!important;
-  opacity:1!important;
-}
-#libraryView .r360-brand>.nav-title::before,
-#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
-#libraryView .r360-brand>.nav-title .r360-name{
-  display:inline!important;color:var(--text,#f5f5f7)!important;font-size:20px!important
-}
-#libraryView .r360-brand>.nav-title .r360-360{
-  display:inline!important;color:var(--green,#30d158)!important;font-size:20px!important
-}
-#libraryView .r360-brand .runtime-sync{
-  width:100%!important;
-  min-height:15px!important;
-  margin:0!important;
-  padding:0!important;
-  gap:6px!important;
-  font-size:11px!important;
-  line-height:1.2!important;
-  color:var(--muted)!important;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-#libraryView .r360-brand .sync-dot{flex:0 0 auto}
+/* XeniOS-style chrome: actual Rendr360 DOM text, compact status pill, exact icon order. */
+#libraryView .nav-row{position:relative!important;align-items:flex-start!important;min-height:92px!important;padding-bottom:42px!important}
+#libraryView .r360-brand{display:flex!important;flex-direction:column!important;align-items:flex-start!important;justify-content:flex-start!important;gap:0!important;min-width:0!important;padding-top:1px}
+#libraryView .r360-brand>.nav-title{display:flex!important;align-items:baseline!important;min-height:25px!important;font-size:20px!important;line-height:1.05!important;font-weight:750!important;letter-spacing:-.5px!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important;color:var(--text)!important}
+#libraryView .r360-brand>.nav-title::before,#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
+#libraryView .r360-brand>.nav-title .r360-name{display:inline!important;color:var(--text,#f5f5f7)!important;font-size:20px!important}
+#libraryView .r360-brand>.nav-title .r360-360{display:inline!important;color:var(--green,#30d158)!important;font-size:20px!important}
 
-/* Exact requested order: Settings first, Profile second. Explicit order values
-   avoid the profile button's default flex order placing it before Settings. */
-#libraryView .nav-actions{
-  display:flex!important;
-  flex-direction:row!important;
-  align-items:center!important;
-  gap:4px!important;
-  padding-top:0!important;
-}
+#libraryView .r360-brand .runtime-sync{position:absolute!important;left:0!important;right:0!important;bottom:2px!important;width:auto!important;min-height:34px!important;margin:0!important;padding:7px 10px!important;display:flex!important;align-items:center!important;gap:7px!important;border-radius:10px!important;background:rgba(118,118,128,.16)!important;border:1px solid rgba(255,255,255,.035)!important;color:var(--muted,#98989d)!important;overflow:hidden!important;white-space:nowrap!important;box-sizing:border-box!important}
+:root[data-theme="light"] #libraryView .r360-brand .runtime-sync{background:rgba(118,118,128,.10)!important;border-color:rgba(60,60,67,.04)!important}
+#libraryView .r360-brand .sync-dot{flex:0 0 auto!important;width:7px!important;height:7px!important}
+#libraryView #runtimeSyncText{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;font-size:0!important;line-height:1.25!important}
+#libraryView #runtimeSyncText::after{content:"Starting runtime…";font-size:12px!important;color:var(--muted,#98989d)!important;letter-spacing:-.1px}
+#libraryView .runtime-sync.ready #runtimeSyncText::after{content:"Runtime ready · Core V32"}
+#libraryView .runtime-sync.error #runtimeSyncText::after{content:"Runtime unavailable"}
+
+#libraryView .nav-actions{display:flex!important;flex-direction:row!important;align-items:center!important;gap:4px!important;padding-top:0!important}
+#libraryView .nav-actions::before,#libraryView .nav-actions::after{content:none!important;display:none!important}
 #libraryView .nav-actions>#settingsButton{order:1!important}
 #libraryView .nav-actions>#profileButton{order:2!important}
 #libraryView .nav-actions>#importButton{order:3!important}
-#libraryView .nav-actions::after{content:none!important;display:none!important}
-
-#profileButton{
-  display:grid!important;place-items:center!important;width:36px!important;height:36px!important;
-  flex:0 0 36px!important;padding:0!important;border:0!important;background:transparent!important;
-  color:var(--muted,#98989d)!important;border-radius:10px!important
-}
-#profileButton svg{
-  display:block!important;width:28px!important;height:28px!important;fill:none!important;
-  stroke:currentColor!important;stroke-width:1.65!important;stroke-linecap:round!important;stroke-linejoin:round!important
-}
+#profileButton{display:grid!important;place-items:center!important;width:36px!important;height:36px!important;flex:0 0 36px!important;padding:0!important;border:0!important;background:transparent!important;color:var(--muted,#98989d)!important;border-radius:10px!important}
 #profileButton:active{background:color-mix(in srgb,var(--surface3,#2c2c2e) 30%,transparent)!important;transform:scale(.93)}
 
-/* Xenia-like hierarchy: common choices first; compatibility/developer controls
-   are one deliberate tap away instead of one very long settings page. */
-.r360-advanced-settings{
-  margin:24px 0 8px;
-  border:0;
-  background:transparent;
-}
-.r360-advanced-settings>summary{
-  list-style:none;
-  min-height:54px;
-  margin:0;
-  padding:10px 16px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:18px;
-  border-radius:12px;
-  background:var(--surface);
-  color:var(--text);
-  font-size:15px;
-  cursor:pointer;
-  user-select:none;
-  -webkit-user-select:none;
-}
+.r360-advanced-settings{margin:24px 0 8px;border:0;background:transparent}
+.r360-advanced-settings>summary{list-style:none;min-height:54px;margin:0;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-radius:12px;background:var(--surface);color:var(--text);font-size:15px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .r360-advanced-settings>summary::-webkit-details-marker{display:none}
-.r360-advanced-settings>summary .r360-advanced-copy{
-  min-width:0;
-  display:flex;
-  flex-direction:column;
-  gap:2px;
-}
+.r360-advanced-settings>summary .r360-advanced-copy{min-width:0;display:flex;flex-direction:column;gap:2px}
 .r360-advanced-settings>summary small{font-size:11px;line-height:1.25;color:var(--muted);font-weight:400}
-.r360-advanced-settings>summary .r360-disclosure{
-  flex:none;
-  width:8px;
-  height:8px;
-  border-top:1.5px solid var(--muted2);
-  border-right:1.5px solid var(--muted2);
-  transform:rotate(45deg);
-  transition:transform .16s ease;
-  margin-right:3px;
-}
+.r360-advanced-settings>summary .r360-disclosure{flex:none;width:8px;height:8px;border-top:1.5px solid var(--muted2);border-right:1.5px solid var(--muted2);transform:rotate(45deg);transition:transform .16s ease;margin-right:3px}
 .r360-advanced-settings[open]>summary .r360-disclosure{transform:rotate(135deg)}
-.r360-advanced-content{padding-top:1px}
-.r360-advanced-content>.group-title:first-child{margin-top:18px}
-
-/* Short, useful header copy; the controls themselves explain the rest. */
+.r360-advanced-content{padding-top:1px}.r360-advanced-content>.group-title:first-child{margin-top:18px}
 #gameSettingsView .settings-note,#appSettingsView .settings-note{max-width:520px}
-
-@media (orientation:landscape){
-  #gameSettingsView .settings-body,#appSettingsView .settings-body{width:min(720px,100%)}
-  #gameSettingsView .settings-header,#appSettingsView .settings-header{padding-bottom:2px}
-  #gameSettingsView .group-title,#appSettingsView .group-title{margin-top:18px}
-  .r360-advanced-settings{margin-top:18px}
-}
+@media (orientation:landscape){#gameSettingsView .settings-body,#appSettingsView .settings-body{width:min(720px,100%)}#gameSettingsView .settings-header,#appSettingsView .settings-header{padding-bottom:2px}#gameSettingsView .group-title,#appSettingsView .group-title{margin-top:18px}.r360-advanced-settings{margin-top:18px}}

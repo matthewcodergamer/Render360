@@ -1,4 +1,4 @@
-/* Rendr360 V44.19 — mobile runtime + concise settings pass. */
+/* Rendr360 V44.20 — mobile runtime + concise settings pass. */
 
 /* Safari can report a stale layout viewport while rotating/fullscreening. The
    JS layer refreshes --r360-vh/--r360-vw from visualViewport several times
@@ -134,9 +134,13 @@ html,body,#app{
 }
 #libraryView .r360-brand .sync-dot{flex:0 0 auto}
 #libraryView .nav-actions{padding-top:0;align-items:center;gap:4px!important}
+#libraryView .nav-actions>#settingsButton{order:1!important}
+#libraryView .nav-actions::after{order:2!important}
+#libraryView .nav-actions>#importButton{order:3!important}
 
-/* Reference-matched profile glyph: a quiet outlined account circle beside the
-   settings control, built with CSS so Safari never depends on a private glyph. */
+/* Reference-matched profile glyph: directly to the RIGHT of Settings, like
+   XeniOS. Explicit flex ordering prevents the import button from separating it
+   during the initial DOM pass before Import is moved beside Library. */
 #libraryView .nav-actions::after{
   content:"";
   display:block;

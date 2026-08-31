@@ -50,6 +50,53 @@ html body #runtimeView .control,html body #runtimeView .stick{color:rgba(245,245
   html body #runtimeView #gpuCanvas{inset:0!important;width:100%!important;height:100%!important}
 }
 @media(orientation:portrait){
+  /* Use the real iPhone visual viewport instead of a desktop-style centered column. */
+  html body .view:not(.runtime-view){
+    width:100%!important;
+    max-width:none!important;
+    padding-left:max(12px,var(--safe-left))!important;
+    padding-right:max(12px,var(--safe-right))!important;
+  }
+  #libraryView .navbar,
+  #appSettingsView .detail-nav,
+  #gameSettingsView .detail-nav,
+  #detailView .detail-nav{
+    margin-left:calc(-1 * max(12px,var(--safe-left)))!important;
+    margin-right:calc(-1 * max(12px,var(--safe-right)))!important;
+    padding-left:max(12px,var(--safe-left))!important;
+    padding-right:max(12px,var(--safe-right))!important;
+    width:auto!important;
+    max-width:none!important;
+  }
+  #libraryView .library-content,
+  #detailView .detail-body,
+  #appSettingsView .settings-body,
+  #gameSettingsView .settings-body{
+    width:100%!important;
+    max-width:none!important;
+    margin-left:0!important;
+    margin-right:0!important;
+  }
+  #libraryView .search-wrap{width:100%!important;max-width:none!important}
+  #appSettingsView .group,
+  #gameSettingsView .group,
+  #detailView .group{width:100%!important;max-width:none!important}
+
+  /* Native bottom-sheet behavior on phone: full viewport width, only top corners rounded. */
+  .r360-profile-sheet{
+    left:0!important;
+    right:0!important;
+    bottom:0!important;
+    width:100%!important;
+    max-width:none!important;
+    margin:0!important;
+    border-radius:24px 24px 0 0!important;
+    max-height:min(620px,82dvh)!important;
+    padding-bottom:max(0px,var(--safe-bottom))!important;
+  }
+  .r360-profile-sheet .sheet-content{padding-left:16px!important;padding-right:16px!important}
+  .r360-profile-sheet .r360-profile-group{width:100%!important;margin-left:0!important;margin-right:0!important}
+
   #runtimeView .performance-hud{right:max(8px,var(--safe-right))!important;top:max(70px,calc(var(--safe-top) + 52px))!important}
   #runtimeView .top-controls{top:max(72px,calc(var(--safe-top) + 54px))!important}
   #runtimeView .left-controls{left:max(16px,var(--safe-left))!important;bottom:max(74px,calc(var(--safe-bottom) + 58px))!important}

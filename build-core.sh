@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC="$ROOT/render360_xenia_core_v32.cpp"
+SRC="$ROOT/package-core.cpp"
 DECODER="$ROOT/src/xenia_web_bootstrap/xex_image_decoder.cpp"
 DECODER_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_image_decoder_exports.cpp"
 PREPARER="$ROOT/src/xenia_web_bootstrap/xex_image_preparer.cpp"
@@ -100,4 +100,4 @@ for symbol in "${EXPORTS[@]}"; do ARGS+=("-Wl,--export=$symbol"); done
 "$CXX" "${ARGS[@]}" -o "$OUT" \
   "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS" \
   "$PE_IMAGE" "$PE_EXPORTS"
-printf 'Built %s from V32 package core + V36 XEX decode/preparation/PE layers\n' "$OUT"
+printf 'Built %s from canonical package core + XEX decode/preparation/PE layers\n' "$OUT"

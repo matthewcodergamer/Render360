@@ -1,16 +1,19 @@
-name: Render360 V44 Braid startup integration gate
+name: Braid Startup Integration Gate
 
 on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/r360-v44-braid-startup-gate.yml'
+      - '.github/workflows/braid-startup-gate.yml'
       - 'test-braid-startup-critic.mjs'
       - 'test-opcode39-main-thread.mjs'
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'render360-title-controller.mjs'
       - 'render360-browser-title-runtime.mjs'
+      - 'app.js'
+      - 'ui-behavior.js'
+      - 'runtime/render360-runtime.js'
   workflow_dispatch:
 
 jobs:
@@ -26,15 +29,15 @@ jobs:
         run: node ./test-opcode39-main-thread.mjs ./xenia_ppc_bootstrap.wasm
       - name: Verify published Braid startup integration
         run: node ./test-braid-startup-critic.mjs ./xenia_ppc_bootstrap.wasm
-      - name: Verify browser cache chain points at synchronized runtime
+      - name: Verify canonical browser runtime chain
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'app-v41.js?v=44.10' index.html
-          grep -q 'app-v42-patch.js?v=44.10' index.html
-          grep -q 'runtime/render360-runtime.js?v=44.10' app-v41.js
-          grep -q 'render360-browser-modern-content-bridge.mjs?v=44.10' runtime/render360-runtime.js
-          grep -q 'render360-browser-title-runtime.mjs?v=44.10' render360-browser-modern-content-bridge.mjs
-          grep -q 'render360-title-controller.mjs?v=44.10' render360-browser-modern-content-bridge.mjs
-          grep -q 'xenia_ppc_bootstrap.wasm?v=44.10' render360-browser-title-runtime.mjs
-          echo 'R360_BROWSER_CACHE_CHAIN=PASS'
+          grep -q 'src="app.js"' index.html
+          grep -q 'src="ui-behavior.js"' index.html
+          grep -q "from '../wasm-core.js'" runtime/render360-runtime.js
+          grep -q "from '../runtime-host.js'" runtime/render360-runtime.js
+          grep -q "from './runtime-worker.js'" runtime-host.js
+          grep -q "from './wasm-core.js'" runtime-worker.js
+          grep -q 'xenia_ppc_bootstrap.wasm' render360-browser-title-runtime.mjs
+          echo 'R360_BROWSER_RUNTIME_CHAIN=PASS'

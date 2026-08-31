@@ -1,5 +1,0 @@
-Render360 V44 forced browser-bootstrap rebuild marker.
-Triggered: 2026-08-31T09:38Z
-Reason: the 2026-08-31 Braid device capture proves the deployed xenia_ppc_bootstrap.wasm is stale: main contains the symbol-less HIR OPCODE_CALL resolver, but the device still stops at HIR opcode 7 @ 0x8236EF40 and never prints R360_DIRECT_CALL_FALLBACK.
-Required build: rebuild xenia_ppc_bootstrap.wasm from current src/xenia_web_bootstrap/hir_correctness_executor.cpp and publish it with fresh provenance.
-Expected device proof: R360_DIRECT_CALL_FALLBACK source=0x8236EF40 ... target=0x... followed by execution beyond the previous opcode-7 blocker.

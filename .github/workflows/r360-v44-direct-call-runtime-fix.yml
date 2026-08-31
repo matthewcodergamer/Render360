@@ -1,0 +1,36 @@
+name: Render360 V44 Direct Guest Call Runtime Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r360-v44-direct-call-runtime-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve direct HIR calls even when Xenia did not attach a symbol
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
+          s=p.read_text()
+          old='''        case xe::cpu::hir::OPCODE_CALL:\n          supported = g_call_resolver && instr->src1.symbol &&\n                      g_call_resolver(instr->src1.symbol);\n          break;\n        case xe::cpu::hir::OPCODE_CALL_TRUE: {\n          bool condition = false;\n          supported = ResolveCondition(instr->src1.value, values, &condition);\n          if (supported && condition) {\n            supported = g_call_resolver && instr->src2.symbol &&\n                        g_call_resolver(instr->src2.symbol);\n          }\n          break;\n        }\n'''
+          new='''        case xe::cpu::hir::OPCODE_CALL: {\n          supported = g_call_resolver && instr->src1.symbol &&\n                      g_call_resolver(instr->src1.symbol);\n          if (!supported && g_address_resolver) {\n            uint32_t target = instr->src1.symbol ? instr->src1.symbol->address() : 0u;\n            bool target_known = instr->src1.symbol != nullptr;\n            if (!target_known) {\n              uint8_t raw[4] = {};\n              if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {\n                const uint32_t ppc = (uint32_t(raw[0]) << 24) |\n                                     (uint32_t(raw[1]) << 16) |\n                                     (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);\n                if ((ppc >> 26) == 18u && (ppc & 1u)) {\n                  int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);\n                  if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);\n                  target = (ppc & 0x2u)\n                               ? static_cast<uint32_t>(displacement)\n                               : current_source_address + static_cast<uint32_t>(displacement);\n                  target_known = true;\n                }\n              }\n            }\n            if (target_known) {\n              std::fprintf(stderr,\n                           "R360_DIRECT_CALL_FALLBACK source=0x%08X symbol=%u target=0x%08X\\n",\n                           current_source_address, instr->src1.symbol ? 1u : 0u, target);\n              supported = g_address_resolver(target);\n            }\n          }\n          break;\n        }\n        case xe::cpu::hir::OPCODE_CALL_TRUE: {\n          bool condition = false;\n          supported = ResolveCondition(instr->src1.value, values, &condition);\n          if (supported && condition) {\n            supported = g_call_resolver && instr->src2.symbol &&\n                        g_call_resolver(instr->src2.symbol);\n            if (!supported && g_address_resolver) {\n              uint32_t target = instr->src2.symbol ? instr->src2.symbol->address() : 0u;\n              bool target_known = instr->src2.symbol != nullptr;\n              if (!target_known) {\n                uint8_t raw[4] = {};\n                if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {\n                  const uint32_t ppc = (uint32_t(raw[0]) << 24) |\n                                       (uint32_t(raw[1]) << 16) |\n                                       (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);\n                  if ((ppc >> 26) == 18u && (ppc & 1u)) {\n                    int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);\n                    if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);\n                    target = (ppc & 0x2u)\n                                 ? static_cast<uint32_t>(displacement)\n                                 : current_source_address + static_cast<uint32_t>(displacement);\n                    target_known = true;\n                  }\n                }\n              }\n              if (target_known) {\n                std::fprintf(stderr,\n                             "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X symbol=%u target=0x%08X\\n",\n                             current_source_address, instr->src2.symbol ? 1u : 0u, target);\n                supported = g_address_resolver(target);\n              }\n            }\n          }\n          break;\n        }\n'''
+          if old not in s:
+            raise SystemExit('direct CALL block not found; refusing blind patch')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Remove one-shot workflow and commit runtime fix
+        run: |
+          git rm .github/workflows/r360-v44-direct-call-runtime-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          git commit -m 'fix: resolve symbol-less direct guest calls in HIR fallback'
+          git push origin HEAD:main

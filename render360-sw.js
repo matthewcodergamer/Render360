@@ -1,4 +1,4 @@
-const VERSION='44.11';
+const VERSION='44.20';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
@@ -39,12 +39,13 @@ async function networkFirstNoStore(request){
 }
 async function shellAsset(request){
   const cache=await caches.open(SHELL_CACHE);
-  const cached=await cache.match(request);
-  const network=fetch(request).then(response=>{
+  try{
+    const response=await fetch(new Request(request,{cache:'no-store'}));
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
-  }).catch(()=>null);
-  return cached||await network||Response.error();
+  }catch{
+    return await cache.match(request)||Response.error();
+  }
 }
 async function navigation(event){
   const cache=await caches.open(SHELL_CACHE);
@@ -68,7 +69,9 @@ self.addEventListener('fetch',event=>{
   if(request.mode==='navigate'){event.respondWith(navigation(event));return;}
   // Emulator JavaScript and WebAssembly are deliberately network-first and
   // never stored in the shell cache. This prevents an old service worker from
-  // resurrecting stale PPC/Xenos binaries after a Render360 deployment.
+  // resurrecting stale PPC/Xenos binaries after a Rendr360 deployment.
   if(isMutableRuntime(request)){event.respondWith(networkFirstNoStore(request));return;}
+  // UI assets are network-first too. This prevents an older cached stylesheet
+  // from briefly restoring an obsolete header/order after a new deployment.
   if(isShellAsset(request))event.respondWith(shellAsset(request));
 });

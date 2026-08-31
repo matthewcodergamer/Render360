@@ -950,9 +950,11 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         }
 
         case xe::cpu::hir::OPCODE_CALL: {
-          supported = g_call_resolver && instr->src1.symbol &&
-                      g_call_resolver(instr->src1.symbol);
-          if (!supported && g_address_resolver) {
+          if (instr->src1.symbol) {
+            // A real HIR symbol is authoritative. If its resolver rejects the
+            // target, do not retry the same call through the address resolver.
+            supported = g_call_resolver && g_call_resolver(instr->src1.symbol);
+          } else if (g_address_resolver) {
             uint32_t target = instr->src1.symbol ? instr->src1.symbol->address() : 0u;
             bool target_known = instr->src1.symbol != nullptr;
             if (!target_known) {
@@ -984,9 +986,11 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
           if (supported && condition) {
-            supported = g_call_resolver && instr->src2.symbol &&
-                        g_call_resolver(instr->src2.symbol);
-            if (!supported && g_address_resolver) {
+            if (instr->src2.symbol) {
+              // The PPC decoder below is only for direct calls that have no HIR
+              // symbol. Known symbols stay on the authoritative call resolver.
+              supported = g_call_resolver && g_call_resolver(instr->src2.symbol);
+            } else if (g_address_resolver) {
               uint32_t target = instr->src2.symbol ? instr->src2.symbol->address() : 0u;
               bool target_known = instr->src2.symbol != nullptr;
               if (!target_known) {

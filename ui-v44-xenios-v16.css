@@ -1,0 +1,299 @@
+/* Render360 V44.16 — measured XeniOS/iPhone controller fidelity layer.
+   Reference capture supplied by the user: 1792×828 physical pixels, i.e.
+   896×414 CSS pixels at 2×. Geometry below is expressed as viewport ratios so
+   the 896×414 reference is reproduced exactly while remaining proportional.
+
+   The color values are rendered-pixel samples from the supplied reference,
+   not claims about XeniOS source constants. The goal is visual parity without
+   layering decorative effects that are not visible in the reference. */
+
+:root{
+  --x16-pause:#33281b;
+  --x16-back:#473962;
+  --x16-start:#734c6b;
+  --x16-lb:#452130;
+  --x16-rb:#15191f;
+  --x16-lt:#151c1d;
+  --x16-rt:#1e1616;
+  --x16-move:#1e1b1e;
+  --x16-y:#44262b;
+  --x16-x:#3e2c3b;
+  --x16-b:#2d1924;
+  --x16-a:#181c1f;
+
+  --x16-pause-edge:#846939;
+  --x16-back-edge:#443f62;
+  --x16-start-edge:#5b4a65;
+  --x16-lb-edge:#363c4f;
+  --x16-rb-edge:#283448;
+  --x16-lt-edge:#263a3a;
+  --x16-rt-edge:#402a27;
+  --x16-move-edge:#4c464f;
+  --x16-y-edge:#5b3638;
+  --x16-x-edge:#554353;
+  --x16-b-edge:#4d2e3b;
+  --x16-a-edge:#3f4144;
+}
+
+/* Apple-native typography first. The UI module places the SF Symbols private
+   glyph only on Apple clients and supplies a normal Unicode fallback elsewhere.
+   No Apple font or symbol artwork is redistributed by Render360. */
+.r360-sf-symbol{
+  display:grid;
+  place-items:center;
+  width:100%;
+  height:100%;
+  font-family:"SF Pro","SF Pro Text","SF Pro Display",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  font-style:normal;
+  font-variant:normal;
+  font-synthesis:none;
+  line-height:1;
+  text-align:center;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:geometricPrecision;
+  pointer-events:none;
+}
+.r360-sf-gear{font-size:24px;font-weight:400;transform:translateY(-.25px)}
+.r360-sf-plus{font-size:29px;font-weight:300;transform:translateY(-.5px)}
+#settingsButton,#importButton{
+  width:36px!important;
+  height:36px!important;
+  min-width:36px!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:10px!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+#settingsButton{color:#8e8e93!important}
+#importButton{color:#0a84ff!important}
+#settingsButton:active,#importButton:active{background:rgba(118,118,128,.14)!important;transform:scale(.94)}
+
+/* Keep iOS navigation titles mathematically centered, independent of unequal
+   Cancel/Save or Done button widths. */
+.detail-nav.r360-centered-nav{
+  display:grid!important;
+  grid-template-columns:minmax(96px,1fr) auto minmax(96px,1fr)!important;
+  align-items:center!important;
+}
+.detail-nav.r360-centered-nav>.nav-center-title{justify-self:center!important;text-align:center!important}
+.detail-nav.r360-centered-nav>*:first-child{justify-self:start!important}
+.detail-nav.r360-centered-nav>*:last-child{justify-self:end!important}
+
+/* Developer/terminal affordance: true horizontal center. The earlier layout
+   was visually left of center and could collide with RB/HUD. */
+.runtime-stage #developerToggle.developer-toggle{
+  position:absolute!important;
+  left:50%!important;
+  right:auto!important;
+  top:max(10px,var(--safe-top))!important;
+  bottom:auto!important;
+  width:48px!important;
+  height:42px!important;
+  min-width:48px!important;
+  padding:0!important;
+  border-radius:15px!important;
+  transform:translateX(-50%)!important;
+  transform-origin:center!important;
+  z-index:50!important;
+}
+.runtime-stage #developerToggle.developer-toggle:active{transform:translateX(-50%) scale(.94)!important}
+
+/* Truthful performance monitor. Browser/WASM polling is CPU activity, not game
+   FPS. The JS layer leaves FPS blank until a genuine guest presentation/swap. */
+.performance-hud{
+  width:160px!important;
+  right:max(8px,var(--safe-right))!important;
+  top:max(8px,var(--safe-top))!important;
+  padding:5px 6px!important;
+  border-radius:4px!important;
+  background:rgba(0,0,0,.68)!important;
+  border:1px solid rgba(255,255,255,.22)!important;
+  box-shadow:0 1px 3px rgba(0,0,0,.26)!important;
+  -webkit-backdrop-filter:none!important;
+  backdrop-filter:none!important;
+  font-size:7.7px!important;
+  line-height:1.08!important;
+  z-index:46!important;
+}
+.performance-hud .hud-canvas{height:24px!important}
+
+/* XeniOS controls use restrained one-pixel strokes and nearly flat material.
+   Avoid large glows/gradients that make the overlay look synthetic. */
+.control,.stick{
+  -webkit-tap-highlight-color:transparent;
+  touch-action:none;
+  box-shadow:0 1px 2px rgba(0,0,0,.18)!important;
+  -webkit-backdrop-filter:blur(10px) saturate(112%);
+  backdrop-filter:blur(10px) saturate(112%);
+}
+.control{color:rgba(255,255,255,.90)!important;font-size:12px!important;font-weight:600!important}
+.control:active,.control.pressed{filter:brightness(1.14);transform:scale(.965)}
+
+@media (orientation:landscape){
+  /* Reset the older grouped/flex geometry. Every visible bound below maps
+     directly to the supplied 896×414 CSS reference frame. */
+  .controller-layer{position:absolute!important;inset:0!important;overflow:visible!important}
+
+  .top-controls,
+  .left-controls,
+  .right-controls{
+    position:absolute!important;
+    inset:0!important;
+    width:auto!important;
+    height:auto!important;
+    left:0!important;
+    right:0!important;
+    top:0!important;
+    bottom:0!important;
+    transform:none!important;
+    pointer-events:none!important;
+  }
+  .top-controls>div{position:absolute!important;display:flex!important;align-items:center!important;padding:0!important;pointer-events:auto!important;transform:none!important}
+  .top-controls>div:first-child{left:10.8817%!important;top:11.1111%!important}
+  .top-controls>div:nth-child(2){left:40.6250%!important;top:11.1111%!important;gap:1.9531vw!important}
+  .top-controls>div:last-child{left:63.5603%!important;top:11.9565%!important;gap:1.5067vw!important}
+
+  .top-control{
+    min-width:0!important;
+    height:9.9034vh!important;
+    padding:0!important;
+    border-width:1px!important;
+    border-style:solid!important;
+    border-radius:4.5894vh!important;
+    font-size:11px!important;
+    line-height:1!important;
+  }
+  .top-controls>div:first-child .top-control{
+    width:10.3237vw!important;
+    background:var(--x16-pause)!important;
+    border-color:var(--x16-pause-edge)!important;
+  }
+  .top-controls>div:nth-child(2) .top-control:first-child{
+    width:6.9196vw!important;
+    background:var(--x16-back)!important;
+    border-color:var(--x16-back-edge)!important;
+  }
+  .top-controls>div:nth-child(2) .top-control:last-child{
+    width:7.4219vw!important;
+    background:var(--x16-start)!important;
+    border-color:var(--x16-start-edge)!important;
+  }
+  .top-controls>div:last-child .top-control:first-child{
+    width:7.3103vw!important;
+    background:var(--x16-lb)!important;
+    border-color:var(--x16-lb-edge)!important;
+  }
+  .top-controls>div:last-child .top-control:last-child{
+    width:7.4219vw!important;
+    background:var(--x16-rb)!important;
+    border-color:var(--x16-rb-edge)!important;
+  }
+
+  /* LT: x=138.5 y=173 w=93.5 h=40 CSS px in the reference. */
+  .left-controls .trigger{
+    position:absolute!important;
+    left:15.4576%!important;
+    right:auto!important;
+    top:41.7874%!important;
+    bottom:auto!important;
+    width:10.4353vw!important;
+    height:9.6618vh!important;
+    border:1px solid var(--x16-lt-edge)!important;
+    border-radius:4.3478vh!important;
+    background:var(--x16-lt)!important;
+    pointer-events:auto!important;
+  }
+
+  /* Move: x=108 y=228 w=146.5 h=111. The reference is NOT an ellipse.
+     It is a rounded-rectangle/squircle silhouette with a visibly flat top and
+     bottom. Finite corner radii reproduce that contour; 50% does not. */
+  .left-controls .stick{
+    position:absolute!important;
+    left:12.0536%!important;
+    right:auto!important;
+    top:55.0725%!important;
+    bottom:auto!important;
+    width:16.3504vw!important;
+    height:26.8116vh!important;
+    aspect-ratio:auto!important;
+    border:1.2px solid var(--x16-move-edge)!important;
+    border-radius:5.5804vw 5.5804vw 5.4688vw 5.4688vw / 12.5604vh 12.5604vh 12.3188vh 12.3188vh!important;
+    background:var(--x16-move)!important;
+    box-shadow:none!important;
+    pointer-events:auto!important;
+  }
+  .left-controls .stick-knob{opacity:0!important;width:0!important;height:0!important;border:0!important;box-shadow:none!important}
+  .left-controls .stick-label{font-size:12px!important;font-weight:600!important;color:rgba(255,255,255,.74)!important}
+
+  /* Draw the four Move chevrons with CSS geometry instead of font characters,
+     eliminating font-dependent arrow shapes. */
+  .left-controls .r360-stick-guide{font-size:0!important;width:18px!important;height:18px!important;color:rgba(255,255,255,.78)!important}
+  .left-controls .r360-stick-guide::before{
+    content:"";
+    position:absolute;
+    left:50%;top:50%;
+    width:11px;height:11px;
+    border-color:currentColor;
+    border-style:solid;
+    border-width:0;
+    transform-origin:center;
+  }
+  .left-controls .r360-stick-guide.up{left:50%!important;right:auto!important;top:6%!important;bottom:auto!important;transform:translateX(-50%)!important}
+  .left-controls .r360-stick-guide.up::before{border-left-width:2px;border-top-width:2px;transform:translate(-50%,-25%) rotate(45deg)}
+  .left-controls .r360-stick-guide.down{left:50%!important;right:auto!important;top:auto!important;bottom:5%!important;transform:translateX(-50%)!important}
+  .left-controls .r360-stick-guide.down::before{border-right-width:2px;border-bottom-width:2px;transform:translate(-50%,-75%) rotate(45deg)}
+  .left-controls .r360-stick-guide.left{left:8%!important;right:auto!important;top:50%!important;bottom:auto!important;transform:translateY(-50%)!important}
+  .left-controls .r360-stick-guide.left::before{border-left-width:2px;border-bottom-width:2px;transform:translate(-25%,-50%) rotate(45deg)}
+  .left-controls .r360-stick-guide.right{left:auto!important;right:8%!important;top:50%!important;bottom:auto!important;transform:translateY(-50%)!important}
+  .left-controls .r360-stick-guide.right::before{border-right-width:2px;border-top-width:2px;transform:translate(-75%,-50%) rotate(45deg)}
+
+  /* RT: x=721.5 y=173 w=92.5 h=40. */
+  .right-controls .trigger{
+    position:absolute!important;
+    left:80.5246%!important;
+    right:auto!important;
+    top:41.7874%!important;
+    bottom:auto!important;
+    width:10.3237vw!important;
+    height:9.6618vh!important;
+    border:1px solid var(--x16-rt-edge)!important;
+    border-radius:4.3478vh!important;
+    background:var(--x16-rt)!important;
+    pointer-events:auto!important;
+  }
+  .right-controls .face-grid{
+    position:absolute!important;
+    inset:0!important;
+    width:auto!important;
+    height:auto!important;
+    left:0!important;
+    right:0!important;
+    top:0!important;
+    bottom:0!important;
+    transform:none!important;
+    pointer-events:none!important;
+  }
+  .right-controls .face{
+    position:absolute!important;
+    width:5.6919vw!important;
+    height:10.1449vh!important;
+    min-width:0!important;
+    border-width:1px!important;
+    border-style:solid!important;
+    border-radius:5.0725vh!important;
+    box-shadow:none!important;
+    pointer-events:auto!important;
+  }
+  .right-controls .face.y{left:72.0424%!important;right:auto!important;top:47.2222%!important;bottom:auto!important;background:var(--x16-y)!important;border-color:var(--x16-y-edge)!important}
+  .right-controls .face.x{left:66.7411%!important;right:auto!important;top:57.0048%!important;bottom:auto!important;background:var(--x16-x)!important;border-color:var(--x16-x-edge)!important}
+  .right-controls .face.b{left:77.2879%!important;right:auto!important;top:57.0048%!important;bottom:auto!important;background:var(--x16-b)!important;border-color:var(--x16-b-edge)!important}
+  .right-controls .face.a{left:71.9866%!important;right:auto!important;top:66.9082%!important;bottom:auto!important;background:var(--x16-a)!important;border-color:var(--x16-a-edge)!important}
+}
+
+/* Very short landscape windows keep the same layout but reduce the complete
+   controller overlay as one composition rather than independently drifting
+   controls into new positions. */
+@media (orientation:landscape) and (max-height:360px){
+  .controller-layer{transform:scale(.88)!important;transform-origin:center center!important;width:113.636%!important;height:113.636%!important;left:-6.818%!important;top:-6.818%!important}
+}

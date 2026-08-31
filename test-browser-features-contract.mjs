@@ -28,10 +28,15 @@ for(const token of [
 
 assert.ok(sw.includes('navigationPreload.enable'),'service worker must enable navigation preload');
 assert.ok(sw.includes('isMutableRuntime'),'service worker must separate mutable runtime assets');
-assert.ok(sw.includes("cache:'no-store'"),'mutable JS/WASM must remain network-first/no-store');
-assert.ok(settings.includes("render360-browser-features.mjs?v=44.11"),'app settings store must load browser feature bridge');
+assert.ok(sw.includes("cache:'no-store'"),'runtime refreshes must bypass stale HTTP cache');
+assert.ok(sw.includes("const VERSION='44.28'")&&sw.includes('RUNTIME_ASSETS'),'service worker must warm the V44.28 runtime cache');
+assert.ok(sw.includes("'./render360_xenia_core.wasm?v=44.28'"),'service worker must pre-cache the expensive WASM core');
+assert.ok(!settings.includes('render360-browser-features.mjs'),'settings storage must not auto-load browser capability UI on the critical startup path');
 assert.ok(app.includes("app-settings-store.js?v=44.11"),'app entrypoint must cache-bust browser settings dependency');
-assert.ok(patch.includes("render360-browser-features.mjs?v=44.11"),'V44 patch must directly load browser feature bridge');
+assert.ok(patch.includes("render360-browser-features.mjs?v=44.11"),'V44 patch must retain on-demand browser feature loading');
+assert.ok(patch.includes('loadBrowserFeatures')&&patch.includes("$('settingsButton')?.addEventListener"),'browser capabilities must load only after Settings is requested');
+assert.ok(!patch.includes('scheduleDeferredTools()'),'diagnostics must not auto-wake on startup');
+assert.ok(patch.includes('render360:fatalError')&&patch.includes('render360:runtimeBlocker'),'diagnostics must wake after concrete runtime failures');
 assert.ok(/app-v41\.js\?v=44(?:\.|["'])/.test(index)&&/app-v42-patch\.js\?v=44(?:\.|["'])/.test(index),'HTML V44 entrypoints must be cache-busted');
 assert.ok(/manifest\.webmanifest\?v=44(?:\.|["'])/.test(index),'manifest URL must be cache-busted for V44');
 assert.ok(gl.includes('EXT_disjoint_timer_query_webgl2'),'WebGL2 presenter must support GPU timer queries');

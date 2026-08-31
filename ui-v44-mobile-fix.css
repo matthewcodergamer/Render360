@@ -1,4 +1,4 @@
-/* Rendr360 V44.18 — mobile runtime + concise settings pass. */
+/* Rendr360 V44.19 — mobile runtime + concise settings pass. */
 
 /* Safari can report a stale layout viewport while rotating/fullscreening. The
    JS layer refreshes --r360-vh/--r360-vw from visualViewport several times
@@ -133,7 +133,25 @@ html,body,#app{
   text-overflow:ellipsis;
 }
 #libraryView .r360-brand .sync-dot{flex:0 0 auto}
-#libraryView .nav-actions{padding-top:0}
+#libraryView .nav-actions{padding-top:0;align-items:center;gap:4px!important}
+
+/* Reference-matched profile glyph: a quiet outlined account circle beside the
+   settings control, built with CSS so Safari never depends on a private glyph. */
+#libraryView .nav-actions::after{
+  content:"";
+  display:block;
+  width:34px;
+  height:34px;
+  flex:0 0 34px;
+  border:2px solid var(--muted);
+  border-radius:50%;
+  opacity:.82;
+  background:
+    radial-gradient(circle at 50% 34%, transparent 0 3.6px,var(--muted) 3.8px 5.7px,transparent 5.9px),
+    radial-gradient(ellipse at 50% 88%, transparent 0 10px,var(--muted) 10.2px 12px,transparent 12.2px);
+  box-sizing:border-box;
+}
+:root[data-theme="light"] #libraryView .nav-actions::after{opacity:.66}
 
 /* Xenia-like hierarchy: common choices first; compatibility/developer controls
    are one deliberate tap away instead of one very long settings page. */

@@ -141,4 +141,4 @@ The percentage is a scoped engineering estimate, not source-code coverage and no
 
 ## V44.15 retail-title CALL verification
 
-The browser bootstrap is being rebuilt from the current source closure after the Braid startup trace reached HIR `CALL` at `0x8236EF40`. The rebuild includes recursive direct/address guest-call resolution, active title-module preservation for address-decoded calls, and the `R360_CALL_RESOLVERS_READY` provenance marker so a deployed browser trace can prove that the verified WASM contains the current resolver path.
+The browser bootstrap is being rebuilt from the current source closure after the Braid startup trace reached HIR `CALL` at `0x8236EF40`. The rebuild keeps the existing recursive direct/address guest-call resolver and sparse far-code paging, adds the `R360_CALL_RESOLVERS_READY call=1 address=1 stable=1` provenance marker, and deliberately avoids retaining a raw `Module*` beyond its safe lifetime. The full guest-thread/scheduler critic must pass before the rebuilt browser WASM is eligible for publication.

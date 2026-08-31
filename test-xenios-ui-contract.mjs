@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const patch=readFileSync('app-v42-patch.js','utf8'),ui=readFileSync('render360-xenios-ui.mjs','utf8'),css=readFileSync('ui-v44-xenios.css','utf8'),ref=readFileSync('ui-v44-xenios-v16.css','utf8'),patchCss=readFileSync('ui-v42-patch.css','utf8'),app=readFileSync('app-v41.js','utf8');
-assert.ok(patch.includes("import './render360-xenios-ui.mjs?v=44.17';"),'V44.17 restored UI module not live');
+assert.ok(patch.includes("import './render360-xenios-ui.mjs?v=44.18';"),'V44.18 truthful HUD UI module not live');
 for(const token of ['installSystemIcons','installProfile','profileButton','profileSheet','r360-svg-icon','r360-profile-svg','installLibraryChrome','centerNavigation','installPerformanceHud','installStickGuides','render360:telemetry','navigator.gpu.requestAdapter','estimateRefreshRate','hudGpuName','hudResolution','hudFpsRange','ui-v44-xenios-v16.css?v=44.18','guestPresented','recordHudActivity','drawActivityGraph','threadSlices','workerHz','cadencePressure'])assert.ok(ui.includes(token),`missing UI token: ${token}`);
 assert.ok(!ui.includes('0x1008CC')&&!ui.includes('0x100185'),'private SF Symbol code points must not be used for toolbar controls');
 assert.ok(!ui.includes('Math.random'),'HUD activity graph must never synthesize fake movement/noise');

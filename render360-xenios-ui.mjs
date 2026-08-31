@@ -1,18 +1,16 @@
 const $=id=>document.getElementById(id);
 
-const APPLE_CLIENT=/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(`${navigator.userAgent||''} ${navigator.platform||''}`);
-const systemGlyph=(codePoint,fallback)=>APPLE_CLIENT?String.fromCodePoint(codePoint):fallback;
 const ICONS={
-  // A browser cannot invoke UIKit's UIImage(systemName:). On Apple clients we
-  // ask the installed Apple system font to render the SF Symbols private glyph
-  // instead of shipping/redrawing Apple's vector artwork. Non-Apple clients get
-  // a semantic fallback so the control never becomes a tofu square.
-  settings:`<span class="r360-sf-symbol r360-sf-gear" data-symbol-name="gearshape" aria-hidden="true">${systemGlyph(0x1008CC,'⚙︎')}</span>`,
-  plus:`<span class="r360-sf-symbol r360-sf-plus" data-symbol-name="plus" aria-hidden="true">${systemGlyph(0x100185,'+')}</span>`
+  settings:`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.15"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.96 19.36a1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3v-4h.04A1.7 1.7 0 0 0 4.6 8.92a1.7 1.7 0 0 0-.34-1.87L4.2 6.99l2.83-2.83.06.06a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.04V3h4v.04a1.7 1.7 0 0 0 1.04 1.52 1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21v4h-.04A1.7 1.7 0 0 0 19.4 15Z"></path></svg>`,
+  plus:`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>`
 };
 
 function addStyle(){
-  const sheets=[['base','./ui-v44-xenios.css?v=44.16'],['reference','./ui-v44-xenios-v16.css?v=44.16']];
+  const sheets=[
+    ['base','./ui-v44-xenios.css?v=44.17'],
+    ['reference','./ui-v44-xenios-v16.css?v=44.17'],
+    ['mobile','./ui-v44-mobile-fix.css?v=44.17']
+  ];
   for(const [key,href] of sheets){
     const old=document.querySelector(`link[data-r360-xenios-ui="${key}"]`);
     if(old){if(old.getAttribute('href')!==href)old.setAttribute('href',href);continue;}
@@ -60,11 +58,53 @@ function centerNavigation(){
   }
 }
 
+function advancedDisclosure(label,note){
+  const details=document.createElement('details');details.className='r360-advanced-settings';
+  const summary=document.createElement('summary');
+  summary.innerHTML=`<span class="r360-advanced-copy"><span>${label}</span><small>${note}</small></span><span class="r360-disclosure" aria-hidden="true"></span>`;
+  const content=document.createElement('div');content.className='r360-advanced-content';
+  details.append(summary,content);return {details,content};
+}
+function moveNamedSections(body,content,names){
+  const wanted=new Set(names.map(v=>v.toLowerCase()));
+  for(const title of [...body.children]){
+    if(!title.classList?.contains('group-title'))continue;
+    const name=String(title.textContent||'').trim().toLowerCase();if(!wanted.has(name))continue;
+    const group=title.nextElementSibling;content.appendChild(title);if(group?.classList?.contains('group'))content.appendChild(group);
+  }
+}
+function compactSettings(){
+  const gameBody=document.querySelector('#gameSettingsView .settings-body');
+  if(gameBody&&!gameBody.querySelector(':scope > .r360-advanced-settings')){
+    const note=gameBody.querySelector('.settings-note');if(note)note.textContent='Per-game overrides. Most titles should stay on the defaults.';
+    const {details,content}=advancedDisclosure('Advanced Settings','Graphics workarounds, CPU and developer options');
+    moveNamedSections(gameBody,content,['Graphics Workarounds','CPU & Kernel','Advanced']);gameBody.appendChild(details);
+  }
+  const appBody=document.querySelector('#appSettingsView .settings-body');
+  if(appBody&&!appBody.querySelector(':scope > .r360-advanced-settings')){
+    const note=appBody.querySelector('.settings-note');if(note)note.textContent='Defaults for every game. Change only what you need.';
+    const {details,content}=advancedDisclosure('Advanced Settings','Storage, diagnostics and developer options');
+    moveNamedSections(appBody,content,['Library & Game Storage','Advanced','Runtime Contract']);appBody.appendChild(details);
+  }
+}
+function collectInjectedAdminSections(){
+  const appBody=document.querySelector('#appSettingsView .settings-body'),details=appBody?.querySelector(':scope > .r360-advanced-settings'),content=details?.querySelector('.r360-advanced-content');
+  if(!appBody||!content)return;
+  for(const title of [...appBody.children]){
+    if(!title.classList?.contains('group-title'))continue;
+    const name=String(title.textContent||'').trim();
+    if(!/owner|admin|developer|runtime contract/i.test(name))continue;
+    const group=title.nextElementSibling;content.appendChild(title);if(group?.classList?.contains('group'))content.appendChild(group);
+  }
+}
+function watchSettingsInjection(){
+  const body=document.querySelector('#appSettingsView .settings-body');if(!body)return;
+  new MutationObserver(()=>collectInjectedAdminSections()).observe(body,{childList:true,subtree:false});collectInjectedAdminSections();
+}
+
 function installStickGuides(){
   document.querySelectorAll('.stick').forEach(stick=>{
     if(stick.querySelector('.r360-stick-guide'))return;
-    // Text is intentionally empty in V44.16. CSS draws deterministic chevrons
-    // so the Move arrows don't change shape with the active system font.
     for(const cls of ['up','down','left','right']){
       const node=document.createElement('span');node.className=`r360-stick-guide ${cls}`;node.setAttribute('aria-hidden','true');stick.appendChild(node);
     }
@@ -86,13 +126,14 @@ function installPerformanceHud(){
     <canvas id="hudGraph" class="hud-canvas" aria-label="Guest frame-rate history"></canvas>`;
 }
 
-let minFps=Infinity,maxFps=0;
+let minFps=Infinity,maxFps=0,guestFrameVerified=false;
 function resetHudRange(){
-  minFps=Infinity;maxFps=0;
+  minFps=Infinity;maxFps=0;guestFrameVerified=false;
   if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';
   if($('hudFps'))$('hudFps').textContent='—';
   if($('hudFrame'))$('hudFrame').textContent='—';
   if($('hudBackend'))$('hudBackend').textContent='WAITING';
+  enforceBootOverlay();
 }
 function resolutionFromTelemetry(t){
   const state=t?.state||globalThis.render360ModernTitle||{};
@@ -102,10 +143,8 @@ function resolutionFromTelemetry(t){
   return w&&h?`[${Math.round(w)}×${Math.round(h)}]`:'[—×—]';
 }
 function onTelemetry(t={}){
-  // This is the critical distinction for the HUD: requestAnimationFrame,
-  // workerHz and WebGPU polling are not Xbox 360 frames. A frame exists only
-  // after the guest produces a real frontbuffer/presentation or swap.
   const swaps=Number(t.swaps||0),guestPresented=Boolean(t.realFrame)||swaps>0;
+  if(t.realFrame)guestFrameVerified=true;
   const fps=guestPresented?Number(t.fps||0):0;
   const frameMs=guestPresented?Number(t.frameMs||0):0;
   const hud=$('performanceHud');if(hud)hud.dataset.guestPresented=guestPresented?'1':'0';
@@ -123,18 +162,47 @@ function onTelemetry(t={}){
     if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;
   }else if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';
   if($('hudResolution'))$('hudResolution').textContent=resolutionFromTelemetry(t);
+  enforceBootOverlay();
+}
+
+function enforceBootOverlay(){
+  const overlay=$('bootOverlay'),runtimeView=$('runtimeView');if(!overlay||!runtimeView)return;
+  const runtimeVisible=!runtimeView.classList.contains('hidden');
+  if(runtimeVisible&&!guestFrameVerified&&overlay.classList.contains('frame-live'))overlay.classList.remove('frame-live');
+}
+function installBootOverlayGuard(){
+  const overlay=$('bootOverlay');if(!overlay)return;
+  new MutationObserver(()=>{if(!guestFrameVerified&&overlay.classList.contains('frame-live'))queueMicrotask(enforceBootOverlay);}).observe(overlay,{attributes:true,attributeFilter:['class']});
+  enforceBootOverlay();
+}
+
+function syncMobileViewport(){
+  const vv=globalThis.visualViewport;
+  const width=Math.max(1,Math.round(vv?.width||innerWidth||document.documentElement.clientWidth||1));
+  const height=Math.max(1,Math.round(vv?.height||innerHeight||document.documentElement.clientHeight||1));
+  const root=document.documentElement;
+  root.style.setProperty('--r360-vw',`${width}px`);root.style.setProperty('--r360-vh',`${height}px`);root.style.setProperty('--app-height',`${height}px`);
+  enforceBootOverlay();
+}
+function installViewportRecovery(){
+  const syncBurst=()=>{for(const delay of [0,60,180,360,700])setTimeout(syncMobileViewport,delay);};
+  syncMobileViewport();
+  globalThis.addEventListener('resize',syncMobileViewport,{passive:true});
+  globalThis.addEventListener('orientationchange',syncBurst,{passive:true});
+  globalThis.addEventListener('fullscreenchange',syncBurst,{passive:true});
+  globalThis.visualViewport?.addEventListener('resize',syncMobileViewport,{passive:true});
+  globalThis.visualViewport?.addEventListener('scroll',syncMobileViewport,{passive:true});
 }
 
 async function detectGpuLabel(){
   const target=$('hudGpuName');if(!target)return;
-  const apple=APPLE_CLIENT;
+  const apple=/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(`${navigator.userAgent||''} ${navigator.platform||''}`);
   let label=apple?'Apple GPU':'WebGPU';
   try{
     if(navigator.gpu?.requestAdapter){
       const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'}),info=adapter?.info||{};
       const disclosed=String(info.device||info.description||info.architecture||'').trim();
-      if(disclosed)label=disclosed;
-      if(apple&&(!disclosed||/^webgpu$/i.test(disclosed)))label='Apple GPU';
+      if(disclosed)label=disclosed;if(apple&&(!disclosed||/^webgpu$/i.test(disclosed)))label='Apple GPU';
     }
   }catch{}
   target.textContent=label.slice(0,26);
@@ -146,22 +214,23 @@ function estimateRefreshRate(){
   const tick=now=>{
     if(prev){const d=now-prev;if(d>3&&d<45)samples.push(d);}prev=now;
     if(samples.length<48)return requestAnimationFrame(tick);
-    samples.sort((a,b)=>a-b);
-    const mid=samples[Math.floor(samples.length/2)]||16.67;
-    const hz=Math.max(24,Math.min(240,Math.round(1000/mid)));
-    const el=$('hudRefresh');if(el)el.textContent=`${hz}Hz`;
-  };
-  requestAnimationFrame(tick);
+    samples.sort((a,b)=>a-b);const mid=samples[Math.floor(samples.length/2)]||16.67;
+    const hz=Math.max(24,Math.min(240,Math.round(1000/mid))),el=$('hudRefresh');if(el)el.textContent=`${hz}Hz`;
+  };requestAnimationFrame(tick);
 }
 
 function bindTelemetry(){
   globalThis.addEventListener('render360:telemetry',event=>onTelemetry(event.detail||{}));
-  globalThis.addEventListener('render360:bootStage',event=>{if(String(event.detail?.stage||'').toLowerCase()==='launch')resetHudRange();});
+  globalThis.addEventListener('render360:framePresented',()=>{guestFrameVerified=true;enforceBootOverlay();});
+  globalThis.addEventListener('render360:bootStage',event=>{
+    const stage=String(event.detail?.stage||'').toLowerCase();
+    if(stage==='launch'||stage==='core'){resetHudRange();}
+  });
 }
 
 function boot(){
-  addStyle();installSystemIcons();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();
-  console.log('[Render360 V44.16] measured XeniOS controller geometry, Apple system-symbol path, centered chrome, and guest-only FPS telemetry active');
+  addStyle();installSystemIcons();installLibraryChrome();centerNavigation();compactSettings();watchSettingsInjection();installStickGuides();installPerformanceHud();installBootOverlayGuard();installViewportRecovery();bindTelemetry();detectGpuLabel();estimateRefreshRate();
+  console.log('[Render360 V44.17] deterministic icons, concise settings, Safari rotation recovery and boot-overlay guard active');
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

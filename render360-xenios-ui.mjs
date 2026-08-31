@@ -1,16 +1,21 @@
 const $=id=>document.getElementById(id);
 
+const APPLE_CLIENT=/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(`${navigator.userAgent||''} ${navigator.platform||''}`);
+const systemGlyph=(codePoint,fallback)=>APPLE_CLIENT?String.fromCodePoint(codePoint):fallback;
 const ICONS={
-  // Browser pages cannot call UIKit UIImage(systemName:). Let the Apple
-  // system font renderer draw native glyphs instead of bundling lookalike SVGs.
-  settings:`<span class="r360-native-ios-symbol r360-native-gear" aria-hidden="true">⚙︎</span>`,
-  plus:`<span class="r360-native-ios-symbol r360-native-plus" aria-hidden="true">＋</span>`
+  // A browser cannot invoke UIKit's UIImage(systemName:). On Apple clients we
+  // ask the installed Apple system font to render the SF Symbols private glyph
+  // instead of shipping/redrawing Apple's vector artwork. Non-Apple clients get
+  // a semantic fallback so the control never becomes a tofu square.
+  settings:`<span class="r360-sf-symbol r360-sf-gear" data-symbol-name="gearshape" aria-hidden="true">${systemGlyph(0x1008CC,'⚙︎')}</span>`,
+  plus:`<span class="r360-sf-symbol r360-sf-plus" data-symbol-name="plus" aria-hidden="true">${systemGlyph(0x100185,'+')}</span>`
 };
 
 function addStyle(){
-  const sheets=[['base','./ui-v44-xenios.css?v=44.14'],['reference','./ui-v44-xenios-v15.css?v=44.15']];
+  const sheets=[['base','./ui-v44-xenios.css?v=44.16'],['reference','./ui-v44-xenios-v16.css?v=44.16']];
   for(const [key,href] of sheets){
-    if(document.querySelector(`link[data-r360-xenios-ui="${key}"]`))continue;
+    const old=document.querySelector(`link[data-r360-xenios-ui="${key}"]`);
+    if(old){if(old.getAttribute('href')!==href)old.setAttribute('href',href);continue;}
     const link=document.createElement('link');link.rel='stylesheet';link.href=href;link.dataset.r360XeniosUi=key;document.head.appendChild(link);
   }
 }
@@ -29,9 +34,6 @@ function installLibraryChrome(){
     const brand=document.createElement('div');brand.className='r360-brand';title.replaceWith(brand);brand.appendChild(title);if(sync)brand.appendChild(sync);
   }else if(nav&&sync&&nav.querySelector('.r360-brand')&&!sync.closest('.r360-brand'))nav.querySelector('.r360-brand').appendChild(sync);
 
-  // XeniOS keeps the primary app chrome on the first row and the add action on
-  // the Library title row. This also keeps the gear from visually colliding
-  // with the import action.
   if(navbar&&large&&add&&!large.closest('.r360-library-title-row')){
     const row=document.createElement('div');row.className='r360-library-title-row';
     large.replaceWith(row);row.appendChild(large);row.appendChild(add);
@@ -61,35 +63,36 @@ function centerNavigation(){
 function installStickGuides(){
   document.querySelectorAll('.stick').forEach(stick=>{
     if(stick.querySelector('.r360-stick-guide'))return;
-    for(const [cls,glyph] of [['up','⌃'],['down','⌄'],['left','‹'],['right','›']]){
-      const node=document.createElement('span');node.className=`r360-stick-guide ${cls}`;node.textContent=glyph;stick.appendChild(node);
+    // Text is intentionally empty in V44.16. CSS draws deterministic chevrons
+    // so the Move arrows don't change shape with the active system font.
+    for(const cls of ['up','down','left','right']){
+      const node=document.createElement('span');node.className=`r360-stick-guide ${cls}`;node.setAttribute('aria-hidden','true');stick.appendChild(node);
     }
   });
 }
 
 function installPerformanceHud(){
-  const hud=$('performanceHud');if(!hud||hud.dataset.xeniosHud==='2')return;
-  hud.dataset.xeniosHud='2';
-  // Keep the legacy element IDs because app-v41's updateHud() owns the real
-  // runtime telemetry. The V44.14 layer changes layout only, so FPS/CPU/GPU/
-  // RAM/PM4/draws still come from actual Render360 telemetry.
+  const hud=$('performanceHud');if(!hud||hud.dataset.xeniosHud==='3')return;
+  hud.dataset.xeniosHud='3';
   hud.innerHTML=`
     <div class="x-hud-top"><span id="hudGpuName">WebGPU</span><span id="hudResolution">[—×—]</span></div>
     <div class="x-hud-sub"><span id="hudScale">1.00x</span><span id="hudBackend" class="hud-state">WAITING</span><span id="hudRefresh">—Hz</span></div>
     <div class="x-hud-table">
-      <span class="label">FPS:</span><b id="hudFps" class="fps-now">0.0</b><span id="hudFpsRange" class="detail">0.0 / 0.0</span>
+      <span class="label">FPS:</span><b id="hudFps" class="fps-now">—</b><span id="hudFpsRange" class="detail">— / —</span>
       <span class="label">Frm:</span><b id="hudFrame">—</b><span id="hudGpu" class="detail">0 swaps</span>
       <span class="label">CPU:</span><b id="hudCpu" class="cpu-now">—</b><span class="detail"><span id="hudPm4">0</span> PM4</span>
       <span class="label">Mem:</span><b id="hudRam" class="mem-now">—</b><span class="detail"><span id="hudDraws">0</span> draws</span>
     </div>
-    <canvas id="hudGraph" class="hud-canvas" aria-label="Frame rate history"></canvas>`;
+    <canvas id="hudGraph" class="hud-canvas" aria-label="Guest frame-rate history"></canvas>`;
 }
 
 let minFps=Infinity,maxFps=0;
 function resetHudRange(){
   minFps=Infinity;maxFps=0;
-  const range=$('hudFpsRange');if(range)range.textContent='0.0 / 0.0';
-  const fps=$('hudFps');if(fps)fps.textContent='0.0';
+  if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';
+  if($('hudFps'))$('hudFps').textContent='—';
+  if($('hudFrame'))$('hudFrame').textContent='—';
+  if($('hudBackend'))$('hudBackend').textContent='WAITING';
 }
 function resolutionFromTelemetry(t){
   const state=t?.state||globalThis.render360ModernTitle||{};
@@ -99,17 +102,32 @@ function resolutionFromTelemetry(t){
   return w&&h?`[${Math.round(w)}×${Math.round(h)}]`:'[—×—]';
 }
 function onTelemetry(t={}){
-  const guestPresented=Boolean(t.realFrame)||Number(t.swaps||0)>0;
+  // This is the critical distinction for the HUD: requestAnimationFrame,
+  // workerHz and WebGPU polling are not Xbox 360 frames. A frame exists only
+  // after the guest produces a real frontbuffer/presentation or swap.
+  const swaps=Number(t.swaps||0),guestPresented=Boolean(t.realFrame)||swaps>0;
   const fps=guestPresented?Number(t.fps||0):0;
-  if(fps>0){minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;}
-  else if(!guestPresented&&$('hudFpsRange'))$('hudFpsRange').textContent='— / —';
+  const frameMs=guestPresented?Number(t.frameMs||0):0;
+  const hud=$('performanceHud');if(hud)hud.dataset.guestPresented=guestPresented?'1':'0';
+
+  if($('hudFps'))$('hudFps').textContent=guestPresented&&fps>0?fps.toFixed(1):'—';
+  if($('hudFrame'))$('hudFrame').textContent=guestPresented&&frameMs>0?`${frameMs.toFixed(1)} ms`:'—';
+  if($('hudBackend'))$('hudBackend').textContent=guestPresented?(t.realFrame?'REAL FRAME':'PRESENTING'):'CPU ONLY';
+  if($('hudGpu'))$('hudGpu').textContent=t.gpuMs&&guestPresented?`${Number(t.gpuMs).toFixed(2)} ms`:`${swaps} swaps`;
+  if($('hudPm4'))$('hudPm4').textContent=Number(t.pm4Packets||0).toLocaleString();
+  if($('hudDraws'))$('hudDraws').textContent=Number(t.draws||0).toLocaleString();
+  if($('hudScale'))$('hudScale').textContent=`${Number(t.scale||1).toFixed(2)}x`;
+
+  if(guestPresented&&fps>0){
+    minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);
+    if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;
+  }else if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';
   if($('hudResolution'))$('hudResolution').textContent=resolutionFromTelemetry(t);
-  if($('hudPipeline'))$('hudPipeline').textContent=`${Number(t.pm4Packets||0).toLocaleString()} PM4`;
 }
 
 async function detectGpuLabel(){
   const target=$('hudGpuName');if(!target)return;
-  const apple=/iPhone|iPad|Macintosh|Mac OS X/i.test(navigator.userAgent);
+  const apple=APPLE_CLIENT;
   let label=apple?'Apple GPU':'WebGPU';
   try{
     if(navigator.gpu?.requestAdapter){
@@ -143,7 +161,7 @@ function bindTelemetry(){
 
 function boot(){
   addStyle();installSystemIcons();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();
-  console.log('[Render360 V44.15] XeniOS reference geometry, iOS-style chrome, corrected telemetry HUD, and centered developer control active');
+  console.log('[Render360 V44.16] measured XeniOS controller geometry, Apple system-symbol path, centered chrome, and guest-only FPS telemetry active');
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

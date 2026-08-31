@@ -1,4 +1,3 @@
-import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js?v=44';
 import {extractStfsEntryBrowser,browserStfsExtractorContract} from './render360-stfs-browser-extractor.mjs?v=44';
 const U32 = 0x100000000;
 const STFS_STATUS = {
@@ -12,20 +11,34 @@ const BASE_EXPORTS=['memory','r360_build_version','r360_abi_version','r360_featu
 function decodeBase64(s){const bin=globalThis.atob(s),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 async function gunzip(bytes){if(typeof DecompressionStream!=='function')throw new Error('Browser DecompressionStream is unavailable');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Uint8Array(await new Response(stream).arrayBuffer());}
 function validateInstance(instance,label){const e=instance?.exports||{};const missing=BASE_EXPORTS.filter(name=>name==='memory'?!e.memory:typeof e[name]!=='function');if(missing.length)throw new Error(`${label} core is missing required ABI exports: ${missing.join(', ')}`);return instance;}
+function yieldToBrowser(){return new Promise(resolve=>setTimeout(resolve,0));}
+async function fetchWithTimeout(url,timeoutMs=3500){
+  const controller=typeof AbortController==='function'?new AbortController():null;
+  const timer=setTimeout(()=>controller?.abort(),timeoutMs);
+  try{return await fetch(url,{cache:'no-store',signal:controller?.signal});}
+  finally{clearTimeout(timer);}
+}
+async function loadEmbeddedCore(){
+  await yieldToBrowser();
+  const module=await import('./render360_xenia_core_embedded.js?v=44.27');
+  return module.CORE_WASM_GZIP_BASE64||'';
+}
 
 export class Render360Core {
-  constructor(url='./render360_xenia_core.wasm?v=44') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
+  constructor(url='./render360_xenia_core.wasm?v=44.27') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
 
   async init() {
     let result=null,networkError=null,embeddedError=null;
     try{
-      const response=await fetch(this.url,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const response=await fetchWithTimeout(this.url,3500);if(!response.ok)throw new Error(`HTTP ${response.status}`);
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
       validateInstance(result.instance,'Network');this.source='network';
     }catch(error){networkError=error;result=null;}
-    if(!result&&CORE_WASM_GZIP_BASE64){
-      try{result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
-      catch(error){embeddedError=error;result=null;}
+    if(!result){
+      try{
+        const embeddedBase64=await loadEmbeddedCore();
+        if(embeddedBase64){result=await WebAssembly.instantiate(await gunzip(decodeBase64(embeddedBase64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
+      }catch(error){embeddedError=error;result=null;}
     }
     if(!result)throw new Error(`Render360 core could not start${networkError?` · network: ${networkError.message}`:''}${embeddedError?` · embedded: ${embeddedError.message}`:''}`);
     this.networkError=networkError;this.instance=result.instance;this.exports=this.instance.exports;return this;

@@ -84,10 +84,11 @@ must(has(runtime,'REQUIRED_CORE_BUILD=30')&&has(runtime,'REQUIRED_ABI=0x00030002
 must(has(runtime,'coreSource')&&has(runtime,'stfsExtraction'),'runtime diagnostics must expose which core and extraction path Safari actually loaded');
 must(has(runtime,'render360:${type}')&&has(runtime,'globalThis.dispatchEvent'),'runtime must mirror structured emulator events onto the global developer-console bus');
 
-const networkPos=coreLoader.indexOf('const response=await fetch(this.url');
-const embeddedPos=coreLoader.indexOf('if(!result&&CORE_WASM_GZIP_BASE64)');
-must(networkPos>=0&&embeddedPos>networkPos,'package core loader must try the cache-busted network artifact before the embedded fallback');
-must(has(coreLoader,"cache:'no-store'")&&has(coreLoader,"render360_xenia_core.wasm?v=44"),'package core loader must avoid stale Safari core artifacts');
+const networkPos=coreLoader.indexOf('const response=await fetchWithTimeout(this.url');
+const embeddedPos=coreLoader.indexOf('const embeddedBase64=await loadEmbeddedCore()');
+must(networkPos>=0&&embeddedPos>networkPos,'package core loader must try the bounded cache-busted network artifact before lazy embedded fallback');
+must(has(coreLoader,"cache:'no-store'")&&has(coreLoader,"render360_xenia_core.wasm?v=44.27"),'package core loader must avoid stale Safari core artifacts');
+must(has(coreLoader,"import('./render360_xenia_core_embedded.js?v=44.27')")&&!coreLoader.startsWith("import {CORE_WASM_GZIP_BASE64"),'embedded WASM must be lazy-loaded so startup does not parse the large base64 module on the main path');
 must(has(coreLoader,'extractStfsEntryBrowser')&&has(coreLoader,'stfsExtractionMode'),'package core must recover STFS extraction when a legacy mounted core lacks the native V32 extractor');
 must(has(extractor,'HASH_ACTIVE_INDEX_BIT')&&has(extractor,'END_OF_CHAIN')&&has(extractor,'visited.has(next)'),'browser STFS fallback must preserve hash-table selection, end-of-chain and cycle guards');
 must(has(extractor,'nativePreferred:true')&&has(extractor,'version:44'),'STFS compatibility contract must identify V44 and keep native extraction preferred');

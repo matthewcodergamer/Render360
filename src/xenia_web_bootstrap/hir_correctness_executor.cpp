@@ -949,16 +949,69 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           break;
         }
 
-        case xe::cpu::hir::OPCODE_CALL:
+        case xe::cpu::hir::OPCODE_CALL: {
           supported = g_call_resolver && instr->src1.symbol &&
                       g_call_resolver(instr->src1.symbol);
+          if (!supported && g_address_resolver) {
+            uint32_t target = instr->src1.symbol ? instr->src1.symbol->address() : 0u;
+            bool target_known = instr->src1.symbol != nullptr;
+            if (!target_known) {
+              uint8_t raw[4] = {};
+              if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {
+                const uint32_t ppc = (uint32_t(raw[0]) << 24) |
+                                     (uint32_t(raw[1]) << 16) |
+                                     (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
+                if ((ppc >> 26) == 18u && (ppc & 1u)) {
+                  int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
+                  if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);
+                  target = (ppc & 0x2u)
+                               ? static_cast<uint32_t>(displacement)
+                               : current_source_address + static_cast<uint32_t>(displacement);
+                  target_known = true;
+                }
+              }
+            }
+            if (target_known) {
+              std::fprintf(stderr,
+                           "R360_DIRECT_CALL_FALLBACK source=0x%08X symbol=%u target=0x%08X\n",
+                           current_source_address, instr->src1.symbol ? 1u : 0u, target);
+              supported = g_address_resolver(target);
+            }
+          }
           break;
+        }
         case xe::cpu::hir::OPCODE_CALL_TRUE: {
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
           if (supported && condition) {
             supported = g_call_resolver && instr->src2.symbol &&
                         g_call_resolver(instr->src2.symbol);
+            if (!supported && g_address_resolver) {
+              uint32_t target = instr->src2.symbol ? instr->src2.symbol->address() : 0u;
+              bool target_known = instr->src2.symbol != nullptr;
+              if (!target_known) {
+                uint8_t raw[4] = {};
+                if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {
+                  const uint32_t ppc = (uint32_t(raw[0]) << 24) |
+                                       (uint32_t(raw[1]) << 16) |
+                                       (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
+                  if ((ppc >> 26) == 18u && (ppc & 1u)) {
+                    int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
+                    if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);
+                    target = (ppc & 0x2u)
+                                 ? static_cast<uint32_t>(displacement)
+                                 : current_source_address + static_cast<uint32_t>(displacement);
+                    target_known = true;
+                  }
+                }
+              }
+              if (target_known) {
+                std::fprintf(stderr,
+                             "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X symbol=%u target=0x%08X\n",
+                             current_source_address, instr->src2.symbol ? 1u : 0u, target);
+                supported = g_address_resolver(target);
+              }
+            }
           }
           break;
         }

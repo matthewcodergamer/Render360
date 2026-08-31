@@ -7,7 +7,7 @@ const ICONS={
 };
 
 function addStyle(){
-  const sheets=[['base','./ui-v44-xenios.css?v=44.17'],['reference','./ui-v44-xenios-v16.css?v=44.17']];
+  const sheets=[['base','./ui-v44-xenios.css?v=44.18'],['reference','./ui-v44-xenios-v16.css?v=44.18']];
   for(const [key,href] of sheets){
     const old=document.querySelector(`link[data-r360-xenios-ui="${key}"]`);
     if(old){if(old.getAttribute('href')!==href)old.setAttribute('href',href);continue;}
@@ -73,17 +73,55 @@ function installStickGuides(){document.querySelectorAll('.stick').forEach(stick=
 
 function installPerformanceHud(){
   const hud=$('performanceHud');if(!hud||hud.dataset.xeniosHud==='3')return;hud.dataset.xeniosHud='3';
-  hud.innerHTML=`<div class="x-hud-top"><span id="hudGpuName">WebGPU</span><span id="hudResolution">[—×—]</span></div><div class="x-hud-sub"><span id="hudScale">1.00x</span><span id="hudBackend" class="hud-state">WAITING</span><span id="hudRefresh">—Hz</span></div><div class="x-hud-table"><span class="label">FPS:</span><b id="hudFps" class="fps-now">—</b><span id="hudFpsRange" class="detail">— / —</span><span class="label">Frm:</span><b id="hudFrame">—</b><span id="hudGpu" class="detail">0 swaps</span><span class="label">CPU:</span><b id="hudCpu" class="cpu-now">—</b><span class="detail"><span id="hudPm4">0</span> PM4</span><span class="label">Mem:</span><b id="hudRam" class="mem-now">—</b><span class="detail"><span id="hudDraws">0</span> draws</span></div><canvas id="hudGraph" class="hud-canvas" aria-label="Guest frame-rate history"></canvas>`;
+  hud.innerHTML=`<div class="x-hud-top"><span id="hudGpuName">WebGPU</span><span id="hudResolution">[—×—]</span></div><div class="x-hud-sub"><span id="hudScale">1.00x</span><span id="hudBackend" class="hud-state">WAITING</span><span id="hudRefresh">—Hz</span></div><div class="x-hud-table"><span class="label">FPS:</span><b id="hudFps" class="fps-now">—</b><span id="hudFpsRange" class="detail">— / —</span><span class="label">Frm:</span><b id="hudFrame">—</b><span id="hudGpu" class="detail">0 swaps</span><span class="label">CPU:</span><b id="hudCpu" class="cpu-now">—</b><span class="detail"><span id="hudPm4">0</span> PM4</span><span class="label">Mem:</span><b id="hudRam" class="mem-now">—</b><span class="detail"><span id="hudDraws">0</span> draws</span></div><canvas id="hudGraph" class="hud-canvas" aria-label="Runtime activity history"></canvas>`;
 }
 
 let minFps=Infinity,maxFps=0;
-function resetHudRange(){minFps=Infinity;maxFps=0;if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';if($('hudFps'))$('hudFps').textContent='—';if($('hudFrame'))$('hudFrame').textContent='—';if($('hudBackend'))$('hudBackend').textContent='WAITING';}
+let hudActivityHistory=[];
+let hudGraphMode='cpu';
+let lastHudSlices=0;
+let lastTelemetryAt=0;
+
+function drawActivityGraph(){
+  const c=$('hudGraph'),ctx=c?.getContext('2d');if(!ctx)return;
+  const dpr=Math.min(devicePixelRatio||1,2),w=Math.max(1,Math.floor(c.clientWidth*dpr)),h=Math.max(1,Math.floor(c.clientHeight*dpr));
+  if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
+  ctx.clearRect(0,0,w,h);
+  if(!hudActivityHistory.length)return;
+  const values=hudActivityHistory.map(p=>p.value).filter(Number.isFinite);if(!values.length)return;
+  let lo=Math.min(...values),hi=Math.max(...values),center=(lo+hi)/2,span=hi-lo;
+  const minimumBand=hudGraphMode==='fps'?Math.max(4,center*.12):Math.max(3,center*.10);
+  if(span<minimumBand){const pad=(minimumBand-span)/2;lo-=pad;hi+=pad;span=hi-lo;}
+  const topPad=Math.max(.5,span*.12);lo=Math.max(0,lo-topPad);hi+=topPad;span=Math.max(.001,hi-lo);
+  ctx.strokeStyle='rgba(48,209,88,.92)';ctx.lineWidth=Math.max(1,dpr);ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();
+  hudActivityHistory.forEach((point,i)=>{const x=hudActivityHistory.length<=1?0:i/(hudActivityHistory.length-1)*w;const normalized=Math.max(0,Math.min(1,(point.value-lo)/span));const y=h-normalized*h;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+}
+
+function resetHudRange(){minFps=Infinity;maxFps=0;hudActivityHistory=[];hudGraphMode='cpu';lastHudSlices=0;lastTelemetryAt=0;if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';if($('hudFps'))$('hudFps').textContent='—';if($('hudFrame'))$('hudFrame').textContent='—';if($('hudBackend'))$('hudBackend').textContent='WAITING';drawActivityGraph();}
 function resolutionFromTelemetry(t){const state=t?.state||globalThis.render360ModernTitle||{},frame=state?.frontbufferFrame||{},canvas=$('titleFrameCanvas')||$('gpuCanvas'),w=Number(frame.width||canvas?.width||canvas?.clientWidth||0),h=Number(frame.height||canvas?.height||canvas?.clientHeight||0);return w&&h?`[${Math.round(w)}×${Math.round(h)}]`:'[—×—]';}
-function onTelemetry(t={}){const swaps=Number(t.swaps||0),guestPresented=Boolean(t.realFrame)||swaps>0,fps=guestPresented?Number(t.fps||0):0,frameMs=guestPresented?Number(t.frameMs||0):0,hud=$('performanceHud');if(hud)hud.dataset.guestPresented=guestPresented?'1':'0';if($('hudFps'))$('hudFps').textContent=guestPresented&&fps>0?fps.toFixed(1):'—';if($('hudFrame'))$('hudFrame').textContent=guestPresented&&frameMs>0?`${frameMs.toFixed(1)} ms`:'—';if($('hudBackend'))$('hudBackend').textContent=guestPresented?(t.realFrame?'REAL FRAME':'PRESENTING'):'CPU ONLY';if($('hudGpu'))$('hudGpu').textContent=t.gpuMs&&guestPresented?`${Number(t.gpuMs).toFixed(2)} ms`:`${swaps} swaps`;if($('hudPm4'))$('hudPm4').textContent=Number(t.pm4Packets||0).toLocaleString();if($('hudDraws'))$('hudDraws').textContent=Number(t.draws||0).toLocaleString();if($('hudScale'))$('hudScale').textContent=`${Number(t.scale||1).toFixed(2)}x`;if(guestPresented&&fps>0){minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;}else if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';if($('hudResolution'))$('hudResolution').textContent=resolutionFromTelemetry(t);}
+
+function recordHudActivity(t,guestPresented,fps){
+  const nextMode=guestPresented&&fps>0?'fps':'cpu';
+  if(nextMode!==hudGraphMode){hudGraphMode=nextMode;hudActivityHistory=[];lastHudSlices=Number(t.threadSlices||0);lastTelemetryAt=performance.now();}
+  let value=fps;
+  if(nextMode==='cpu'){
+    const now=performance.now(),workerHz=Math.max(0,Number(t.workerHz||0)),slices=Math.max(0,Number(t.threadSlices||0)),sliceDelta=Math.max(0,slices-lastHudSlices),cadence=lastTelemetryAt?Math.max(0,now-lastTelemetryAt):250;
+    // Every term is measured runtime activity: worker pump frequency, newly
+    // executed guest slices, and telemetry scheduling pressure. No fake FPS or
+    // random noise is introduced merely to animate the graph.
+    const cadencePressure=Math.min(12,Math.abs(cadence-250)*.08);
+    value=workerHz+Math.min(30,sliceDelta*2)+cadencePressure;
+    lastHudSlices=slices;lastTelemetryAt=now;
+  }
+  if(Number.isFinite(value)){hudActivityHistory.push({mode:nextMode,value});if(hudActivityHistory.length>70)hudActivityHistory.shift();}
+  drawActivityGraph();
+}
+
+function onTelemetry(t={}){const swaps=Number(t.swaps||0),guestPresented=Boolean(t.realFrame)||swaps>0,fps=guestPresented?Number(t.fps||0):0,frameMs=guestPresented?Number(t.frameMs||0):0,hud=$('performanceHud');if(hud)hud.dataset.guestPresented=guestPresented?'1':'0';if($('hudFps'))$('hudFps').textContent=guestPresented&&fps>0?fps.toFixed(1):'—';if($('hudFrame'))$('hudFrame').textContent=guestPresented&&frameMs>0?`${frameMs.toFixed(1)} ms`:'—';if($('hudBackend'))$('hudBackend').textContent=guestPresented?(t.realFrame?'REAL FRAME':'PRESENTING'):'CPU ONLY';if($('hudGpu'))$('hudGpu').textContent=t.gpuMs&&guestPresented?`${Number(t.gpuMs).toFixed(2)} ms`:`${swaps} swaps`;if($('hudPm4'))$('hudPm4').textContent=Number(t.pm4Packets||0).toLocaleString();if($('hudDraws'))$('hudDraws').textContent=Number(t.draws||0).toLocaleString();if($('hudScale'))$('hudScale').textContent=`${Number(t.scale||1).toFixed(2)}x`;if(guestPresented&&fps>0){minFps=Math.min(minFps,fps);maxFps=Math.max(maxFps,fps);if($('hudFpsRange'))$('hudFpsRange').textContent=`${minFps.toFixed(1)} / ${maxFps.toFixed(1)}`;}else if($('hudFpsRange'))$('hudFpsRange').textContent='— / —';if($('hudResolution'))$('hudResolution').textContent=resolutionFromTelemetry(t);recordHudActivity(t,guestPresented,fps);}
 
 async function detectGpuLabel(){const target=$('hudGpuName');if(!target)return;let label=/iPhone|iPad|iPod|Macintosh|Mac OS X/i.test(`${navigator.userAgent||''} ${navigator.platform||''}`)?'Apple GPU':'WebGPU';try{if(navigator.gpu?.requestAdapter){const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'}),info=adapter?.info||{},disclosed=String(info.device||info.description||info.architecture||'').trim();if(disclosed)label=disclosed;}}catch{}target.textContent=label.slice(0,26);}
 function estimateRefreshRate(){if(!globalThis.requestAnimationFrame)return;const samples=[];let prev=0;const tick=now=>{if(prev){const d=now-prev;if(d>3&&d<45)samples.push(d);}prev=now;if(samples.length<32)return requestAnimationFrame(tick);samples.sort((a,b)=>a-b);const mid=samples[Math.floor(samples.length/2)]||16.67,hz=Math.max(24,Math.min(240,Math.round(1000/mid))),el=$('hudRefresh');if(el)el.textContent=`${hz}Hz`;};requestAnimationFrame(tick);}
 function bindTelemetry(){globalThis.addEventListener('render360:telemetry',event=>onTelemetry(event.detail||{}));globalThis.addEventListener('render360:bootStage',event=>{if(String(event.detail?.stage||'').toLowerCase()==='launch')resetHudRange();});}
 
-function boot(){addStyle();installSystemIcons();installProfile();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();console.log('[Render360 V44.17] reliable Settings/Profile SVG controls and measured XeniOS UI active');}
+function boot(){addStyle();installSystemIcons();installProfile();installLibraryChrome();centerNavigation();installStickGuides();installPerformanceHud();bindTelemetry();detectGpuLabel();estimateRefreshRate();console.log('[Render360 V44.18] Settings/Profile UI + truthful CPU/FPS activity graph active');}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();

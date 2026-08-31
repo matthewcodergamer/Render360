@@ -1,4 +1,4 @@
-# Render360 — Xenia-Web
+# Rendr360 — Xenia-Web
 
 **Experimental browser-native Xbox 360 emulator built around real Xenia architecture, WebAssembly and WebGPU.**
 

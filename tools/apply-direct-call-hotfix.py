@@ -3,23 +3,23 @@ from pathlib import Path
 cpp_path = Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
 cpp = cpp_path.read_text()
 
-old_call = """        supported = g_call_resolver && instr->src1.symbol &&
-                    g_call_resolver(instr->src1.symbol);
-        if (!supported && g_address_resolver) {"""
-new_call = """        if (instr->src1.symbol) {
-          // A real HIR symbol is authoritative. If its resolver rejects the
-          // target, do not retry the same call through the address resolver.
-          supported = g_call_resolver && g_call_resolver(instr->src1.symbol);
-        } else if (g_address_resolver) {"""
-
-old_call_true = """          supported = g_call_resolver && instr->src2.symbol &&
-                      g_call_resolver(instr->src2.symbol);
+old_call = """          supported = g_call_resolver && instr->src1.symbol &&
+                      g_call_resolver(instr->src1.symbol);
           if (!supported && g_address_resolver) {"""
-new_call_true = """          if (instr->src2.symbol) {
-            // The PPC decoder below is only for direct calls that have no HIR
-            // symbol. Known symbols stay on the authoritative call resolver.
-            supported = g_call_resolver && g_call_resolver(instr->src2.symbol);
+new_call = """          if (instr->src1.symbol) {
+            // A real HIR symbol is authoritative. If its resolver rejects the
+            // target, do not retry the same call through the address resolver.
+            supported = g_call_resolver && g_call_resolver(instr->src1.symbol);
           } else if (g_address_resolver) {"""
+
+old_call_true = """            supported = g_call_resolver && instr->src2.symbol &&
+                        g_call_resolver(instr->src2.symbol);
+            if (!supported && g_address_resolver) {"""
+new_call_true = """            if (instr->src2.symbol) {
+              // The PPC decoder below is only for direct calls that have no HIR
+              // symbol. Known symbols stay on the authoritative call resolver.
+              supported = g_call_resolver && g_call_resolver(instr->src2.symbol);
+            } else if (g_address_resolver) {"""
 
 if cpp.count(old_call) != 1:
     raise SystemExit(f'expected one OPCODE_CALL resolver block, found {cpp.count(old_call)}')

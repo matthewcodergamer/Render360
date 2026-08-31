@@ -26,12 +26,15 @@ function runtimeActive(){
 
 function ensureFreshUiLayer(){
   const desired=new URL('./ui-v44-mobile-fix.css?v=44.23',import.meta.url).href;
-  const links=[...document.querySelectorAll('link[rel="stylesheet"]')].filter(link=>String(link.href).includes('ui-v44-mobile-fix.css'));
-  let keep=links[0]||null;
-  if(!keep){keep=document.createElement('link');keep.rel='stylesheet';document.head.appendChild(keep);}
-  keep.dataset.r360XeniosUi='mobile';
-  if(keep.href!==desired)keep.href=desired;
-  for(const link of links){if(link!==keep)link.remove();}
+  for(const link of [...document.querySelectorAll('link[rel="stylesheet"]')]){
+    if(String(link.href).includes('ui-v44-mobile-fix.css'))link.remove();
+  }
+  // Append after index.html's critical first-paint style so the current mobile
+  // layer becomes authoritative once JavaScript is ready. This prevents old
+  // inline V44.19 !important rules from flattening the runtime pill/layout.
+  const link=document.createElement('link');
+  link.rel='stylesheet';link.href=desired;link.dataset.r360XeniosUi='mobile';
+  document.head.appendChild(link);
 }
 
 function profileSvg(){return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.25"></circle><circle cx="12" cy="9" r="3.15"></circle><path d="M6.9 18.2c.9-3 2.7-4.5 5.1-4.5s4.2 1.5 5.1 4.5"></path></svg>';}

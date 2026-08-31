@@ -1,4 +1,4 @@
-const VERSION='44.26';
+const VERSION='44.27';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const RUNTIME_CACHE=`render360-runtime-v${VERSION}`;
 const SHELL_ASSETS=[
@@ -33,21 +33,22 @@ self.addEventListener('activate',event=>{
 function sameOrigin(request){try{return new URL(request.url).origin===self.location.origin;}catch{return false;}}
 function isMutableRuntime(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:m?js|wasm)$/.test(pathname);}
 function isShellAsset(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:css|svg|webmanifest|png|jpg|jpeg|webp)$/.test(pathname);}
-function timeout(ms){return new Promise((_,reject)=>setTimeout(()=>reject(new Error('network timeout')),ms));}
-async function fetchBounded(request,ms=2500){return Promise.race([fetch(new Request(request,{cache:'no-store'})),timeout(ms)]);}
+async function fetchBounded(request,ms=2500){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),ms);
+  try{return await fetch(new Request(request,{cache:'no-store',signal:controller.signal}));}
+  finally{clearTimeout(timer);}
+}
 
 async function runtimeAsset(request){
   const cache=await caches.open(RUNTIME_CACHE);
   const cached=await cache.match(request);
-  if(cached){
-    fetchBounded(request,3500).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
-    return cached;
-  }
   try{
-    const response=await fetchBounded(request,4000);
+    const response=await fetchBounded(request,cached?1000:3500);
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
   }catch{
+    if(cached)return cached;
     return Response.error();
   }
 }
@@ -56,11 +57,11 @@ async function shellAsset(request){
   const cache=await caches.open(SHELL_CACHE);
   const cached=await cache.match(request);
   if(cached){
-    fetchBounded(request,2500).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
+    fetchBounded(request,1800).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
     return cached;
   }
   try{
-    const response=await fetchBounded(request,3000);
+    const response=await fetchBounded(request,2800);
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
   }catch{return Response.error();}
@@ -71,9 +72,9 @@ async function navigation(event){
   const cached=await cache.match('./index.html')||await cache.match('./');
   const network=(async()=>{
     try{
-      const preload=await Promise.race([event.preloadResponse,timeout(1200)]).catch(()=>null);
+      const preload=await Promise.race([event.preloadResponse,new Promise(resolve=>setTimeout(()=>resolve(null),900))]).catch(()=>null);
       if(preload?.ok){cache.put('./index.html',preload.clone()).catch(()=>{});return preload;}
-      const response=await fetchBounded(event.request,2200);
+      const response=await fetchBounded(event.request,1800);
       if(response?.ok)cache.put('./index.html',response.clone()).catch(()=>{});
       return response;
     }catch{return null;}

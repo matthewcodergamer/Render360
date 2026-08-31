@@ -32,9 +32,10 @@ assert.ok(sw.includes("cache:'no-store'"),'mutable JS/WASM must remain network-f
 assert.ok(settings.includes("render360-browser-features.mjs?v=44.11"),'app settings store must load browser feature bridge');
 assert.ok(app.includes("app-settings-store.js?v=44.11"),'app entrypoint must cache-bust browser settings dependency');
 assert.ok(patch.includes("render360-browser-features.mjs?v=44.11"),'V44 patch must directly load browser feature bridge');
-assert.ok(index.includes('app-v41.js?v=44.11')&&index.includes('app-v42-patch.js?v=44.11'),'HTML entrypoints must be cache-busted');
-assert.ok(index.includes('manifest.webmanifest?v=44.11'),'manifest URL must be cache-busted');
+assert.ok(/app-v41\.js\?v=44(?:\.|["'])/.test(index)&&/app-v42-patch\.js\?v=44(?:\.|["'])/.test(index),'HTML V44 entrypoints must be cache-busted');
+assert.ok(/manifest\.webmanifest\?v=44(?:\.|["'])/.test(index),'manifest URL must be cache-busted for V44');
 assert.ok(gl.includes('EXT_disjoint_timer_query_webgl2'),'WebGL2 presenter must support GPU timer queries');
-assert.ok(icon.includes('<svg')&&icon.includes('#30D158'),'Render360 vector app icon missing');
-assert.ok(Array.isArray(manifest.icons)&&manifest.icons.some(i=>i.src.includes('render360-app-icon.svg')),'manifest must advertise app icon');
+assert.ok(icon.includes('<svg')&&icon.includes('#30D158'),'Rendr360 vector app icon missing');
+assert.ok(Array.isArray(manifest.icons)&&manifest.icons.some(i=>i.src.includes('render360-app-icon.svg')),'manifest must retain vector app icon fallback');
+assert.ok(manifest.icons.some(i=>i.src.includes('rendr360-apple-touch-icon.png')&&i.type==='image/png'),'manifest must advertise the iOS PNG app icon');
 console.log('R360_BROWSER_FEATURE_INTEGRATION=PASS');

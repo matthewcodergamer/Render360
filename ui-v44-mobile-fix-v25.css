@@ -1,0 +1,40 @@
+/* Rendr360 V44.25 — lighter XeniOS-style runtime pill + isolated header hit targets. */
+
+#runtimeView.runtime-view{position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:var(--r360-vw,100vw)!important;height:var(--r360-vh,100dvh)!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;z-index:1000!important}
+#runtimeView .runtime-stage,#runtimeView #gpuCanvas,#runtimeView #titleFrameCanvas,#runtimeView .boot-overlay,#runtimeView .controller-layer{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important}
+body.r360-runtime-active #libraryView,body.r360-runtime-active #detailView,body.r360-runtime-active #gameSettingsView,body.r360-runtime-active #appSettingsView{display:none!important;visibility:hidden!important;pointer-events:none!important}
+body.r360-runtime-active #runtimeView{display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important}
+#runtimeView .controller-layer{display:block!important;visibility:visible!important;z-index:10!important;pointer-events:none!important;overflow:visible!important}
+#runtimeView .controller-layer .control,#runtimeView .controller-layer .stick{pointer-events:auto!important}
+#runtimeView .boot-overlay{display:grid!important;place-items:center!important;z-index:8!important;background:#000!important;padding:max(14px,var(--safe-top)) max(18px,var(--safe-right)) max(14px,var(--safe-bottom)) max(18px,var(--safe-left))}
+#runtimeView .boot-card{position:relative!important;left:auto!important;top:auto!important;transform:none!important;margin:auto!important;width:min(420px,82vw)!important;max-width:82vw!important;max-height:78vh!important;text-align:center}
+body.r360-rotating #runtimeView .boot-overlay,body.r360-rotating #runtimeView .controller-layer{transition:none!important}
+
+#libraryView .navbar{overflow:visible!important}
+#libraryView .nav-row{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:start!important;column-gap:18px!important;min-height:72px!important;overflow:visible!important}
+#libraryView .r360-brand{display:flex!important;min-width:0!important;width:100%!important;flex-direction:column!important;align-items:stretch!important;gap:8px!important;padding-top:1px!important;overflow:visible!important}
+#libraryView .r360-brand>.nav-title{display:flex!important;align-items:baseline!important;min-height:26px!important;margin:0!important;padding:0!important;font-size:20px!important;line-height:1.05!important;font-weight:750!important;letter-spacing:-.5px!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important;overflow:visible!important;color:var(--text,#f5f5f7)!important}
+#libraryView .r360-brand>.nav-title::before,#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
+#libraryView .r360-name{display:inline!important;color:var(--text,#f5f5f7)!important}
+#libraryView .r360-360{display:inline!important;color:var(--green,#30d158)!important}
+
+/* The source text remains intact for runtime logic; only the compact mirror is visible. */
+#libraryView .r360-brand .runtime-sync{position:relative!important;display:flex!important;align-items:center!important;gap:8px!important;width:min(100%,680px)!important;max-width:none!important;min-width:0!important;min-height:36px!important;margin:0!important;padding:7px 12px!important;box-sizing:border-box!important;border:0!important;border-radius:12px!important;background:rgba(118,118,128,.22)!important;color:#a7a7ad!important;overflow:hidden!important}
+:root[data-theme="light"] #libraryView .r360-brand .runtime-sync{background:rgba(118,118,128,.13)!important;color:#6e6e73!important}
+#libraryView .r360-brand .sync-dot{width:8px!important;height:8px!important;flex:0 0 8px!important;border-radius:50%!important;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 10%,transparent)!important}
+#libraryView #runtimeSyncText{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;pointer-events:none!important}
+#libraryView #r360RuntimeDisplayText{display:block!important;min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;font-size:12px!important;line-height:1.25!important;letter-spacing:-.1px!important;color:inherit!important}
+
+/* Each icon owns a separate non-overlapping 44pt touch target. */
+#libraryView .nav-actions{position:relative!important;display:grid!important;grid-template-columns:44px 44px!important;grid-auto-flow:column!important;align-items:start!important;justify-content:end!important;gap:8px!important;width:96px!important;min-width:96px!important;max-width:96px!important;height:44px!important;padding:0!important;margin:0!important;overflow:visible!important;pointer-events:auto!important;isolation:isolate!important}
+#libraryView .nav-actions::before,#libraryView .nav-actions::after{content:none!important;display:none!important}
+#libraryView .nav-actions>#settingsButton{grid-column:1!important;order:1!important}
+#libraryView .nav-actions>#profileButton{grid-column:2!important;order:2!important}
+#settingsButton,#profileButton{position:relative!important;inset:auto!important;transform:none!important;display:grid!important;place-items:center!important;width:44px!important;height:44px!important;min-width:44px!important;max-width:44px!important;min-height:44px!important;max-height:44px!important;margin:0!important;padding:0!important;border:0!important;border-radius:12px!important;background:transparent!important;color:var(--muted,#98989d)!important;pointer-events:auto!important;touch-action:manipulation!important;-webkit-tap-highlight-color:transparent!important;z-index:1!important}
+#settingsButton:active,#profileButton:active{background:rgba(118,118,128,.16)!important;transform:scale(.94)!important}
+#settingsButton svg,#profileButton svg{display:block!important;pointer-events:none!important;fill:none!important;stroke:currentColor!important;stroke-linecap:round!important;stroke-linejoin:round!important}
+#settingsButton svg{width:25px!important;height:25px!important;stroke-width:1.8!important}
+#profileButton svg{width:29px!important;height:29px!important;stroke-width:1.65!important}
+
+@media (max-width:430px){#libraryView .nav-row{column-gap:12px!important}#libraryView .r360-brand .runtime-sync{width:calc(100vw - 132px)!important;min-width:280px!important;max-width:calc(100vw - 132px)!important}}
+@media (orientation:landscape) and (max-height:520px){#runtimeView .boot-card{width:min(390px,58vw)!important;max-width:58vw!important;padding:10px 16px!important}}

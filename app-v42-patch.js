@@ -1,6 +1,6 @@
 import './developer-console-v44.js?v=44.5';
 import './render360-browser-features.mjs?v=44.11';
-import './render360-xenios-ui.mjs?v=44.13';
+import './render360-xenios-ui.mjs?v=44.14';
 import {listGames,putGame,putCover} from './library/game-library.js?v=44';
 import {resolveTitleCover} from './library/cover-resolver.js?v=44';
 import {clearGamesDirectory,storageInfo} from './storage/game-storage.js?v=44';

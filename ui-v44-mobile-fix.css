@@ -1,34 +1,64 @@
-/* Rendr360 V44.21 — mobile runtime + concise settings pass. */
+/* Rendr360 V44.23 — stable iPhone chrome + rotation/runtime recovery. */
 html,body,#app{width:100%;height:var(--r360-vh,var(--app-height,100dvh));min-height:0}
-#runtimeView.runtime-view{position:absolute!important;inset:0!important;width:100%!important;height:var(--r360-vh,var(--app-height,100dvh))!important;min-height:0!important;overflow:hidden!important;padding:0!important;background:#000!important}
-#runtimeView .runtime-stage{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;overflow:hidden!important}
-#runtimeView #gpuCanvas,#runtimeView #titleFrameCanvas{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important}
-#runtimeView .boot-overlay{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;display:grid;place-items:center;z-index:8!important;padding:max(14px,var(--safe-top)) max(18px,var(--safe-right)) max(14px,var(--safe-bottom)) max(18px,var(--safe-left));overflow:hidden}
-#runtimeView .boot-card{width:min(420px,82vw);max-width:82vw!important;max-height:78vh;margin:auto;overflow:hidden}
-@media (orientation:landscape) and (max-height:520px){#runtimeView .boot-card{width:min(390px,58vw);padding:10px 16px!important}#runtimeView .spinner{width:28px;height:28px;margin-bottom:10px}#runtimeView .boot-title{font-size:16px;line-height:1.15}#runtimeView .boot-message{font-size:11px;line-height:1.3;margin-top:5px}#runtimeView .boot-stage{font-size:9px;margin-top:6px}}
 
+/* Runtime owns the whole visual viewport while a title is booting/running. */
+#runtimeView.runtime-view{position:fixed!important;left:var(--r360-vx,0px)!important;top:var(--r360-vy,0px)!important;right:auto!important;bottom:auto!important;width:var(--r360-vw,100vw)!important;height:var(--r360-vh,100dvh)!important;min-width:0!important;min-height:0!important;overflow:hidden!important;padding:0!important;margin:0!important;background:#000!important;z-index:1000!important}
+#runtimeView .runtime-stage{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;overflow:hidden!important;background:#000!important}
+#runtimeView #gpuCanvas,#runtimeView #titleFrameCanvas{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:contain!important}
+body.r360-runtime-active #libraryView,body.r360-runtime-active #detailView,body.r360-runtime-active #gameSettingsView,body.r360-runtime-active #appSettingsView{display:none!important;visibility:hidden!important;pointer-events:none!important}
+body.r360-runtime-active #runtimeView{display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important}
+
+/* Keep the boot surface and controls in the newly measured box after every turn. */
+#runtimeView .boot-overlay{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;display:grid!important;place-items:center!important;visibility:visible;z-index:8!important;padding:max(14px,var(--safe-top)) max(18px,var(--safe-right)) max(14px,var(--safe-bottom)) max(18px,var(--safe-left));overflow:hidden!important;background:#000!important}
+#runtimeView .boot-overlay.frame-live{visibility:hidden!important}
+#runtimeView .boot-card{position:relative!important;left:auto!important;top:auto!important;transform:none!important;width:min(420px,82vw)!important;max-width:82vw!important;max-height:78vh!important;margin:auto!important;overflow:hidden;text-align:center;z-index:1}
+#runtimeView .controller-layer{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;display:block!important;visibility:visible!important;z-index:10!important;pointer-events:none!important}
+#runtimeView .controller-layer .control,#runtimeView .controller-layer .stick{pointer-events:auto!important}
+body.r360-rotating #runtimeView .boot-overlay,body.r360-rotating #runtimeView .controller-layer{transition:none!important}
+
+/* Developer console stays a small safe-area button instead of stretching on rotation. */
+#runtimeView .runtime-stage .r360-console-fab{position:absolute!important;left:50%!important;right:auto!important;top:max(6px,var(--safe-top))!important;bottom:auto!important;transform:translateX(-50%)!important;width:46px!important;min-width:46px!important;max-width:46px!important;height:38px!important;min-height:38px!important;max-height:38px!important;padding:0!important;margin:0!important;border-radius:13px!important;z-index:28!important}
+
+@media (orientation:landscape) and (max-height:520px){
+  #runtimeView .boot-card{width:min(390px,58vw)!important;padding:10px 16px!important}
+  #runtimeView .spinner{width:28px;height:28px;margin-bottom:10px}
+  #runtimeView .boot-title{font-size:16px;line-height:1.15}
+  #runtimeView .boot-message{font-size:11px;line-height:1.3;margin-top:5px}
+  #runtimeView .boot-stage{font-size:9px;margin-top:6px}
+}
+@media (orientation:portrait){
+  #runtimeView .boot-card{width:min(390px,86vw)!important;max-width:86vw!important}
+  #runtimeView .controller-layer{transform:scale(var(--controller-scale,1))!important;transform-origin:center bottom!important}
+  #runtimeView .top-controls{top:max(10px,calc(var(--safe-top) + 4px))!important;left:max(12px,var(--safe-left))!important;right:max(12px,var(--safe-right))!important}
+  #runtimeView .left-controls{left:max(16px,var(--safe-left))!important;transform:none!important}
+  #runtimeView .right-controls{right:max(16px,var(--safe-right))!important;transform:none!important}
+}
+
+/* Deterministic Safari-safe system icons. */
 #settingsButton svg,#profileButton svg,#importButton svg{display:block!important;overflow:visible;fill:none!important;stroke:currentColor!important;stroke-linecap:round!important;stroke-linejoin:round!important}
 #settingsButton svg{width:24px!important;height:24px!important;stroke-width:1.8!important}
 #profileButton svg{width:28px!important;height:28px!important;stroke-width:1.65!important}
 #importButton svg{width:27px!important;height:27px!important;stroke-width:1.9!important}
 
-/* XeniOS-style chrome: actual Rendr360 DOM text, compact status pill, exact icon order. */
-#libraryView .nav-row{position:relative!important;align-items:flex-start!important;min-height:92px!important;padding-bottom:42px!important}
-#libraryView .r360-brand{display:flex!important;flex-direction:column!important;align-items:flex-start!important;justify-content:flex-start!important;gap:0!important;min-width:0!important;padding-top:1px}
-#libraryView .r360-brand>.nav-title{display:flex!important;align-items:baseline!important;min-height:25px!important;font-size:20px!important;line-height:1.05!important;font-weight:750!important;letter-spacing:-.5px!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important;color:var(--text)!important}
+/* XeniOS-like library chrome: brand first, short runtime pill below, actions right. */
+#libraryView .navbar{overflow:visible!important}
+#libraryView .nav-row{position:relative!important;align-items:flex-start!important;min-height:82px!important;padding-bottom:38px!important;overflow:visible!important}
+#libraryView .r360-brand{display:flex!important;flex-direction:column!important;align-items:flex-start!important;justify-content:flex-start!important;gap:0!important;min-width:0!important;min-height:28px!important;padding-top:1px!important;visibility:visible!important;opacity:1!important;overflow:visible!important}
+#libraryView .r360-brand>.nav-title{position:relative!important;z-index:2!important;display:flex!important;align-items:baseline!important;min-height:26px!important;font-size:20px!important;line-height:1.05!important;font-weight:750!important;letter-spacing:-.5px!important;white-space:nowrap!important;visibility:visible!important;opacity:1!important;color:var(--text,#f5f5f7)!important;overflow:visible!important}
 #libraryView .r360-brand>.nav-title::before,#libraryView .r360-brand>.nav-title::after{content:none!important;display:none!important}
-#libraryView .r360-brand>.nav-title .r360-name{display:inline!important;color:var(--text,#f5f5f7)!important;font-size:20px!important}
-#libraryView .r360-brand>.nav-title .r360-360{display:inline!important;color:var(--green,#30d158)!important;font-size:20px!important}
+#libraryView .r360-brand>.nav-title .r360-name{display:inline!important;visibility:visible!important;opacity:1!important;color:var(--text,#f5f5f7)!important;font-size:20px!important;line-height:1.05!important}
+#libraryView .r360-brand>.nav-title .r360-360{display:inline!important;visibility:visible!important;opacity:1!important;color:var(--green,#30d158)!important;font-size:20px!important;line-height:1.05!important}
 
-#libraryView .r360-brand .runtime-sync{position:absolute!important;left:0!important;right:0!important;bottom:2px!important;width:auto!important;min-height:34px!important;margin:0!important;padding:7px 10px!important;display:flex!important;align-items:center!important;gap:7px!important;border-radius:10px!important;background:rgba(118,118,128,.16)!important;border:1px solid rgba(255,255,255,.035)!important;color:var(--muted,#98989d)!important;overflow:hidden!important;white-space:nowrap!important;box-sizing:border-box!important}
-:root[data-theme="light"] #libraryView .r360-brand .runtime-sync{background:rgba(118,118,128,.10)!important;border-color:rgba(60,60,67,.04)!important}
+/* Same quiet rounded status treatment as the XeniOS JIT banner, but concise. */
+#libraryView .r360-brand .runtime-sync{position:absolute!important;left:0!important;right:0!important;bottom:1px!important;width:auto!important;min-width:0!important;min-height:32px!important;margin:0!important;padding:6px 10px!important;display:flex!important;align-items:center!important;gap:7px!important;border-radius:10px!important;background:rgba(118,118,128,.15)!important;border:1px solid rgba(255,255,255,.035)!important;color:var(--muted,#98989d)!important;overflow:hidden!important;white-space:nowrap!important;box-sizing:border-box!important}
+:root[data-theme="light"] #libraryView .r360-brand .runtime-sync{background:rgba(118,118,128,.09)!important;border-color:rgba(60,60,67,.04)!important}
 #libraryView .r360-brand .sync-dot{flex:0 0 auto!important;width:7px!important;height:7px!important}
-#libraryView #runtimeSyncText{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;font-size:0!important;line-height:1.25!important}
+#libraryView #runtimeSyncText{display:block!important;min-width:0!important;max-width:100%!important;overflow:hidden!important;text-overflow:clip!important;white-space:nowrap!important;font-size:0!important;line-height:1.25!important}
 #libraryView #runtimeSyncText::after{content:"Starting runtime…";font-size:12px!important;color:var(--muted,#98989d)!important;letter-spacing:-.1px}
-#libraryView .runtime-sync.ready #runtimeSyncText::after{content:"Runtime ready · Core V32"}
+#libraryView .runtime-sync.ready #runtimeSyncText::after{content:"Runtime V44 · Core V32"}
 #libraryView .runtime-sync.error #runtimeSyncText::after{content:"Runtime unavailable"}
 
-#libraryView .nav-actions{display:flex!important;flex-direction:row!important;align-items:center!important;gap:4px!important;padding-top:0!important}
+#libraryView .nav-actions{display:flex!important;flex-direction:row!important;align-items:center!important;gap:4px!important;padding-top:0!important;visibility:visible!important}
 #libraryView .nav-actions::before,#libraryView .nav-actions::after{content:none!important;display:none!important}
 #libraryView .nav-actions>#settingsButton{order:1!important}
 #libraryView .nav-actions>#profileButton{order:2!important}
@@ -36,6 +66,7 @@ html,body,#app{width:100%;height:var(--r360-vh,var(--app-height,100dvh));min-hei
 #profileButton{display:grid!important;place-items:center!important;width:36px!important;height:36px!important;flex:0 0 36px!important;padding:0!important;border:0!important;background:transparent!important;color:var(--muted,#98989d)!important;border-radius:10px!important}
 #profileButton:active{background:color-mix(in srgb,var(--surface3,#2c2c2e) 30%,transparent)!important;transform:scale(.93)}
 
+/* Xenia-like settings hierarchy. */
 .r360-advanced-settings{margin:24px 0 8px;border:0;background:transparent}
 .r360-advanced-settings>summary{list-style:none;min-height:54px;margin:0;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-radius:12px;background:var(--surface);color:var(--text);font-size:15px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .r360-advanced-settings>summary::-webkit-details-marker{display:none}

@@ -1,10 +1,12 @@
-const VERSION='44.23';
+const VERSION='44.24';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
   './manifest.webmanifest',
   './render360-app-icon.svg',
   './rendr360-apple-touch-icon.png',
+  './rendr360-apple-touch-icon.svg',
+  './ui-v44-mobile-fix-v24.css',
 ];
 
 self.addEventListener('install',event=>{
@@ -68,11 +70,6 @@ self.addEventListener('fetch',event=>{
   const request=event.request;
   if(request.method!=='GET'||!sameOrigin(request))return;
   if(request.mode==='navigate'){event.respondWith(navigation(event));return;}
-  // Emulator JavaScript and WebAssembly are deliberately network-first and
-  // never stored in the shell cache. This prevents an old service worker from
-  // resurrecting stale PPC/Xenos binaries after a Rendr360 deployment.
   if(isMutableRuntime(request)){event.respondWith(networkFirstNoStore(request));return;}
-  // UI assets are network-first too. This prevents an older cached stylesheet
-  // from briefly restoring an obsolete header/order after a new deployment.
   if(isShellAsset(request))event.respondWith(shellAsset(request));
 });

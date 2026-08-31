@@ -5,6 +5,7 @@ const runtime=readFileSync('rendr360-mobile-runtime-fix.mjs','utf8');
 const css=readFileSync('ui-v44-mobile-fix-v25.css','utf8');
 const manifest=readFileSync('manifest.webmanifest','utf8');
 const sw=readFileSync('render360-sw.js','utf8');
+const storage=readFileSync('storage/game-storage.js','utf8');
 
 assert.match(runtime,/ui-v44-mobile-fix-v25\.css\?v=44\.25/,'V44.25 authoritative mobile stylesheet must load last');
 assert.ok(runtime.includes("root.dataset.r360MobileFix='44.25'"),'runtime recovery version must be V44.25');
@@ -24,6 +25,9 @@ assert.ok(css.includes('left:0!important;top:0!important'),'runtime CSS must rem
 const manifestJson=JSON.parse(manifest);
 assert.equal(manifestJson.name,'Rendr360');
 assert.ok(manifestJson.icons.some(icon=>String(icon.src).includes('rendr360-apple-touch-icon.png')),'manifest must expose the Rendr360 PNG icon');
-assert.ok(sw.includes("const VERSION='44.25'"),'service worker must evict the prior mobile shell cache');
+assert.ok(sw.includes("const VERSION='44.26'"),'service worker must evict the prior shell cache');
+assert.ok(sw.includes('fetchBounded')&&sw.includes('runtimeAsset')&&sw.includes('RUNTIME_CACHE'),'startup resources must use bounded cached fetches rather than unbounded network-only loading');
+assert.ok(sw.includes("cache.match('./index.html')")&&sw.includes('if(cached){network.catch'),'navigation must paint cached HTML immediately while refreshing in the background');
+assert.ok(storage.includes('return stored;')&&!storage.includes('return new File([stored]'),'persistent restore must not duplicate large game blobs during app startup');
 
-console.log('RENDR360_MOBILE_V25_CONTRACT=PASS');
+console.log('RENDR360_MOBILE_V26_STARTUP_CONTRACT=PASS');

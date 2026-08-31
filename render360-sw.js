@@ -1,4 +1,4 @@
-const VERSION='44.27';
+const VERSION='44.28';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const RUNTIME_CACHE=`render360-runtime-v${VERSION}`;
 const SHELL_ASSETS=[
@@ -12,11 +12,20 @@ const SHELL_ASSETS=[
   './app-v42-patch.js?v=44.18',
   './rendr360-mobile-runtime-fix.mjs?v=44.23',
 ];
+const RUNTIME_ASSETS=[
+  './render360_xenia_core.wasm?v=44.28',
+  './wasm-core-v32.js?v=44.10',
+  './runtime/render360-runtime.js?v=44.10',
+  './render360-browser-modern-content-bridge.mjs?v=44.10',
+];
 
 self.addEventListener('install',event=>{
   event.waitUntil((async()=>{
-    const cache=await caches.open(SHELL_CACHE);
-    await Promise.allSettled(SHELL_ASSETS.map(url=>cache.add(new Request(url,{cache:'reload'}))));
+    const [shell,runtime]=await Promise.all([caches.open(SHELL_CACHE),caches.open(RUNTIME_CACHE)]);
+    await Promise.allSettled(SHELL_ASSETS.map(url=>shell.add(new Request(url,{cache:'reload'}))));
+    // Warm the expensive core in the background of SW installation so the next
+    // page boot can compile from local bytes instead of waiting on GitHub Pages.
+    await Promise.allSettled(RUNTIME_ASSETS.map(url=>runtime.add(new Request(url,{cache:'reload'}))));
     await self.skipWaiting();
   })());
 });
@@ -32,6 +41,7 @@ self.addEventListener('activate',event=>{
 
 function sameOrigin(request){try{return new URL(request.url).origin===self.location.origin;}catch{return false;}}
 function isMutableRuntime(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:m?js|wasm)$/.test(pathname);}
+function isWasm(request){return new URL(request.url).pathname.toLowerCase().endsWith('.wasm');}
 function isShellAsset(request){const pathname=new URL(request.url).pathname.toLowerCase();return /\.(?:css|svg|webmanifest|png|jpg|jpeg|webp)$/.test(pathname);}
 async function fetchBounded(request,ms=2500){
   const controller=new AbortController();
@@ -43,14 +53,16 @@ async function fetchBounded(request,ms=2500){
 async function runtimeAsset(request){
   const cache=await caches.open(RUNTIME_CACHE);
   const cached=await cache.match(request);
+  if(cached){
+    // Zero startup wait when a versioned runtime asset is already local.
+    fetchBounded(request,isWasm(request)?12000:3500).then(response=>{if(response?.ok)cache.put(request,response.clone()).catch(()=>{});}).catch(()=>{});
+    return cached;
+  }
   try{
-    const response=await fetchBounded(request,cached?1000:3500);
+    const response=await fetchBounded(request,isWasm(request)?15000:5000);
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
-  }catch{
-    if(cached)return cached;
-    return Response.error();
-  }
+  }catch{return Response.error();}
 }
 
 async function shellAsset(request){

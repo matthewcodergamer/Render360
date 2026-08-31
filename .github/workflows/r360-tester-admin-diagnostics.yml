@@ -1,0 +1,65 @@
+name: Render360 admin diagnostics publish gate
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tester-diagnostics-admin-v44.mjs'
+      - 'tester-diagnostics-v44.mjs'
+      - 'test-tester-diagnostics-admin.mjs'
+      - 'app-v42-patch.js'
+      - 'index.html'
+      - '.github/workflows/r360-tester-admin-diagnostics.yml'
+permissions:
+  contents: write
+jobs:
+  wire-and-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wire admin diagnostics and publish cache-bust
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          diag = Path('tester-diagnostics-v44.mjs')
+          text = diag.read_text()
+          line = "import './tester-diagnostics-admin-v44.mjs?v=44.18';\n"
+          if 'tester-diagnostics-admin-v44.mjs' not in text:
+              text = line + text
+          else:
+              text = re.sub(r"import './tester-diagnostics-admin-v44\.mjs\?v=[^']+';\n?", line, text)
+          diag.write_text(text)
+
+          app = Path('app-v42-patch.js')
+          text = app.read_text()
+          text = re.sub(r"tester-diagnostics-v44\.mjs\?v=[0-9.]+", 'tester-diagnostics-v44.mjs?v=44.18', text)
+          app.write_text(text)
+
+          html = Path('index.html')
+          text = html.read_text()
+          text = re.sub(r"app-v42-patch\.js\?v=[0-9.]+", 'app-v42-patch.js?v=44.18', text)
+          html.write_text(text)
+          PY
+      - name: Syntax check diagnostics modules
+        run: |
+          node --check tester-diagnostics-v44.mjs
+          node --check tester-diagnostics-admin-v44.mjs
+      - name: Existing tester diagnostics critic
+        run: node test-tester-diagnostics.mjs
+      - name: Admin diagnostics harsh critic
+        run: node test-tester-diagnostics-admin.mjs
+      - name: Commit wired diagnostics when changed
+        run: |
+          if git diff --quiet; then
+            echo 'Diagnostics wiring already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tester-diagnostics-v44.mjs app-v42-patch.js index.html
+          git commit -m 'feat: publish admin tester diagnostics V44.18'
+          git push

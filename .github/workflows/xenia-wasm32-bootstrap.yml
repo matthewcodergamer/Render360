@@ -68,11 +68,11 @@ on:
       - 'test-xex-guest-mapper.mjs'
       - 'wasm-backend-function-cache.mjs'
       - 'render360_xenia_core.cpp'
-      - 'render360_xenia_core_v32.cpp'
+      - 'package-core.cpp'
       - 'render360_xenia_core.wasm'
       - 'render360_xenia_core_embedded.js'
       - 'build-core.sh'
-      - 'wasm-core-v32.js'
+      - 'wasm-core.js'
       - 'xenia_port/**'
       - 'prepare-xenia-*-overlay.py'
       - 'prepare-render360-*-overlay.py'
@@ -84,6 +84,7 @@ on:
       - 'test-xenia-ppc-translation-probe.mjs'
       - 'src/xenia_web_shims/**'
       - 'src/xenia_web_bootstrap/**'
+      - 'src/xenia/**'
       - 'README.md'
       - 'XENIA_WEB_BOOTSTRAP.md'
       - 'WASM_BACKEND_FOUNDATION.md'
@@ -93,7 +94,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   xenia-wasm32-bootstrap:
@@ -102,7 +103,7 @@ jobs:
     steps:
       - name: Checkout Render360
         uses: actions/checkout@v4
-      - name: Rebuild V32 package/XEX WASM core from source
+      - name: Rebuild package/XEX WASM core from source
         run: bash ./build-core.sh
       - name: Verify STFS/XEX package foundation
         run: node ./test-package-xex-foundation.mjs
@@ -186,34 +187,53 @@ jobs:
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify sparse title RAM, far PPC paging, Xenos MMIO and captured ring submission
         run: node ./test-title-gpu-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-      - name: Verify locked foundations and V36 XEX bring-up
+      - name: Verify locked foundations and XEX bring-up
         run: |
-          if [ -f build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ]; then
-            node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-calls.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-fpu.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-fpu-semantics.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-vmx.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-cache.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-wasm-backend-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-sparse-guest-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-            node ./test-xex-real-mapper-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-          else
-            echo 'Runtime gate pending: strict link has not produced xenia_ppc_bootstrap.wasm yet.'
-          fi
+          node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-guest-control-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-fpu-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-vmx-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-calls.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-fpu.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-fpu-semantics.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-vmx.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-cache.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-wasm-backend-foundation.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-sparse-guest-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          node ./test-xex-real-mapper-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Show compile and link state
         if: always()
         run: |
           if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then cat build/xenia-ppc-bootstrap/report.tsv; else echo 'No compile report generated.'; fi
           echo
           if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then cat build/xenia-ppc-bootstrap/link-report.txt; else echo 'No link report generated.'; fi
+      - name: Publish verified browser bootstrap
+        if: success()
+        run: |
+          cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ./xenia_ppc_bootstrap.wasm
+          SHA256="$(sha256sum ./xenia_ppc_bootstrap.wasm | awk '{print $1}')"
+          BYTES="$(stat -c%s ./xenia_ppc_bootstrap.wasm)"
+          cat > xenia_ppc_bootstrap.meta.json <<EOF
+          {
+            "sourceCommit": "${GITHUB_SHA}",
+            "sourceRun": "${GITHUB_RUN_ID}",
+            "sha256": "${SHA256}",
+            "bytes": ${BYTES},
+            "runtimeFix": "verified-main-bootstrap",
+            "browserCache": "${GITHUB_SHA::12}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build: publish verified Xenia bootstrap [skip ci]"
+            git push origin HEAD:main
+          fi
       - name: Upload bootstrap report
         if: always()
         uses: actions/upload-artifact@v4

@@ -11,6 +11,22 @@
   <link rel="icon" href="render360-app-icon.svg" type="image/svg+xml">
   <link rel="mask-icon" href="render360-app-icon.svg" color="#30D158">
   <link rel="manifest" href="manifest.webmanifest">
+  <style id="r360-first-paint">
+    :root{--app-width:100vw;--app-height:100dvh}
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#000}
+    #app{width:var(--app-width);height:var(--app-height);min-height:0!important;overflow:hidden}
+    #libraryView .nav-row{min-width:0}
+    #libraryView .r360-brand{display:flex;min-width:0;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px}
+    #libraryView .r360-brand>.nav-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #libraryView .r360-brand .runtime-sync{margin:0;min-height:12px;max-width:min(62vw,360px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #libraryView .r360-library-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    #libraryView .nav-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+    #settingsButton,#profileButton,#importButton{pointer-events:auto;touch-action:manipulation;flex:0 0 36px}
+    @media(max-width:430px){#libraryView .r360-brand .runtime-sync{max-width:55vw}.view{max-width:100%}}
+  </style>
+  <script>
+    (()=>{const apply=()=>{const v=window.visualViewport;const w=Math.max(1,Math.round(v?.width||window.innerWidth||document.documentElement.clientWidth||1));const h=Math.max(1,Math.round(v?.height||window.innerHeight||document.documentElement.clientHeight||1));document.documentElement.style.setProperty('--app-width',w+'px');document.documentElement.style.setProperty('--app-height',h+'px');};apply();window.__r360ApplyViewport=apply;})();
+  </script>
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/interactions.css">
   <link rel="stylesheet" href="styles/xenios.css" data-r360-ui="xenios">
@@ -20,11 +36,11 @@
 <div id="app">
   <section id="libraryView" class="view">
     <div class="navbar">
-      <div class="nav-row"><div class="nav-title">Render360</div><div class="nav-actions"><button id="settingsButton" class="ios-icon-button" type="button" aria-label="Settings"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25"/><path d="M19.1 13.3c.1-.4.1-.9.1-1.3s0-.9-.1-1.3l2-1.55-2-3.45-2.48 1a7.8 7.8 0 0 0-2.25-1.3L14 2.75h-4l-.38 2.65a7.8 7.8 0 0 0-2.25 1.3l-2.47-1-2 3.45 2 1.55c-.07.43-.1.87-.1 1.3s.03.87.1 1.3l-2 1.55 2 3.45 2.47-1a7.8 7.8 0 0 0 2.25 1.3L10 21.25h4l.37-2.65a7.8 7.8 0 0 0 2.25-1.3l2.48 1 2-3.45-2-1.55Z"/></svg></button><button id="importButton" class="ios-icon-button" type="button" aria-label="Import Game"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button></div></div>
-      <div class="nav-title large">Library</div>
+      <div class="nav-row"><div class="r360-brand"><div class="nav-title">Render360</div><div id="runtimeSyncStatus" class="runtime-sync"><span class="sync-dot"></span><span id="runtimeSyncText">Starting emulator…</span></div></div><div class="nav-actions"><button id="settingsButton" class="ios-icon-button" type="button" aria-label="Settings"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25"/><path d="M19.1 13.3c.1-.4.1-.9.1-1.3s0-.9-.1-1.3l2-1.55-2-3.45-2.48 1a7.8 7.8 0 0 0-2.25-1.3L14 2.75h-4l-.38 2.65a7.8 7.8 0 0 0-2.25 1.3l-2.47-1-2 3.45 2 1.55c-.07.43-.1.87-.1 1.3s.03.87.1 1.3l-2 1.55 2 3.45 2.47-1a7.8 7.8 0 0 0 2.25 1.3L10 21.25h4l.37-2.65a7.8 7.8 0 0 0 2.25-1.3l2.48 1 2-3.45-2-1.55Z"/></svg></button><button id="profileButton" class="ios-icon-button" type="button" aria-label="Profile" title="Profile"><svg class="r360-svg-icon r360-profile-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.25"/><circle cx="12" cy="9" r="3.1"/><path d="M5.8 18.5c1.35-3.1 3.45-4.65 6.2-4.65s4.85 1.55 6.2 4.65"/></svg></button></div></div>
+      <div class="r360-library-title-row"><div class="nav-title large">Library</div><button id="importButton" class="ios-icon-button" type="button" aria-label="Import Game"><svg class="r360-svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button></div>
       <div class="search-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg><input id="librarySearch" class="search-input" type="search" placeholder="Search Games" autocomplete="off"></div>
     </div>
-    <div class="library-content"><div id="runtimeSyncStatus" class="runtime-sync"><span class="sync-dot"></span><span id="runtimeSyncText">Starting emulator…</span></div><div id="gameGrid" class="game-grid"></div><div id="emptyLibrary" class="empty-library"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"></path><path d="M8 10h2M9 9v2M15 10h.01M17 12h.01"></path></svg></div><h2>No Games Yet</h2><p>Import an Xbox 360 ISO, XEX, LIVE/PIRS/CON package, or a ZIP containing one of those formats.</p><button id="emptyImportButton" class="primary" type="button">Import Game</button></div></div>
+    <div class="library-content"><div id="gameGrid" class="game-grid"></div><div id="emptyLibrary" class="empty-library"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"></path><path d="M8 10h2M9 9v2M15 10h.01M17 12h.01"></path></svg></div><h2>No Games Yet</h2><p>Import an Xbox 360 ISO, XEX, LIVE/PIRS/CON package, or a ZIP containing one of those formats.</p><button id="emptyImportButton" class="primary" type="button">Import Game</button></div></div>
   </section>
 
   <section id="detailView" class="view hidden"><div class="detail-nav"><button id="detailBack" class="text-button" type="button">‹ Library</button><button id="gameSettingsButton" class="text-button" type="button">Game Settings</button></div><div class="detail-body"><div class="detail-hero"><div><div id="detailCover" class="detail-cover"></div><button id="chooseCoverButton" class="cover-action" type="button">Choose Cover</button></div><div class="detail-info"><h1 id="detailName">Xbox 360 Game</h1><div class="detail-sub">Title ID <span id="detailTitleId">Unknown</span></div><div class="detail-sub">Media ID <span id="detailMediaId">Unknown</span></div><div id="detailCompatibility" class="compat-pill">Testing</div><button id="playGameButton" class="play-button" type="button">Play</button></div></div><div class="group-title">Game</div><div class="group"><div class="row"><span>Content</span><span id="detailType" class="value">—</span></div><div class="row"><span>Size</span><span id="detailSize" class="value">—</span></div><div class="row"><span>Source</span><span id="detailSource" class="value">—</span></div><div class="row"><span>Storage</span><span id="detailStorage" class="value">—</span></div></div><div class="group-title">Manage</div><div class="group"><button id="relinkGameButton" class="row row-button" type="button"><span>Choose / Replace Game File</span><span class="chev">›</span></button><button id="diagnosticsButton" class="row row-button" type="button"><span>Diagnostics</span><span class="chev">›</span></button><button id="deleteGameButton" class="row row-button danger" type="button"><span>Remove from Library</span><span></span></button></div></div></section>

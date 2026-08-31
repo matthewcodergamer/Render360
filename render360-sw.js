@@ -1,4 +1,4 @@
-const VERSION='44.24';
+const VERSION='44.25';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
@@ -6,7 +6,7 @@ const SHELL_ASSETS=[
   './render360-app-icon.svg',
   './rendr360-apple-touch-icon.png',
   './rendr360-apple-touch-icon.svg',
-  './ui-v44-mobile-fix-v24.css',
+  './ui-v44-mobile-fix-v25.css',
 ];
 
 self.addEventListener('install',event=>{

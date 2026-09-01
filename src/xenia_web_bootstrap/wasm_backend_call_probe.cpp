@@ -232,6 +232,38 @@ bool EmitI64Value(const Value* value, const Producers& producers,
       ok = true;
       break;
     }
+    case xe::cpu::hir::OPCODE_BYTE_SWAP: {
+      const uint32_t size = ScalarTypeSize(value->type);
+      if (!size || !instr->src1.value) break;
+      // Xenia materializes PPC big-endian scalar loads as LOAD_OFFSET followed
+      // by BYTE_SWAP. Keep this in the same callable generated-WASM tier so a
+      // loaded function pointer can flow directly into mtctr / CALL_INDIRECT.
+      // This is fail-closed to integer scalar values admitted by ScalarTypeSize.
+      for (uint32_t byte = 0; byte < size; ++byte) {
+        if (!EmitI64Value(instr->src1.value, producers, visiting, body, lowered)) {
+          ok = false;
+          break;
+        }
+        if (byte) {
+          body.push_back(0x42);
+          EmitI64Leb(body, static_cast<int64_t>(byte * 8u));
+          body.push_back(0x88);  // i64.shr_u
+        }
+        body.push_back(0x42);
+        EmitI64Leb(body, 0xFF);
+        body.push_back(0x83);  // i64.and
+        const uint32_t target_byte = size - 1u - byte;
+        if (target_byte) {
+          body.push_back(0x42);
+          EmitI64Leb(body, static_cast<int64_t>(target_byte * 8u));
+          body.push_back(0x86);  // i64.shl
+        }
+        if (byte) body.push_back(0x84);  // i64.or
+        ok = true;
+      }
+      if (ok) EmitI64Mask(body, value->type);
+      break;
+    }
     case xe::cpu::hir::OPCODE_ADD:
     case xe::cpu::hir::OPCODE_SUB:
     case xe::cpu::hir::OPCODE_AND:
@@ -343,6 +375,7 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
                instr->opcode->num == xe::cpu::hir::OPCODE_TRUNCATE ||
                instr->opcode->num == xe::cpu::hir::OPCODE_LOAD ||
                instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_BYTE_SWAP ||
                instr->opcode->num == xe::cpu::hir::OPCODE_ADD ||
                instr->opcode->num == xe::cpu::hir::OPCODE_SUB ||
                instr->opcode->num == xe::cpu::hir::OPCODE_AND ||

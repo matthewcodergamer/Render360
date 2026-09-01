@@ -18,6 +18,8 @@ on:
       - 'runtime/render360-runtime.js'
       - 'runtime/recompiled-title-runtime.js'
       - 'settings/execution-engine.js'
+      - 'runtime-host.js'
+      - 'runtime-worker.js'
   workflow_dispatch:
 
 jobs:
@@ -43,7 +45,7 @@ jobs:
           grep -q 'src="ui-behavior.js"' index.html
           grep -Fq "import('../wasm-core.js')" runtime/render360-runtime.js
           grep -q "from '../runtime-host.js'" runtime/render360-runtime.js
-          grep -q "from './runtime-worker.js'" runtime-host.js
+          grep -Fq "new URL('./runtime-worker.js', import.meta.url)" runtime-host.js
           grep -q "from './wasm-core.js'" runtime-worker.js
           grep -q 'xenia_ppc_bootstrap.wasm' render360-browser-title-runtime.mjs
           grep -q "recompiled-title-runtime.js" settings/execution-engine.js

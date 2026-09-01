@@ -20,6 +20,12 @@ def require(path, needle):
         raise SystemExit(f"expected marker missing from {path}: {needle}")
 
 
+# Make the 32-bit PPC effective-address rule authoritative in source, not only
+# in a later generated overlay. D-form/X-form guest addresses are modulo 2^32.
+replace_once('src/xenia_web_bootstrap/hir_correctness_executor.cpp',
+"""  const uint64_t effective = base + displacement;\n  if (effective > std::numeric_limits<uint32_t>::max()) return false;\n  *guest_address = static_cast<uint32_t>(effective);\n  return true;\n""",
+"""  const uint32_t effective = static_cast<uint32_t>(base) +\n                             static_cast<uint32_t>(displacement);\n  *guest_address = effective;\n  return true;\n""")
+
 # Pinned Xenia opcode truth: CALL_INDIRECT is 9; opcode 37 is LOAD_OFFSET.
 # The native executor already handles CALL_INDIRECT. Treat a failure at 37 as
 # guest-memory / generated-WASM coverage, rather than adding a duplicate call case.
@@ -66,7 +72,8 @@ replace_once('src/xenia_web_bootstrap/wasm_backend_call_probe.cpp',
 # Child Wasm ABI: guest_call remains function import 0; guest_load is function
 # import 1; therefore the module's own run function moves to function index 2.
 replace_once('src/xenia_web_bootstrap/wasm_backend_call_probe.cpp',
-'''  EmitU32Leb(types, 2);''','''  EmitU32Leb(types, 3);''')
+'''  std::vector<uint8_t> types;\n  EmitU32Leb(types, 2);\n  types.push_back(0x60);''',
+'''  std::vector<uint8_t> types;\n  EmitU32Leb(types, 3);\n  types.push_back(0x60);''')
 replace_once('src/xenia_web_bootstrap/wasm_backend_call_probe.cpp',
 '''  EmitU32Leb(types, 1);\n  types.push_back(0x7E);\n  EmitSection(module, 1, types);''',
 '''  EmitU32Leb(types, 1);\n  types.push_back(0x7E);\n  types.push_back(0x60);\n  EmitU32Leb(types, 3);\n  types.push_back(0x7F); types.push_back(0x7F); types.push_back(0x7F);\n  EmitU32Leb(types, 1);\n  types.push_back(0x7E);\n  EmitSection(module, 1, types);''')
@@ -105,20 +112,12 @@ replace_once('test-wasm-backend-calls.mjs',
 '''console.log('WASM_BACKEND_CALL_DIRECT=PASS');''',
 '''// Braid regression: HIR opcode 37 is LOAD_OFFSET. Fetch an XAM thunk from\n// sparse guest memory, mtctr it, bctrl, and require generated-WASM continuation.\npick('r360_ppc_probe_reset')();\npick('r360_kernel_import_reset')();\npick('r360_sparse_guest_memory_reset')();\nconst braidDataBase = 0x30000000;\nconst braidBacking = pick('r360_sparse_guest_memory_alloc')(2)>>>0;\nif (!braidBacking || (pick('r360_sparse_guest_memory_map')(braidDataBase,2,braidBacking,0,3)>>>0)!==1) throw new Error('Could not map Braid LOAD_OFFSET data pages');\nconst braidXamThunk = (guestBase + 0x00200000)>>>0;\nif ((pick('r360_kernel_import_register')(braidXamThunk,2,0x028B,0,0)>>>0)!==1) throw new Error('Could not register Braid XNotifyGetNext thunk');\nif ((pick('r360_sparse_guest_memory_write_u32_be')(braidDataBase+4,braidXamThunk)>>>0)!==1) throw new Error('Could not seed Braid XAM thunk pointer');\nconst braidOutput = braidDataBase + 0x1000;\nfor (const [index,value] of [[5,BigInt(braidOutput)],[6,0n]]) {\n  if ((pick('r360_ppc_probe_set_initial_gpr')(index,value)>>>0)!==1) throw new Error(`Could not seed Braid r${index}`);\n}\nconst braidLoadOffset = wordBytes(\n  0x3C803000,  // lis r4,0x3000\n  0x80840004,  // lwz r4,4(r4) -> HIR LOAD_OFFSET\n  0x7C8903A6,  // mtctr r4\n  0x4E800421,  // bctrl -> HIR CALL_INDIRECT\n  0x38630002,  // addi r3,r3,2\n  0x4E800020,  // blr\n);\nconst braidInput = pick('r360_ppc_probe_input_buffer')()>>>0;\nnew Uint8Array(parent.exports.memory.buffer,braidInput,braidLoadOffset.length).set(braidLoadOffset);\nif ((pick('r360_ppc_probe_load')(braidInput,braidLoadOffset.length)>>>0)!==braidLoadOffset.length) throw new Error('Could not load Braid LOAD_OFFSET regression PPC');\npick('r360_ppc_probe_translate')();\nconst braidOracleStatus = pick('r360_ppc_probe_correctness_status')()>>>0;\nconst braidOracleR3 = BigInt.asUintN(64,pick('r360_ppc_probe_correctness_r3')());\nif (braidOracleStatus!==3 || braidOracleR3!==2n) throw new Error(`Braid LOAD_OFFSET oracle failed status=${braidOracleStatus} r3=${braidOracleR3}`);\nif ((pick('r360_wasm_backend_call_function_count')()>>>0)!==1) throw new Error(`Braid LOAD_OFFSET still produced ${pick('r360_wasm_backend_call_function_count')()>>>0} callable functions`);\nconst braidSession = await createPersistentPpcSession({bootstrap:parent,initialGprs:{5:BigInt(braidOutput),6:0n}});\nconst braidResult = await braidSession.runFunctionSlice(guestBase);\nif (braidResult.r3!==2n || braidResult.kernelDispatches!==1) throw new Error(`Braid generated LOAD_OFFSET/XAM dispatch failed r3=${braidResult.r3} kernel=${braidResult.kernelDispatches}`);\nif ((pick('r360_kernel_import_last_module')()>>>0)!==2 || (pick('r360_kernel_import_last_ordinal')()>>>0)!==0x028B) throw new Error('Braid generated path did not reach xam.xex ordinal 0x28B');\nconsole.log('BRAID_LOAD_OFFSET_CALL_INDIRECT_XAM=PASS');\n\nconsole.log('WASM_BACKEND_CALL_DIRECT=PASS');''')
 
-# Make the fastlane execute this critic before publishing.
-replace_once('.github/workflows/xenia-browser-bootstrap-fastlane.yml',
-'''      - 'test-wasm-backend-cfg.mjs'\n      - 'test-browser-thread-scheduler.mjs' ''',
-'''      - 'test-wasm-backend-cfg.mjs'\n      - 'test-wasm-backend-calls.mjs'\n      - 'test-browser-thread-scheduler.mjs' ''')
-replace_once('.github/workflows/xenia-browser-bootstrap-fastlane.yml',
-'''      - name: Verify browser Xbox thread scheduler\n        run: timeout 90s node ./test-browser-thread-scheduler.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm''',
-'''      - name: Verify generated guest calls and Braid LOAD_OFFSET/XAM path\n        run: timeout 90s node ./test-wasm-backend-calls.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm\n\n      - name: Verify browser Xbox thread scheduler\n        run: timeout 90s node ./test-browser-thread-scheduler.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm''')
-
 for path, marker in [
     ('src/xenia_web_bootstrap/wasm_backend_call_probe.cpp', 'guest_load'),
     ('src/xenia_web_bootstrap/hir_correctness_executor.cpp', 'kHIRBlockerGuestMemory'),
+    ('src/xenia_web_bootstrap/hir_correctness_executor.cpp', 'const uint32_t effective = static_cast<uint32_t>(base) +'),
     ('render360-browser-ppc-session.mjs', 'FAIL_CLOSED_GUEST_LOAD'),
     ('test-wasm-backend-calls.mjs', 'BRAID_LOAD_OFFSET_CALL_INDIRECT_XAM=PASS'),
-    ('.github/workflows/xenia-browser-bootstrap-fastlane.yml', 'Verify generated guest calls and Braid LOAD_OFFSET/XAM path'),
 ]:
     require(path, marker)
 

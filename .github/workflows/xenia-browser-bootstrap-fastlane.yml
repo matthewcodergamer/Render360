@@ -13,6 +13,7 @@ on:
       - 'test-wasm-backend-cfg.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
+      - 'test-hir-load-offset-addressing.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -69,6 +70,9 @@ jobs:
 
       - name: Verify direct calls page executable sparse subwindows
         run: timeout 90s node ./test-direct-call-sparse-window.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify signed PPC LOAD_OFFSET effective addresses
+        run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

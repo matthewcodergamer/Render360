@@ -56,6 +56,9 @@ export async function runRecompiledTitle({runtime,game,file,config={},probe=null
   if(!session||typeof session!=='object')throw new Error('Recompiled adapter did not return a title session.');
   runtime.recompiledSession=session;
   runtime.backend='RECOMPILED WASM';
+  host.state.stop=()=>{
+    try{session.stop?.();}finally{if(runtime.recompiledSession===session)runtime.recompiledSession=null;}
+  };
   runtime.emit('bootStage',{stage:'recompiled-start',engine:'recompiled',message:'Starting ahead-of-time recompiled title…'});
   let result={};
   if(typeof session.start==='function')result=await session.start();

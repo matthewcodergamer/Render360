@@ -18,6 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # This isolates overlay surgery from the full 98-unit bootstrap matrix.
           docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:latest bash -lc '
             set -euo pipefail
             apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null

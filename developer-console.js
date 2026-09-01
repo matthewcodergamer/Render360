@@ -39,6 +39,38 @@ function compactBlocker(detail){
     ordinal:present(source.ordinal)?`0x${Number(source.ordinal).toString(16).toUpperCase()}`:undefined,
   });
 }
+function memoryDiagnostics(state,result){
+  const bootstrap=state?.bootstrap,exp=bootstrap?.exports||{};
+  const fn=name=>{const value=exp[name]??exp[`_${name}`];return typeof value==='function'?value:null;};
+  const faultAddressFn=fn('r360_sparse_guest_memory_last_fault_address');
+  const faultCodeFn=fn('r360_sparse_guest_memory_last_fault_code');
+  const mappedPagesFn=fn('r360_sparse_guest_memory_mapped_pages');
+  const backingPagesFn=fn('r360_sparse_guest_memory_backing_pages');
+  // Snapshot the sparse fault before reading instruction bytes: successful
+  // diagnostic reads intentionally clear SparseGuestMemory's last fault.
+  const faultAddress=faultAddressFn?(faultAddressFn()>>>0):undefined;
+  const faultCode=faultCodeFn?(faultCodeFn()>>>0):undefined;
+  const blockerAddress=number(result?.executionBlockerAddress);
+  let instructionWord,primaryOpcode,rt,ra,displacement;
+  const read8=fn('r360_sparse_guest_memory_read_u8');
+  if(read8&&blockerAddress!==undefined){
+    const a=blockerAddress>>>0;
+    const bytes=[0,1,2,3].map(i=>read8((a+i)>>>0)>>>0);
+    instructionWord=((bytes[0]<<24)|(bytes[1]<<16)|(bytes[2]<<8)|bytes[3])>>>0;
+    primaryOpcode=instructionWord>>>26;rt=(instructionWord>>>21)&31;ra=(instructionWord>>>16)&31;
+    displacement=(instructionWord<<16)>>16;
+  }
+  const faultNames={0:'none',1:'unmapped',2:'read-protection',3:'write-protection',4:'invalid-argument',5:'already-mapped'};
+  const context=result?.mainThreadContext||{};
+  return compact({
+    faultAddress:faultAddress===undefined?undefined:address(faultAddress),
+    faultCode,faultName:faultCode===undefined?undefined:(faultNames[faultCode]||`fault-${faultCode}`),
+    blockerInstruction:instructionWord===undefined?undefined:`0x${instructionWord.toString(16).toUpperCase().padStart(8,'0')}`,
+    ppcPrimaryOpcode:primaryOpcode,rt,ra,displacement,
+    mappedPages:mappedPagesFn?(mappedPagesFn()>>>0):undefined,backingPages:backingPagesFn?(backingPagesFn()>>>0):undefined,
+    stackTop:address(context.stackTop),stackLimit:address(context.stackLimit),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
+  });
+}
 function addEntry(level,message){
   if(!enabled)return;
   const next={at:Date.now(),level:String(level||'info'),message:String(message||'')};
@@ -72,7 +104,7 @@ function installEntryPoints(){
 }
 function removeEntryPoints(){$('r360RuntimeConsole')?.remove();$('appDeveloperConsoleButton')?.remove();$('r360DevConsole')?.classList.add('hidden');opened=false;}
 function render(){
-  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
+  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.memory?.faultName&&`memory: ${summary.memory.faultName} @ ${summary.memory.faultAddress||'—'} · PPC ${summary.memory.blockerInstruction||'—'}`,present(summary.memory?.ra)&&`PPC operands: rA=${summary.memory.ra} rT=${summary.memory.rt??'—'} disp=${summary.memory.displacement??'—'}`,summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
   if(!log)return;log.innerHTML='';for(const e of entries){const row=document.createElement('div');row.className=`r360-dev-line ${e.level}`;row.innerHTML='<time></time><strong></strong><span></span>';row.children[0].textContent=new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});row.children[1].textContent=e.level.toUpperCase();row.children[2].textContent=`${e.message}${e.count>1?` ×${e.count}`:''}`;log.appendChild(row);}if(!entries.length)log.innerHTML='<div class="r360-dev-line"><span></span><strong>INFO</strong><span>No runtime events captured yet.</span></div>';
 }
 function report(){
@@ -83,12 +115,14 @@ function report(){
   const gpu=state.gpuTraffic||result.titleGpuTelemetry||result.browserHleTelemetry||{};
   const kernelBlocker=result.reachedKernelBlocker||result.firstKernelBlocker||null;
   const blocker=Object.keys(lastBlocker||{}).length?lastBlocker:compactBlocker(state.schedulerBlocker||result.executionBlocker||kernelBlocker);
+  const memory=memoryDiagnostics(state,result);
   return {
     schema:'render360-blocker-report-v1',
     generatedAt:new Date().toISOString(),
     page:compact({path:location.pathname,state:document.body.dataset.state||undefined}),
     runtimeAsset:globalThis.render360PpcRuntimeIdentity||null,
     blocker:Object.keys(blocker).length?blocker:null,
+    memory:Object.keys(memory).length?memory:null,
     cpu:compact({
       entry:address(result.entry),hir:number(result.hir),runtimeBoundary:result.runtimeBoundary,
       executionStatus:number(result.executionStatus),instructions:number(result.executionInstructions??compatibility.executionInstructions),

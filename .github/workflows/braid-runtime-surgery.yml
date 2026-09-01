@@ -36,8 +36,7 @@ jobs:
           git add src/xenia_web_bootstrap/hir_correctness_executor.cpp \
                   render360-iso-title-controller.mjs \
                   test-direct-call-sparse-window.mjs \
-                  test-braid-startup-critic.mjs \
-                  .github/workflows/braid-startup-gate.yml
+                  test-braid-startup-critic.mjs
           git commit -m 'fix: resolve Braid tail-call startup path'
           git push origin HEAD:main
 

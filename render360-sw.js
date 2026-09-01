@@ -1,4 +1,4 @@
-const VERSION='44';
+const VERSION='45';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',
@@ -17,10 +17,18 @@ self.addEventListener('install',event=>{
 self.addEventListener('activate',event=>{
   event.waitUntil((async()=>{
     const names=await caches.keys();
-    await Promise.all(names.filter(name=>name.startsWith('render360-shell-v')&&name!==SHELL_CACHE).map(name=>caches.delete(name)));
+    // Runtime builds are immutable by provenance but keep stable public names.
+    // Purge every older Render360 CacheStorage namespace so a service worker
+    // from an earlier release cannot keep serving an old JS/WASM pair after a
+    // verified bootstrap has been published.
+    await Promise.all(names.filter(name=>name.startsWith('render360-')&&name!==SHELL_CACHE).map(name=>caches.delete(name)));
     if(self.registration.navigationPreload)await self.registration.navigationPreload.enable().catch(()=>{});
     await self.clients.claim();
   })());
+});
+
+self.addEventListener('message',event=>{
+  if(event.data?.type==='R360_SKIP_WAITING')self.skipWaiting();
 });
 
 function sameOrigin(request){
@@ -28,7 +36,10 @@ function sameOrigin(request){
 }
 function isMutableRuntime(request){
   const pathname=new URL(request.url).pathname.toLowerCase();
-  return /\.(?:m?js|wasm)$/.test(pathname);
+  // JavaScript, WASM and provenance JSON must always come from the network.
+  // In particular this protects xenia_ppc_bootstrap.wasm + its metadata from
+  // iOS Safari reusing a pre-fix runtime after GitHub Pages publishes a build.
+  return /\.(?:m?js|wasm|json)$/.test(pathname);
 }
 function isShellAsset(request){
   const pathname=new URL(request.url).pathname.toLowerCase();
@@ -40,7 +51,7 @@ async function networkFirstNoStore(request){
 async function shellAsset(request){
   const cache=await caches.open(SHELL_CACHE);
   const cached=await cache.match(request);
-  const network=fetch(request).then(response=>{
+  const network=fetch(new Request(request,{cache:'no-cache'})).then(response=>{
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
   }).catch(()=>null);

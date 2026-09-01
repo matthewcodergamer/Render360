@@ -1,0 +1,46 @@
+name: HIR Compile Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hir-compile-diagnostic.yml'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Xenia
+        run: bash ./fetch-xenia.sh
+      - name: Compile HIR executor only
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:latest bash -lc '
+            set -euo pipefail
+            apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null
+            python3 prepare-xenia-web-overlay.py
+            python3 prepare-xenia-relocatable-probe-memory-overlay.py
+            python3 prepare-xenia-arena-overlay.py
+            python3 prepare-xenia-mmio-overlay.py
+            python3 prepare-xenia-compiler-overlay.py
+            python3 prepare-vmx-executor-overlay.py
+            python3 prepare-title-runtime-memory-overlay.py
+            LLVM_INCLUDE="$(llvm-config --includedir)"
+            em++ -std=c++20 -O0 -g0 \
+              -Ibuild/xenia-web-overlay \
+              -Isrc/xenia_web_shims -Isrc/xenia_web_bootstrap \
+              -Iupstream/xenia/src -Iupstream/xenia \
+              -Iupstream/xenia/third_party/mspack \
+              -Iupstream/xenia/third_party/fmt/include \
+              -Iupstream/xenia/third_party/utfcpp/source \
+              -Iupstream/xenia/third_party/capstone/include \
+              -Iupstream/xenia/third_party/cpptoml/include \
+              -Iupstream/xenia/third_party/cxxopts/include \
+              -Iupstream/xenia/third_party/glslang \
+              -I"$LLVM_INCLUDE" \
+              -c build/xenia-web-overlay/render360/hir_correctness_executor_vmx.cpp \
+              -o /tmp/hir.o
+          '

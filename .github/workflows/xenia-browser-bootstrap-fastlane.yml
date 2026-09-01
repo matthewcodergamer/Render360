@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'prepare-wasm-backend-cfg-overlay.py'
+      - 'prepare-vmx-executor-overlay.py'
+      - 'prepare-title-runtime-memory-overlay.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'

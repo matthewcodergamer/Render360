@@ -1,0 +1,45 @@
+name: Braid LOAD_OFFSET Surgery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/braid-load-offset-surgery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  surgery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply opcode 37 / generated-WASM surgery
+        run: python3 tools/braid-load-offset-surgery.py
+      - name: Harsh static critic
+        run: |
+          set -euo pipefail
+          git diff --check
+          node --check render360-browser-ppc-session.mjs
+          node --check render360-browser-title-runtime.mjs
+          node --check render360-title-controller.mjs
+          node --check test-wasm-backend-calls.mjs
+          grep -q 'OPCODE_LOAD_OFFSET' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          grep -q 'r360_generated_guest_load_scalar' src/xenia_web_bootstrap/sparse_guest_memory.cpp
+          grep -q 'BRAID_LOAD_OFFSET_CALL_INDIRECT_XAM=PASS' test-wasm-backend-calls.mjs
+          grep -q 'test-wasm-backend-calls.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+      - name: Commit runtime surgery
+        run: |
+          set -euo pipefail
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add -A
+          git diff --cached --stat
+          git commit -m 'fix: lower Braid LOAD_OFFSET into generated Wasm'
+          git push origin HEAD:main

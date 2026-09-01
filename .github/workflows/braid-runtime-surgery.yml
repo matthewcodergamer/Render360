@@ -1,0 +1,284 @@
+name: Braid Runtime Surgery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/braid-runtime-surgery.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: braid-runtime-surgery
+  cancel-in-progress: false
+
+jobs:
+  patch-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply Braid CPU/runtime surgery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Fix native HIR direct-call decoding. Xenia lowers both linked
+          # branches (bl/bcl) and non-linking tail branches (b/bc) to HIR CALL /
+          # CALL_TRUE. The old fallback incorrectly required LK=1 and therefore
+          # rejected a real tail call as an unresolved opcode-7 boundary.
+          p = Path('src/xenia_web_bootstrap/hir_correctness_executor.cpp')
+          s = p.read_text()
+          helper_marker = 'bool DecodeDirectBranchTarget(uint32_t source_address, uint32_t ppc,'
+          if helper_marker not in s:
+              anchor = 'bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,\n'
+              if anchor not in s:
+                  raise SystemExit('HIR surgery anchor missing')
+              helper = r'''bool DecodeDirectBranchTarget(uint32_t source_address, uint32_t ppc,
+                                  uint32_t* target) {
+  if (!target) return false;
+  const uint32_t primary = ppc >> 26;
+  int32_t displacement = 0;
+  if (primary == 18u) {
+    // I-form b/bl. LK is deliberately not part of validation: upstream Xenia
+    // emits HIR CALL with CALL_TAIL for a direct b (LK=0), and HIR CALL for bl.
+    displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
+    if (displacement & 0x02000000) {
+      displacement |= static_cast<int32_t>(0xFC000000u);
+    }
+  } else if (primary == 16u) {
+    // B-form bc/bcl. Xenia may lower an out-of-function conditional branch to
+    // CALL_TRUE. BD||00 is a signed 16-bit displacement.
+    displacement = static_cast<int32_t>(ppc & 0x0000FFFCu);
+    if (displacement & 0x00008000) {
+      displacement |= static_cast<int32_t>(0xFFFF0000u);
+    }
+  } else {
+    return false;
+  }
+  *target = (ppc & 0x2u)
+                ? static_cast<uint32_t>(displacement)
+                : source_address + static_cast<uint32_t>(displacement);
+  return true;
+}
+
+bool DecodeDirectBranchFromSource(uint32_t source_address, uint32_t* target) {
+  uint8_t raw[4] = {};
+  if (!ReadSparseGuestMemory(source_address, raw, sizeof(raw))) return false;
+  const uint32_t ppc = (uint32_t(raw[0]) << 24) |
+                       (uint32_t(raw[1]) << 16) |
+                       (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
+  return DecodeDirectBranchTarget(source_address, ppc, target);
+}
+
+'''
+              s = s.replace(anchor, helper + anchor, 1)
+
+          start_marker = '        case xe::cpu::hir::OPCODE_CALL: {'
+          end_marker = '\n\n        case xe::cpu::hir::OPCODE_RETURN:'
+          start = s.find(start_marker)
+          end = s.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit('HIR CALL block surgery anchors missing')
+          replacement = r'''        case xe::cpu::hir::OPCODE_CALL: {
+          uint32_t target = 0;
+          bool call_resolved = false;
+          if (instr->src1.symbol) {
+            // A real HIR symbol is authoritative. If its resolver rejects the
+            // target, do not reinterpret the instruction as a different call.
+            target = instr->src1.symbol->address();
+            call_resolved =
+                g_call_resolver && g_call_resolver(instr->src1.symbol);
+          } else if (g_address_resolver &&
+                     DecodeDirectBranchFromSource(current_source_address,
+                                                  &target)) {
+            std::fprintf(stderr,
+                         "R360_DIRECT_CALL_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
+                         current_source_address, target, instr->flags);
+            call_resolved = g_address_resolver(target);
+          }
+          supported = call_resolved;
+          if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
+            // Match Xenia's direct b semantics: after the callee returns there
+            // is no continuation in this function.
+            reached_return = true;
+            block_terminated = true;
+          }
+          break;
+        }
+        case xe::cpu::hir::OPCODE_CALL_TRUE: {
+          bool condition = false;
+          supported = ResolveCondition(instr->src1.value, values, &condition);
+          if (supported && condition) {
+            uint32_t target = 0;
+            bool call_resolved = false;
+            if (instr->src2.symbol) {
+              target = instr->src2.symbol->address();
+              call_resolved =
+                  g_call_resolver && g_call_resolver(instr->src2.symbol);
+            } else if (g_address_resolver &&
+                       DecodeDirectBranchFromSource(current_source_address,
+                                                    &target)) {
+              std::fprintf(stderr,
+                           "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
+                           current_source_address, target, instr->flags);
+              call_resolved = g_address_resolver(target);
+            }
+            supported = call_resolved;
+            if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
+              reached_return = true;
+              block_terminated = true;
+            }
+          }
+          break;
+        }'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s)
+
+          # 2) The native-HIR fallback must enter the title with a Xenia-like
+          # main thread (stack + PCR/TLS + r1/r13), not an all-zero PPCContext.
+          p = Path('render360-iso-title-controller.mjs')
+          s = p.read_text()
+          needle = 'handoff=await handoffDefaultXex(handoffArgs);'
+          positions = []
+          at = 0
+          while True:
+              i = s.find(needle, at)
+              if i < 0: break
+              positions.append(i)
+              at = i + len(needle)
+          if len(positions) < 2 and 'prepareMainThreadContext:true' not in s:
+              raise SystemExit('compatibility fallback handoff anchor missing')
+          if 'prepareMainThreadContext:true' not in s:
+              i = positions[-1]
+              s = s[:i] + 'handoff=await handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true});' + s[i+len(needle):]
+          p.write_text(s)
+
+          # 3) Upgrade direct-call regression to include the exact class that
+          # escaped the previous critic: far direct tail b (LK=0).
+          p = Path('test-direct-call-sparse-window.mjs')
+          s = p.read_text()
+          if 'DIRECT_TAIL_CALL_SPARSE_SUBWINDOW=PASS' not in s:
+              marker = "\nconsole.log('DIRECT_CALL_SPARSE_SUBWINDOW=PASS');"
+              if marker not in s:
+                  raise SystemExit('direct-call critic anchor missing')
+              tail = r'''
+
+// Xenia lowers a direct non-linking b to HIR CALL with CALL_TAIL. This is the
+// production shape that Braid exposed at opcode 7: it must resolve the target
+// even though LK=0 and then terminate the caller as a tail call.
+const tailCaller = 0x21000000;
+const tailCallee = 0x21008000;
+const tailCallerWords = [
+  ((18 << 26) | ((tailCallee - tailCaller) & 0x03FFFFFC)) >>> 0, // b tailCallee
+];
+const tailCalleeWords = [0x38600007, 0x4E800020]; // li r3,7; blr
+const tailCallerBacking = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+const tailCalleeBacking = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+if (!tailCallerBacking || !tailCalleeBacking) throw new Error('could not allocate tail-call sparse pages');
+if ((pick('r360_sparse_guest_memory_map')(tailCaller, 1, tailCallerBacking, 0, 7) >>> 0) !== 1 ||
+    (pick('r360_sparse_guest_memory_map')(tailCallee, 1, tailCalleeBacking, 0, 7) >>> 0) !== 1) {
+  throw new Error('could not map tail-call sparse pages');
+}
+writeWords(tailCaller, tailCallerWords);
+writeWords(tailCallee, tailCalleeWords);
+if ((pick('r360_sparse_guest_memory_protect')(tailCaller, 1, 5) >>> 0) !== 1 ||
+    (pick('r360_sparse_guest_memory_protect')(tailCallee, 1, 5) >>> 0) !== 1) {
+  throw new Error('could not seal tail-call sparse pages RX');
+}
+pick('r360_ppc_probe_reset')();
+const tailInput = pick('r360_ppc_probe_input_buffer')() >>> 0;
+const tailBytes = new Uint8Array(e.memory.buffer, tailInput, tailCallerWords.length * 4);
+tailCallerWords.forEach((word, i) => {
+  tailBytes[i * 4] = word >>> 24;
+  tailBytes[i * 4 + 1] = (word >>> 16) & 255;
+  tailBytes[i * 4 + 2] = (word >>> 8) & 255;
+  tailBytes[i * 4 + 3] = word & 255;
+});
+if ((pick('r360_ppc_probe_load_at')(tailCaller, tailInput, tailBytes.length) >>> 0) !== tailBytes.length) {
+  throw new Error('could not stage tail-call caller');
+}
+if (!(pick('r360_ppc_probe_translate')() >>> 0)) throw new Error('tail-call translation failed');
+const tailStatus = pick('r360_ppc_probe_correctness_status')() >>> 0;
+const tailR3 = BigInt.asUintN(64, pick('r360_ppc_probe_correctness_r3')());
+if (tailStatus !== 3 || tailR3 !== 7n) {
+  throw new Error(`far direct tail call failed status=${tailStatus} r3=${tailR3}`);
+}
+console.log('DIRECT_TAIL_CALL_SPARSE_SUBWINDOW=PASS');'''
+              s = s.replace(marker, tail + marker, 1)
+          p.write_text(s)
+
+          # 4) Make the Braid critic verify production wiring, not merely that a
+          # dormant helper exists. Also test XNotifyGetNext output behavior.
+          p = Path('test-braid-startup-critic.mjs')
+          s = p.read_text()
+          if "const isoController=fs.readFileSync('render360-iso-title-controller.mjs','utf8');" not in s:
+              s = s.replace("const controller=fs.readFileSync('render360-title-controller.mjs','utf8');\n",
+                            "const controller=fs.readFileSync('render360-title-controller.mjs','utf8');\nconst isoController=fs.readFileSync('render360-iso-title-controller.mjs','utf8');\n", 1)
+          wiring = "if(!isoController.includes(\"handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true})\")) throw new Error('production HIR fallback does not enable the Xenia main-thread context');\n"
+          if 'production HIR fallback does not enable the Xenia main-thread context' not in s:
+              anchor = "if(!titleRuntime.includes(\"PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm'\"))"
+              idx = s.find(anchor)
+              if idx < 0: raise SystemExit('Braid critic runtime anchor missing')
+              s = s[:idx] + wiring + s[idx:]
+          if "'r360_sparse_guest_memory_read_u32_be'" not in s:
+              s = s.replace("'r360_sparse_guest_memory_write_u32_be',", "'r360_sparse_guest_memory_write_u32_be','r360_sparse_guest_memory_read_u32_be',")
+          old = "p('r360_kernel_service_call')(2,0x28B,0,0,0,0,0,0,0,0);const svc=p('r360_kernel_service_status')()>>>0;\nif(svc!==1)throw new Error(`XAM_028B_REACHED failed service_status=${svc}`);"
+          if old in s:
+              new = "const notifyBacking=p('r360_sparse_guest_memory_alloc')(1)>>>0;const notifyBase=0x30000000;if(!notifyBacking||(p('r360_sparse_guest_memory_map')(notifyBase,1,notifyBacking,0,3)>>>0)!==1)throw new Error('XAM_028B notify output page map failed');p('r360_sparse_guest_memory_write_u32_be')(notifyBase,0xDEADBEEF);p('r360_sparse_guest_memory_write_u32_be')(notifyBase+4,0xCAFEBABE);const dequeued=p('r360_kernel_service_call')(2,0x28B,0,0,notifyBase,notifyBase+4,0,0,0,0)>>>0;const svc=p('r360_kernel_service_status')()>>>0;const notifyId=p('r360_sparse_guest_memory_read_u32_be')(notifyBase)>>>0;const notifyParam=p('r360_sparse_guest_memory_read_u32_be')(notifyBase+4)>>>0;\nif(svc!==1||dequeued!==0||notifyId!==0||notifyParam!==0)throw new Error(`XAM_028B_REACHED failed service_status=${svc} dequeued=${dequeued} id=0x${notifyId.toString(16)} param=0x${notifyParam.toString(16)}`);"
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # 5) Published Braid gate must run the direct/tail call critic and must
+          # notice production ISO fallback changes.
+          p = Path('.github/workflows/braid-startup-gate.yml')
+          s = p.read_text()
+          if "      - 'render360-iso-title-controller.mjs'" not in s:
+              s = s.replace("      - 'render360-title-controller.mjs'\n", "      - 'render360-title-controller.mjs'\n      - 'render360-iso-title-controller.mjs'\n", 1)
+          if "      - 'test-direct-call-sparse-window.mjs'" not in s:
+              s = s.replace("      - 'test-braid-startup-critic.mjs'\n", "      - 'test-braid-startup-critic.mjs'\n      - 'test-direct-call-sparse-window.mjs'\n", 1)
+          step = "      - name: Verify published direct and tail guest calls\n        run: node ./test-direct-call-sparse-window.mjs ./xenia_ppc_bootstrap.wasm\n"
+          if 'Verify published direct and tail guest calls' not in s:
+              anchor = '      - name: Verify published Braid startup integration\n'
+              if anchor not in s: raise SystemExit('Braid gate step anchor missing')
+              s = s.replace(anchor, step + anchor, 1)
+          p.write_text(s)
+
+          print('BRAID_RUNTIME_SURGERY_PATCHED=PASS')
+          PY
+
+          git rm .github/workflows/braid-runtime-surgery.yml
+          git diff --check
+          git status --short
+
+      - name: Commit surgery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Surgery Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+                  render360-iso-title-controller.mjs \
+                  test-direct-call-sparse-window.mjs \
+                  test-braid-startup-critic.mjs \
+                  .github/workflows/braid-startup-gate.yml \
+                  .github/workflows/braid-runtime-surgery.yml
+          git commit -m 'fix: resolve Braid tail-call startup path'
+          git push origin HEAD:main
+
+      - name: Dispatch fresh bootstrap build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Commits made with GITHUB_TOKEN intentionally do not recursively
+          # trigger push workflows, so explicitly launch the verified fastlane.
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main

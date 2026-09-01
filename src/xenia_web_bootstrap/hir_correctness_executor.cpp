@@ -774,6 +774,43 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
 }
 
 
+bool DecodeDirectBranchTarget(uint32_t source_address, uint32_t ppc,
+                                  uint32_t* target) {
+  if (!target) return false;
+  const uint32_t primary = ppc >> 26;
+  int32_t displacement = 0;
+  if (primary == 18u) {
+    // I-form b/bl. LK is deliberately not part of validation: upstream Xenia
+    // emits HIR CALL with CALL_TAIL for a direct b (LK=0), and HIR CALL for bl.
+    displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
+    if (displacement & 0x02000000) {
+      displacement |= static_cast<int32_t>(0xFC000000u);
+    }
+  } else if (primary == 16u) {
+    // B-form bc/bcl. Xenia may lower an out-of-function conditional branch to
+    // CALL_TRUE. BD||00 is a signed 16-bit displacement.
+    displacement = static_cast<int32_t>(ppc & 0x0000FFFCu);
+    if (displacement & 0x00008000) {
+      displacement |= static_cast<int32_t>(0xFFFF0000u);
+    }
+  } else {
+    return false;
+  }
+  *target = (ppc & 0x2u)
+                ? static_cast<uint32_t>(displacement)
+                : source_address + static_cast<uint32_t>(displacement);
+  return true;
+}
+
+bool DecodeDirectBranchFromSource(uint32_t source_address, uint32_t* target) {
+  uint8_t raw[4] = {};
+  if (!ReadSparseGuestMemory(source_address, raw, sizeof(raw))) return false;
+  const uint32_t ppc = (uint32_t(raw[0]) << 24) |
+                       (uint32_t(raw[1]) << 16) |
+                       (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
+  return DecodeDirectBranchTarget(source_address, ppc, target);
+}
+
 bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
                      bool* block_terminated) {
   if (!reached_return || !block_terminated) return false;
@@ -950,35 +987,28 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         }
 
         case xe::cpu::hir::OPCODE_CALL: {
+          uint32_t target = 0;
+          bool call_resolved = false;
           if (instr->src1.symbol) {
             // A real HIR symbol is authoritative. If its resolver rejects the
-            // target, do not retry the same call through the address resolver.
-            supported = g_call_resolver && g_call_resolver(instr->src1.symbol);
-          } else if (g_address_resolver) {
-            uint32_t target = instr->src1.symbol ? instr->src1.symbol->address() : 0u;
-            bool target_known = instr->src1.symbol != nullptr;
-            if (!target_known) {
-              uint8_t raw[4] = {};
-              if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {
-                const uint32_t ppc = (uint32_t(raw[0]) << 24) |
-                                     (uint32_t(raw[1]) << 16) |
-                                     (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
-                if ((ppc >> 26) == 18u && (ppc & 1u)) {
-                  int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
-                  if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);
-                  target = (ppc & 0x2u)
-                               ? static_cast<uint32_t>(displacement)
-                               : current_source_address + static_cast<uint32_t>(displacement);
-                  target_known = true;
-                }
-              }
-            }
-            if (target_known) {
-              std::fprintf(stderr,
-                           "R360_DIRECT_CALL_FALLBACK source=0x%08X symbol=%u target=0x%08X\n",
-                           current_source_address, instr->src1.symbol ? 1u : 0u, target);
-              supported = g_address_resolver(target);
-            }
+            // target, do not reinterpret the instruction as a different call.
+            target = instr->src1.symbol->address();
+            call_resolved =
+                g_call_resolver && g_call_resolver(instr->src1.symbol);
+          } else if (g_address_resolver &&
+                     DecodeDirectBranchFromSource(current_source_address,
+                                                  &target)) {
+            std::fprintf(stderr,
+                         "R360_DIRECT_CALL_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
+                         current_source_address, target, instr->flags);
+            call_resolved = g_address_resolver(target);
+          }
+          supported = call_resolved;
+          if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
+            // Match Xenia's direct b semantics: after the callee returns there
+            // is no continuation in this function.
+            reached_return = true;
+            block_terminated = true;
           }
           break;
         }
@@ -986,35 +1016,24 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           bool condition = false;
           supported = ResolveCondition(instr->src1.value, values, &condition);
           if (supported && condition) {
+            uint32_t target = 0;
+            bool call_resolved = false;
             if (instr->src2.symbol) {
-              // The PPC decoder below is only for direct calls that have no HIR
-              // symbol. Known symbols stay on the authoritative call resolver.
-              supported = g_call_resolver && g_call_resolver(instr->src2.symbol);
-            } else if (g_address_resolver) {
-              uint32_t target = instr->src2.symbol ? instr->src2.symbol->address() : 0u;
-              bool target_known = instr->src2.symbol != nullptr;
-              if (!target_known) {
-                uint8_t raw[4] = {};
-                if (ReadSparseGuestMemory(current_source_address, raw, sizeof(raw))) {
-                  const uint32_t ppc = (uint32_t(raw[0]) << 24) |
-                                       (uint32_t(raw[1]) << 16) |
-                                       (uint32_t(raw[2]) << 8) | uint32_t(raw[3]);
-                  if ((ppc >> 26) == 18u && (ppc & 1u)) {
-                    int32_t displacement = static_cast<int32_t>(ppc & 0x03FFFFFCu);
-                    if (displacement & 0x02000000) displacement |= static_cast<int32_t>(0xFC000000u);
-                    target = (ppc & 0x2u)
-                                 ? static_cast<uint32_t>(displacement)
-                                 : current_source_address + static_cast<uint32_t>(displacement);
-                    target_known = true;
-                  }
-                }
-              }
-              if (target_known) {
-                std::fprintf(stderr,
-                             "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X symbol=%u target=0x%08X\n",
-                             current_source_address, instr->src2.symbol ? 1u : 0u, target);
-                supported = g_address_resolver(target);
-              }
+              target = instr->src2.symbol->address();
+              call_resolved =
+                  g_call_resolver && g_call_resolver(instr->src2.symbol);
+            } else if (g_address_resolver &&
+                       DecodeDirectBranchFromSource(current_source_address,
+                                                    &target)) {
+              std::fprintf(stderr,
+                           "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
+                           current_source_address, target, instr->flags);
+              call_resolved = g_address_resolver(target);
+            }
+            supported = call_resolved;
+            if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
+              reached_return = true;
+              block_terminated = true;
             }
           }
           break;

@@ -59,7 +59,7 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
       };
       console.info(`[Render360] Generated WASM entry unavailable; executing native HIR compatibility path for 0x${(handoff.entry>>>0).toString(16)}`);
       try{
-        handoff=await handoffDefaultXex(handoffArgs);
+        handoff=await handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true});
       }finally{
         setExecute(beforeFallback?1:0);
       }

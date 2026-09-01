@@ -82,4 +82,46 @@ if (status !== 3 || r3 !== 7n) {
   throw new Error(`far direct call failed status=${status} r3=${r3}`);
 }
 
+
+// Xenia lowers a direct non-linking b to HIR CALL with CALL_TAIL. This is the
+// production shape that Braid exposed at opcode 7: it must resolve the target
+// even though LK=0 and then terminate the caller as a tail call.
+const tailCaller = 0x21000000;
+const tailCallee = 0x21008000;
+const tailCallerWords = [
+  ((18 << 26) | ((tailCallee - tailCaller) & 0x03FFFFFC)) >>> 0, // b tailCallee
+];
+const tailCalleeWords = [0x38600007, 0x4E800020]; // li r3,7; blr
+const tailCallerBacking = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+const tailCalleeBacking = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+if (!tailCallerBacking || !tailCalleeBacking) throw new Error('could not allocate tail-call sparse pages');
+if ((pick('r360_sparse_guest_memory_map')(tailCaller, 1, tailCallerBacking, 0, 7) >>> 0) !== 1 ||
+    (pick('r360_sparse_guest_memory_map')(tailCallee, 1, tailCalleeBacking, 0, 7) >>> 0) !== 1) {
+  throw new Error('could not map tail-call sparse pages');
+}
+writeWords(tailCaller, tailCallerWords);
+writeWords(tailCallee, tailCalleeWords);
+if ((pick('r360_sparse_guest_memory_protect')(tailCaller, 1, 5) >>> 0) !== 1 ||
+    (pick('r360_sparse_guest_memory_protect')(tailCallee, 1, 5) >>> 0) !== 1) {
+  throw new Error('could not seal tail-call sparse pages RX');
+}
+pick('r360_ppc_probe_reset')();
+const tailInput = pick('r360_ppc_probe_input_buffer')() >>> 0;
+const tailBytes = new Uint8Array(e.memory.buffer, tailInput, tailCallerWords.length * 4);
+tailCallerWords.forEach((word, i) => {
+  tailBytes[i * 4] = word >>> 24;
+  tailBytes[i * 4 + 1] = (word >>> 16) & 255;
+  tailBytes[i * 4 + 2] = (word >>> 8) & 255;
+  tailBytes[i * 4 + 3] = word & 255;
+});
+if ((pick('r360_ppc_probe_load_at')(tailCaller, tailInput, tailBytes.length) >>> 0) !== tailBytes.length) {
+  throw new Error('could not stage tail-call caller');
+}
+if (!(pick('r360_ppc_probe_translate')() >>> 0)) throw new Error('tail-call translation failed');
+const tailStatus = pick('r360_ppc_probe_correctness_status')() >>> 0;
+const tailR3 = BigInt.asUintN(64, pick('r360_ppc_probe_correctness_r3')());
+if (tailStatus !== 3 || tailR3 !== 7n) {
+  throw new Error(`far direct tail call failed status=${tailStatus} r3=${tailR3}`);
+}
+console.log('DIRECT_TAIL_CALL_SPARSE_SUBWINDOW=PASS');
 console.log('DIRECT_CALL_SPARSE_SUBWINDOW=PASS');

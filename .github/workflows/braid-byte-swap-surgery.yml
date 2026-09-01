@@ -1,0 +1,42 @@
+name: Braid Callable BYTE_SWAP Surgery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/braid-byte-swap-surgery.py'
+      - '.github/workflows/braid-byte-swap-surgery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  surgery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Add callable BYTE_SWAP lowering
+        run: python3 tools/braid-byte-swap-surgery.py
+      - name: Harsh static critic
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'case xe::cpu::hir::OPCODE_BYTE_SWAP' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          grep -q 'i64.shr_u' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          grep -q 'i64.shl' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          grep -q 'instr->opcode->num == xe::cpu::hir::OPCODE_BYTE_SWAP' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+      - name: Commit BYTE_SWAP runtime fix
+        run: |
+          set -euo pipefail
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          git diff --cached --stat
+          git commit -m 'fix: lower scalar BYTE_SWAP in callable Wasm'
+          git push origin HEAD:main

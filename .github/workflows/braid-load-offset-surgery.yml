@@ -28,6 +28,9 @@ jobs:
           p=Path('tools/braid-load-offset-surgery.py')
           s=p.read_text()
           s=s.replace("    if text.count(old) != 1:\n        raise SystemExit(f\"anchor is not unique in {path}: {text.count(old)} matches\")\n","")
+          # Repair stale whitespace in the surgery tool's fastlane path anchor.
+          s=s.replace("'''      - 'test-wasm-backend-cfg.mjs'\\n      - 'test-browser-thread-scheduler.mjs' ''',","'''      - 'test-wasm-backend-cfg.mjs'\\n      - 'test-browser-thread-scheduler.mjs'\\n''',")
+          s=s.replace("'''      - 'test-wasm-backend-cfg.mjs'\\n      - 'test-wasm-backend-calls.mjs'\\n      - 'test-browser-thread-scheduler.mjs' ''')","'''      - 'test-wasm-backend-cfg.mjs'\\n      - 'test-wasm-backend-calls.mjs'\\n      - 'test-browser-thread-scheduler.mjs'\\n''')")
           p.write_text(s)
           PY
           python3 tools/braid-load-offset-surgery.py

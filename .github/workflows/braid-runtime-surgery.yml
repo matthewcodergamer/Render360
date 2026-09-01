@@ -30,7 +30,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/braid-runtime-surgery.yml tools/braid-runtime-surgery.py
           git diff --check
           git config user.name 'Render360 Surgery Bot'
           git config user.email 'actions@users.noreply.github.com'

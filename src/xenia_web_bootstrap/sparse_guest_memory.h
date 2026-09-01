@@ -59,6 +59,9 @@ uint32_t r360_sparse_guest_memory_mapped_pages();
 uint32_t r360_sparse_guest_memory_backing_pages();
 uint32_t r360_sparse_guest_memory_last_fault_address();
 uint32_t r360_sparse_guest_memory_last_fault_code();
+uint64_t r360_generated_guest_load_scalar(uint32_t virtual_address,
+                                           uint32_t size, uint32_t flags);
+uint32_t r360_generated_guest_load_status();
 }
 
 #endif

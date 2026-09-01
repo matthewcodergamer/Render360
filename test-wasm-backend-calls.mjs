@@ -30,6 +30,10 @@ const required = [
   'r360_kernel_import_reset','r360_kernel_import_register','r360_kernel_import_dispatch_context',
   'r360_kernel_import_calls','r360_kernel_import_last_status','r360_kernel_import_last_module',
   'r360_kernel_import_last_ordinal',
+  'r360_generated_guest_load_scalar','r360_generated_guest_load_status',
+  'r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc',
+  'r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be',
+  'r360_sparse_guest_memory_last_fault_address','r360_sparse_guest_memory_last_fault_code',
 ];
 for (const name of required) if (typeof pick(name) !== 'function') throw new Error(`Missing call-backend export ${name}`);
 if (!(parent.exports.memory instanceof WebAssembly.Memory)) throw new Error('Parent memory not exported');
@@ -93,7 +97,8 @@ async function instantiateRegistry(expectedCount) {
     const mod = await WebAssembly.compile(bytes);
     const declared = WebAssembly.Module.imports(mod);
     if (!declared.some((x)=>x.module==='env'&&x.name==='memory'&&x.kind==='memory') ||
-        !declared.some((x)=>x.module==='env'&&x.name==='guest_call'&&x.kind==='function')) {
+        !declared.some((x)=>x.module==='env'&&x.name==='guest_call'&&x.kind==='function') ||
+        !declared.some((x)=>x.module==='env'&&x.name==='guest_load'&&x.kind==='function')) {
       throw new Error(`Generated call module ${address.toString(16)} missing strict imports`);
     }
     records.push({ address, size, lowered, mod, instance: null });
@@ -109,8 +114,18 @@ async function instantiateRegistry(expectedCount) {
     callee.instance.exports.run(ctx);
     return 1;
   };
+  const guest_load = (address,size,flags) => {
+    const value = pick('r360_generated_guest_load_scalar')(address>>>0,size>>>0,flags>>>0);
+    const status = pick('r360_generated_guest_load_status')()>>>0;
+    if (status !== 1) {
+      const fault = pick('r360_sparse_guest_memory_last_fault_code')()>>>0;
+      const faultAddress = pick('r360_sparse_guest_memory_last_fault_address')()>>>0;
+      throw new Error(`FAIL_CLOSED_TEST_GUEST_LOAD_${fault}_0x${faultAddress.toString(16)}`);
+    }
+    return BigInt.asUintN(64,value);
+  };
   for (const record of records) {
-    record.instance = await WebAssembly.instantiate(record.mod, { env: { memory: parent.exports.memory, guest_call } });
+    record.instance = await WebAssembly.instantiate(record.mod, { env: { memory: parent.exports.memory, guest_call, guest_load } });
   }
   return { records, byAddress, dispatchCount:()=>dispatches };
 }
@@ -191,6 +206,43 @@ try { await kernelSession.runFunctionSlice(guestBase); } catch (e) {
 }
 if (!unsupportedFailedClosed) throw new Error('Unsupported generated kernel thunk did not remain fail closed');
 if ((pick('r360_kernel_import_last_status')()>>>0)!==2 || (pick('r360_kernel_import_last_ordinal')()>>>0)!==0x1234) throw new Error('Unsupported generated kernel thunk lost exact blocker telemetry');
+
+// Braid regression: HIR opcode 37 is LOAD_OFFSET. Fetch an XAM thunk from
+// sparse guest memory, mtctr it, bctrl, and require generated-WASM continuation.
+pick('r360_ppc_probe_reset')();
+pick('r360_kernel_import_reset')();
+pick('r360_sparse_guest_memory_reset')();
+const braidDataBase = 0x30000000;
+const braidBacking = pick('r360_sparse_guest_memory_alloc')(2)>>>0;
+if (!braidBacking || (pick('r360_sparse_guest_memory_map')(braidDataBase,2,braidBacking,0,3)>>>0)!==1) throw new Error('Could not map Braid LOAD_OFFSET data pages');
+const braidXamThunk = (guestBase + 0x00200000)>>>0;
+if ((pick('r360_kernel_import_register')(braidXamThunk,2,0x028B,0,0)>>>0)!==1) throw new Error('Could not register Braid XNotifyGetNext thunk');
+if ((pick('r360_sparse_guest_memory_write_u32_be')(braidDataBase+4,braidXamThunk)>>>0)!==1) throw new Error('Could not seed Braid XAM thunk pointer');
+const braidOutput = braidDataBase + 0x1000;
+for (const [index,value] of [[5,BigInt(braidOutput)],[6,0n]]) {
+  if ((pick('r360_ppc_probe_set_initial_gpr')(index,value)>>>0)!==1) throw new Error(`Could not seed Braid r${index}`);
+}
+const braidLoadOffset = wordBytes(
+  0x3C803000,  // lis r4,0x3000
+  0x80840004,  // lwz r4,4(r4) -> HIR LOAD_OFFSET
+  0x7C8903A6,  // mtctr r4
+  0x4E800421,  // bctrl -> HIR CALL_INDIRECT
+  0x38630002,  // addi r3,r3,2
+  0x4E800020,  // blr
+);
+const braidInput = pick('r360_ppc_probe_input_buffer')()>>>0;
+new Uint8Array(parent.exports.memory.buffer,braidInput,braidLoadOffset.length).set(braidLoadOffset);
+if ((pick('r360_ppc_probe_load')(braidInput,braidLoadOffset.length)>>>0)!==braidLoadOffset.length) throw new Error('Could not load Braid LOAD_OFFSET regression PPC');
+pick('r360_ppc_probe_translate')();
+const braidOracleStatus = pick('r360_ppc_probe_correctness_status')()>>>0;
+const braidOracleR3 = BigInt.asUintN(64,pick('r360_ppc_probe_correctness_r3')());
+if (braidOracleStatus!==3 || braidOracleR3!==2n) throw new Error(`Braid LOAD_OFFSET oracle failed status=${braidOracleStatus} r3=${braidOracleR3}`);
+if ((pick('r360_wasm_backend_call_function_count')()>>>0)!==1) throw new Error(`Braid LOAD_OFFSET still produced ${pick('r360_wasm_backend_call_function_count')()>>>0} callable functions`);
+const braidSession = await createPersistentPpcSession({bootstrap:parent,initialGprs:{5:BigInt(braidOutput),6:0n}});
+const braidResult = await braidSession.runFunctionSlice(guestBase);
+if (braidResult.r3!==2n || braidResult.kernelDispatches!==1) throw new Error(`Braid generated LOAD_OFFSET/XAM dispatch failed r3=${braidResult.r3} kernel=${braidResult.kernelDispatches}`);
+if ((pick('r360_kernel_import_last_module')()>>>0)!==2 || (pick('r360_kernel_import_last_ordinal')()>>>0)!==0x028B) throw new Error('Braid generated path did not reach xam.xex ordinal 0x28B');
+console.log('BRAID_LOAD_OFFSET_CALL_INDIRECT_XAM=PASS');
 
 console.log('WASM_BACKEND_CALL_DIRECT=PASS');
 console.log('WASM_BACKEND_CALL_NESTED=PASS');

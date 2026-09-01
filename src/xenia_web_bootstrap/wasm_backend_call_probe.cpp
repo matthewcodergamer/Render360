@@ -21,6 +21,7 @@ namespace render360::xenia_web {
 namespace {
 using xe::cpu::hir::HIRBuilder;
 using xe::cpu::hir::Instr;
+using xe::cpu::hir::TypeName;
 using xe::cpu::hir::Value;
 using xe::cpu::ppc::PPCContext;
 using Producers = std::unordered_map<const Value*, const Instr*>;
@@ -102,6 +103,30 @@ void EmitI64Leb(std::vector<uint8_t>& out, int64_t value) {
     out.push_back(byte);
   }
 }
+void EmitI64Mask(std::vector<uint8_t>& out, TypeName type) {
+  uint64_t mask = 0;
+  switch (type) {
+    case xe::cpu::hir::INT8_TYPE: mask = 0xFFu; break;
+    case xe::cpu::hir::INT16_TYPE: mask = 0xFFFFu; break;
+    case xe::cpu::hir::INT32_TYPE: mask = 0xFFFFFFFFu; break;
+    case xe::cpu::hir::INT64_TYPE: return;
+    default: return;
+  }
+  out.push_back(0x42);
+  EmitI64Leb(out, static_cast<int64_t>(mask));
+  out.push_back(0x83);
+}
+
+uint32_t ScalarTypeSize(TypeName type) {
+  switch (type) {
+    case xe::cpu::hir::INT8_TYPE: return 1u;
+    case xe::cpu::hir::INT16_TYPE: return 2u;
+    case xe::cpu::hir::INT32_TYPE: return 4u;
+    case xe::cpu::hir::INT64_TYPE: return 8u;
+    default: return 0u;
+  }
+}
+
 void EmitName(std::vector<uint8_t>& out, const char* name) {
   const auto n = static_cast<uint32_t>(std::strlen(name));
   EmitU32Leb(out, n);
@@ -140,24 +165,78 @@ bool EmitI64Value(const Value* value, const Producers& producers,
   const Instr* instr = it->second;
   bool ok = false;
   switch (instr->opcode->num) {
-    case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
-      if (value->type != xe::cpu::hir::INT64_TYPE) break;
+    case xe::cpu::hir::OPCODE_LOAD_CONTEXT: {
       body.push_back(0x20);
       body.push_back(0x00);
-      body.push_back(0x29);
-      body.push_back(0x03);
-      EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
+      switch (value->type) {
+        case xe::cpu::hir::INT8_TYPE:
+          body.push_back(0x2D); body.push_back(0x00);
+          EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
+          body.push_back(0xAD);
+          break;
+        case xe::cpu::hir::INT16_TYPE:
+          body.push_back(0x2F); body.push_back(0x01);
+          EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
+          body.push_back(0xAD);
+          break;
+        case xe::cpu::hir::INT32_TYPE:
+          body.push_back(0x28); body.push_back(0x02);
+          EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
+          body.push_back(0xAD);
+          break;
+        case xe::cpu::hir::INT64_TYPE:
+          body.push_back(0x29); body.push_back(0x03);
+          EmitU32Leb(body, static_cast<uint32_t>(instr->src1.offset));
+          break;
+        default:
+          break;
+      }
+      ok = ScalarTypeSize(value->type) != 0;
+      break;
+    }
+    case xe::cpu::hir::OPCODE_ASSIGN:
+    case xe::cpu::hir::OPCODE_CAST:
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+      ok = EmitI64Value(instr->src1.value, producers, visiting, body, lowered);
+      if (ok) EmitI64Mask(body, value->type);
+      break;
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+      ok = EmitI64Value(instr->src1.value, producers, visiting, body, lowered);
+      if (ok) {
+        switch (instr->src1.value->type) {
+          case xe::cpu::hir::INT8_TYPE: body.push_back(0xC2); break;
+          case xe::cpu::hir::INT16_TYPE: body.push_back(0xC3); break;
+          case xe::cpu::hir::INT32_TYPE: body.push_back(0xC4); break;
+          case xe::cpu::hir::INT64_TYPE: break;
+          default: ok = false; break;
+        }
+      }
+      break;
+    case xe::cpu::hir::OPCODE_LOAD:
+    case xe::cpu::hir::OPCODE_LOAD_OFFSET: {
+      const uint32_t size = ScalarTypeSize(value->type);
+      if (!size || (instr->flags & ~xe::cpu::hir::LOAD_STORE_BYTE_SWAP)) break;
+      if (!EmitI64Value(instr->src1.value, producers, visiting, body, lowered))
+        break;
+      if (instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET) {
+        if (!EmitI64Value(instr->src2.value, producers, visiting, body, lowered))
+          break;
+        body.push_back(0x7C);
+      }
+      body.push_back(0xA7);
+      body.push_back(0x41); EmitI32Leb(body, static_cast<int32_t>(size));
+      body.push_back(0x41); EmitI32Leb(body, static_cast<int32_t>(instr->flags));
+      body.push_back(0x10); EmitU32Leb(body, 1);
+      EmitI64Mask(body, value->type);
       ok = true;
       break;
-    case xe::cpu::hir::OPCODE_ASSIGN:
-      ok = EmitI64Value(instr->src1.value, producers, visiting, body, lowered);
-      break;
+    }
     case xe::cpu::hir::OPCODE_ADD:
     case xe::cpu::hir::OPCODE_SUB:
     case xe::cpu::hir::OPCODE_AND:
     case xe::cpu::hir::OPCODE_OR:
     case xe::cpu::hir::OPCODE_XOR:
-      if (value->type != xe::cpu::hir::INT64_TYPE) break;
       if (!EmitI64Value(instr->src1.value, producers, visiting, body, lowered) ||
           !EmitI64Value(instr->src2.value, producers, visiting, body, lowered)) {
         break;
@@ -167,6 +246,7 @@ bool EmitI64Value(const Value* value, const Producers& producers,
                      instr->opcode->num == xe::cpu::hir::OPCODE_AND ? 0x83 :
                      instr->opcode->num == xe::cpu::hir::OPCODE_OR ? 0x84 : 0x85);
       ok = true;
+      if (ok) EmitI64Mask(body, value->type);
       break;
     default:
       break;
@@ -257,6 +337,12 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
           if (instr->dest &&
               (instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_CONTEXT ||
                instr->opcode->num == xe::cpu::hir::OPCODE_ASSIGN ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_CAST ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_ZERO_EXTEND ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_SIGN_EXTEND ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_TRUNCATE ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_LOAD ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
                instr->opcode->num == xe::cpu::hir::OPCODE_ADD ||
                instr->opcode->num == xe::cpu::hir::OPCODE_SUB ||
                instr->opcode->num == xe::cpu::hir::OPCODE_AND ||
@@ -274,7 +360,7 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
 
   std::vector<uint8_t> module = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};
   std::vector<uint8_t> types;
-  EmitU32Leb(types, 2);
+  EmitU32Leb(types, 3);
   types.push_back(0x60);
   EmitU32Leb(types, 2);
   types.push_back(0x7F);
@@ -286,13 +372,22 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
   types.push_back(0x7F);
   EmitU32Leb(types, 1);
   types.push_back(0x7E);
+  types.push_back(0x60);
+  EmitU32Leb(types, 3);
+  types.push_back(0x7F); types.push_back(0x7F); types.push_back(0x7F);
+  EmitU32Leb(types, 1);
+  types.push_back(0x7E);
   EmitSection(module, 1, types);
   std::vector<uint8_t> imports;
-  EmitU32Leb(imports, 2);
+  EmitU32Leb(imports, 3);
   EmitName(imports, "env");
   EmitName(imports, "guest_call");
   imports.push_back(0x00);
   EmitU32Leb(imports, 0);
+  EmitName(imports, "env");
+  EmitName(imports, "guest_load");
+  imports.push_back(0x00);
+  EmitU32Leb(imports, 2);
   EmitName(imports, "env");
   EmitName(imports, "memory");
   imports.push_back(0x02);
@@ -307,7 +402,7 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
   EmitU32Leb(exports, 1);
   EmitName(exports, "run");
   exports.push_back(0x00);
-  EmitU32Leb(exports, 1);
+  EmitU32Leb(exports, 2);
   EmitSection(module, 7, exports);
   std::vector<uint8_t> fn;
   EmitU32Leb(fn, 0);

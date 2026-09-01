@@ -56,6 +56,10 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const kernelLastStatus=pick(bootstrap,'r360_kernel_import_last_status');
   const kernelLastModule=pick(bootstrap,'r360_kernel_import_last_module');
   const kernelLastOrdinal=pick(bootstrap,'r360_kernel_import_last_ordinal');
+  const generatedGuestLoad=requiredFunction(bootstrap,'r360_generated_guest_load_scalar');
+  const generatedGuestLoadStatus=requiredFunction(bootstrap,'r360_generated_guest_load_status');
+  const sparseFaultAddress=pick(bootstrap,'r360_sparse_guest_memory_last_fault_address');
+  const sparseFaultCode=pick(bootstrap,'r360_sparse_guest_memory_last_fault_code');
 
   const contextPtr=contextPtrFn()>>>0;
   const contextSize=contextSizeFn()>>>0;
@@ -203,8 +207,19 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
       }
       throw new Error(`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${target.toString(16)}${kernelFailureDetail(target)}`);
     };
+    const guest_load=(address,size,flags)=>{
+      address>>>=0;size>>>=0;flags>>>=0;
+      const value=generatedGuestLoad(address,size,flags);
+      const status=generatedGuestLoadStatus()>>>0;
+      if(status!==1){
+        const faultAddress=typeof sparseFaultAddress==='function'?sparseFaultAddress()>>>0:address;
+        const faultCode=typeof sparseFaultCode==='function'?sparseFaultCode()>>>0:0;
+        throw new Error(`FAIL_CLOSED_GUEST_LOAD_0x${address.toString(16).toUpperCase()}_SIZE_${size}_FLAGS_${flags}_FAULT_${faultCode}_AT_0x${faultAddress.toString(16).toUpperCase()}`);
+      }
+      return BigInt.asUintN(64,value);
+    };
     for(const record of next.values()){
-      record.instance=await WebAssembly.instantiate(record.module,{env:{memory,guest_call}});
+      record.instance=await WebAssembly.instantiate(record.module,{env:{memory,guest_call,guest_load}});
       if(typeof record.instance?.exports?.run!=='function')throw new Error(`Generated guest function 0x${record.address.toString(16)} has no run export`);
     }
     clearContinuationRegistry();

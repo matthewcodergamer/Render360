@@ -360,6 +360,34 @@ uint32_t SparseGuestLastFaultCode() { return g_last_fault_code; }
 
 }  // namespace render360::xenia_web
 
+namespace {
+uint32_t g_generated_guest_load_status = 0;
+
+uint64_t GeneratedGuestLoadScalar(uint32_t virtual_address, uint32_t size,
+                                  uint32_t flags) {
+  g_generated_guest_load_status = 0;
+  if ((flags & ~1u) != 0 ||
+      (size != 1u && size != 2u && size != 4u && size != 8u)) {
+    return 0;
+  }
+  uint64_t value = 0;
+  if (!render360::xenia_web::ReadSparseGuestMemory(virtual_address, &value,
+                                                    size)) {
+    return 0;
+  }
+  if ((flags & 1u) && size > 1u) {
+    uint64_t swapped = 0;
+    for (uint32_t i = 0; i < size; ++i) {
+      swapped |= ((value >> (i * 8u)) & 0xFFu)
+                 << ((size - 1u - i) * 8u);
+    }
+    value = swapped;
+  }
+  g_generated_guest_load_status = 1;
+  return value;
+}
+}  // namespace
+
 extern "C" {
 void r360_sparse_guest_memory_reset() {
   render360::xenia_web::ResetSparseGuestMemory();
@@ -440,6 +468,13 @@ uint32_t r360_sparse_guest_memory_last_fault_address() {
 }
 uint32_t r360_sparse_guest_memory_last_fault_code() {
   return render360::xenia_web::SparseGuestLastFaultCode();
+}
+uint64_t r360_generated_guest_load_scalar(uint32_t virtual_address,
+                                           uint32_t size, uint32_t flags) {
+  return GeneratedGuestLoadScalar(virtual_address, size, flags);
+}
+uint32_t r360_generated_guest_load_status() {
+  return g_generated_guest_load_status;
 }
 uint32_t r360_wasm_backend_executable_content_generation(uint32_t address) {
   return render360::xenia_web::GetWasmBackendExecutableContentGeneration(address);

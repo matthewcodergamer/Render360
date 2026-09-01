@@ -653,9 +653,9 @@ bool ResolveGuestAddress(const Value* address, const Value* offset,
   uint64_t base = 0, displacement = 0;
   if (!guest_address || !ResolveUint64(address, values, &base)) return false;
   if (offset && !ResolveUint64(offset, values, &displacement)) return false;
-  const uint64_t effective = base + displacement;
-  if (effective > std::numeric_limits<uint32_t>::max()) return false;
-  *guest_address = static_cast<uint32_t>(effective);
+  const uint32_t effective = static_cast<uint32_t>(base) +
+                             static_cast<uint32_t>(displacement);
+  *guest_address = effective;
   return true;
 }
 
@@ -1086,8 +1086,15 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
             opcode == xe::cpu::hir::OPCODE_CALL_TRUE ||
             opcode == xe::cpu::hir::OPCODE_CALL_INDIRECT ||
             opcode == xe::cpu::hir::OPCODE_CALL_INDIRECT_TRUE;
-        result.blocker_kind = call_boundary ? kHIRBlockerUnresolvedCall
-                                            : kHIRBlockerUnsupportedOpcode;
+        const bool memory_boundary =
+            opcode == xe::cpu::hir::OPCODE_LOAD ||
+            opcode == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
+            opcode == xe::cpu::hir::OPCODE_STORE ||
+            opcode == xe::cpu::hir::OPCODE_STORE_OFFSET;
+        result.blocker_kind = call_boundary
+                                  ? kHIRBlockerUnresolvedCall
+                                  : memory_boundary ? kHIRBlockerGuestMemory
+                                                    : kHIRBlockerUnsupportedOpcode;
         result.blocker_opcode = opcode;
         result.blocker_address = current_source_address;
       }

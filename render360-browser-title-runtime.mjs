@@ -20,6 +20,8 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_xex_guest_mapper_reserve_input','r360_xex_guest_mapper_input_max_capacity',
   'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_kernel_runtime_reset',
+  'r360_generated_guest_load_scalar','r360_generated_guest_load_status',
+  'r360_sparse_guest_memory_last_fault_address','r360_sparse_guest_memory_last_fault_code',
   'r360_guest_thread_create','r360_guest_thread_current','r360_guest_thread_set_current','r360_guest_thread_terminate','r360_guest_thread_next_runnable',
   'r360_guest_thread_state','r360_guest_thread_exit_code','r360_guest_thread_entry','r360_guest_thread_context','r360_guest_thread_flags',
   'r360_guest_thread_stack_size','r360_guest_thread_stack_base','r360_guest_thread_stack_top','r360_guest_thread_stack_mapped','r360_guest_tls_alloc',

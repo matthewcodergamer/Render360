@@ -24,6 +24,7 @@ enum HIRCorrectnessBlockerKind : uint32_t {
   kHIRBlockerUnresolvedCall = 2,
   kHIRBlockerInstructionLimit = 3,
   kHIRBlockerNoReturnBoundary = 4,
+  kHIRBlockerGuestMemory = 5,
 };
 
 struct HIRCorrectnessResult {

@@ -38,9 +38,7 @@ jobs:
                   render360-iso-title-controller.mjs \
                   test-direct-call-sparse-window.mjs \
                   test-braid-startup-critic.mjs \
-                  .github/workflows/braid-startup-gate.yml \
-                  .github/workflows/braid-runtime-surgery.yml \
-                  tools/braid-runtime-surgery.py
+                  .github/workflows/braid-startup-gate.yml
           git commit -m 'fix: resolve Braid tail-call startup path'
           git push origin HEAD:main
 

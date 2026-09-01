@@ -21,9 +21,15 @@ if 'include "sparse_guest_memory.h"' not in text:
 # garbage/high bits from the base and perform the add in 32-bit address space.
 address_old = '''  const uint64_t effective = base + displacement;\n  if (effective > std::numeric_limits<uint32_t>::max()) return false;\n  *guest_address = static_cast<uint32_t>(effective);\n  return true;\n'''
 address_new = '''  const uint32_t base32 = static_cast<uint32_t>(base);\n  const uint32_t displacement32 = static_cast<uint32_t>(displacement);\n  *guest_address = base32 + displacement32;\n  return true;\n'''
-if address_old not in text:
+address_source_fixed = '''  const uint32_t effective = static_cast<uint32_t>(base) +\n                             static_cast<uint32_t>(displacement);\n  *guest_address = effective;\n  return true;\n'''
+if address_old in text:
+    text = text.replace(address_old, address_new, 1)
+elif address_source_fixed in text:
+    # The authoritative source now carries the same PPC modulo-2^32 rule.
+    # Normalize the generated overlay without requiring the legacy buggy form.
+    text = text.replace(address_source_fixed, address_new, 1)
+elif address_new not in text:
     raise SystemExit('title runtime memory overlay: ResolveGuestAddress anchor changed')
-text = text.replace(address_old, address_new, 1)
 
 # Replace only the guest-memory implementation. The source may insert runtime
 # helpers (for example the direct PPC branch decoder used by the HIR CALL

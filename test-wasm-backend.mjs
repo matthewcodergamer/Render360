@@ -30,6 +30,11 @@ const required = [
   'r360_wasm_backend_cfg_status', 'r360_wasm_backend_cfg_module_ptr',
   'r360_wasm_backend_cfg_module_size', 'r360_wasm_backend_cfg_lowered_instructions',
   'r360_wasm_backend_cfg_context_ptr',
+  'r360_wasm_backend_cfg_continuation_slot_count',
+  'r360_wasm_backend_cfg_continuation_state_size',
+  'r360_wasm_backend_cfg_continuation_ptr',
+  'r360_wasm_backend_cfg_continuation_status',
+  'r360_wasm_backend_cfg_continuation_reset',
 ];
 for (const name of required) {
   if (typeof pick(name) !== 'function') throw new Error(`Missing WasmBackend gate export ${name}`);
@@ -122,8 +127,17 @@ async function cfgCase({ name, ppc, initialGprs = [], expectedR3, expectedCtr = 
   const generated = await instantiateGenerated('_cfg');
   if (generated.lowered < minLowered) throw new Error(`${name}: CFG lowered only ${generated.lowered}`);
   const contextPtr = pick('r360_wasm_backend_cfg_context_ptr')() >>> 0;
+  const continuationSlots = pick('r360_wasm_backend_cfg_continuation_slot_count')() >>> 0;
+  const continuationSize = pick('r360_wasm_backend_cfg_continuation_state_size')() >>> 0;
+  if (!continuationSlots || !continuationSize) throw new Error(`${name}: no CFG continuation storage`);
+  const continuationSlot = 0;
+  pick('r360_wasm_backend_cfg_continuation_reset')(continuationSlot);
+  const continuationPtr = pick('r360_wasm_backend_cfg_continuation_ptr')(continuationSlot) >>> 0;
+  if (!continuationPtr) throw new Error(`${name}: invalid CFG continuation pointer`);
   const view = seedContext(contextPtr, initialGprs);
-  const result = BigInt.asUintN(64, generated.childInstance.exports.run(contextPtr));
+  const result = BigInt.asUintN(64, generated.childInstance.exports.run(contextPtr, continuationPtr));
+  const continuationStatus = pick('r360_wasm_backend_cfg_continuation_status')(continuationSlot) >>> 0;
+  if (continuationStatus !== 2) throw new Error(`${name}: CFG continuation status=${continuationStatus}, expected completed=2`);
   const stored = view.getBigUint64(contextPtr + gprOffset + 3 * 8, true);
   if (result !== expected || stored !== expected) {
     throw new Error(`${name}: CFG mismatch result=0x${result.toString(16)} stored=0x${stored.toString(16)} expected=0x${expected.toString(16)}`);

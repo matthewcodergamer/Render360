@@ -37,11 +37,11 @@ for(const token of ['.cover-art-surface','#libraryView #profileButton'])must(has
 for(const token of ['.r360-brand','.performance-hud','.x-hud-table'])must(has(xeniosCss,token),`XeniOS CSS missing ${token}`);
 for(const token of ['--x16-move:#1e1b1e','left:12.0536%','top:55.0725%'])must(has(controllerCss,token),`controller CSS missing ${token}`);
 
-must(has(runtime,"from '../wasm-core.js'")&&has(runtime,"from '../runtime-host.js'"),'runtime must use canonical core/host names');
+must(has(runtime,"'../wasm-core.js'")&&has(runtime,"'../runtime-host.js'"),'runtime must use canonical core/host names');
 must(has(host,"'./runtime-worker.js'"),'runtime host must launch canonical worker');
 must(has(worker,"from './wasm-core.js'"),'runtime worker must load canonical core');
 must(has(core,'render360_xenia_core.wasm'),'canonical core loader must still load the package WASM artifact');
-for(const token of ['runtimeBlocker','fatalError','telemetry'])must(has(developerConsole,token),`developer console missing ${token}`);
+for(const token of ['runtimeBlocker','fatalError','render360-blocker-report-v1','render360PpcRuntimeIdentity'])must(has(developerConsole,token),`developer console missing ${token}`);
 
 if(failures.length){console.error('UI_CANONICAL_CONTRACT FAIL');for(const failure of failures)console.error(` - ${failure}`);process.exit(1);}
 console.log('UI_CANONICAL_CONTRACT PASS');

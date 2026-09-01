@@ -1,10 +1,10 @@
-import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js?v=44.10';
-import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js?v=44';
-import {resolveTitleCover} from './library/cover-resolver.js?v=44';
-import {prepareZipGame} from './import/zip-importer.js?v=44';
-import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js?v=44';
-import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js?v=44.11';
-import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory} from './storage/game-storage.js?v=44';
+import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js';
+import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js';
+import {resolveTitleCover} from './library/cover-resolver.js';
+import {prepareZipGame} from './import/zip-importer.js';
+import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js';
+import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js';
+import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory} from './storage/game-storage.js';
 
 const $=id=>document.getElementById(id);
 const runtime=new Render360Runtime();
@@ -130,7 +130,7 @@ window.addEventListener('keydown',e=>{const map={Enter:'START',Escape:'BACK',q:'
 async function boot(){
   setState('LIBRARY');$('importButton').disabled=true;$('emptyImportButton').disabled=true;await refreshLibrary();
   runtime.addEventListener('log',e=>log(e.detail.level,e.detail.message));runtime.addEventListener('telemetry',e=>updateHud(e.detail));runtime.addEventListener('framePresented',()=>{$('bootOverlay').classList.add('frame-live');if(appState==='BOOTING_GAME')setState('RUNNING',{keepScroll:true});});runtime.addEventListener('bootStage',e=>{setText('bootMessage',e.detail.message||'Working…');setText('bootStage',String(e.detail.stage||'runtime').toUpperCase());});runtime.addEventListener('runtimeBlocker',e=>log('warn',e.detail.message||'Runtime blocker'));runtime.addEventListener('fatalError',e=>log('error',e.detail.message));
-  try{await runtime.init();await restorePersistentSources();const c=runtime.contract();$('runtimeSyncStatus').classList.add('ready');setText('runtimeSyncText',`Runtime V${c.release} synced · Core V${c.loadedCoreBuild} (${c.coreSource}) · ${c.stfsExtraction}`);setText('aboutCore',`V${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutAbi',fmtHex(c.loadedAbi));$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Render360 ${RENDER360_RELEASE} ready · Core V${c.loadedCoreBuild} · ABI ${fmtHex(c.loadedAbi)} · ${c.stfsExtraction} · ISO/XEX/STFS launch adapters active`);}catch(error){$('runtimeSyncStatus').classList.add('error');setText('runtimeSyncText',`Runtime contract failed · ${error.message}`);setText('aboutCore','Unavailable');setText('aboutAbi','Unavailable');log('error',error.message);}
+  try{await runtime.init();await restorePersistentSources();const c=runtime.contract();$('runtimeSyncStatus').classList.add('ready');setText('runtimeSyncText',`Emulator ready · Core build ${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutCore',`Build ${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutAbi',fmtHex(c.loadedAbi));$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Render360 ready · Core build ${c.loadedCoreBuild} · ABI ${fmtHex(c.loadedAbi)} · ${c.stfsExtraction} · ISO/XEX/STFS launch adapters active`);}catch(error){$('runtimeSyncStatus').classList.add('error');setText('runtimeSyncText',`Runtime contract failed · ${error.message}`);setText('aboutCore','Unavailable');setText('aboutAbi','Unavailable');log('error',error.message);}
   await updateStorageUi();
 }
 boot();

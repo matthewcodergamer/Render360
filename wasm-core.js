@@ -1,5 +1,5 @@
-import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js?v=44';
-import {extractStfsEntryBrowser,browserStfsExtractorContract} from './render360-stfs-browser-extractor.mjs?v=44';
+import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js';
+import {extractStfsEntryBrowser,browserStfsExtractorContract} from './render360-stfs-browser-extractor.mjs';
 const U32 = 0x100000000;
 const STFS_STATUS = {
   0:'Idle', 1:'Working', 2:'Mounted', 3:'Mounted (partial)',
@@ -14,7 +14,7 @@ async function gunzip(bytes){if(typeof DecompressionStream!=='function')throw ne
 function validateInstance(instance,label){const e=instance?.exports||{};const missing=BASE_EXPORTS.filter(name=>name==='memory'?!e.memory:typeof e[name]!=='function');if(missing.length)throw new Error(`${label} core is missing required ABI exports: ${missing.join(', ')}`);return instance;}
 
 export class Render360Core {
-  constructor(url='./render360_xenia_core.wasm?v=44') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
+  constructor(url='./render360_xenia_core.wasm') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
 
   async init() {
     let result=null,networkError=null,embeddedError=null;
@@ -35,7 +35,7 @@ export class Render360Core {
   get abiVersion(){return this.exports.r360_abi_version()>>>0}
   get featureBits(){return this.exports.r360_feature_bits()>>>0}
   get nativeStfsExtraction(){return typeof this.exports?.r360_stfs_extract_begin==='function'}
-  get stfsExtractionMode(){return this.nativeStfsExtraction?'native-v32':'browser-v32-fallback'}
+  get stfsExtractionMode(){return this.nativeStfsExtraction?'native-wasm':'browser-fallback'}
   get extractionContract(){return this.nativeStfsExtraction?{native:true,version:this.buildVersion}:{native:false,...browserStfsExtractorContract()}}
   ioCapacity(){return this.exports.r360_io_capacity()>>>0}
   ioPtr(){return this.exports.r360_io_ptr()>>>0}

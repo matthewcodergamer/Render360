@@ -1,5 +1,5 @@
-import {mountXdvdfs} from './render360-xdvdfs.mjs?v=44.1';
-import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.1';
+import {mountXdvdfs} from './render360-xdvdfs.mjs';
+import {handoffDefaultXex} from './render360-title-controller.mjs';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];

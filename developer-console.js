@@ -2,7 +2,7 @@
 const SETTINGS_KEY='render360.settings.v44';
 const $=id=>document.getElementById(id);
 const entries=[];
-const MAX_LOGS=160;
+const MAX_LOGS=30;
 let enabled=false;
 let listenersInstalled=false;
 let opened=false;
@@ -20,16 +20,38 @@ function compactRuntimeStatus(){
   const el=$('runtimeSyncText');if(!el)return;
   const text=String(el.textContent||'');
   const match=text.match(/Runtime V(\d+).*?Core V(\d+).*?\(([^)]+)\)/i);
-  if(match)el.textContent=`Runtime V${match[1]} · Core V${match[2]} · ${match[3]}`;
+  if(match)el.textContent=`Emulator ready · Core build ${match[2]} · ${match[3]}`;
 }
-function addEntry(level,message,data=null){
-  if(!enabled)return;entries.push({at:Date.now(),level:String(level||'info'),message:String(message||''),data});if(entries.length>MAX_LOGS)entries.splice(0,entries.length-MAX_LOGS);render();
+function present(value){return value!==undefined&&value!==null&&value!=='';}
+function number(value){return present(value)&&Number.isFinite(Number(value))?Number(value):undefined;}
+function address(value){const n=number(value);return n===undefined?undefined:`0x${(n>>>0).toString(16).toUpperCase().padStart(8,'0')}`;}
+function compact(value){return Object.fromEntries(Object.entries(value).filter(([,item])=>present(item)));}
+function compactBlocker(detail){
+  const source=detail?.blocker||detail?.schedulerBlocker||detail||{};
+  return compact({
+    kind:source.kind||detail?.stage,
+    message:source.message||source.reason||detail?.message||detail?.reason,
+    address:address(source.address??source.sourceAddress??source.entry),
+    opcode:number(source.opcode??source.executionBlockerOpcode),
+    status:number(source.status??source.executionStatus),
+    instructions:number(source.instructions??source.executionInstructions),
+    module:source.module,
+    ordinal:present(source.ordinal)?`0x${Number(source.ordinal).toString(16).toUpperCase()}`:undefined,
+  });
+}
+function addEntry(level,message){
+  if(!enabled)return;
+  const next={at:Date.now(),level:String(level||'info'),message:String(message||'')};
+  const previous=entries.at(-1);
+  if(previous&&previous.level===next.level&&previous.message===next.message){previous.at=next.at;previous.count=(previous.count||1)+1;}
+  else entries.push(next);
+  if(entries.length>MAX_LOGS)entries.splice(0,entries.length-MAX_LOGS);render();
 }
 function eventHandler(event){
   if(!enabled)return;const type=event.type.replace('render360:',''),detail=event.detail||{};
-  if(type==='runtimeBlocker'||type==='fatalError'||detail?.stage==='blocked')lastBlocker=detail;
+  if(type==='runtimeBlocker'||type==='fatalError'||detail?.stage==='blocked')lastBlocker=compactBlocker(detail);
   const message=detail.message||detail.reason||detail.stage||type;
-  addEntry(type==='runtimeBlocker'||type==='fatalError'?'error':detail.level||'info',`${type}: ${message}`,detail);
+  addEntry(type==='runtimeBlocker'||type==='fatalError'?'error':detail.level||'info',`${type}: ${message}`);
 }
 function installListeners(){
   if(listenersInstalled)return;listenersInstalled=true;
@@ -38,10 +60,10 @@ function installListeners(){
   globalThis.addEventListener('unhandledrejection',e=>{if(enabled)addEntry('error',`Unhandled promise rejection · ${e.reason?.message||String(e.reason)}`);});
 }
 function consoleCss(){return `
-#r360DevConsole{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.7);display:flex;align-items:flex-end}.r360-dev-panel{width:100%;height:min(88dvh,820px);background:#0b0c0e;color:#f5f5f7;border-radius:24px 24px 0 0;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.12)}.r360-dev-head{display:flex;align-items:center;gap:8px;padding:14px 14px 12px;border-bottom:1px solid rgba(255,255,255,.1)}.r360-dev-head b{font-size:17px;flex:1}.r360-dev-head button{height:38px;border:0;border-radius:11px;background:#242529;color:#fff;padding:0 12px;font-weight:700}.r360-dev-body{overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 12px calc(18px + env(safe-area-inset-bottom))}.r360-dev-blocker{padding:11px 12px;margin-bottom:10px;border:1px solid rgba(255,69,58,.35);border-radius:14px;background:rgba(255,69,58,.1);font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}.r360-dev-log{font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid rgba(255,255,255,.09);border-radius:13px;overflow:hidden}.r360-dev-line{display:grid;grid-template-columns:64px 46px minmax(0,1fr);gap:6px;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)}.r360-dev-line:last-child{border-bottom:0}.r360-dev-line time{color:#6e6e73}.r360-dev-line strong{font-size:9px;color:#64d2ff}.r360-dev-line.error strong{color:#ff453a}.r360-dev-line.warn strong{color:#ffd60a}.r360-dev-line span{white-space:pre-wrap;word-break:break-word}.r360-console-fab{position:absolute;z-index:80;left:50%;top:max(6px,env(safe-area-inset-top));transform:translateX(-50%);width:48px;height:42px;border-radius:14px;border:1px solid rgba(255,255,255,.2);background:rgba(20,20,22,.7);color:#fff;font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace}.r360-dev-settings-row .console-mark{color:#0a84ff;font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace}#r360DevConsole.hidden{display:none!important}`;}
+#r360DevConsole{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.7);display:flex;align-items:flex-end}.r360-dev-panel{width:100%;max-width:100dvw;height:min(88dvh,820px);max-height:calc(100dvh - env(safe-area-inset-top));background:#0b0c0e;color:#f5f5f7;border-radius:24px 24px 0 0;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.12)}.r360-dev-head{display:flex;align-items:center;gap:8px;padding:14px 14px 12px;border-bottom:1px solid rgba(255,255,255,.1)}.r360-dev-head b{font-size:17px;flex:1}.r360-dev-head button{height:38px;border:0;border-radius:11px;background:#242529;color:#fff;padding:0 12px;font-weight:700}.r360-dev-body{overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 12px calc(18px + env(safe-area-inset-bottom))}.r360-dev-blocker{padding:11px 12px;margin-bottom:10px;border:1px solid rgba(255,69,58,.35);border-radius:14px;background:rgba(255,69,58,.1);font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word}.r360-dev-log{font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid rgba(255,255,255,.09);border-radius:13px;overflow:hidden}.r360-dev-line{display:grid;grid-template-columns:64px 46px minmax(0,1fr);gap:6px;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06)}.r360-dev-line:last-child{border-bottom:0}.r360-dev-line time{color:#6e6e73}.r360-dev-line strong{font-size:9px;color:#64d2ff}.r360-dev-line.error strong{color:#ff453a}.r360-dev-line.warn strong{color:#ffd60a}.r360-dev-line span{white-space:pre-wrap;word-break:break-word}.r360-console-fab{position:absolute;z-index:80;left:50%;top:max(6px,env(safe-area-inset-top));transform:translateX(-50%);width:48px;height:42px;border-radius:14px;border:1px solid rgba(255,255,255,.2);background:rgba(20,20,22,.7);color:#fff;font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace}.r360-dev-settings-row .console-mark{color:#0a84ff;font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace}#r360DevConsole.hidden{display:none!important}`;}
 function ensureUi(){
   if(!$('r360DevConsoleStyle')){const s=document.createElement('style');s.id='r360DevConsoleStyle';s.textContent=consoleCss();document.head.appendChild(s);}
-  if(!$('r360DevConsole')){const root=document.createElement('section');root.id='r360DevConsole';root.className='hidden';root.innerHTML='<div class="r360-dev-panel"><div class="r360-dev-head"><b>Developer Console</b><button id="r360DevCopy" type="button">Copy</button><button id="r360DevClose" type="button">Done</button></div><div class="r360-dev-body"><div id="r360DevBlocker" class="r360-dev-blocker"></div><div id="r360DevLog" class="r360-dev-log"></div></div></div>';document.body.appendChild(root);root.addEventListener('click',e=>{if(e.target===root)closeConsole();});$('r360DevClose').onclick=closeConsole;$('r360DevCopy').onclick=copyReport;}
+  if(!$('r360DevConsole')){const root=document.createElement('section');root.id='r360DevConsole';root.className='hidden';root.innerHTML='<div class="r360-dev-panel"><div class="r360-dev-head"><b>Developer Console</b><button id="r360DevCopy" type="button">Copy Report</button><button id="r360DevClose" type="button">Done</button></div><div class="r360-dev-body"><div id="r360DevBlocker" class="r360-dev-blocker"></div><div id="r360DevLog" class="r360-dev-log"></div></div></div>';document.body.appendChild(root);root.addEventListener('click',e=>{if(e.target===root)closeConsole();});$('r360DevClose').onclick=closeConsole;$('r360DevCopy').onclick=copyReport;}
   installEntryPoints();render();
 }
 function installEntryPoints(){
@@ -50,11 +72,52 @@ function installEntryPoints(){
 }
 function removeEntryPoints(){$('r360RuntimeConsole')?.remove();$('appDeveloperConsoleButton')?.remove();$('r360DevConsole')?.classList.add('hidden');opened=false;}
 function render(){
-  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){if(lastBlocker){blocker.hidden=false;blocker.textContent=`CURRENT BLOCKER\n${lastBlocker.message||lastBlocker.reason||JSON.stringify(lastBlocker)}`;}else{blocker.hidden=true;}}
-  if(!log)return;log.innerHTML='';for(const e of entries){const row=document.createElement('div');row.className=`r360-dev-line ${e.level}`;row.innerHTML='<time></time><strong></strong><span></span>';row.children[0].textContent=new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});row.children[1].textContent=e.level.toUpperCase();row.children[2].textContent=e.message;log.appendChild(row);}if(!entries.length)log.innerHTML='<div class="r360-dev-line"><span></span><strong>INFO</strong><span>No runtime events captured yet.</span></div>';
+  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
+  if(!log)return;log.innerHTML='';for(const e of entries){const row=document.createElement('div');row.className=`r360-dev-line ${e.level}`;row.innerHTML='<time></time><strong></strong><span></span>';row.children[0].textContent=new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});row.children[1].textContent=e.level.toUpperCase();row.children[2].textContent=`${e.message}${e.count>1?` ×${e.count}`:''}`;log.appendChild(row);}if(!entries.length)log.innerHTML='<div class="r360-dev-line"><span></span><strong>INFO</strong><span>No runtime events captured yet.</span></div>';
 }
-function report(){return {generatedAt:new Date().toISOString(),page:location.href,state:document.body.dataset.state||null,blocker:lastBlocker,runtime:globalThis.render360ModernTitle||null,logs:entries};}
-async function copyReport(){const text=JSON.stringify(report(),(k,v)=>typeof v==='bigint'?String(v):v,2);try{await navigator.clipboard.writeText(text);}catch{}}
+function report(){
+  const state=globalThis.render360ModernTitle||{};
+  const result=state.result||{};
+  const compatibility=result.compatibilityExecution||{};
+  const scheduler=state.threadScheduler?.inspect?.()||state.schedulerReport||result.commercialCpu?.firstPump||null;
+  const gpu=state.gpuTraffic||result.titleGpuTelemetry||result.browserHleTelemetry||{};
+  const kernelBlocker=result.reachedKernelBlocker||result.firstKernelBlocker||null;
+  const blocker=Object.keys(lastBlocker||{}).length?lastBlocker:compactBlocker(state.schedulerBlocker||result.executionBlocker||kernelBlocker);
+  return {
+    schema:'render360-blocker-report-v1',
+    generatedAt:new Date().toISOString(),
+    page:compact({path:location.pathname,state:document.body.dataset.state||undefined}),
+    runtimeAsset:globalThis.render360PpcRuntimeIdentity||null,
+    blocker:Object.keys(blocker).length?blocker:null,
+    cpu:compact({
+      entry:address(result.entry),hir:number(result.hir),runtimeBoundary:result.runtimeBoundary,
+      executionStatus:number(result.executionStatus),instructions:number(result.executionInstructions??compatibility.executionInstructions),
+      executionBlockerKind:result.executionBlockerKind,executionBlockerOpcode:number(result.executionBlockerOpcode),
+      executionBlockerAddress:address(result.executionBlockerAddress),translatedFunctions:number(result.translatedFunctionCount),
+      firstTranslatedFunction:address(result.firstTranslatedFunction),callableFunctions:number(state.ppcSession?.functionCount??result.commercialCpu?.callableFunctionCount),
+      schedulerReady:Boolean(state.threadScheduler),schedulerState:scheduler?.state||scheduler?.status,
+    }),
+    kernel:compact({
+      imports:number(result.kernelImportCount??result.importCount),registered:number(result.registeredKernelImports),calls:number(result.kernelCalls),
+      lastStatus:number(result.lastKernelServiceStatus),reachedBlocker:kernelBlocker?compactBlocker(kernelBlocker):undefined,
+    }),
+    gpu:compact({
+      ringInitialized:gpu.ringInitialized,producerObserved:gpu.producerObserved,packets:number(gpu.packets),draws:number(gpu.draws),
+      swaps:number(gpu.swaps),presents:number(gpu.presents),realTitleFrameReady:gpu.realTitleFrameReady,reason:gpu.reason,
+    }),
+    logs:entries.map(({at,level,message,count})=>compact({at:new Date(at).toISOString(),level,message,count})),
+  };
+}
+async function writeClipboard(text){
+  try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return true;}}catch{}
+  const field=document.createElement('textarea');field.value=text;field.readOnly=true;field.setAttribute('aria-hidden','true');field.style.cssText='position:fixed;inset:0;width:1px;height:1px;opacity:0;';document.body.appendChild(field);field.focus();field.select();field.setSelectionRange(0,field.value.length);
+  let copied=false;try{copied=document.execCommand('copy');}catch{}field.remove();return copied;
+}
+async function copyReport(){
+  const button=$('r360DevCopy');const original=button?.textContent||'Copy Report';
+  const text=JSON.stringify(report(),(key,value)=>typeof value==='bigint'?String(value):value,2);
+  const copied=await writeClipboard(text);if(button){button.textContent=copied?'Copied':'Copy failed';setTimeout(()=>{button.textContent=original;},1400);}return copied;
+}
 function openConsole(){if(!enabled)return;ensureUi();opened=true;$('r360DevConsole').classList.remove('hidden');render();}
 function closeConsole(){opened=false;$('r360DevConsole')?.classList.add('hidden');}
 function setEnabled(next){
@@ -63,5 +126,5 @@ function setEnabled(next){
   if(enabled){installListeners();ensureUi();addEntry('info','Developer Mode enabled');}else removeEntryPoints();
 }
 function tick(){unlockNavigation();compactRuntimeStatus();setEnabled(readDeveloperMode());if(enabled)installEntryPoints();}
-function start(){unlockNavigation();compactRuntimeStatus();setEnabled(readDeveloperMode());setInterval(tick,500);globalThis.render360DeveloperConsole={open:openConsole,close:closeConsole,report,setEnabled,get enabled(){return enabled;}};}
+function start(){unlockNavigation();compactRuntimeStatus();setEnabled(readDeveloperMode());setInterval(tick,500);globalThis.render360DeveloperConsole={open:openConsole,close:closeConsole,report,copy:copyReport,setEnabled,get enabled(){return enabled;}};}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();

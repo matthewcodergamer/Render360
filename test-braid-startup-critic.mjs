@@ -4,7 +4,10 @@ const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.w
 const controller=fs.readFileSync('render360-title-controller.mjs','utf8');
 const titleRuntime=fs.readFileSync('render360-browser-title-runtime.mjs','utf8');
 for(const marker of ["map(0,1,zeroPageBacking,0,readWrite)","applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress})","r360_ppc_probe_page_sparse_code","xenia-main-thread-context"]) if(!controller.includes(marker)) throw new Error(`missing Braid startup invariant: ${marker}`);
-if(!titleRuntime.includes("xenia_ppc_bootstrap.wasm?v=44.10")) throw new Error('browser bootstrap cache key is not synchronized');
+if(!titleRuntime.includes("PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm'")) throw new Error('canonical browser bootstrap URL is missing');
+if(!titleRuntime.includes("PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json'")) throw new Error('browser bootstrap provenance URL is missing');
+if(!titleRuntime.includes("Symbol.for('render360.ppc.bootstrap.singleton')")) throw new Error('browser bootstrap singleton is missing');
+if(titleRuntime.includes('?v=')) throw new Error('versioned module/runtime URLs can create duplicate PPC loader state');
 const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
 const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
 const imports=wasi.getImportObject(mod);

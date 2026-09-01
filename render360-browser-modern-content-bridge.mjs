@@ -1,33 +1,26 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.4';
-import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.10';
-import {handoffDefaultXex} from './render360-title-controller.mjs?v=44.10';
-import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs?v=44.4';
-import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs?v=44.4';
-import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs?v=44.4';
-import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs?v=44.4';
-import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs?v=44.4';
+import {installRender360Buffer} from './render360-byte-buffer.mjs';
+import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {handoffDefaultXex} from './render360-title-controller.mjs';
+import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs';
+import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
+import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
+import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
+import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs';
 
 installRender360Buffer();
 
 const MAX_XEX_BYTES=256*1024*1024;
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
-let bootstrapPromise=null;
 let activeRun=0;
 let activeScheduler=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
 async function getBootstrap(onStage=null){
-  const wasCached=Boolean(bootstrapPromise);
+  const wasCached=Boolean(globalThis.render360PpcRuntimeIdentity?.verified);
   stage(onStage,'runtime',wasCached?'Checking generated WASM CPU runtime…':'Loading generated WASM CPU runtime…');
-  if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();
-  try{
-    const bootstrap=await bootstrapPromise;
-    stage(onStage,'runtime','Generated WASM CPU runtime ready');
-    return bootstrap;
-  }catch(error){
-    bootstrapPromise=null;
-    throw error;
-  }
+  const bootstrap=await loadRender360Bootstrap();
+  stage(onStage,'runtime','Verified generated WASM CPU runtime ready');
+  return bootstrap;
 }
 function stopActive(){try{activeScheduler?.stop?.();}catch{}activeScheduler=null;hideTitleFrontbuffer();}
 

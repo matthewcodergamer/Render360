@@ -1,5 +1,5 @@
-import {Render360Core} from './wasm-core-v32.js';
-import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs?v=44.2';
+import {Render360Core} from './wasm-core.js';
+import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
@@ -11,7 +11,6 @@ const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart
 const fmtBytes=value=>{const n=Number(value)||0;if(n<1024)return`${n} B`;if(n<1048576)return`${(n/1024).toFixed(1)} KB`;if(n<1073741824)return`${(n/1048576).toFixed(1)} MB`;return`${(n/1073741824).toFixed(2)} GB`};
 
 let corePromise=null;
-let bootstrapPromise=null;
 let activeRun=0;
 let activeScheduler=null;
 
@@ -47,7 +46,7 @@ function showFailure(error){
   hostLog('error',`Modern ISO runtime stopped: ${error?.message||error}`);
 }
 async function getCore(){if(!corePromise)corePromise=(async()=>{const core=new Render360Core();await core.init();return core})();return corePromise}
-async function getBootstrap(){if(!bootstrapPromise)bootstrapPromise=loadRender360Bootstrap();return bootstrapPromise}
+async function getBootstrap(){return loadRender360Bootstrap()}
 
 function shaderSummary(shaderRuntime,shaderWebGPU=null){
   if(!shaderRuntime?.available||!shaderRuntime.capturedShaders)return '';

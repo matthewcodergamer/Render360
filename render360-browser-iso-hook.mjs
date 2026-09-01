@@ -1,15 +1,15 @@
-import {Render360Core} from './wasm-core-v32.js';
+import {Render360Core} from './wasm-core.js';
 import {mountXboxIsoBrowser,loadRender360Bootstrap,handoffXboxIsoBrowser} from './render360-browser-title-runtime.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 
 const $=id=>document.getElementById(id);
 const fmt=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:n<1073741824?`${(n/1048576).toFixed(1)} MB`:`${(n/1073741824).toFixed(2)} GB`;
 const hex=n=>`0x${(Number(n)>>>0).toString(16).padStart(8,'0')}`;
-let modernCore=null,modernBootstrap=null,busy=false;
+let modernCore=null,busy=false;
 function setText(id,text){const e=$(id);if(e)e.textContent=text;}
 function boundary(title,text){setText('boundaryTitle',title);setText('boundaryText',text);}
 async function core(){if(!modernCore){modernCore=new Render360Core();await modernCore.init();}return modernCore;}
-async function bootstrap(){if(!modernBootstrap)modernBootstrap=await loadRender360Bootstrap();return modernBootstrap;}
+async function bootstrap(){return loadRender360Bootstrap();}
 
 async function runIso(file){
   if(busy)return;busy=true;

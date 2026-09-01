@@ -1,4 +1,4 @@
-import '../render360-browser-features.mjs?v=44.11';
+import '../render360-browser-features.mjs';
 
 const KEY='render360.settings.v44';
 const LEGACY_KEYS=['render360.settings.v43','render360.settings.v41'];

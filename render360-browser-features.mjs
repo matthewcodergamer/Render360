@@ -214,7 +214,7 @@ function flashAction(id,text){
 async function ensureServiceWorker(){
   if(!prefs.serviceWorker||!('serviceWorker' in navigator)||!globalThis.isSecureContext)return null;
   try{
-    const url=new URL('./render360-sw.js?v=44.11',import.meta.url);
+    const url=new URL('./render360-sw.js',import.meta.url);
     swRegistration=await navigator.serviceWorker.register(url,{scope:'./',updateViaCache:'none'});
     await swRegistration.update().catch(()=>{});
     if(swRegistration.navigationPreload)await swRegistration.navigationPreload.enable().catch(()=>{});
@@ -301,7 +301,7 @@ function installGameplayHooks(){
   observer.observe(document.body,{attributes:true,attributeFilter:['data-state']});
 }
 function installIconLinks(){
-  const href=new URL('./render360-app-icon.svg?v=44.11',import.meta.url).href;
+  const href=new URL('./render360-app-icon.svg',import.meta.url).href;
   for(const rel of ['icon','mask-icon']){
     let link=document.querySelector(`link[rel="${rel}"]`);
     if(!link){link=document.createElement('link');link.rel=rel;document.head.appendChild(link);}

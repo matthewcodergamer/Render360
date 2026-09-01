@@ -69,8 +69,6 @@ on:
       - 'wasm-backend-function-cache.mjs'
       - 'render360_xenia_core.cpp'
       - 'package-core.cpp'
-      - 'render360_xenia_core.wasm'
-      - 'render360_xenia_core_embedded.js'
       - 'build-core.sh'
       - 'wasm-core.js'
       - 'xenia_port/**'
@@ -94,7 +92,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   xenia-wasm32-bootstrap:
@@ -211,29 +209,6 @@ jobs:
           if [ -f build/xenia-ppc-bootstrap/report.tsv ]; then cat build/xenia-ppc-bootstrap/report.tsv; else echo 'No compile report generated.'; fi
           echo
           if [ -f build/xenia-ppc-bootstrap/link-report.txt ]; then cat build/xenia-ppc-bootstrap/link-report.txt; else echo 'No link report generated.'; fi
-      - name: Publish verified browser bootstrap
-        if: success()
-        run: |
-          cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm ./xenia_ppc_bootstrap.wasm
-          SHA256="$(sha256sum ./xenia_ppc_bootstrap.wasm | awk '{print $1}')"
-          BYTES="$(stat -c%s ./xenia_ppc_bootstrap.wasm)"
-          cat > xenia_ppc_bootstrap.meta.json <<EOF
-          {
-            "sourceCommit": "${GITHUB_SHA}",
-            "sourceRun": "${GITHUB_RUN_ID}",
-            "sha256": "${SHA256}",
-            "bytes": ${BYTES},
-            "runtimeFix": "verified-main-bootstrap",
-            "browserCache": "${GITHUB_SHA::12}"
-          }
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json
-          if ! git diff --cached --quiet; then
-            git commit -m "build: publish verified Xenia bootstrap [skip ci]"
-            git push origin HEAD:main
-          fi
       - name: Upload bootstrap report
         if: always()
         uses: actions/upload-artifact@v4

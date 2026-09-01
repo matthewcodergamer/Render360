@@ -1,8 +1,12 @@
-import {installRender360Buffer} from './render360-byte-buffer.mjs?v=44.2';
-import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs?v=44.2';
-import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs?v=44.2';
-import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs?v=44.2';
+import {installRender360Buffer} from './render360-byte-buffer.mjs';
+import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
+import {createPersistentPpcSession,persistentPpcSessionContract} from './render360-browser-ppc-session.mjs';
+import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs';
 installRender360Buffer();
+
+export const PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm';
+export const PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json';
+const BOOTSTRAP_SINGLETON_KEY=Symbol.for('render360.ppc.bootstrap.singleton');
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
   'memory','r360_ppc_probe_load_at','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
@@ -43,25 +47,78 @@ export function validateBrowserBootstrap(instance){
   return {ok:true,exports:REQUIRED_BOOTSTRAP_EXPORTS.length,memoryBytes:instance.exports.memory.buffer.byteLength};
 }
 
-export async function loadRender360Bootstrap({url='./xenia_ppc_bootstrap.wasm?v=44.10',fetchImpl=globalThis.fetch,onStdout=null,onStderr=null}={}){
+function byteView(bytes){
+  if(bytes instanceof ArrayBuffer)return new Uint8Array(bytes);
+  if(ArrayBuffer.isView(bytes))return new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  throw new TypeError('Render360 bootstrap bytes must be an ArrayBuffer or typed array');
+}
+
+function sha256Hex(digest){return [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');}
+
+export async function validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl=globalThis.crypto}={}){
+  const view=byteView(bytes);
+  if(!metadata||typeof metadata!=='object')throw new Error('Render360 bootstrap provenance metadata is missing');
+  if(!/^[0-9a-f]{40}$/i.test(String(metadata.sourceCommit||'')))throw new Error('Render360 bootstrap source commit is invalid');
+  if(!/^\d+$/.test(String(metadata.sourceRun||'')))throw new Error('Render360 bootstrap source run is invalid');
+  if(!/^[0-9a-f]{64}$/i.test(String(metadata.sha256||'')))throw new Error('Render360 bootstrap SHA-256 is invalid');
+  if(!Number.isSafeInteger(Number(metadata.bytes))||Number(metadata.bytes)!==view.byteLength){
+    throw new Error(`Render360 bootstrap byte count mismatch: expected ${metadata.bytes}, received ${view.byteLength}`);
+  }
+  if(!cryptoImpl?.subtle?.digest)throw new Error('SHA-256 verification is unavailable');
+  const actualSha256=sha256Hex(await cryptoImpl.subtle.digest('SHA-256',view));
+  if(actualSha256!==String(metadata.sha256).toLowerCase()){
+    throw new Error(`Render360 bootstrap SHA-256 mismatch: expected ${metadata.sha256}, received ${actualSha256}`);
+  }
+  return {
+    verified:true,
+    sourceCommit:String(metadata.sourceCommit).toLowerCase(),
+    sourceRun:String(metadata.sourceRun),
+    sha256:actualSha256,
+    bytes:view.byteLength,
+  };
+}
+
+async function instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
-  const response=await fetchImpl(url,{cache:'no-store'});
+  const [metadataResponse,response]=await Promise.all([
+    fetchImpl(metadataUrl,{cache:'no-store'}),
+    fetchImpl(url,{cache:'no-store'}),
+  ]);
+  if(!metadataResponse?.ok)throw new Error(`Render360 bootstrap metadata fetch failed: HTTP ${metadataResponse?.status??0}`);
   if(!response?.ok)throw new Error(`Render360 bootstrap fetch failed: HTTP ${response?.status??0}`);
+  const [metadata,bytes]=await Promise.all([metadataResponse.json(),response.arrayBuffer()]);
+  const identity=await validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl});
   const host=createRender360BrowserImports({onStdout,onStderr});
-  let module,instance;
-  try{
-    const result=await WebAssembly.instantiateStreaming(response.clone(),host.imports);
-    module=result.module;instance=result.instance;
-  }catch(streamError){
-    const bytes=await response.arrayBuffer();
-    module=await WebAssembly.compile(bytes);
-    try{instance=await WebAssembly.instantiate(module,host.imports);}catch(error){throw new Error(`Render360 bootstrap instantiate failed: ${error?.message||error}; streaming error: ${streamError?.message||streamError}`);}
-  }
+  const module=await WebAssembly.compile(bytes);
+  let instance;
+  try{instance=await WebAssembly.instantiate(module,host.imports);}catch(error){throw new Error(`Render360 bootstrap instantiate failed: ${error?.message||error}`);}
   validateRender360BrowserImports(module);
   attachRender360BrowserInstance(host,instance);
   validateBrowserBootstrap(instance);
+  globalThis.render360PpcRuntimeIdentity={...identity,url,metadataUrl,loadedAt:new Date().toISOString(),loadCount:1};
   return instance;
+}
+
+export async function loadRender360Bootstrap({
+  url=PPC_BOOTSTRAP_URL,
+  metadataUrl=PPC_BOOTSTRAP_META_URL,
+  fetchImpl=globalThis.fetch,
+  onStdout=null,
+  onStderr=null,
+  cryptoImpl=globalThis.crypto,
+}={}){
+  const canonical=url===PPC_BOOTSTRAP_URL&&metadataUrl===PPC_BOOTSTRAP_META_URL&&fetchImpl===globalThis.fetch;
+  if(!canonical)return instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl});
+  const existing=globalThis[BOOTSTRAP_SINGLETON_KEY];
+  if(existing?.promise)return existing.promise;
+  const state={promise:null};
+  state.promise=instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl}).catch(error=>{
+    if(globalThis[BOOTSTRAP_SINGLETON_KEY]===state)delete globalThis[BOOTSTRAP_SINGLETON_KEY];
+    throw error;
+  });
+  globalThis[BOOTSTRAP_SINGLETON_KEY]=state;
+  return state.promise;
 }
 
 export async function createBrowserTitlePpcSession({bootstrap,initialGprs={},clearContext=true}={}){
@@ -76,7 +133,7 @@ export async function createBrowserTitleThreadScheduler({bootstrap,session=null,
 
 export async function mountXboxIsoBrowser(file){
   if(!file||typeof file.slice!=='function'||!Number.isSafeInteger(Number(file.size)))throw new TypeError('Xbox ISO must be a browser File/Blob-like object');
-  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs?v=44.2');
+  const {mountXdvdfs}=await import('./render360-xdvdfs.mjs');
   const volume=await mountXdvdfs(file);
   const node=await volume.stat('/default.xex');
   return {volume,defaultXex:node,layout:volume.layout,partitionOffset:volume.partitionOffset,telemetry:volume.telemetry};
@@ -96,7 +153,7 @@ export async function handoffXboxIsoBrowser({
   core,
   file,
   bootstrap=null,
-  bootstrapUrl='./xenia_ppc_bootstrap.wasm?v=44.10',
+  bootstrapUrl=PPC_BOOTSTRAP_URL,
   scanEntryFunction=true,
   productionThreadedExecution=true,
   primaryThreadContext=0,
@@ -106,7 +163,7 @@ export async function handoffXboxIsoBrowser({
 }){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
-  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs?v=44.2');
+  const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs');
   const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
   const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
   if(!productionThreadedExecution)return {bootstrap:runtime,result};
@@ -209,7 +266,10 @@ export async function handoffXboxIsoBrowser({
 }
 
 export function browserTitleRuntimeContract(){return {
-  bootstrapUrl:'./xenia_ppc_bootstrap.wasm?v=44.10',
+  bootstrapUrl:PPC_BOOTSTRAP_URL,
+  bootstrapMetadataUrl:PPC_BOOTSTRAP_META_URL,
+  bootstrapIntegrity:'SHA-256 + byte count + source commit/run',
+  singletonBootstrap:true,
   requiredExports:[...REQUIRED_BOOTSTRAP_EXPORTS],
   input:'File/Blob XDVDFS ISO',
   wholeIsoCopy:false,

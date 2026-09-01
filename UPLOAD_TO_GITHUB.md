@@ -23,6 +23,7 @@ Keep `.github/workflows/` too so GitHub can rebuild/smoke-test the WASM core and
 
 After Pages republishes, open:
 
-`https://matthewcodergamer.github.io/Render360/?v=30`
+`https://matthewcodergamer.github.io/Render360/`
 
-The `?v=30` is only a cache buster for Safari; the normal site remains `/Render360/`.
+The production site uses canonical, unversioned module and runtime URLs. Runtime
+artifacts are fetched without cache and verified against their published hashes.

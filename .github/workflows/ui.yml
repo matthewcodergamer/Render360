@@ -37,6 +37,7 @@ on:
       - 'test-ui-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
       - 'test-package-core-artifact-contract.mjs'
+      - 'test-runtime-asset-identity.mjs'
       - '.github/workflows/ui.yml'
   pull_request:
     paths:
@@ -73,6 +74,7 @@ on:
       - 'test-ui-contract.mjs'
       - 'test-stfs-browser-extractor.mjs'
       - 'test-package-core-artifact-contract.mjs'
+      - 'test-runtime-asset-identity.mjs'
       - '.github/workflows/ui.yml'
 
 permissions:
@@ -108,7 +110,9 @@ jobs:
           node --check import/zip-importer.js
           node --check profiles/title-profile-store.js
       - name: Enforce canonical browser contract
-        run: node test-ui-contract.mjs
+        run: |
+          node test-ui-contract.mjs
+          node test-runtime-asset-identity.mjs
       - name: Verify checked-in package WASM artifact
         run: node test-package-core-artifact-contract.mjs
       - name: Regress STFS extraction compatibility

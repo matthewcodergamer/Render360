@@ -6,10 +6,12 @@ on:
     paths:
       - '.github/workflows/braid-startup-gate.yml'
       - 'test-braid-startup-critic.mjs'
+      - 'test-direct-call-sparse-window.mjs'
       - 'test-opcode39-main-thread.mjs'
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'render360-title-controller.mjs'
+      - 'render360-iso-title-controller.mjs'
       - 'render360-browser-title-runtime.mjs'
       - 'app.js'
       - 'ui-behavior.js'
@@ -27,6 +29,8 @@ jobs:
           node-version: '22'
       - name: Verify published opcode39 main-thread path
         run: node ./test-opcode39-main-thread.mjs ./xenia_ppc_bootstrap.wasm
+      - name: Verify published direct and tail guest calls
+        run: node ./test-direct-call-sparse-window.mjs ./xenia_ppc_bootstrap.wasm
       - name: Verify published Braid startup integration
         run: node ./test-braid-startup-critic.mjs ./xenia_ppc_bootstrap.wasm
       - name: Verify canonical browser runtime chain

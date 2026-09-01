@@ -11,6 +11,7 @@ on:
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
       - 'test-wasm-backend-cfg.mjs'
+      - 'test-wasm-backend-calls.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
       - 'test-hir-load-offset-addressing.mjs'
@@ -64,6 +65,9 @@ jobs:
 
       - name: Verify resumable integer CFG backend
         run: timeout 90s node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify generated guest calls and Braid LOAD_OFFSET/XAM path
+        run: timeout 90s node ./test-wasm-backend-calls.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser Xbox thread scheduler
         run: timeout 90s node ./test-browser-thread-scheduler.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

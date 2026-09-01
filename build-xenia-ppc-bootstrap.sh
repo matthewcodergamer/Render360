@@ -65,6 +65,9 @@ compile_one() {
     local category
     category="$(classify_failure "$log")"
     echo "BLOCKED ($category)"
+    echo "----- compiler diagnostics: $label -----" >&2
+    cat "$log" >&2
+    echo "----- end compiler diagnostics -----" >&2
     printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
     failed=$((failed + 1))
   fi
@@ -84,6 +87,9 @@ compile_c() {
     local category
     category="$(classify_failure "$log")"
     echo "BLOCKED ($category)"
+    echo "----- compiler diagnostics: $label -----" >&2
+    cat "$log" >&2
+    echo "----- end compiler diagnostics -----" >&2
     printf '%s\tBLOCKED\t%s\n' "$label" "$category" >> "$OUT/report.tsv"
     failed=$((failed + 1))
   fi

@@ -12,6 +12,19 @@ if 'include "sparse_guest_memory.h"' not in text:
         raise SystemExit('title runtime memory overlay: include anchor changed')
     text = text.replace(include_anchor, include_replacement, 1)
 
+# Xenia's guest memory backend addresses memory through the low 32 bits of the
+# PPC effective address. LOAD_OFFSET / STORE_OFFSET offsets are signed 64-bit
+# constants in HIR (for example -4), but the effective Xbox virtual address is
+# computed modulo 2^32. The compatibility executor used to add the operands as
+# uint64_t and reject values above UINT32_MAX, which turns every negative D-form
+# displacement into a false memory failure. Mirror Xenia's x64 backend: discard
+# garbage/high bits from the base and perform the add in 32-bit address space.
+address_old = '''  const uint64_t effective = base + displacement;\n  if (effective > std::numeric_limits<uint32_t>::max()) return false;\n  *guest_address = static_cast<uint32_t>(effective);\n  return true;\n'''
+address_new = '''  const uint32_t base32 = static_cast<uint32_t>(base);\n  const uint32_t displacement32 = static_cast<uint32_t>(displacement);\n  *guest_address = base32 + displacement32;\n  return true;\n'''
+if address_old not in text:
+    raise SystemExit('title runtime memory overlay: ResolveGuestAddress anchor changed')
+text = text.replace(address_old, address_new, 1)
+
 # Replace only the guest-memory implementation. The source may insert runtime
 # helpers (for example the direct PPC branch decoder used by the HIR CALL
 # fallback) between StoreGuestValue and ExecuteIndirect. Those helpers are part

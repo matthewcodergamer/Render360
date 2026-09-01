@@ -12,11 +12,14 @@ if 'include "sparse_guest_memory.h"' not in text:
         raise SystemExit('title runtime memory overlay: include anchor changed')
     text = text.replace(include_anchor, include_replacement, 1)
 
-# Replace the complete guest-memory implementation by function boundaries rather
-# than matching an old source snapshot. This intentionally survives changes in
-# the base executor such as adding LOAD_STORE_BYTE_SWAP support.
+# Replace only the guest-memory implementation. The source may insert runtime
+# helpers (for example the direct PPC branch decoder used by the HIR CALL
+# fallback) between StoreGuestValue and ExecuteIndirect. Those helpers are part
+# of the CPU runtime and must survive this overlay pass.
 start = text.find('bool LoadGuestValue(xe::Memory* memory, Value* destination,')
-end = text.find('\nbool ExecuteIndirect(', start)
+helper_boundary = text.find('\nbool DecodeDirectBranchTarget(', start)
+execute_boundary = text.find('\nbool ExecuteIndirect(', start)
+end = helper_boundary if helper_boundary >= 0 else execute_boundary
 if start < 0 or end < 0:
     raise SystemExit('title runtime memory overlay: guest load/store boundaries changed')
 

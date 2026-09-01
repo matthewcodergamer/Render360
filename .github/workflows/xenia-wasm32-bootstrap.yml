@@ -19,6 +19,7 @@ on:
       - 'test-guest-runtime-critic.mjs'
       - 'test-title-kernel-import-integration.mjs'
       - 'test-title-gpu-runtime.mjs'
+      - 'test-direct-call-sparse-window.mjs'
       - 'render360-title-gpu-traffic.mjs'
       - 'test-xenos-semantic-foundation.mjs'
       - 'test-xenos-title-state-foundation.mjs'
@@ -185,6 +186,8 @@ jobs:
         run: node ./test-title-kernel-import-integration.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify sparse title RAM, far PPC paging, Xenos MMIO and captured ring submission
         run: node ./test-title-gpu-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify direct calls page executable sparse subwindows
+        run: node ./test-direct-call-sparse-window.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and XEX bring-up
         run: |
           node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

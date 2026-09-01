@@ -22,6 +22,7 @@
 #include "xenia/memory.h"
 
 extern "C" uint32_t r360_ppc_probe_guest_base();
+extern "C" uint32_t r360_ppc_probe_loaded_size();
 extern "C" uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 
 #if defined(__wasm__)
@@ -37,9 +38,9 @@ ProbeBackend* g_probe_backend = nullptr;
 bool g_execute_correctness_on_assemble = true;
 constexpr uint32_t kProbeGuestSize = 64u * 1024u;
 
-bool IsInActiveProbeWindow(uint32_t address) {
+bool IsInLoadedProbeWindow(uint32_t address) {
   const uint32_t base = r360_ppc_probe_guest_base();
-  const uint64_t end = uint64_t(base) + kProbeGuestSize;
+  const uint64_t end = uint64_t(base) + r360_ppc_probe_loaded_size();
   return address >= base && uint64_t(address) < end;
 }
 
@@ -79,16 +80,23 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   if (!frontend) { std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n"); return false; }
   std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X active_base=0x%08X\n",
                address, r360_ppc_probe_guest_base());
-  if (!IsInActiveProbeWindow(address)) {
+  // A target being inside the reserved 64 KiB decoder address range does not
+  // mean that its guest bytes are loaded. Page targets outside the exact
+  // loaded span before scanning, otherwise Xenia decodes zero/stale bytes.
+  if (!IsInLoadedProbeWindow(address)) {
     const uint32_t paged = r360_ppc_probe_page_sparse_code(address);
     std::fprintf(stderr, "R360_CALL_RESOLVE sparse-page target=0x%08X bytes=%u new_base=0x%08X\n",
                  address, paged, r360_ppc_probe_guest_base());
-    if (!paged || !IsInActiveProbeWindow(address)) {
+    if (!paged || !IsInLoadedProbeWindow(address)) {
       std::fprintf(stderr, "R360_CALL_RESOLVE rejected: target unavailable in sparse guest code\n");
       return false;
     }
   }
   ProbeGuestFunction nested_function(module, address);
+  const uint32_t loaded_base = r360_ppc_probe_guest_base();
+  const uint32_t loaded_size = r360_ppc_probe_loaded_size();
+  if (loaded_size < 4u) return false;
+  nested_function.set_end_address(loaded_base + loaded_size - 4u);
   xe::cpu::ppc::PPCScanner scanner(frontend);
   if (!scanner.Scan(&nested_function, nullptr)) {
     std::fprintf(stderr, "R360_CALL_RESOLVE scan failed target=0x%08X\n", address); return false;

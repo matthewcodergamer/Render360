@@ -10,6 +10,7 @@ on:
       - 'render360-browser-title-runtime.mjs'
       - 'test-wasm-backend-cfg.mjs'
       - 'test-browser-thread-scheduler.mjs'
+      - 'test-direct-call-sparse-window.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -63,6 +64,9 @@ jobs:
 
       - name: Verify browser Xbox thread scheduler
         run: timeout 90s node ./test-browser-thread-scheduler.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify direct calls page executable sparse subwindows
+        run: timeout 90s node ./test-direct-call-sparse-window.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

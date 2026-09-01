@@ -80,16 +80,15 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   const contextPages=3;
   const readWrite=3;
 
-  // Compatibility fallback for the native-HIR title path. The current Braid
-  // entry sequence performs a 32-bit read through guest address 0 before any
-  // kernel import is called. Xenia's normal virtual-memory backend has a full
-  // guest address aperture, while Render360's strict sparse-memory path treated
-  // page zero as an immediate unmapped dependency failure. Map one private,
-  // zero-filled page only for this title execution context so a null-page read
-  // observes zero and execution can continue to the next real dependency.
-  // This is deliberately title-context-local rather than a global HIR hack.
-  const zeroPageBacking=alloc(1)>>>0;
-  if(!zeroPageBacking||(map(0,1,zeroPageBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map title compatibility zero page');
+  // Compatibility fallback for the native-HIR title path. Braid's current
+  // startup load is `lwz r11,0x46C0(r31)` while r31 is still zero, so its
+  // effective address is 0x000046C0. The previous workaround mapped only one
+  // 4 KiB page (0x0000-0x0FFF), leaving that exact address unmapped. Keep this
+  // workaround bounded to Xenia's first 64 KiB low-memory region rather than
+  // turning sparse memory into an unrestricted low-address alias.
+  const lowMemoryPages=0x10000/pageSize;
+  const lowMemoryBacking=alloc(lowMemoryPages)>>>0;
+  if(!lowMemoryBacking||(map(0,lowMemoryPages,lowMemoryBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map title low-memory compatibility aperture');
 
   const stackBacking=alloc(stackPages)>>>0;
   if(!stackBacking||(map(stackBase,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
@@ -119,7 +118,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true};
+  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
 }
 
 function stagePreparedPeImage(bootstrap,prepared){

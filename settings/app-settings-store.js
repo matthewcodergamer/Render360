@@ -37,7 +37,15 @@ export function loadAppSettings(){
   }catch{return normalizeSettings();}
 }
 
-export function saveAppSettings(value){const next=normalizeSettings(value);localStorage.setItem(KEY,JSON.stringify(next));return next;}
+export function saveAppSettings(value){
+  // The Execution Engine control is injected by execution-engine.js rather than
+  // owned by app.js. app.js keeps an in-memory settings snapshot, so preserve
+  // the live router preference when any of the older settings controls saves.
+  const stored=readJson(KEY)||{};
+  const liveMode=normalizeExecutionMode(globalThis.render360ExecutionModePreference||stored.preferredExecutionMode||value?.preferredExecutionMode||'auto');
+  const next=normalizeSettings({...value,preferredExecutionMode:liveMode});
+  localStorage.setItem(KEY,JSON.stringify(next));return next;
+}
 export function resetAppSettings(){localStorage.removeItem(KEY);for(const key of LEGACY_KEYS)localStorage.removeItem(key);return normalizeSettings();}
 export function appSettingDefaults(){return {...DEFAULTS};}
 export function resolveAppearance(appearance='system'){if(appearance==='light'||appearance==='dark')return appearance;return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';}

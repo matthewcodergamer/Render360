@@ -1,5 +1,6 @@
 const PREFIX='render360.profile.';
 const DEFAULT_PROFILE=Object.freeze({
+  executionMode:'inherit',
   renderer:'inherit',
   resolutionScale:'inherit',
   targetFps:'inherit',
@@ -20,18 +21,21 @@ const DEFAULT_PROFILE=Object.freeze({
   developerMode:false,
 });
 
+const normalizeExecutionMode=(value,allowInherit=false)=>{const valid=allowInherit?['inherit','auto','emulator','recompiled']:['auto','emulator','recompiled'];return valid.includes(String(value))?String(value):(allowInherit?'inherit':'auto');};
 function keyFor(game){const title=Number(game?.titleId||0)>>>0;return `${PREFIX}${title?title.toString(16).toUpperCase().padStart(8,'0'):game?.id||'default'}`;}
 export function loadTitleProfile(game){
-  try{const raw=localStorage.getItem(keyFor(game));return raw?{...DEFAULT_PROFILE,...JSON.parse(raw)}:{...DEFAULT_PROFILE};}catch{return {...DEFAULT_PROFILE};}
+  try{const raw=localStorage.getItem(keyFor(game));const value=raw?{...DEFAULT_PROFILE,...JSON.parse(raw)}:{...DEFAULT_PROFILE};value.executionMode=normalizeExecutionMode(value.executionMode,true);return value;}catch{return {...DEFAULT_PROFILE};}
 }
-export function saveTitleProfile(game,profile){const value={...DEFAULT_PROFILE,...profile};localStorage.setItem(keyFor(game),JSON.stringify(value));return value;}
+export function saveTitleProfile(game,profile){const value={...DEFAULT_PROFILE,...profile};value.executionMode=normalizeExecutionMode(value.executionMode,true);localStorage.setItem(keyFor(game),JSON.stringify(value));return value;}
 export function resetTitleProfile(game){localStorage.removeItem(keyFor(game));return {...DEFAULT_PROFILE};}
 export function profileDefaults(){return {...DEFAULT_PROFILE};}
 
 export function resolveTitleProfile(game,profile,globalSettings={}){
   const p={...DEFAULT_PROFILE,...profile};
+  const globalExecutionMode=normalizeExecutionMode(globalThis.render360ExecutionModePreference||globalSettings.preferredExecutionMode||'auto');
   return {
     ...p,
+    executionMode:p.executionMode==='inherit'?globalExecutionMode:normalizeExecutionMode(p.executionMode),
     renderer:p.renderer==='inherit'?(globalSettings.preferredRenderer||'auto'):p.renderer,
     resolutionScale:p.resolutionScale==='inherit'?Number(globalSettings.defaultResolutionScale||1):Number(p.resolutionScale||1),
     targetFps:p.targetFps==='inherit'?Number(globalSettings.defaultTargetFps||30):Number(p.targetFps||30),

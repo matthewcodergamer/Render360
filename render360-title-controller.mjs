@@ -191,7 +191,20 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   if(scanEntryFunction&&!scannedEntry)throw new Error('browser bootstrap is missing scanned title-entry execution');
   const hir=scanEntryFunction?(scannedEntry()>>>0):(pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0);
   const entryExecutionMode=scanEntryFunction?'xenia-scanned-entry-function':'bounded-entry-byte-probe';
-  if(!hir)throw new Error(`title entry handoff failed 0x${(pick(bootstrap,'r360_title_handoff_status')()>>>0).toString(16)} mode=${entryExecutionMode}`);
+  if(!hir){
+    const handoffStatus=pick(bootstrap,'r360_title_handoff_status')()>>>0;
+    const probeStatus=maybe(bootstrap,'r360_ppc_probe_status')?.()>>>0||0;
+    const scanDiagnostic=maybe(bootstrap,'r360_ppc_probe_scan_diagnostic')?.()>>>0||0;
+    const scanAddress=maybe(bootstrap,'r360_ppc_probe_scan_address')?.()>>>0||0;
+    const scanWindowEnd=maybe(bootstrap,'r360_ppc_probe_scan_window_end')?.()>>>0||0;
+    const scanHir=maybe(bootstrap,'r360_ppc_probe_scan_hir_instructions')?.()>>>0||0;
+    const scanReason=['idle','guard-rejected','scanner-failed','define-function-failed','zero-hir','translated'][scanDiagnostic]||'unknown';
+    const hex=value=>`0x${(value>>>0).toString(16).toUpperCase()}`;
+    const error=new Error(`title entry handoff failed ${hex(handoffStatus)} mode=${entryExecutionMode} scan=${scanReason}(${scanDiagnostic}) probe=${hex(probeStatus)} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanHIR=${scanHir}`);
+    error.code='R360_TITLE_ENTRY_HANDOFF_FAILED';
+    error.render360={kind:'ppc-entry-translation-failure',handoffStatus,probeStatus,scanDiagnostic,scanReason,scanAddress,scanWindowEnd,scanHir,entry:entry>>>0,entryExecutionMode};
+    throw error;
+  }
 
   const execStatusFn=maybe(bootstrap,'r360_ppc_probe_correctness_status');
   const execInstructionsFn=maybe(bootstrap,'r360_ppc_probe_correctness_instructions');

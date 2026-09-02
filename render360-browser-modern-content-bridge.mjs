@@ -61,6 +61,11 @@ async function translateOnlyXex({core,bootstrap,bytes,onStage}){
   if((setExecute(0)>>>0)!==0)throw new Error('Unable to enter translation-only PPC mode');
   let result;
   try{result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true});}
+  catch(error){
+    const blocker=error?.render360??{kind:'title-translation-failure',message:error?.message||String(error)};
+    stage(onStage,'blocked',error?.message||String(error),{blocker});
+    throw error;
+  }
   finally{setExecute(previous?1:0);}
   if((result.executionStatus>>>0)!==4)throw new Error(`Title translation unexpectedly executed guest PPC (status ${result.executionStatus>>>0})`);
   stage(onStage,'translate',`Translated entry 0x${(result.entry>>>0).toString(16).toUpperCase()} · ${result.translatedFunctionCount||0} functions`);

@@ -54,11 +54,35 @@ enum ProbeStatus : uint32_t {
   kProbeErrorTranslate = 0xE004,
 };
 
+// Scanned-entry translation used to collapse four different outcomes into a
+// single zero return. Keep this diagnostic separate from ProbeStatus so the
+// title handoff can retain its stable 0x82000005 ABI while browser reports say
+// exactly which Xenia stage failed.
+enum ProbeScanDiagnostic : uint32_t {
+  kProbeScanIdle = 0,
+  kProbeScanGuardRejected = 1,
+  kProbeScanScannerFailed = 2,
+  kProbeScanDefineFailed = 3,
+  kProbeScanZeroHIR = 4,
+  kProbeScanTranslated = 5,
+};
+
 xe::Memory* g_memory = nullptr;
 xe::cpu::Processor* g_processor = nullptr;
 ProbeModule* g_probe_module = nullptr;
 uint32_t g_loaded_size = 0;
 uint32_t g_status = kProbeCold;
+uint32_t g_scan_diagnostic = kProbeScanIdle;
+uint32_t g_scan_address = 0;
+uint32_t g_scan_window_end = 0;
+uint32_t g_scan_hir_instructions = 0;
+
+void ResetScanDiagnostic() {
+  g_scan_diagnostic = kProbeScanIdle;
+  g_scan_address = 0;
+  g_scan_window_end = 0;
+  g_scan_hir_instructions = 0;
+}
 
 bool EnsureRuntime() {
   if (g_processor) return true;
@@ -195,6 +219,7 @@ void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::ResetWasmBackendCallProbe();
+  render360::xenia_web::ResetScanDiagnostic();
   render360::xenia_web::g_active_guest_base =
       render360::xenia_web::kDefaultProbeGuestBase;
   render360::xenia_web::g_loaded_size = 0;
@@ -283,14 +308,28 @@ uint32_t r360_ppc_probe_translate() {
     return 0;
   }
 
+  const uint32_t hir = GetProbeTelemetry().hir_instructions;
+  if (!hir) {
+    // A zero-HIR translation is not success. The old path marked the probe as
+    // translated and then returned zero, leaving the caller and telemetry in
+    // contradictory states.
+    g_status = kProbeErrorTranslate;
+    return 0;
+  }
   g_status = kProbeTranslated;
-  return GetProbeTelemetry().hir_instructions;
+  return hir;
 }
 
 uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   using namespace render360::xenia_web;
+  ResetScanDiagnostic();
+  g_scan_address = address;
+  g_scan_window_end =
+      g_loaded_size >= 4u ? g_active_guest_base + g_loaded_size - 4u : 0u;
+
   if (!EnsureRuntime() || !g_loaded_size || !g_probe_module || (address & 3u) ||
       !IsProbeGuestRange(address, 4u)) {
+    g_scan_diagnostic = kProbeScanGuardRejected;
     if (g_status < 0xE000) g_status = kProbeErrorInput;
     return 0;
   }
@@ -302,14 +341,28 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   // actual function end (blr/bctr/control-flow) within that real title span.
   function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
   xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());
-  if (!scanner.Scan(&function, nullptr) ||
-      !g_processor->frontend()->DefineFunction(&function, 0)) {
+  if (!scanner.Scan(&function, nullptr)) {
+    g_scan_diagnostic = kProbeScanScannerFailed;
+    g_status = kProbeErrorTranslate;
+    return 0;
+  }
+  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
+    g_scan_diagnostic = kProbeScanDefineFailed;
     g_status = kProbeErrorTranslate;
     return 0;
   }
 
+  const uint32_t hir = GetProbeTelemetry().hir_instructions;
+  g_scan_hir_instructions = hir;
+  if (!hir) {
+    g_scan_diagnostic = kProbeScanZeroHIR;
+    g_status = kProbeErrorTranslate;
+    return 0;
+  }
+
+  g_scan_diagnostic = kProbeScanTranslated;
   g_status = kProbeTranslated;
-  return GetProbeTelemetry().hir_instructions;
+  return hir;
 }
 
 uint32_t r360_ppc_probe_status() {
@@ -320,6 +373,18 @@ uint32_t r360_ppc_probe_guest_base() {
 }
 uint32_t r360_ppc_probe_loaded_size() {
   return render360::xenia_web::g_loaded_size;
+}
+uint32_t r360_ppc_probe_scan_diagnostic() {
+  return render360::xenia_web::g_scan_diagnostic;
+}
+uint32_t r360_ppc_probe_scan_address() {
+  return render360::xenia_web::g_scan_address;
+}
+uint32_t r360_ppc_probe_scan_window_end() {
+  return render360::xenia_web::g_scan_window_end;
+}
+uint32_t r360_ppc_probe_scan_hir_instructions() {
+  return render360::xenia_web::g_scan_hir_instructions;
 }
 
 }  // extern "C"

@@ -29,8 +29,10 @@ jobs:
           git merge-base --is-ancestor "$SOURCE_SHA" HEAD
           # Browser/UI/workflow/docs-only commits made while the long build runs are fine.
           # Any change to the actual Xenia/WASM runtime closure means this artifact is
-          # stale and must never overwrite a later verified build.
-          if ! git diff --quiet "$SOURCE_SHA"..HEAD -- \
+          # stale and must never overwrite a later verified build. Filter documentation
+          # after collecting the runtime closure so Markdown markers inside source trees
+          # don't invalidate an otherwise exact verified binary.
+          runtime_changes="$(git diff --name-only "$SOURCE_SHA"..HEAD -- \
             build-xenia-ppc-bootstrap.sh \
             link-xenia-ppc-bootstrap.sh \
             fetch-xenia.sh \
@@ -41,8 +43,10 @@ jobs:
             xenia_port \
             package-core.cpp \
             render360_xenia_core.cpp \
-            build-core.sh; then
+            build-core.sh | grep -Ev '(^|/)(README[^/]*|[^/]+\.md)$' || true)"
+          if [[ -n "$runtime_changes" ]]; then
             echo "Refusing stale bootstrap: runtime source changed after $SOURCE_SHA"
+            printf '%s\n' "$runtime_changes"
             exit 78
           fi
       - name: Download verified runtime artifact

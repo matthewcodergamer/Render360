@@ -1,0 +1,40 @@
+name: Portal Scan Diagnostics Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/portal-scan-diagnostics-gate.yml'
+      - 'test-ppc-scan-diagnostics.mjs'
+      - 'xenia_ppc_bootstrap.wasm'
+      - 'xenia_ppc_bootstrap.meta.json'
+      - 'render360-title-controller.mjs'
+      - 'render360-browser-modern-content-bridge.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  published-scan-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify published PPC scanned-entry diagnostics
+        run: node ./test-ppc-scan-diagnostics.mjs ./xenia_ppc_bootstrap.wasm
+      - name: Verify published runtime provenance is present
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const meta=JSON.parse(fs.readFileSync('xenia_ppc_bootstrap.meta.json','utf8'));
+          if(!/^[0-9a-f]{40}$/i.test(meta.sourceCommit||''))throw new Error('invalid sourceCommit');
+          if(!String(meta.sourceRun||'').match(/^\d+$/))throw new Error('invalid sourceRun');
+          if(!/^[0-9a-f]{64}$/i.test(meta.sha256||''))throw new Error('invalid sha256');
+          if(!(meta.bytes>0))throw new Error('invalid byte count');
+          console.log(`PORTAL_SCAN_PUBLISHED_PROVENANCE=PASS source=${meta.sourceCommit} run=${meta.sourceRun}`);
+          NODE

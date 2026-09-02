@@ -75,12 +75,14 @@ uint32_t g_status = kProbeCold;
 uint32_t g_scan_diagnostic = kProbeScanIdle;
 uint32_t g_scan_address = 0;
 uint32_t g_scan_window_end = 0;
+uint32_t g_scan_function_end = 0;
 uint32_t g_scan_hir_instructions = 0;
 
 void ResetScanDiagnostic() {
   g_scan_diagnostic = kProbeScanIdle;
   g_scan_address = 0;
   g_scan_window_end = 0;
+  g_scan_function_end = 0;
   g_scan_hir_instructions = 0;
 }
 
@@ -346,6 +348,10 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
     g_status = kProbeErrorTranslate;
     return 0;
   }
+  // scanWindowEnd is only the input ceiling. Preserve the boundary the Xenia
+  // scanner actually discovered so a one-instruction thunk/stub can be
+  // distinguished from a normal function whose assembler emitted zero HIR.
+  g_scan_function_end = function.end_address();
   if (!g_processor->frontend()->DefineFunction(&function, 0)) {
     g_scan_diagnostic = kProbeScanDefineFailed;
     g_status = kProbeErrorTranslate;
@@ -382,6 +388,9 @@ uint32_t r360_ppc_probe_scan_address() {
 }
 uint32_t r360_ppc_probe_scan_window_end() {
   return render360::xenia_web::g_scan_window_end;
+}
+uint32_t r360_ppc_probe_scan_function_end() {
+  return render360::xenia_web::g_scan_function_end;
 }
 uint32_t r360_ppc_probe_scan_hir_instructions() {
   return render360::xenia_web::g_scan_hir_instructions;

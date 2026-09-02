@@ -197,12 +197,15 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
     const scanDiagnostic=maybe(bootstrap,'r360_ppc_probe_scan_diagnostic')?.()>>>0||0;
     const scanAddress=maybe(bootstrap,'r360_ppc_probe_scan_address')?.()>>>0||0;
     const scanWindowEnd=maybe(bootstrap,'r360_ppc_probe_scan_window_end')?.()>>>0||0;
+    const scanFunctionEnd=maybe(bootstrap,'r360_ppc_probe_scan_function_end')?.()>>>0||0;
     const scanHir=maybe(bootstrap,'r360_ppc_probe_scan_hir_instructions')?.()>>>0||0;
+    const assembledFunctions=maybe(bootstrap,'r360_ppc_probe_assembled_functions')?.()>>>0||0;
+    const hirBlocks=maybe(bootstrap,'r360_ppc_probe_hir_block_count')?.()>>>0||0;
     const scanReason=['idle','guard-rejected','scanner-failed','define-function-failed','zero-hir','translated'][scanDiagnostic]||'unknown';
     const hex=value=>`0x${(value>>>0).toString(16).toUpperCase()}`;
-    const error=new Error(`title entry handoff failed ${hex(handoffStatus)} mode=${entryExecutionMode} scan=${scanReason}(${scanDiagnostic}) probe=${hex(probeStatus)} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanHIR=${scanHir}`);
+    const error=new Error(`title entry handoff failed ${hex(handoffStatus)} mode=${entryExecutionMode} scan=${scanReason}(${scanDiagnostic}) probe=${hex(probeStatus)} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanFunctionEnd=${hex(scanFunctionEnd)} assembledFunctions=${assembledFunctions} hirBlocks=${hirBlocks} scanHIR=${scanHir}`);
     error.code='R360_TITLE_ENTRY_HANDOFF_FAILED';
-    error.render360={kind:'ppc-entry-translation-failure',handoffStatus,probeStatus,scanDiagnostic,scanReason,scanAddress,scanWindowEnd,scanHir,entry:entry>>>0,entryExecutionMode};
+    error.render360={kind:'ppc-entry-translation-failure',handoffStatus,probeStatus,scanDiagnostic,scanReason,scanAddress,scanWindowEnd,scanFunctionEnd,assembledFunctions,hirBlocks,scanHir,entry:entry>>>0,entryExecutionMode};
     throw error;
   }
 

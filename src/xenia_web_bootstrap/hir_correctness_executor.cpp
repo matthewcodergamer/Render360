@@ -21,6 +21,11 @@
 #include "sparse_guest_memory.h"
 #include "title_gpu_runtime.h"
 
+extern "C" {
+uint32_t r360_ppc_probe_guest_base();
+uint32_t r360_ppc_probe_loaded_size();
+}
+
 namespace render360::xenia_web {
 namespace {
 
@@ -672,6 +677,16 @@ bool TranslateGuestRange(xe::Memory* memory, uint32_t guest_address,
   return true;
 }
 
+bool IsSyntheticProbeWindowRange(uint32_t guest_address, size_t size) {
+  if (!size) return false;
+  const uint32_t base = r360_ppc_probe_guest_base();
+  const uint32_t loaded = r360_ppc_probe_loaded_size();
+  if (!loaded || guest_address < base) return false;
+  const uint64_t end = uint64_t(guest_address) + size;
+  const uint64_t window_end = uint64_t(base) + loaded;
+  return end <= window_end && end <= 0x100000000ull;
+}
+
 bool LoadGuestValue(xe::Memory* memory, Value* destination,
                     const Value* address, const Value* offset,
                     const RuntimeValues& values, RuntimeValues& out_values,
@@ -712,12 +727,14 @@ bool LoadGuestValue(xe::Memory* memory, Value* destination,
                              static_cast<uint32_t>(size))) {
     const uint32_t sparse_fault = SparseGuestLastFaultCode();
     const uint32_t sparse_fault_address = SparseGuestLastFaultAddress();
+    const bool in_probe_window = IsSyntheticProbeWindowRange(guest_address, size);
     uint8_t* host = nullptr;
-    if (!TranslateGuestRange(memory, guest_address, size, &host)) {
+    if (!in_probe_window ||
+        !TranslateGuestRange(memory, guest_address, size, &host)) {
       std::fprintf(stderr,
-                   "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
+                   "R360_HIR_MEMORY_FAIL op=load address=0x%08X fault=%u fault_address=0x%08X size=%u in_window=%u\n",
                    guest_address, sparse_fault, sparse_fault_address,
-                   static_cast<unsigned>(size));
+                   static_cast<unsigned>(size), in_probe_window ? 1u : 0u);
       return false;
     }
     std::memcpy(&loaded.value, host, size);
@@ -761,12 +778,14 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
   }
   const uint32_t sparse_fault = SparseGuestLastFaultCode();
   const uint32_t sparse_fault_address = SparseGuestLastFaultAddress();
+  const bool in_probe_window = IsSyntheticProbeWindowRange(guest_address, size);
   uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) {
+  if (!in_probe_window ||
+      !TranslateGuestRange(memory, guest_address, size, &host)) {
     std::fprintf(stderr,
-                 "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
+                 "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u fault_address=0x%08X size=%u in_window=%u\n",
                  guest_address, sparse_fault, sparse_fault_address,
-                 static_cast<unsigned>(size));
+                 static_cast<unsigned>(size), in_probe_window ? 1u : 0u);
     return false;
   }
   std::memcpy(host, &stored.value, size);

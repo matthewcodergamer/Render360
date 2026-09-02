@@ -1,4 +1,5 @@
 name: Portal Scan Diagnostics Gate
+# Verifies the checked-in browser runtime, not only the temporary build artifact.
 
 on:
   push:

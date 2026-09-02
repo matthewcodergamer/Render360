@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/braid-main-stack-geometry-fix.yml'
-      - 'tools/braid-main-stack-geometry-fix.py'
+      - 'tools/braid-main-stack-geometry-fix-v2.py'
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
           node-version: '22'
 
       - name: Apply guarded-stack repair
-        run: python3 tools/braid-main-stack-geometry-fix.py
+        run: python3 tools/braid-main-stack-geometry-fix-v2.py
 
       - name: Validate patched browser and regression fixtures
         shell: bash

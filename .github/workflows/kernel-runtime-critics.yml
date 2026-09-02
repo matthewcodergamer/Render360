@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - 'src/xenia_web_bootstrap/sparse_guest_memory.cpp'
+      - 'src/xenia_web_bootstrap/sparse_guest_memory.h'
       - 'test-kernel-services-critic.mjs'
       - 'test-guest-runtime-critic.mjs'
       - '.github/workflows/kernel-runtime-critics.yml'
@@ -22,14 +24,35 @@ jobs:
       - name: Checkout Render360
         uses: actions/checkout@v4
 
-      - name: Compile kernel/runtime foundation to standalone wasm32
+      - name: Compile kernel/runtime foundation with real sparse guest memory
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p build/kernel-runtime
+          cat > build/kernel-runtime/standalone_sparse_backend_stub.cpp <<'CPP'
+          #include <cstdint>
+          namespace render360::xenia_web {
+          // The standalone kernel critic never maps executable stack pages.
+          // Sparse guest memory still references the generated-WASM cache
+          // invalidator, so provide the no-op cache hook while linking the real
+          // sparse mapping/read/write implementation used by the runtime.
+          void InvalidateWasmBackendExecutableRange(uint32_t, uint32_t) {}
+          }
+          CPP
           docker run --rm \
             -v "$PWD:/src" \
             -w /src \
             emscripten/emsdk:latest \
-            bash -lc 'em++ -std=c++20 -O2 src/xenia_web_bootstrap/kernel_runtime_foundation.cpp -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 -Wl,--no-entry -Wl,--export-memory -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS='"'"'["_r360_kernel_runtime_reset","_r360_guest_thread_create","_r360_guest_thread_current","_r360_guest_thread_set_current","_r360_guest_thread_suspend","_r360_guest_thread_resume","_r360_guest_thread_terminate","_r360_guest_thread_next_runnable","_r360_guest_thread_state","_r360_guest_thread_exit_code","_r360_guest_thread_stack_size","_r360_guest_runtime_status","_r360_guest_tls_alloc","_r360_guest_tls_free","_r360_guest_tls_set","_r360_guest_tls_get","_r360_kernel_service_reset","_r360_kernel_service_call","_r360_kernel_service_status","_r360_kernel_service_calls","_r360_kernel_service_last_module","_r360_kernel_service_last_ordinal"]'"'"' -o build/kernel-runtime/kernel_runtime.wasm'
+            bash -lc 'em++ -std=c++20 -O2 \
+              src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+              src/xenia_web_bootstrap/sparse_guest_memory.cpp \
+              build/kernel-runtime/standalone_sparse_backend_stub.cpp \
+              -sSTANDALONE_WASM=1 \
+              -sERROR_ON_UNDEFINED_SYMBOLS=1 \
+              -Wl,--no-entry -Wl,--export-memory \
+              -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 \
+              -sEXPORTED_FUNCTIONS='"'"'["_r360_sparse_guest_memory_read_u8","_r360_sparse_guest_memory_write_u8","_r360_sparse_guest_memory_last_fault_code"]'"'"' \
+              -o build/kernel-runtime/kernel_runtime.wasm'
 
       - name: 'Harsh critic: verify xboxkrnl and XAM starter services'
         run: node ./test-kernel-services-critic.mjs build/kernel-runtime/kernel_runtime.wasm

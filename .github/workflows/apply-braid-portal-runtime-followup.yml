@@ -1,0 +1,46 @@
+name: Apply Braid Portal Runtime Followup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-braid-portal-runtime-followup.yml'
+      - 'tools/apply-braid-portal-runtime-followup.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply source and regression patches
+        run: python3 ./tools/apply-braid-portal-runtime-followup.py
+      - name: Preflight browser tests
+        run: |
+          node --check ./render360-title-controller.mjs
+          node --check ./test-ppc-scan-diagnostics.mjs
+          node --check ./test-hir-sparse-fail-closed.mjs
+          grep -q 'r360_ppc_probe_scan_function_end' ./src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'IsSyntheticProbeWindowRange' ./src/xenia_web_bootstrap/hir_correctness_executor.cpp
+      - name: Commit verified patch
+        run: |
+          set -euo pipefail
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/ppc_translation_probe.cpp \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            link-xenia-ppc-bootstrap.sh \
+            render360-title-controller.mjs \
+            test-ppc-scan-diagnostics.mjs \
+            test-hir-sparse-fail-closed.mjs
+          if git diff --cached --quiet; then
+            echo 'No source changes required.'
+            exit 0
+          fi
+          git commit -m 'fix: fail closed Braid memory and expose Portal scan extent'
+          git push

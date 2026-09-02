@@ -1,0 +1,51 @@
+name: Apply Portal Scan Diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-portal-scan-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply scan diagnostic patch
+        run: python3 ./tools/apply-portal-scan-diagnostics.py
+      - name: Validate patched source contracts
+        run: |
+          set -euo pipefail
+          node --check render360-title-controller.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check test-ppc-scan-diagnostics.mjs
+          python3 -m py_compile tools/apply-portal-scan-diagnostics.py
+          git diff --check
+          grep -q 'kProbeScanScannerFailed' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'kProbeScanDefineFailed' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'kProbeScanZeroHIR' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'R360_TITLE_ENTRY_HANDOFF_FAILED' render360-title-controller.mjs
+          grep -q 'test-ppc-scan-diagnostics.mjs' .github/workflows/xenia-wasm32-bootstrap.yml
+      - name: Commit verified diagnostic fix
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No source changes required.'
+            exit 0
+          fi
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/ppc_translation_probe.cpp link-xenia-ppc-bootstrap.sh render360-title-controller.mjs render360-browser-modern-content-bridge.mjs test-ppc-scan-diagnostics.mjs .github/workflows/xenia-wasm32-bootstrap.yml
+          git commit -m 'fix: expose scanned PPC entry failure cause'
+          git push origin HEAD:main

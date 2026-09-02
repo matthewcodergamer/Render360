@@ -50,6 +50,8 @@ if [ "${#ALL_R360_SYMBOLS[@]}" -eq 0 ]; then
 fi
 
 # These are production execution exports that must exist in the deployed Wasm.
+# Portal scanned-entry diagnostics are part of that deployed browser ABI, not
+# optional debug-only symbols, so a stale bootstrap must fail the link gate.
 # In particular, the PE staging reserve pair prevents commercial prepared XEX
 # images from being incorrectly constrained by the historical 64 KiB scratch
 # buffer used by early bring-up tests.

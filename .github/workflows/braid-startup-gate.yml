@@ -1,3 +1,4 @@
+# Revalidate after Xenia-style guarded-stack geometry changes.
 name: Braid Startup Integration Gate
 
 on:

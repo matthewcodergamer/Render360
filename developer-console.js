@@ -46,25 +46,43 @@ function memoryDiagnostics(state,result){
   const faultCodeFn=fn('r360_sparse_guest_memory_last_fault_code');
   const mappedPagesFn=fn('r360_sparse_guest_memory_mapped_pages');
   const backingPagesFn=fn('r360_sparse_guest_memory_backing_pages');
-  // The title controller snapshots the fault immediately when HIR returns.
-  // Prefer that immutable snapshot: later successful sparse reads (including
-  // reading the blocker instruction below) clear the runtime's global latch.
   const capturedFaultAddress=number(result?.memoryFaultAddress);
   const capturedFaultCode=number(result?.memoryFaultCode);
   const faultAddress=capturedFaultAddress!==undefined?capturedFaultAddress:(faultAddressFn?(faultAddressFn()>>>0):undefined);
   const faultCode=capturedFaultCode!==undefined?capturedFaultCode:(faultCodeFn?(faultCodeFn()>>>0):undefined);
   const blockerAddress=number(result?.executionBlockerAddress);
-  let instructionWord,primaryOpcode,rt,ra,displacement,baseRegisterValue,effectiveAddress;
+  let instructionWord,primaryOpcode,instructionKind='unknown';
+  let rt,ra,displacement,baseRegisterValue,effectiveAddress;
+  let branchDisplacement,branchTarget,branchAbsolute,branchLink,branchBO,branchBI;
   const read8=fn('r360_sparse_guest_memory_read_u8');
   if(read8&&blockerAddress!==undefined){
     const a=blockerAddress>>>0;
     const bytes=[0,1,2,3].map(i=>read8((a+i)>>>0)>>>0);
     instructionWord=((bytes[0]<<24)|(bytes[1]<<16)|(bytes[2]<<8)|bytes[3])>>>0;
-    primaryOpcode=instructionWord>>>26;rt=(instructionWord>>>21)&31;ra=(instructionWord>>>16)&31;
-    displacement=(instructionWord<<16)>>16;
-    if(faultAddress!==undefined&&faultCode){
-      effectiveAddress=faultAddress>>>0;
-      baseRegisterValue=(effectiveAddress-(displacement|0))>>>0;
+    primaryOpcode=instructionWord>>>26;
+    if(primaryOpcode>=32&&primaryOpcode<=55){
+      instructionKind='d-form-memory';
+      rt=(instructionWord>>>21)&31;ra=(instructionWord>>>16)&31;
+      displacement=(instructionWord<<16)>>16;
+      if(faultAddress!==undefined&&faultCode){
+        effectiveAddress=faultAddress>>>0;
+        baseRegisterValue=ra===0?0:(effectiveAddress-(displacement|0))>>>0;
+      }
+    }else if(primaryOpcode===18){
+      instructionKind='direct-branch';
+      const li=instructionWord&0x03FFFFFC;
+      branchDisplacement=((li&0x02000000)?(li|0xFC000000):li)|0;
+      branchAbsolute=!!(instructionWord&2);branchLink=!!(instructionWord&1);
+      branchTarget=(branchAbsolute?branchDisplacement:(a+branchDisplacement))>>>0;
+    }else if(primaryOpcode===16){
+      instructionKind='conditional-branch';
+      const bd=instructionWord&0x0000FFFC;
+      branchDisplacement=(bd<<16)>>16;
+      branchAbsolute=!!(instructionWord&2);branchLink=!!(instructionWord&1);
+      branchBO=(instructionWord>>>21)&31;branchBI=(instructionWord>>>16)&31;
+      branchTarget=(branchAbsolute?branchDisplacement:(a+branchDisplacement))>>>0;
+    }else{
+      instructionKind='other';
     }
   }
   const faultNames={0:'none',1:'unmapped',2:'read-protection',3:'write-protection',4:'invalid-argument',5:'already-mapped'};
@@ -74,12 +92,21 @@ function memoryDiagnostics(state,result){
     faultCode,faultName:faultCode===undefined?undefined:(faultNames[faultCode]||`fault-${faultCode}`),
     faultCapturedAtExecution:capturedFaultCode!==undefined,
     blockerInstruction:instructionWord===undefined?undefined:`0x${instructionWord.toString(16).toUpperCase().padStart(8,'0')}`,
-    ppcPrimaryOpcode:primaryOpcode,rt,ra,displacement,
+    instructionKind,ppcPrimaryOpcode:primaryOpcode,rt,ra,displacement,
     effectiveAddress:effectiveAddress===undefined?undefined:address(effectiveAddress),
     baseRegisterValue:baseRegisterValue===undefined?undefined:address(baseRegisterValue),
+    branchDisplacement,branchTarget:branchTarget===undefined?undefined:address(branchTarget),
+    branchAbsolute,branchLink,branchBO,branchBI,
+    faultInstructionAttribution:faultCode&&instructionKind!=='d-form-memory'?'fault-not-derived-from-boundary-instruction':undefined,
     mappedPages:mappedPagesFn?(mappedPagesFn()>>>0):undefined,backingPages:backingPagesFn?(backingPagesFn()>>>0):undefined,
-    stackTop:address(context.stackTop),stackLimit:address(context.stackLimit),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
+    stackTop:address(context.stackTop),stackLimit:address(context.stackLimit),stackBase:address(context.stackBase),stackSlotBase:address(context.stackSlotBase),stackGuardBytes:number(context.stackGuardBytes),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
   });
+}
+function ppcDiagnosticSummary(memory){
+  if(!memory?.blockerInstruction)return undefined;
+  if(memory.instructionKind==='d-form-memory'&&present(memory.ra))return `PPC memory: rA=${memory.ra}=${memory.baseRegisterValue||'—'} rT=${memory.rt??'—'} disp=${memory.displacement??'—'} EA=${memory.effectiveAddress||'—'}`;
+  if(memory.instructionKind==='direct-branch'||memory.instructionKind==='conditional-branch')return `PPC ${memory.instructionKind}: target=${memory.branchTarget||'—'} disp=${memory.branchDisplacement??'—'} AA=${memory.branchAbsolute?1:0} LK=${memory.branchLink?1:0}${memory.faultInstructionAttribution?' · memory fault belongs to an earlier/different boundary':''}`;
+  return `PPC ${memory.instructionKind||'other'} · primary opcode ${memory.ppcPrimaryOpcode??'—'}`;
 }
 function addEntry(level,message){
   if(!enabled)return;
@@ -114,7 +141,7 @@ function installEntryPoints(){
 }
 function removeEntryPoints(){$('r360RuntimeConsole')?.remove();$('appDeveloperConsoleButton')?.remove();$('r360DevConsole')?.classList.add('hidden');opened=false;}
 function render(){
-  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.memory?.faultName&&`memory: ${summary.memory.faultName} @ ${summary.memory.faultAddress||'—'} · PPC ${summary.memory.blockerInstruction||'—'}`,present(summary.memory?.ra)&&`PPC operands: rA=${summary.memory.ra}=${summary.memory.baseRegisterValue||'—'} rT=${summary.memory.rt??'—'} disp=${summary.memory.displacement??'—'} EA=${summary.memory.effectiveAddress||'—'}`,summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
+  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.memory?.faultName&&`memory: ${summary.memory.faultName} @ ${summary.memory.faultAddress||'—'} · PPC ${summary.memory.blockerInstruction||'—'}`,ppcDiagnosticSummary(summary.memory),summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
   if(!log)return;log.innerHTML='';for(const e of entries){const row=document.createElement('div');row.className=`r360-dev-line ${e.level}`;row.innerHTML='<time></time><strong></strong><span></span>';row.children[0].textContent=new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});row.children[1].textContent=e.level.toUpperCase();row.children[2].textContent=`${e.message}${e.count>1?` ×${e.count}`:''}`;log.appendChild(row);}if(!entries.length)log.innerHTML='<div class="r360-dev-line"><span></span><strong>INFO</strong><span>No runtime events captured yet.</span></div>';
 }
 function report(){

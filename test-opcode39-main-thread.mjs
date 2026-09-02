@@ -21,12 +21,17 @@ for(const n of ['r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc
 
 p('r360_sparse_guest_memory_reset')();
 p('r360_ppc_probe_reset')();
-const stackBase=0x70000000;
+const stackSlotBase=0x70000000;
+const stackLimit=0x70001000;
 const stackPages=128;
-const stackTop=0x7007ff00;
+const stackBasePointer=stackLimit+stackPages*4096;
+const stackTop=(stackBasePointer-(64+112))&~15;
 const backing=p('r360_sparse_guest_memory_alloc')(stackPages)>>>0;
 if(!backing)throw new Error('stack backing allocation failed');
-if((p('r360_sparse_guest_memory_map')(stackBase,stackPages,backing,0,3)>>>0)!==1)throw new Error('stack mapping failed');
+if((p('r360_sparse_guest_memory_map')(stackLimit,stackPages,backing,0,3)>>>0)!==1)throw new Error('stack mapping failed');
+if((p('r360_sparse_guest_memory_write_u32_be')(stackSlotBase,0xBAD0BAD0)>>>0)!==0)throw new Error('lower stack guard unexpectedly mapped');
+if((p('r360_sparse_guest_memory_write_u32_be')(0x70080020,0x01020304)>>>0)!==1)throw new Error('Braid high-side stack address is not mapped');
+if((p('r360_sparse_guest_memory_write_u32_be')(stackBasePointer,0xBAD1BAD1)>>>0)!==0)throw new Error('upper stack guard unexpectedly mapped');
 if((p('r360_ppc_probe_set_initial_gpr')(1,BigInt(stackTop))>>>0)!==1)throw new Error('r1 initialization failed');
 
 // Braid's first observed compatibility state produced 0x7007FF58, exactly

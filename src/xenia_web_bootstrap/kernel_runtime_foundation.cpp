@@ -31,9 +31,11 @@ constexpr uint32_t kGuestPageSize = 4096u;
 constexpr uint32_t kGuestStackArenaBase = 0x60000000u;
 constexpr uint32_t kGuestStackSlotStride = 0x01000000u;
 constexpr uint32_t kGuestStackGuardBytes = kGuestPageSize;
+constexpr uint32_t kGuestStackDefaultBytes = 0x00040000u;  // 256 KiB.
 constexpr uint32_t kGuestStackTopReserve = 0x100u;
+constexpr uint32_t kBrowserMainThreadReservedSlot = 16u;
 constexpr uint32_t kGuestStackMaxBytes =
-    kGuestStackSlotStride - kGuestStackGuardBytes;
+    kGuestStackSlotStride - 2u * kGuestStackGuardBytes;
 
 enum ThreadState : uint32_t {
   kThreadInvalid = 0,
@@ -121,8 +123,9 @@ bool AllocateThreadStack(uint32_t thread_index, uint32_t stack_size,
                           uint64_t(thread_index) * kGuestStackSlotStride;
   const uint64_t base64 = slot64 + kGuestStackGuardBytes;
   const uint64_t end64 = base64 + stack_size;
-  if (end64 > uint64_t(UINT32_MAX) + 1u ||
-      end64 > slot64 + kGuestStackSlotStride) {
+  const uint64_t upper_guard_end64 = end64 + kGuestStackGuardBytes;
+  if (upper_guard_end64 > uint64_t(UINT32_MAX) + 1u ||
+      upper_guard_end64 > slot64 + kGuestStackSlotStride) {
     return false;
   }
   const uint32_t stack_base = static_cast<uint32_t>(base64);
@@ -163,7 +166,7 @@ uint32_t CreateThread(uint32_t entry, uint32_t context, uint32_t stack_size,
     g_runtime_status = kStatusInvalid;
     return 0;
   }
-  if (!stack_size) stack_size = 0x4000u;
+  if (!stack_size) stack_size = kGuestStackDefaultBytes;
   const uint64_t aligned64 =
       (uint64_t(stack_size) + 0x3FFFu) & ~uint64_t(0x3FFFu);
   if (!aligned64 || aligned64 > kGuestStackMaxBytes) {
@@ -172,6 +175,7 @@ uint32_t CreateThread(uint32_t entry, uint32_t context, uint32_t stack_size,
   }
   stack_size = static_cast<uint32_t>(aligned64);
   for (uint32_t i = 0; i < kMaxThreads; ++i) {
+    if (i == kBrowserMainThreadReservedSlot) continue;
     auto& thread = g_threads[i];
     if (thread.used && thread.state != kThreadTerminated) continue;
     ReleaseThreadStack(thread);

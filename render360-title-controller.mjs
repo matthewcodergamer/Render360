@@ -64,14 +64,15 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   // Xbox user stacks live in 0x70000000-0x7F000000 and r13 points at the
   // per-thread PCR. The fallback used to enter the XEX with every GPR zero.
   const pageSize=4096;
-  const stackBase=0x70000000;
+  const stackSlotBase=0x70000000;
+  const stackGuardBytes=pageSize;
+  const stackLimit=(stackSlotBase+stackGuardBytes)>>>0;
   const stackPages=128;
-  const stackLimit=stackBase;
   // Xenia ThreadState starts r1 at the high stack boundary. Processor::Execute
   // then reserves 64 + 112 bytes before entering guest code. We previously
   // entered default.xex with an invented -0x100 stack pointer, which is not the
   // Xenia/Xbox entry ABI and can make title prologues consume zeroed slots.
-  const stackBasePointer=(stackBase+stackPages*pageSize)>>>0;
+  const stackBasePointer=(stackLimit+stackPages*pageSize)>>>0;
   const xeniaCallFrameBytes=64+112;
   const stackTop=(stackBasePointer-xeniaCallFrameBytes)&~0xF;
   const pcrAddress=0x50000000;
@@ -91,7 +92,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   if(!lowMemoryBacking||(map(0,lowMemoryPages,lowMemoryBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map title low-memory compatibility aperture');
 
   const stackBacking=alloc(stackPages)>>>0;
-  if(!stackBacking||(map(stackBase,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
+  if(!stackBacking||(map(stackLimit,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
   const contextBacking=alloc(contextPages)>>>0;
   if(!contextBacking||(map(pcrAddress,contextPages,contextBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread PCR/TLS');
 
@@ -114,11 +115,11 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x05C,stackBasePointer);
   be32(threadAddress+0x060,stackLimit);
   be32(threadAddress+0x068,tlsAddress);
-  be32(threadAddress+0x0D0,stackBase);
+  be32(threadAddress+0x0D0,stackBasePointer);
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackBase,stackLimit,stackBasePointer,stackTop,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
+  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
 }
 
 function stagePreparedPeImage(bootstrap,prepared){

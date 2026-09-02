@@ -37,15 +37,18 @@ jobs:
           grep -q 'kProbeScanZeroHIR' src/xenia_web_bootstrap/ppc_translation_probe.cpp
           grep -q 'R360_TITLE_ENTRY_HANDOFF_FAILED' render360-title-controller.mjs
           grep -q 'test-ppc-scan-diagnostics.mjs' .github/workflows/xenia-wasm32-bootstrap.yml
-      - name: Commit verified diagnostic fix
+      - name: Commit verified source fix
         run: |
           set -euo pipefail
+          # GitHub App workflow tokens may not update workflow files. The Xenia
+          # workflow change is applied separately by the repository write path.
+          git restore .github/workflows/xenia-wasm32-bootstrap.yml
           if git diff --quiet; then
             echo 'No source changes required.'
             exit 0
           fi
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add src/xenia_web_bootstrap/ppc_translation_probe.cpp link-xenia-ppc-bootstrap.sh render360-title-controller.mjs render360-browser-modern-content-bridge.mjs test-ppc-scan-diagnostics.mjs .github/workflows/xenia-wasm32-bootstrap.yml
+          git add src/xenia_web_bootstrap/ppc_translation_probe.cpp link-xenia-ppc-bootstrap.sh render360-title-controller.mjs render360-browser-modern-content-bridge.mjs test-ppc-scan-diagnostics.mjs
           git commit -m 'fix: expose scanned PPC entry failure cause'
           git push origin HEAD:main

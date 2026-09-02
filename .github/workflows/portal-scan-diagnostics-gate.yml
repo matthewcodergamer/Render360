@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/portal-scan-diagnostics-gate.yml'
       - 'test-ppc-scan-diagnostics.mjs'
+      - 'test-hir-sparse-fail-closed.mjs'
       - 'xenia_ppc_bootstrap.wasm'
       - 'xenia_ppc_bootstrap.meta.json'
       - 'render360-title-controller.mjs'
@@ -26,6 +27,8 @@ jobs:
           node-version: '22'
       - name: Verify published PPC scanned-entry diagnostics
         run: node ./test-ppc-scan-diagnostics.mjs ./xenia_ppc_bootstrap.wasm
+      - name: Verify published Braid-class sparse misses fail closed
+        run: node ./test-hir-sparse-fail-closed.mjs ./xenia_ppc_bootstrap.wasm
       - name: Verify published runtime provenance is present
         run: |
           set -euo pipefail

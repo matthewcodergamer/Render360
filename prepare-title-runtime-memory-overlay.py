@@ -147,3 +147,12 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
 text = text[:start] + replacement + text[end:]
 path.write_text(text)
 print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PASS')
+
+# This second pass fixes guest call/return ABI semantics and records exact r1
+# provenance in the file that is actually compiled into xenia_ppc_bootstrap.wasm.
+import subprocess
+import sys
+subprocess.run(
+    [sys.executable, str(root / 'prepare-hir-call-return-stack-overlay.py')],
+    check=True,
+)

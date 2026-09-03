@@ -1138,8 +1138,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           result.blocker_opcode = nested_failure.blocker_opcode;
           result.blocker_address = nested_failure.blocker_address;
           std::fprintf(stderr,
-                       "R360_NESTED_BLOCKER propagated kind=%u opcode=%u address=0x%08X outer=0x%08X
-",
+                       "R360_NESTED_BLOCKER propagated kind=%u opcode=%u address=0x%08X outer=0x%08X\n",
                        result.blocker_kind, result.blocker_opcode,
                        result.blocker_address, current_source_address);
         }

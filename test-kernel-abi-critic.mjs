@@ -1,3 +1,4 @@
+// Nested title-resolver failures must preserve the callee blocker through the boolean resolver ABI.
 import fs from 'node:fs';
 import { WASI } from 'node:wasi';
 

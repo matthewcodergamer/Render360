@@ -87,3 +87,15 @@ export async function clearGamesDirectory(){
     await ensureGamesDirectory();return true;
   }
 }
+
+/**
+ * Opens an OPFS game as a bounded range reader. This is the preferred API for
+ * disc/package code that does not need a browser File object and must avoid
+ * whole-image buffering for multi-gigabyte titles.
+ */
+export async function openPersistentRangeSource(opfsPath,{blockBytes=1024*1024,maxBlocks=32,cache=true}={}){
+  if(!storageSupported()||!opfsPath)throw new Error('Persistent range source unavailable');
+  const {createOPFSRangeSource,BlockCachedRangeSource}=await import('../render360-streaming-source.mjs');
+  const source=await createOPFSRangeSource(opfsPath);
+  return cache?new BlockCachedRangeSource(source,{blockBytes,maxBlocks}):source;
+}

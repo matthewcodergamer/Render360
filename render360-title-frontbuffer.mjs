@@ -74,6 +74,32 @@ export function ensureTitleFrameCanvas(){
   return canvas;
 }
 
+export function ensureTitleWebGPUCanvas(){
+  if(typeof document==='undefined')return null;
+  let canvas=document.getElementById('titleFrameWebGPUCanvas');
+  if(canvas)return canvas;
+  canvas=document.createElement('canvas');
+  canvas.id='titleFrameWebGPUCanvas';
+  canvas.setAttribute('aria-label','Render360 WebGPU Xbox 360 title framebuffer');
+  Object.assign(canvas.style,{position:'absolute',inset:'0',width:'100%',height:'100%',display:'none',zIndex:'4',pointerEvents:'none',background:'#000'});
+  const gpu=document.getElementById('gpuCanvas');
+  if(gpu?.parentNode)gpu.parentNode.insertBefore(canvas,gpu.nextSibling);
+  else document.getElementById('app')?.prepend(canvas);
+  return canvas;
+}
+
+export function showTitleWebGPUCanvas(frame,{canvas=ensureTitleWebGPUCanvas()}={}){
+  if(!canvas)throw new Error('WebGPU title framebuffer canvas unavailable');
+  if(frame?.width&&canvas.width!==frame.width)canvas.width=frame.width;
+  if(frame?.height&&canvas.height!==frame.height)canvas.height=frame.height;
+  canvas.style.display='block';
+  const fallback=typeof document!=='undefined'?document.getElementById('titleFrameCanvas'):null;
+  if(fallback)fallback.style.display='none';
+  if(frame?.generation!==undefined)canvas.dataset.render360Generation=String(frame.generation>>>0);
+  if(frame?.hash!==undefined)canvas.dataset.render360Hash=`0x${(frame.hash>>>0).toString(16)}`;
+  return canvas;
+}
+
 export function presentTitleFrontbuffer(frame,{canvas=ensureTitleFrameCanvas()}={}){
   if(!frame?.captured||!frame.rgba)throw new TypeError('captured real title frontbuffer required');
   if(!canvas)throw new Error('title framebuffer canvas unavailable');
@@ -84,16 +110,18 @@ export function presentTitleFrontbuffer(frame,{canvas=ensureTitleFrameCanvas()}=
   const clamped=new Uint8ClampedArray(frame.rgba.buffer,frame.rgba.byteOffset,frame.rgba.byteLength);
   ctx.putImageData(new ImageData(clamped,frame.width,frame.height),0,0);
   canvas.style.display='block';
+  const webgpu=typeof document!=='undefined'?document.getElementById('titleFrameWebGPUCanvas'):null;
+  if(webgpu)webgpu.style.display='none';
   canvas.dataset.render360Generation=String(frame.generation>>>0);
   canvas.dataset.render360Hash=`0x${(frame.hash>>>0).toString(16)}`;
   return {presented:true,backend:'canvas2d-real-title-frontbuffer',width:frame.width,height:frame.height,generation:frame.generation,hash:frame.hash};
 }
 
 export function hideTitleFrontbuffer(){
-  const canvas=typeof document!=='undefined'?document.getElementById('titleFrameCanvas'):null;
-  if(canvas)canvas.style.display='none';
+  if(typeof document==='undefined')return;
+  for(const id of ['titleFrameCanvas','titleFrameWebGPUCanvas']){const canvas=document.getElementById(id);if(canvas)canvas.style.display='none';}
 }
 
 export function titleFrontbufferContract(){
-  return {source:'VdSwap fetch constant 0 + sparse guest memory',formats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],layouts:['linear','Xenos tiled 2D'],swizzle:true,endian:true,syntheticRasterAccepted:false,countsAsRealTitleFrame:true};
+  return {source:'VdSwap fetch constant 0 + sparse guest memory',formats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],layouts:['linear','Xenos tiled 2D'],swizzle:true,endian:true,presenters:['WebGPU','Canvas2D fallback'],syntheticRasterAccepted:false,countsAsRealTitleFrame:true};
 }

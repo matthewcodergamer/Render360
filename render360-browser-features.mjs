@@ -45,6 +45,7 @@ async function probeCapabilities(){
   }catch{}
   capabilities={
     webgpu:cap('WebGPU',!!navigator.gpu,'Preferred Xenos graphics path.'),
+    webgpuAsyncPipelines:cap('Async WebGPU Pipelines',typeof globalThis.GPUDevice?.prototype?.createRenderPipelineAsync==='function','Compiles graphics pipelines without blocking the title loop where the browser exposes the async API.'),
     offscreen:cap('OffscreenCanvas',typeof OffscreenCanvas==='function','Allows canvas work away from the main UI thread.'),
     offscreenWorker:cap('Worker canvas',typeof OffscreenCanvas==='function'&&canTransferCanvas(),'Useful for moving graphics work into a worker.'),
     serviceWorker:cap('Service Worker','serviceWorker' in navigator,'App-shell acceleration and offline resilience.'),
@@ -60,6 +61,8 @@ async function probeCapabilities(){
     sharedWorker:cap('SharedWorker',typeof SharedWorker==='function','Available for persistent browser-side services.'),
     streams:cap('Transferable Streams',typeof ReadableStream==='function'&&typeof TransformStream==='function','Lets large title data flow without buffering entire files in memory.'),
     storage:cap('Storage APIs',storageEstimate&&persistentStorage,'Quota and persistence controls for large game files.'),
+    opfs:cap('OPFS',typeof navigator.storage?.getDirectory==='function','Range-readable persistent game storage without loading the whole image into JavaScript memory.'),
+    crossOriginIsolation:cap('Cross-Origin Isolation',globalThis.crossOriginIsolated===true,'Required for SharedArrayBuffer and Wasm threads.'),
     wasmStreaming:cap('WASM Streaming',typeof WebAssembly?.instantiateStreaming==='function','Compiles runtime modules while they download.'),
     sharedMemory:cap('Shared Memory',globalThis.crossOriginIsolated&&typeof SharedArrayBuffer==='function','Requires cross-origin isolation as well as browser support.'),
     wasmESM:cap('WASM ES Modules',false,'No reliable feature probe from page JavaScript; kept optional until Render360 has a stable ESM-Wasm loader.'),
@@ -110,6 +113,10 @@ function ensureSettingsUi(){
   group.className='group';group.id='r360BrowserFeatureGroup';
   group.innerHTML=[
     rowMarkup('r360CapWebgpu','WebGPU','Preferred modern graphics backend for the Xenos renderer.'),
+    rowMarkup('r360CapWebgpuAsync','Async WebGPU Pipelines','Uses createRenderPipelineAsync/createComputePipelineAsync where available to reduce shader/pipeline stalls.'),
+    rowMarkup('r360CapOpfs','OPFS Range Storage','Reads selected game byte ranges from persistent browser storage instead of copying whole images into RAM.'),
+    rowMarkup('r360CapIsolation','Cross-Origin Isolation','COOP/COEP gate required for SharedArrayBuffer and Wasm threads.'),
+    rowMarkup('r360CapSharedMemory','SharedArrayBuffer / Wasm Threads','Enables the future shared-memory worker execution path when hosting and browser support are both ready.'),
     rowMarkup('r360CapOffscreen','OffscreenCanvas + Workers','Lets compatible rendering work move away from the UI thread.'),
     rowMarkup('r360CapServiceWorker','Service Worker + Navigation Preload','Speeds the app shell while keeping mutable JS/WASM network-first.'),
     rowMarkup('r360CapWake','Screen Wake Lock','Keeps the display awake during gameplay.'),
@@ -172,6 +179,10 @@ function setStatus(id,available,availableText='Available',missingText='Unavailab
 }
 function renderCapabilities(){
   setStatus('r360CapWebgpu',capabilities.webgpu?.value);
+  setStatus('r360CapWebgpuAsync',capabilities.webgpuAsyncPipelines?.value,'Async ready','Sync fallback');
+  setStatus('r360CapOpfs',capabilities.opfs?.value,'Range ready','Unavailable');
+  setStatus('r360CapIsolation',capabilities.crossOriginIsolation?.value,'Isolated','Headers missing');
+  setStatus('r360CapSharedMemory',capabilities.sharedMemory?.value,'Thread-ready','Cooperative fallback');
   setStatus('r360CapOffscreen',capabilities.offscreen?.value&&capabilities.offscreenWorker?.value);
   setStatus('r360CapServiceWorker',capabilities.serviceWorker?.value,capabilities.navigationPreload?.value?'Preload ready':'Available');
   setStatus('r360CapWake',capabilities.wakeLock?.value);

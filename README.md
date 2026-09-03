@@ -6,7 +6,7 @@
 
 This `README.md` is the authoritative public status page. Old percentages in historical notes are not compatibility scores and should not be used to claim that a title is playable.
 
-## Current status — August 29, 2026
+## Current status — September 3, 2026
 
 ```text
 DISC / PACKAGE INPUT                         VERIFIED FOUNDATION
@@ -22,6 +22,12 @@ UPSTREAM XENIA SHADER INTERPRETER           CI-PROVEN FOUNDATION
 XENIA XENOS -> SPIR-V                       CI-PROVEN FOUNDATION
 SPIR-V -> NAGA -> WGSL                      CI-PROVEN + PUBLISHED
 WGSL -> WEBGPU SHADER MODULE                BROWSER-INTEGRATED / DEVICE-RUNTIME
+WEBGPU ASYNC PIPELINE CACHE                  IMPLEMENTED / BROWSER-RUNTIME CRITIC
+XENOS 10 MiB EDRAM STORAGE MIRROR            IMPLEMENTED / BROWSER-RUNTIME CRITIC
+RAW STORAGE-BUFFER VERTEX FETCH              IMPLEMENTED / BROWSER-RUNTIME CRITIC
+LINEAR RGBA8 EDRAM COMPUTE RESOLVE           IMPLEMENTED / FOUNDATION ONLY
+OPFS / HTTP RANGE STREAMING SOURCE            IMPLEMENTED / BROWSER-RUNTIME CRITIC
+SAB / WEB WORKER HOST POOL                    IMPLEMENTED / GATED; GUEST SMT INCOMPLETE
 REAL VdSwap FRONTBUFFER SNAPSHOT             CI-PROVEN FOUNDATION
 TITLE-PRODUCED RASTER / EDRAM RESOLVE       GENERAL-TITLE PATH REMAINING
 FIRST COMMERCIAL-TITLE FRAME                NOT YET VERIFIED
@@ -42,6 +48,12 @@ XENOS_WEBGPU_SHADER_TRANSLATION_PATH=PASS
 ```
 
 The generated converter publication is provenance-checked so a stale Xenia runtime cannot silently overwrite a newer source state.
+
+## New WebGPU browser architecture foundation
+
+The browser runtime now has a dedicated WebGPU/Xenos foundation rather than only a final-frame upload helper. `render360-webgpu-runtime.mjs` owns a 10 MiB eDRAM storage buffer, raw storage-buffer vertex fetch arena, render-target cache, async render/compute pipeline compilation and a canonical linear RGBA8 compute resolve. Real VdSwap-derived frontbuffers prefer WebGPU presentation and fail over to the existing Canvas2D path without changing the real-frame provenance rules.
+
+Large-title I/O also has bounded Blob, OPFS and HTTP byte-range readers with an LRU block cache. The worker layer can create a SharedArrayBuffer-aware host pool when COOP/COEP isolation is available, but Render360 deliberately keeps the current cooperative Xbox scheduler until PPC context migration and guest synchronization are safe to distribute across workers. See `WEBGPU_BROWSER_RUNTIME.md` for the exact implemented/incomplete boundary.
 
 ## What is real today
 
@@ -248,6 +260,10 @@ Strict Wasm linking uses `ERROR_ON_UNDEFINED_SYMBOLS=1`. Missing Xenia shader se
 - `render360-webgpu-title-shaders.mjs` — WebGPU validation/cache for translated title shaders.
 - `render360-title-frontbuffer.mjs` — real `VdSwap` frontbuffer capture and browser presentation.
 - `test-xenos-frontbuffer-snapshot.mjs` — adversarial real-frontbuffer critic.
+- `render360-webgpu-runtime.mjs` — WebGPU device foundation, 10 MiB eDRAM mirror, async pipeline cache, raw vertex fetch, render-target cache and linear compute resolve.
+- `render360-streaming-source.mjs` — bounded Blob/OPFS/HTTP byte-range sources with LRU block caching.
+- `render360-web-worker-pool.mjs` — cross-origin-isolated SharedArrayBuffer host worker pool foundation.
+- `WEBGPU_BROWSER_RUNTIME.md` — exact browser architecture contract and remaining Xenos/threading work.
 - `render360-webgpu-xenos.mjs` — browser framebuffer presentation bridge.
 - `render360-webgl2-xenos.mjs` — framebuffer fallback.
 

@@ -5,7 +5,8 @@ import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
-import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs';
+import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
+import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
 
 installRender360Buffer();
 
@@ -13,6 +14,7 @@ const MAX_XEX_BYTES=256*1024*1024;
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
 let activeRun=0;
 let activeScheduler=null;
+let activePresenter=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
 async function getBootstrap(onStage=null){
@@ -22,7 +24,7 @@ async function getBootstrap(onStage=null){
   stage(onStage,'runtime','Verified generated WASM CPU runtime ready');
   return bootstrap;
 }
-function stopActive(){try{activeScheduler?.stop?.();}catch{}activeScheduler=null;hideTitleFrontbuffer();}
+function stopActive(){try{activeScheduler?.stop?.();}catch{}activeScheduler=null;try{activePresenter?.destroy?.();}catch{}activePresenter=null;hideTitleFrontbuffer();}
 
 async function readDirectXex(file,onStage){
   if(file.size<0x18)throw new Error('XEX file is too small');
@@ -134,13 +136,34 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
   let frontbufferFrame=state.frontbufferFrame??null,presentation=state.presentation??null;
   const swaps=gpuTraffic?.swaps||0;
   if(swaps>0&&(forceFrontbuffer||swaps!==state.lastSwapCount)){
-    try{frontbufferFrame=captureTitleFrontbuffer({bootstrap:state.bootstrap});if(frontbufferFrame.captured)presentation=presentTitleFrontbuffer(frontbufferFrame);}catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};}
+    try{
+      frontbufferFrame=captureTitleFrontbuffer({bootstrap:state.bootstrap});
+      if(frontbufferFrame.captured){
+        let webgpuError=null;
+        if(state.config?.renderer!=='webgl2'&&globalThis.navigator?.gpu){
+          try{
+            if(!state.webgpuPresenter){
+              const canvas=ensureTitleWebGPUCanvas();
+              if(!canvas)throw new Error('WebGPU title canvas unavailable');
+              showTitleWebGPUCanvas(frontbufferFrame,{canvas});
+              state.webgpuPresenter=await createRgbaFramePresenter(canvas);
+              activePresenter=state.webgpuPresenter;
+            }else showTitleWebGPUCanvas(frontbufferFrame);
+            presentation=state.webgpuPresenter.present(frontbufferFrame);
+          }catch(error){webgpuError=error;try{state.webgpuPresenter?.destroy?.();}catch{}state.webgpuPresenter=null;activePresenter=null;}
+        }
+        if(!presentation||presentation.generation!==(frontbufferFrame.generation>>>0)){
+          presentation=presentTitleFrontbuffer(frontbufferFrame);
+          if(webgpuError)presentation={...presentation,webgpuFallbackReason:webgpuError?.message||String(webgpuError)};
+        }
+      }
+    }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};}
   }
   Object.assign(state,{gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,lastSwapCount:swaps});return state;
 }
 
 function publish(state){
-  globalThis.render360ModernTitle={fileName:state.file?.name||'',inputKind:state.inputKind,result:state.result,persistentCpu:state.persistentCpu,ppcSession:state.ppcSession,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,schedulerBlocker:state.schedulerBlocker,runtimeLoop:state.runtimeLoop,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,shaderWebGPU:state.shaderWebGPU,frontbufferFrame:state.frontbufferFrame,presentation:state.presentation,bootstrap:state.bootstrap,core:state.core,config:state.config,stop:()=>state.threadScheduler?.stop?.(),inspectScheduler:()=>state.threadScheduler?.inspect?.()??null};
+  globalThis.render360ModernTitle={fileName:state.file?.name||'',inputKind:state.inputKind,result:state.result,persistentCpu:state.persistentCpu,ppcSession:state.ppcSession,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,schedulerBlocker:state.schedulerBlocker,runtimeLoop:state.runtimeLoop,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,shaderWebGPU:state.shaderWebGPU,frontbufferFrame:state.frontbufferFrame,presentation:state.presentation,webgpuPresenter:state.webgpuPresenter,bootstrap:state.bootstrap,core:state.core,config:state.config,stop:()=>state.threadScheduler?.stop?.(),inspectScheduler:()=>state.threadScheduler?.inspect?.()??null};
 }
 
 function driveScheduler(run,state,onStage){
@@ -169,10 +192,10 @@ if(Number(result.translatedFunctionCount||0)>0){
   result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
 }
 if(run!==activeRun)return null;
-const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1};
+const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,lastSwapCount:-1};
 updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
 else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
 return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};
 }
 
-export function modernContentBridgeContract(){return {release:44,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true,nativeHirCompatibilityFallback:true};}
+export function modernContentBridgeContract(){return {release:45,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}

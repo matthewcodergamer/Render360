@@ -3,7 +3,8 @@ import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstra
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
-import {captureTitleFrontbuffer,hideTitleFrontbuffer,presentTitleFrontbuffer} from './render360-title-frontbuffer.mjs';
+import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
+import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
 const $=id=>document.getElementById(id);
@@ -13,6 +14,7 @@ const fmtBytes=value=>{const n=Number(value)||0;if(n<1024)return`${n} B`;if(n<10
 let corePromise=null;
 let activeRun=0;
 let activeScheduler=null;
+let activePresenter=null;
 
 function setText(id,value){const el=$(id);if(el)el.textContent=String(value)}
 function setGate(id,state,label){const el=$(id);if(!el)return;el.classList.remove('ready','blocked');if(state)el.classList.add(state);const em=el.querySelector('em');if(em)em.textContent=label}
@@ -32,6 +34,8 @@ function hostLog(level,message){
 function stopActiveScheduler(){
   try{activeScheduler?.stop?.();}catch{}
   activeScheduler=null;
+  try{activePresenter?.destroy?.();}catch{}
+  activePresenter=null;
 }
 function showGame(file){
   stopActiveScheduler();
@@ -152,8 +156,24 @@ async function inspectModernRuntime({bootstrap,state,forceFrontbuffer=false}){
     try{
       frontbufferFrame=captureTitleFrontbuffer({bootstrap});
       if(frontbufferFrame.captured){
-        presentation=presentTitleFrontbuffer(frontbufferFrame);
-        hostLog('ok',`Real VdSwap frontbuffer displayed · ${frontbufferFrame.width}×${frontbufferFrame.height} · hash ${fmtHex(frontbufferFrame.hash)}`);
+        let webgpuError=null;
+        if(globalThis.navigator?.gpu){
+          try{
+            if(!state.webgpuPresenter){
+              const canvas=ensureTitleWebGPUCanvas();
+              if(!canvas)throw new Error('WebGPU title canvas unavailable');
+              showTitleWebGPUCanvas(frontbufferFrame,{canvas});
+              state.webgpuPresenter=await createRgbaFramePresenter(canvas);
+              activePresenter=state.webgpuPresenter;
+            }else showTitleWebGPUCanvas(frontbufferFrame);
+            presentation=state.webgpuPresenter.present(frontbufferFrame);
+          }catch(error){webgpuError=error;try{state.webgpuPresenter?.destroy?.();}catch{}state.webgpuPresenter=null;activePresenter=null;}
+        }
+        if(!presentation||presentation.generation!==(frontbufferFrame.generation>>>0)){
+          presentation=presentTitleFrontbuffer(frontbufferFrame);
+          if(webgpuError)presentation={...presentation,webgpuFallbackReason:webgpuError?.message||String(webgpuError)};
+        }
+        hostLog('ok',`Real VdSwap frontbuffer displayed via ${presentation.backend} · ${frontbufferFrame.width}×${frontbufferFrame.height} · hash ${fmtHex(frontbufferFrame.hash)}`);
       }else hostLog('warn',`VdSwap frontbuffer not displayable yet: ${frontbufferFrame.reason}`);
     }catch(error){
       frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};
@@ -179,6 +199,7 @@ function publishModernDebug(state){
     shaderWebGPU:state.shaderWebGPU,
     frontbufferFrame:state.frontbufferFrame,
     presentation:state.presentation,
+    webgpuPresenter:state.webgpuPresenter,
     bootstrap:state.bootstrap,
     core:state.core,
     entryWindowBytes:ENTRY_WINDOW_BYTES,
@@ -264,7 +285,7 @@ export async function runModernXboxIso(file){
     const state={
       file,core,bootstrap,result,ppcSession,threadScheduler:threadScheduler??null,primaryThread:primaryThread??null,
       schedulerReport:schedulerReport??null,schedulerBlocker:schedulerBlocker??null,runtimeLoop:null,
-      persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,lastSwapCount:-1,
+      persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,lastSwapCount:-1,
     };
     updatePersistentCpu(state);
     if(state.threadScheduler){
@@ -307,6 +328,8 @@ export function modernIsoBridgeContract(){return {
   usesXeniaSpirvTranslation:true,
   usesNagaWgslTranslation:true,
   validatesCapturedShadersWithWebGPU:true,
+  presentsRealFrontbufferWithWebGPU:true,
+  canvas2dFrontbufferFallback:true,
   webgpuShaderValidationCountsAsRealFrame:false,
   realFrontbufferSource:'VdSwap fetch constant + mapped sparse Xbox memory',
   frontbufferFormats:['8_8_8_8','2_10_10_10_AS_16_16_16_16'],

@@ -40,3 +40,9 @@ jobs:
           WASM="$(find .runtime-followup-artifact -type f -name xenia_ppc_bootstrap.wasm | head -n 1)"
           test -n "$WASM"
           node ./test-hir-sparse-fail-closed.mjs "$WASM"
+      - name: Verify nested HIR blocker propagation
+        run: |
+          set -euo pipefail
+          WASM="$(find .runtime-followup-artifact -type f -name xenia_ppc_bootstrap.wasm | head -n 1)"
+          test -n "$WASM"
+          node ./test-kernel-abi-critic.mjs "$WASM"

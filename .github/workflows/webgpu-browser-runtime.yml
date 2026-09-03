@@ -1,0 +1,70 @@
+name: WebGPU Browser Runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-webgpu-runtime.mjs'
+      - 'render360-webgpu-xenos.mjs'
+      - 'render360-title-frontbuffer.mjs'
+      - 'render360-browser-modern-content-bridge.mjs'
+      - 'render360-browser-modern-iso-bridge.mjs'
+      - 'render360-streaming-source.mjs'
+      - 'storage/game-storage.js'
+      - 'render360-web-worker-pool.mjs'
+      - 'render360-browser-features.mjs'
+      - 'serve.py'
+      - 'test-webgpu-browser-runtime.mjs'
+      - 'WEBGPU_BROWSER_RUNTIME.md'
+      - '.github/workflows/webgpu-browser-runtime.yml'
+  pull_request:
+    paths:
+      - 'render360-webgpu-runtime.mjs'
+      - 'render360-webgpu-xenos.mjs'
+      - 'render360-title-frontbuffer.mjs'
+      - 'render360-browser-modern-content-bridge.mjs'
+      - 'render360-browser-modern-iso-bridge.mjs'
+      - 'render360-streaming-source.mjs'
+      - 'storage/game-storage.js'
+      - 'render360-web-worker-pool.mjs'
+      - 'render360-browser-features.mjs'
+      - 'serve.py'
+      - 'test-webgpu-browser-runtime.mjs'
+      - 'WEBGPU_BROWSER_RUNTIME.md'
+      - '.github/workflows/webgpu-browser-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-critic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse browser runtime modules
+        run: |
+          node --check render360-webgpu-runtime.mjs
+          node --check render360-webgpu-xenos.mjs
+          node --check render360-title-frontbuffer.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check render360-browser-modern-iso-bridge.mjs
+          node --check render360-streaming-source.mjs
+          node --check storage/game-storage.js
+          node --check render360-web-worker-pool.mjs
+          node --check render360-browser-features.mjs
+          python -m py_compile serve.py
+      - name: Run browser architecture critics
+        run: |
+          node test-webgpu-browser-runtime.mjs
+          node test-webgpu-wgsl-edram-foundation.mjs
+          node test-browser-features-contract.mjs
+      - name: Package exact checked revision
+        run: zip -qr /tmp/Render360-webgpu-browser-runtime.zip . -x '.git/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Render360-webgpu-browser-runtime
+          path: /tmp/Render360-webgpu-browser-runtime.zip
+          if-no-files-found: error

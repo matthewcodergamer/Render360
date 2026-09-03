@@ -45,6 +45,39 @@ HIRCorrectnessAddressResolver g_address_resolver = nullptr;
 thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;
 thread_local uint32_t g_execution_depth = 0;
 
+// Resolver callbacks are boolean, but real title calls may recursively execute
+// another HIR builder. Preserve the exact nested blocker across that boundary.
+thread_local bool g_pending_nested_failure_valid = false;
+thread_local HIRCorrectnessResult g_pending_nested_failure{};
+
+void ClearPendingNestedFailure() {
+  g_pending_nested_failure_valid = false;
+  g_pending_nested_failure = {};
+}
+void RecordPendingNestedFailure(const HIRCorrectnessResult& failure) {
+  if (failure.supported || failure.blocker_kind == kHIRBlockerNone) return;
+  g_pending_nested_failure = failure;
+  g_pending_nested_failure_valid = true;
+}
+bool ConsumePendingNestedFailure(HIRCorrectnessResult* failure) {
+  if (!failure || !g_pending_nested_failure_valid) return false;
+  *failure = g_pending_nested_failure;
+  ClearPendingNestedFailure();
+  return true;
+}
+bool ResolveFunctionCallWithNestedFailure(xe::cpu::Function* function) {
+  ClearPendingNestedFailure();
+  if (!g_call_resolver || !g_call_resolver(function)) return false;
+  ClearPendingNestedFailure();
+  return true;
+}
+bool ResolveAddressCallWithNestedFailure(uint32_t target) {
+  ClearPendingNestedFailure();
+  if (!g_address_resolver || !g_address_resolver(target)) return false;
+  ClearPendingNestedFailure();
+  return true;
+}
+
 bool IsIntegerType(TypeName type) {
   return type == xe::cpu::hir::INT8_TYPE || type == xe::cpu::hir::INT16_TYPE ||
          type == xe::cpu::hir::INT32_TYPE || type == xe::cpu::hir::INT64_TYPE;
@@ -838,10 +871,10 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
     *block_terminated = true;
     return true;
   }
-  if (target > std::numeric_limits<uint32_t>::max() || !g_address_resolver) {
+  if (target > std::numeric_limits<uint32_t>::max()) return false;
+  if (!ResolveAddressCallWithNestedFailure(static_cast<uint32_t>(target))) {
     return false;
   }
-  if (!g_address_resolver(static_cast<uint32_t>(target))) return false;
   if (flags & xe::cpu::hir::CALL_TAIL) {
     *reached_return = true;
     *block_terminated = true;
@@ -1013,14 +1046,14 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
             // target, do not reinterpret the instruction as a different call.
             target = instr->src1.symbol->address();
             call_resolved =
-                g_call_resolver && g_call_resolver(instr->src1.symbol);
+                ResolveFunctionCallWithNestedFailure(instr->src1.symbol);
           } else if (g_address_resolver &&
                      DecodeDirectBranchFromSource(current_source_address,
                                                   &target)) {
             std::fprintf(stderr,
                          "R360_DIRECT_CALL_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
                          current_source_address, target, instr->flags);
-            call_resolved = g_address_resolver(target);
+            call_resolved = ResolveAddressCallWithNestedFailure(target);
           }
           supported = call_resolved;
           if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
@@ -1040,14 +1073,14 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
             if (instr->src2.symbol) {
               target = instr->src2.symbol->address();
               call_resolved =
-                  g_call_resolver && g_call_resolver(instr->src2.symbol);
+                  ResolveFunctionCallWithNestedFailure(instr->src2.symbol);
             } else if (g_address_resolver &&
                        DecodeDirectBranchFromSource(current_source_address,
                                                     &target)) {
               std::fprintf(stderr,
                            "R360_DIRECT_CALL_TRUE_FALLBACK source=0x%08X target=0x%08X flags=0x%X\n",
                            current_source_address, target, instr->flags);
-              call_resolved = g_address_resolver(target);
+              call_resolved = ResolveAddressCallWithNestedFailure(target);
             }
             supported = call_resolved;
             if (supported && (instr->flags & xe::cpu::hir::CALL_TAIL)) {
@@ -1097,6 +1130,19 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         default:
           supported = false;
           break;
+      }
+      if (!supported && result.blocker_kind == kHIRBlockerNone) {
+        HIRCorrectnessResult nested_failure;
+        if (ConsumePendingNestedFailure(&nested_failure)) {
+          result.blocker_kind = nested_failure.blocker_kind;
+          result.blocker_opcode = nested_failure.blocker_opcode;
+          result.blocker_address = nested_failure.blocker_address;
+          std::fprintf(stderr,
+                       "R360_NESTED_BLOCKER propagated kind=%u opcode=%u address=0x%08X outer=0x%08X
+",
+                       result.blocker_kind, result.blocker_opcode,
+                       result.blocker_address, current_source_address);
+        }
       }
       if (!supported && result.blocker_kind == kHIRBlockerNone) {
         const uint32_t opcode = instr->opcode ? instr->opcode->num : 0;
@@ -1158,6 +1204,7 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
   if (!builder || !memory) return result;
 
   const bool outermost = g_active_context == nullptr;
+  if (outermost) ClearPendingNestedFailure();
   xe::cpu::ppc::PPCContext local_context{};
   if (outermost) {
     for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
@@ -1170,6 +1217,10 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
   result = ExecuteBuilder(builder, memory, *g_active_context);
   --g_execution_depth;
 
+  if (!outermost && !result.supported &&
+      result.blocker_kind != kHIRBlockerNone) {
+    RecordPendingNestedFailure(result);
+  }
   if (outermost) g_active_context = nullptr;
   return result;
 }

@@ -21,6 +21,8 @@ const required = [
   'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
   'r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate',
   'r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3',
+  'r360_ppc_probe_correctness_blocker_kind','r360_ppc_probe_correctness_blocker_opcode',
+  'r360_ppc_probe_correctness_blocker_address',
   'r360_kernel_import_reset','r360_kernel_import_register','r360_kernel_import_calls',
   'r360_kernel_import_last_thunk','r360_kernel_import_last_module',
   'r360_kernel_import_last_ordinal','r360_kernel_import_last_status'
@@ -58,6 +60,9 @@ function telemetry() {
   return {
     status: pick('r360_ppc_probe_correctness_status')() >>> 0,
     r3: Number(pick('r360_ppc_probe_correctness_r3')()),
+    blockerKind: pick('r360_ppc_probe_correctness_blocker_kind')() >>> 0,
+    blockerOpcode: pick('r360_ppc_probe_correctness_blocker_opcode')() >>> 0,
+    blockerAddress: pick('r360_ppc_probe_correctness_blocker_address')() >>> 0,
     calls: pick('r360_kernel_import_calls')() >>> 0,
     thunk: pick('r360_kernel_import_last_thunk')() >>> 0,
     module: pick('r360_kernel_import_last_module')() >>> 0,
@@ -101,12 +106,19 @@ console.log('KERNEL_ABI_CRITIC_CONTINUATION=PASS');
 
 // Exact end-of-window crossing: a 4-byte store beginning at +0xFFFE must fail closed.
 const boundary = runAbi(base + 0xFFFE);
-if (boundary.status !== 1 || boundary.lastStatus !== 3 || boundary.calls !== 1) throw new Error(`critic boundary failure ${JSON.stringify(boundary)}`);
+if (boundary.status !== 1 || boundary.lastStatus !== 3 || boundary.calls !== 1 ||
+    boundary.blockerKind !== 5 || boundary.blockerAddress !== service) {
+  throw new Error(`critic boundary failure ${JSON.stringify(boundary)}`);
+}
 console.log('KERNEL_ABI_CRITIC_RANGE_FAIL_CLOSED=PASS');
+console.log('KERNEL_ABI_CRITIC_NESTED_BLOCKER_PROPAGATION=PASS');
 
 // 32-bit wraparound pointer must fail closed, never alias back into the staging window.
 const wrap = runAbi(0xFFFFFFFE);
-if (wrap.status !== 1 || wrap.lastStatus !== 3 || wrap.calls !== 1) throw new Error(`critic wraparound failure ${JSON.stringify(wrap)}`);
+if (wrap.status !== 1 || wrap.lastStatus !== 3 || wrap.calls !== 1 ||
+    wrap.blockerKind !== 5 || wrap.blockerAddress !== service) {
+  throw new Error(`critic wraparound failure ${JSON.stringify(wrap)}`);
+}
 console.log('KERNEL_ABI_CRITIC_WRAPAROUND_FAIL_CLOSED=PASS');
 
 // Recursive ABI target must be rejected explicitly rather than recursing or becoming a blanket success.
@@ -119,7 +131,8 @@ if ((pick('r360_ppc_probe_write_guest_u32_be')(ptr, 0x0BADF00D) >>> 0) !== 1) th
 const unsupported = runControl(false, 0);
 const unchanged = pick('r360_ppc_probe_read_guest_u32_be')(ptr) >>> 0;
 if (unsupported.status !== 1 || unsupported.lastStatus !== 2 || unsupported.calls !== 1 ||
-    unsupported.thunk !== thunk || unsupported.module !== moduleId || unsupported.ordinal !== ordinal || unchanged !== 0x0BADF00D) {
+    unsupported.blockerKind !== 2 || unsupported.thunk !== thunk || unsupported.module !== moduleId ||
+    unsupported.ordinal !== ordinal || unchanged !== 0x0BADF00D) {
   throw new Error(`critic unsupported blocker mismatch ${JSON.stringify({...unsupported,unchanged})}`);
 }
 console.log('KERNEL_ABI_CRITIC_UNSUPPORTED_EXACT_BLOCKER=PASS');

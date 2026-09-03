@@ -64,6 +64,7 @@ jobs:
           done
           python -m py_compile serve.py
           rm -rf __pycache__
+          python -c "from pathlib import Path; p=Path('render360-title-frontbuffer.mjs'); p.write_text(p.read_text().rstrip()+'\\n')"
 
       - name: Browser runtime critics
         shell: bash

@@ -1,0 +1,53 @@
+name: Braid Nested Blocker Propagation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/braid-nested-blocker-propagation.yml'
+      - 'tools/braid-nested-blocker-propagation.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply nested blocker propagation patch
+        run: python3 ./tools/braid-nested-blocker-propagation.py
+      - name: Preflight source contracts
+        run: |
+          set -euo pipefail
+          node --check ./test-kernel-abi-critic.mjs
+          grep -q 'R360_NESTED_BLOCKER propagated' ./src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'KERNEL_ABI_CRITIC_NESTED_BLOCKER_PROPAGATION=PASS' ./test-kernel-abi-critic.mjs
+          grep -q 'Verify nested HIR blocker propagation' ./.github/workflows/braid-portal-runtime-followup-gate.yml
+      - name: Commit verified source patch
+        run: |
+          set -euo pipefail
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            src/xenia_web_bootstrap/BRAID_NESTED_BLOCKER_PROPAGATION.md \
+            test-kernel-abi-critic.mjs \
+            .github/workflows/braid-portal-runtime-followup-gate.yml
+          if git diff --cached --quiet; then
+            echo 'No source changes required.'
+          else
+            git commit -m 'fix: propagate nested HIR title blockers'
+            git push
+          fi
+      - name: Package updated repository snapshot
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=Render360-nested-blocker-fix.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Render360-nested-blocker-fix
+          path: Render360-nested-blocker-fix.zip
+          if-no-files-found: error

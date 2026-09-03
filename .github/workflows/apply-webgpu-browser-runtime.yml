@@ -39,12 +39,6 @@ jobs:
           git apply --check /tmp/webgpu.patch
           git apply /tmp/webgpu.patch
 
-      - name: Remove one-shot transport
-        shell: bash
-        run: |
-          rm -rf .r360-patches
-          rm -f .github/workflows/apply-webgpu-browser-runtime.yml
-
       - name: Parse and static checks
         shell: bash
         run: |
@@ -75,13 +69,26 @@ jobs:
           node test-browser-features-contract.mjs
           node test-webgl2-xenos-fallback.mjs
 
-      - name: Commit implementation
+      - name: Commit runtime implementation
         shell: bash
         run: |
           set -euo pipefail
           git config user.name render360-ci
           git config user.email render360-ci@users.noreply.github.com
-          git add -A
+          git add \
+            README.md \
+            WEBGPU_BROWSER_RUNTIME.md \
+            render360-browser-features.mjs \
+            render360-browser-modern-content-bridge.mjs \
+            render360-browser-modern-iso-bridge.mjs \
+            render360-streaming-source.mjs \
+            render360-title-frontbuffer.mjs \
+            render360-web-worker-pool.mjs \
+            render360-webgpu-runtime.mjs \
+            render360-webgpu-xenos.mjs \
+            serve.py \
+            storage/game-storage.js \
+            test-webgpu-browser-runtime.mjs
           git diff --cached --check
           git commit -m 'feat: add WebGPU Xenos browser runtime foundation'
           git push origin HEAD:main

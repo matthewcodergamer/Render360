@@ -17,3 +17,8 @@ The regression reuses the kernel ABI critic: a nested service performs a guest
 STORE to an invalid pointer and must report blocker kind 5 at the nested service
 instruction, not blocker kind 2 at the caller's `bctrl`. This is diagnostic and
 control-flow correctness, not a claim that Braid has reached a frame.
+
+The first CI compile exposed only an escaped-newline typo in the new diagnostic
+`fprintf`; source commit `68b6313f` repairs that token before this verification
+rerun. The behavior gate remains the nested blocker kind/address assertion, not
+the diagnostic string itself.

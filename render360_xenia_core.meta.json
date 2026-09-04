@@ -1,6 +1,8 @@
 {
-  "sourceCommit": "ccb021d20c8fd0ceb1b76335147781ea972a3c85",
-  "sourceRun": "33700736527",
-  "sha256": "7030dffc89bd19d128630665fa20175fb7b077892d82ee36dd6070f11a2777f1",
-  "bytes": 211496
+  "release": 44,
+  "wasm": "render360_xenia_core.wasm",
+  "sha256": "8195b7be7a3e52f78896df4df4258c1b1dfed8cd64ead8873b211639c8bebe52",
+  "bytes": 211496,
+  "embedded_gzip_bytes": 13683,
+  "source": "build-core.sh"
 }

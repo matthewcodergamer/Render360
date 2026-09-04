@@ -1,0 +1,55 @@
+name: Braid r1 boundary diagnostics v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/braid-r1-boundary-diagnostics-v2.yml'
+      - 'tools/braid-r1-boundary-diagnostics-v2.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: braid-r1-boundary-diagnostics-v2
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply r1 boundary diagnostic plumbing
+        run: python3 tools/braid-r1-boundary-diagnostics-v2.py
+
+      - name: Validate diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile prepare-hir-call-return-stack-overlay.py
+          node --check developer-console.js
+          node --check render360-title-controller.mjs
+          node --check test-braid-r1-boundary-diagnostics.mjs
+          node test-braid-r1-boundary-diagnostics.mjs
+          node test-ui-contract.mjs
+          git diff --check
+
+      - name: Commit verified diagnostic fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prepare-hir-call-return-stack-overlay.py render360-title-controller.mjs developer-console.js test-braid-r1-boundary-diagnostics.mjs
+          git diff --cached --check
+          git commit -m 'fix: expose Braid r1 boundary trace' || exit 0
+          git push origin HEAD:main

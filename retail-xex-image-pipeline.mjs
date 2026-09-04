@@ -36,12 +36,44 @@ function bootstrapPick(bootstrap, name) {
   return bootstrap.exports[name] ?? bootstrap.exports[`_${name}`];
 }
 
+const XEX_DECODE_STATUS_NAMES = new Map([
+  [0, 'idle'],
+  [1, 'pass'],
+  [100, 'too-small'],
+  [101, 'bad-magic'],
+  [102, 'header-range'],
+  [103, 'security-info'],
+  [104, 'optional-header'],
+  [105, 'encryption'],
+  [106, 'compression'],
+  [107, 'page-descriptors'],
+  [108, 'image-range'],
+]);
+
+function xexDecodeFailure(core, status, suppliedBytes) {
+  const e = core.exports;
+  const get = (name) => typeof e[name] === 'function' ? (e[name]() >>> 0) : 0;
+  const hex = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  const name = XEX_DECODE_STATUS_NAMES.get(status) || 'unknown';
+  return new Error(
+    `XEX metadata decode failed status=${status}(${name}) ` +
+    `bytes=${suppliedBytes} header=${get('r360_xex_decode_header_size')} ` +
+    `security=${hex(get('r360_xex_decode_security_offset'))} ` +
+    `optional=${get('r360_xex_decode_header_count')} ` +
+    `pages=${get('r360_xex_decode_page_descriptor_count')} ` +
+    `image=${hex(get('r360_xex_decode_image_base'))}+${hex(get('r360_xex_decode_image_size'))}`,
+  );
+}
+
 function validateRequired(core, bootstrap) {
   const ce = core.exports;
   for (const n of [
     'memory','r360_io_ptr','r360_io_capacity','r360_xex_decode',
-    'r360_xex_decode_encryption_type','r360_xex_decode_compression_type',
-    'r360_xex_decode_image_size','r360_xex_prepare_none_begin',
+    'r360_xex_decode_status','r360_xex_decode_header_size',
+    'r360_xex_decode_security_offset','r360_xex_decode_header_count',
+    'r360_xex_decode_page_descriptor_count','r360_xex_decode_image_base',
+    'r360_xex_decode_image_size','r360_xex_decode_encryption_type',
+    'r360_xex_decode_compression_type','r360_xex_prepare_none_begin',
     'r360_xex_prepare_none_accept','r360_xex_prepare_basic_begin',
     'r360_xex_prepare_basic_accept_data','r360_xex_prepare_basic_consume_zero',
     'r360_xex_prepare_basic_data_remaining','r360_xex_prepare_basic_zero_remaining',
@@ -123,7 +155,8 @@ function prepareNormal(core, bootstrap, header, body) {
 export async function prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey=null,useDevkitKey=false}) {
   validateRequired(core,bootstrap);
   const h=Buffer.from(header);coreStage(core,h);
-  if((core.exports.r360_xex_decode(h.length)>>>0)!==1)throw new Error('XEX metadata decode failed');
+  const decodeStatus=core.exports.r360_xex_decode(h.length)>>>0;
+  if(decodeStatus!==1)throw xexDecodeFailure(core,decodeStatus,h.length);
   const enc=core.exports.r360_xex_decode_encryption_type()>>>0;
   const comp=core.exports.r360_xex_decode_compression_type()>>>0;
   if(comp>2)throw new Error(`unsupported XEX patch/delta compression ${comp}`);

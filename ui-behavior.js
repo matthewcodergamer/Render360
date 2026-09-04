@@ -1,4 +1,5 @@
 import './developer-console.js';
+import './developer-console-fab.js';
 import './render360-browser-features.mjs';
 import './ui.js';
 import {listGames,putGame,putCover} from './library/game-library.js';

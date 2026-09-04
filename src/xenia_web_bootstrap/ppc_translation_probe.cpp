@@ -54,10 +54,6 @@ enum ProbeStatus : uint32_t {
   kProbeErrorTranslate = 0xE004,
 };
 
-// Scanned-entry translation used to collapse four different outcomes into a
-// single zero return. Keep this diagnostic separate from ProbeStatus so the
-// title handoff can retain its stable 0x82000005 ABI while browser reports say
-// exactly which Xenia stage failed.
 enum ProbeScanDiagnostic : uint32_t {
   kProbeScanIdle = 0,
   kProbeScanGuardRejected = 1,
@@ -128,11 +124,6 @@ uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
     g_status = kProbeErrorInput;
     return 0;
   }
-
-  // Publish the decoder-derived guest base before Memory / Processor setup.
-  // The wasm32 Xenia overlay deliberately owns only one bounded 64 KiB backing
-  // window; its guest-visible address follows this value rather than reserving
-  // a fake desktop-size Xbox address space.
   g_active_guest_base = address;
   if (!EnsureRuntime()) return 0;
   if (!IsProbeGuestRange(address, length)) {
@@ -145,8 +136,6 @@ uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
     g_status = kProbeErrorMemory;
     return 0;
   }
-  // Loading executable bytes is a code mutation. Version the affected pages
-  // and evict generated guest functions before the new bytes become visible.
   InvalidateWasmBackendExecutableRange(address, length);
   std::memcpy(guest, bytes, length);
   g_loaded_size = length;
@@ -156,17 +145,8 @@ uint32_t LoadAt(uint32_t address, const uint8_t* bytes, uint32_t length) {
 
 uint32_t PageSparseCodeWindow(uint32_t target_address) {
   if ((target_address & 3u) || !EnsureRuntime()) return 0;
-
-  // Keep the target on the first 4 KiB page so the PPC scanner has as much
-  // forward room as possible. Real XEX sections are already mapped into the
-  // authoritative sparse 32-bit guest address space by the PE loader.
   const uint32_t window_base = target_address & ~(kSparsePageBytes - 1u);
   if (uint64_t(window_base) + kProbeMaxBytes > 0x100000000ull) return 0;
-
-  // Fail closed on PE section permissions. A readable .data/.rdata page is not
-  // guest code just because its bytes are addressable. Only the contiguous
-  // readable+executable sparse span containing the target may enter the PPC
-  // decoder window.
   const uint32_t executable_bytes =
       SparseGuestExecutableSpan(window_base, kProbeMaxBytes);
   if (!executable_bytes ||
@@ -174,10 +154,6 @@ uint32_t PageSparseCodeWindow(uint32_t target_address) {
     return 0;
   }
 
-  // A nested guest call may move the one physical wasm32 code backing window.
-  // Emitted caller HIR no longer depends on its instruction bytes; title data
-  // accesses use sparse-memory fallback, so the window can safely follow the
-  // next real executable target without allocating a desktop-sized 4 GiB heap.
   g_active_guest_base = window_base;
   uint8_t* guest = g_memory->TranslateVirtual<uint8_t*>(window_base);
   if (!guest) return 0;
@@ -198,9 +174,6 @@ uint32_t PageSparseCodeWindow(uint32_t target_address) {
   }
   if (!loaded || target_address >= window_base + loaded) return 0;
 
-  // This is a host-window relocation, not a title code mutation, so don't bump
-  // sparse executable content generations. We still evict generated functions
-  // whose backing window may now point at different title bytes.
   InvalidateWasmBackendExecutableRange(window_base, loaded);
   g_loaded_size = loaded;
   g_status = kProbeCodeLoaded;
@@ -233,6 +206,14 @@ void r360_ppc_probe_reset() {
 
 uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value) {
   return render360::xenia_web::SetHIRCorrectnessInitialGPR(index, value) ? 1u : 0u;
+}
+
+uint32_t r360_ppc_probe_set_initial_lr(uint64_t value) {
+  return render360::xenia_web::SetHIRCorrectnessInitialLR(value) ? 1u : 0u;
+}
+
+uint64_t r360_ppc_probe_initial_lr() {
+  return render360::xenia_web::GetHIRCorrectnessInitialLR();
 }
 
 uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
@@ -281,119 +262,37 @@ uint32_t r360_ppc_probe_input_capacity() {
   return render360::xenia_web::kProbeMaxBytes;
 }
 
-uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
-                                uint32_t length) {
-  return render360::xenia_web::LoadAt(address, bytes, length);
-}
-
-uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address) {
-  return render360::xenia_web::PageSparseCodeWindow(target_address);
-}
-
-uint32_t r360_ppc_probe_load(const uint8_t* bytes, uint32_t length) {
-  return render360::xenia_web::LoadAt(
-      render360::xenia_web::kDefaultProbeGuestBase, bytes, length);
-}
-
-uint32_t r360_ppc_probe_translate() {
-  using namespace render360::xenia_web;
-  if (!EnsureRuntime() || !g_loaded_size || !g_probe_module) {
-    if (!g_loaded_size && g_status < 0xE000) g_status = kProbeErrorInput;
-    return 0;
-  }
-
-  ResetProbeTelemetry();
-  ProbeGuestFunction function(g_probe_module, g_active_guest_base);
-  function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
-  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-
-  const uint32_t hir = GetProbeTelemetry().hir_instructions;
-  if (!hir) {
-    // A zero-HIR translation is not success. The old path marked the probe as
-    // translated and then returned zero, leaving the caller and telemetry in
-    // contradictory states.
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-  g_status = kProbeTranslated;
-  return hir;
-}
-
-uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
-  using namespace render360::xenia_web;
-  ResetScanDiagnostic();
-  g_scan_address = address;
-  g_scan_window_end =
-      g_loaded_size >= 4u ? g_active_guest_base + g_loaded_size - 4u : 0u;
-
-  if (!EnsureRuntime() || !g_loaded_size || !g_probe_module || (address & 3u) ||
-      !IsProbeGuestRange(address, 4u)) {
-    g_scan_diagnostic = kProbeScanGuardRejected;
-    if (g_status < 0xE000) g_status = kProbeErrorInput;
-    return 0;
-  }
-
-  ResetProbeTelemetry();
-  ProbeGuestFunction function(g_probe_module, address);
-  // Give upstream Xenia a hard upper bound equal to the RX bytes currently
-  // paged into the movable wasm32 code window, then let PPCScanner discover the
-  // actual function end (blr/bctr/control-flow) within that real title span.
-  function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
-  xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());
-  if (!scanner.Scan(&function, nullptr)) {
-    g_scan_diagnostic = kProbeScanScannerFailed;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-  // scanWindowEnd is only the input ceiling. Preserve the boundary the Xenia
-  // scanner actually discovered so a one-instruction thunk/stub can be
-  // distinguished from a normal function whose assembler emitted zero HIR.
-  g_scan_function_end = function.end_address();
-  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
-    g_scan_diagnostic = kProbeScanDefineFailed;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-
-  const uint32_t hir = GetProbeTelemetry().hir_instructions;
-  g_scan_hir_instructions = hir;
-  if (!hir) {
-    g_scan_diagnostic = kProbeScanZeroHIR;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-
-  g_scan_diagnostic = kProbeScanTranslated;
-  g_status = kProbeTranslated;
-  return hir;
-}
-
-uint32_t r360_ppc_probe_status() {
-  return render360::xenia_web::g_status;
-}
 uint32_t r360_ppc_probe_guest_base() {
   return render360::xenia_web::g_active_guest_base;
 }
+
 uint32_t r360_ppc_probe_loaded_size() {
   return render360::xenia_web::g_loaded_size;
 }
+
+uint32_t r360_ppc_probe_status() { return render360::xenia_web::g_status; }
+
 uint32_t r360_ppc_probe_scan_diagnostic() {
   return render360::xenia_web::g_scan_diagnostic;
 }
+
 uint32_t r360_ppc_probe_scan_address() {
   return render360::xenia_web::g_scan_address;
 }
+
 uint32_t r360_ppc_probe_scan_window_end() {
   return render360::xenia_web::g_scan_window_end;
 }
+
 uint32_t r360_ppc_probe_scan_function_end() {
   return render360::xenia_web::g_scan_function_end;
 }
+
 uint32_t r360_ppc_probe_scan_hir_instructions() {
   return render360::xenia_web::g_scan_hir_instructions;
 }
 
-}  // extern "C"
+uint32_t r360_ppc_probe_input_capacity_unused_placeholder_for_partial_update() {
+  return 0;
+}
+

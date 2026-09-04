@@ -58,7 +58,7 @@ uint64_t r360_ppc_probe_initial_lr() {
 p = Path('prepare-hir-return-metadata-v3-overlay.py')
 s = p.read_text()
 if MARK not in s:
-    injection = r'''
+    injection = r"""
 
 # R360_XENIA_ENTRY_ABI_V51
 # Xenia's real Processor::Execute does two architectural things before
@@ -113,7 +113,7 @@ context_new = '''    for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
     g_r360_stack_trace.initial_r1 = local_context.r[1];
 '''
 replace_once(context_old, context_new, 'initial LR context application')
-'''
+"""
     # Inject immediately before the final required-marker validation so all
     # replacements operate on the same generated translation unit.
     marker = '\nrequired = [\n'

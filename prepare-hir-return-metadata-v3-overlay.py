@@ -180,6 +180,61 @@ return_true_new = '''          if (supported && condition) {
         case xe::cpu::hir::OPCODE_CALL_INDIRECT: {'''
 replace_once(return_true_old, return_true_new, 'conditional return cleanup')
 
+
+# R360_XENIA_ENTRY_ABI_V51
+# Xenia's real Processor::Execute does two architectural things before
+# Function::Call: it reserves 64+112 bytes from r1 and sets LR to 0xBCBCBCBC.
+# Render360 already mirrors the r1 reservation in render360-title-controller;
+# preserve the LR side here as explicit initial special-register state.
+initial_gprs_old = 'std::array<uint64_t, 32> g_initial_gprs{};\n'
+initial_gprs_new = ('std::array<uint64_t, 32> g_initial_gprs{};\n'
+                    'uint64_t g_initial_lr = 0;\n')
+replace_once(initial_gprs_old, initial_gprs_new, 'initial LR storage')
+
+reset_old = '''void ResetHIRCorrectnessInitialState() { g_initial_gprs.fill(0); }
+
+bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
+  if (index >= g_initial_gprs.size()) return false;
+  g_initial_gprs[index] = value;
+  return true;
+}
+'''
+reset_new = '''void ResetHIRCorrectnessInitialState() {
+  g_initial_gprs.fill(0);
+  g_initial_lr = 0;
+}
+
+bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
+  if (index >= g_initial_gprs.size()) return false;
+  g_initial_gprs[index] = value;
+  return true;
+}
+
+bool SetHIRCorrectnessInitialLR(uint64_t value) {
+  g_initial_lr = value;
+  return true;
+}
+
+uint64_t GetHIRCorrectnessInitialLR() { return g_initial_lr; }
+'''
+replace_once(reset_old, reset_new, 'initial LR API implementation')
+
+context_old = '''    for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
+      local_context.r[i] = g_initial_gprs[i];
+    }
+    g_r360_stack_trace.initial_r1 = local_context.r[1];
+'''
+context_new = '''    for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
+      local_context.r[i] = g_initial_gprs[i];
+    }
+    local_context.lr = g_initial_lr;
+    std::fprintf(stderr,
+                 "R360_INITIAL_SPECIALS lr=0x%08X\\n",
+                 static_cast<uint32_t>(local_context.lr));
+    g_r360_stack_trace.initial_r1 = local_context.r[1];
+'''
+replace_once(context_old, context_new, 'initial LR context application')
+
 required = [
     'R360_GUEST_RETURN_DISCARD',
     'internal-branch',

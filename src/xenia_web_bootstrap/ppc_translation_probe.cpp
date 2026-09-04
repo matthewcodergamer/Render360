@@ -235,6 +235,17 @@ uint32_t r360_ppc_probe_set_initial_gpr(uint32_t index, uint64_t value) {
   return render360::xenia_web::SetHIRCorrectnessInitialGPR(index, value) ? 1u : 0u;
 }
 
+// R360_XENIA_ENTRY_ABI_V51: Xenia Processor::Execute installs a sentinel LR
+// before entering the guest function. The browser HIR executor must start with
+// the same architectural state instead of an all-zero special-register set.
+uint32_t r360_ppc_probe_set_initial_lr(uint64_t value) {
+  return render360::xenia_web::SetHIRCorrectnessInitialLR(value) ? 1u : 0u;
+}
+
+uint64_t r360_ppc_probe_initial_lr() {
+  return render360::xenia_web::GetHIRCorrectnessInitialLR();
+}
+
 uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
   using namespace render360::xenia_web;
   if (!EnsureRuntime()) return 0;

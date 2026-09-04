@@ -74,6 +74,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   // Xenia/Xbox entry ABI and can make title prologues consume zeroed slots.
   const stackBasePointer=(stackLimit+stackPages*pageSize)>>>0;
   const xeniaCallFrameBytes=64+112;
+  const xeniaInitialLr=0xBCBCBCBC;
   const stackTop=(stackBasePointer-xeniaCallFrameBytes)&~0xF;
   const pcrAddress=0x50000000;
   const tlsAddress=0x50001000;
@@ -119,7 +120,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
+  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
 }
 
 function stagePreparedPeImage(bootstrap,prepared){
@@ -184,6 +185,12 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap,entry):null;
   let startupGprCount=0;
   if(mainThreadContext){
+    // R360_XENIA_ENTRY_ABI_V51: match upstream Processor::Execute special state.
+    const setInitialLr=maybe(bootstrap,'r360_ppc_probe_set_initial_lr');
+    const readInitialLr=maybe(bootstrap,'r360_ppc_probe_initial_lr');
+    if(!setInitialLr||!readInitialLr)throw new Error('published browser bootstrap is missing Xenia initial-LR support');
+    if((setInitialLr(BigInt(mainThreadContext.xeniaInitialLr))>>>0)!==1)throw new Error('unable to initialize Xenia title-entry LR');
+    if(Number(readInitialLr()&0xFFFFFFFFn)!==(mainThreadContext.xeniaInitialLr>>>0))throw new Error('Xenia title-entry LR verification failed');
     startupGprCount+=applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress});
   }
   startupGprCount+=applyInitialGprs(bootstrap,initialGprs);

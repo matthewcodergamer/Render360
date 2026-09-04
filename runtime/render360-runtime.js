@@ -45,8 +45,9 @@ export class Render360Runtime extends EventTarget{
   bindSource(gameId,file){if(gameId&&file)this.sources.set(gameId,file);}
   getSource(gameId){return this.sources.get(gameId)||null;}
   unbindSource(gameId){this.sources.delete(gameId);}
-  setKey(key,pressed){this.inputHost.setKey(key,pressed);}
-  setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);}
+  syncGuestInput(){const e=globalThis.render360ModernTitle?.bootstrap?.exports;if(!e)return false;const sm=e.r360_kernel_input_set_mask||e._r360_kernel_input_set_mask,sa=e.r360_kernel_input_set_analog||e._r360_kernel_input_set_analog;if(typeof sm==='function')sm(this.inputHost.inputMask>>>0);if(typeof sa==='function'){const a=this.inputHost.analog||{},q=v=>Math.round(Math.max(-1,Math.min(1,Number(v)||0))*32767);sa(q(a.lx),q(-a.ly),q(a.rx),q(-a.ry));}return typeof sm==='function'||typeof sa==='function';}
+  setKey(key,pressed){this.inputHost.setKey(key,pressed);this.syncGuestInput();}
+  setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);this.syncGuestInput();}
   pause(){const titlePaused=pauseActiveTitle();this.inputHost.pause();this.emit('paused',{titlePaused});return titlePaused;}
   resume(){const titleResumed=resumeActiveTitle();this.inputHost.resume();this.emit('resumed',{titleResumed});return titleResumed;}
   resetInput(){this.inputHost.reset();this.setAnalog(0,0,0,0);}
@@ -89,6 +90,7 @@ export class Render360Runtime extends EventTarget{
   }
   startTelemetry(){clearInterval(this.telemetryTimer);this.telemetryTimer=setInterval(()=>this.sampleTelemetry(),250);}
   sampleTelemetry(){
+    this.syncGuestInput();
     const state=globalThis.render360ModernTitle||null,canvas=document.getElementById('titleFrameCanvas'),generation=canvas?.dataset?.render360Generation??null,now=performance.now();
     if(generation!==null&&generation!==this.lastGeneration){if(this.lastFrameAt){this.frameTimes.push(now-this.lastFrameAt);if(this.frameTimes.length>90)this.frameTimes.shift();}this.lastFrameAt=now;this.lastGeneration=generation;this.emit('framePresented',{generation:Number(generation)||0,hash:canvas?.dataset?.render360Hash||'',at:now});}
     const avg=this.frameTimes.length?this.frameTimes.reduce((a,b)=>a+b,0)/this.frameTimes.length:0,fps=avg?1000/avg:0,gpu=state?.gpuTraffic||{},cpu=state?.persistentCpu||{},shaders=state?.shaderRuntime||{};

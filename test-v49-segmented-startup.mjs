@@ -5,6 +5,7 @@ const app=read('app.js'),core=read('wasm-core.js'),ui=read('ui-behavior.js'),fab
 
 must(core.includes("import('./render360_xenia_core_embedded.js')"),'embedded core fallback is not lazy');
 must(!/^\s*import\s*\{\s*CORE_WASM_GZIP_BASE64\s*\}\s*from\s*['\"]\.\/render360_xenia_core_embedded\.js['\"];?/m.test(core),'embedded core remains in startup graph');
+must(core.includes("fetch(this.url,{cache:'force-cache',credentials:'omit'})"),'core fetch does not match preload cache/credentials mode');
 must(app.includes('R360_SEGMENTED_BOOT_V49'),'app segmented startup marker missing');
 must(app.includes('const hydrate=[];'),'library artwork is not split into background hydration');
 must(app.includes("import('./import/zip-importer.js')"),'ZIP importer is not lazy');
@@ -16,8 +17,14 @@ must(ui.includes('bindLazySecondaryUi()'),'secondary UI on-demand hook missing')
 must(ui.includes('idleTask(()=>hydrateMissingArtwork(),4200)'),'artwork network work is not idle-deferred');
 must(!fab.startsWith("import './v47-ui.js'"),'console FAB still eagerly imports profile UI');
 must(profile.includes('R360_SEGMENTED_BOOT_V49'),'profile stylesheet ownership marker missing');
+must(html.includes('R360_CORE_PRELOAD_V49'),'emulator core preload marker missing');
+must(html.includes('rel="preload" href="./render360_xenia_core.wasm"'),'WASM core is not preloaded during shell parse');
+must(html.includes('rel="modulepreload" href="./runtime/render360-runtime.js"'),'runtime module is not preloaded');
+must(!html.includes('<script type="module" src="ui-behavior.js"></script>'),'secondary UI still starts in the critical module lane');
+must(html.includes("import('./ui-behavior.js')")&&html.includes('R360_SECONDARY_UI_LANE_V49'),'secondary UI idle loader missing');
 must(!html.includes('<script type="module" src="developer-console-fab.js"></script>'),'index still starts console FAB eagerly');
 console.log('V49_SEGMENTED_CORE_FALLBACK=PASS');
+console.log('V49_CORE_PRELOAD_LANE=PASS');
 console.log('V49_IMMEDIATE_LIBRARY_PAINT=PASS');
 console.log('V49_LAZY_IMPORT_TOOLS=PASS');
 console.log('V49_LAZY_SECONDARY_UI=PASS');

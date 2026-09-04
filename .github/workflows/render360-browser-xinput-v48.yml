@@ -22,6 +22,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Rebase onto current main
+        run: |
+          git fetch origin main
+          git rebase origin/main
       - name: Apply browser XInput bridge
         run: python3 tools/apply-browser-xinput-v48.py
       - name: Validate browser runtime
@@ -36,5 +40,4 @@ jobs:
             exit 0
           fi
           git commit -m 'feat: bridge browser controls into XamInputGetState'
-          git pull --rebase origin main
           git push origin HEAD:main

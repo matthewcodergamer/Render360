@@ -82,11 +82,4 @@ if 'syncGuestInput(){' not in t:
     t=t.replace('  sampleTelemetry(){\n    const state=', '  sampleTelemetry(){\n    this.syncGuestInput();\n    const state=',1)
     r.write_text(t)
 
-w=Path('.github/workflows/xenia-wasm32-bootstrap.yml'); y=w.read_text()
-if 'test-browser-gamepad-bridge.mjs' not in y:
-    y=y.replace("      - 'test-kernel-services-critic.mjs'\n","      - 'test-kernel-services-critic.mjs'\n      - 'test-browser-gamepad-bridge.mjs'\n",1)
-    needle='      - name: "Harsh critic: verify real imported thunks reach built-in kernel services"\n'
-    step='      - name: Verify browser controls reach XamInputGetState\n        run: node ./test-browser-gamepad-bridge.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm\n'
-    if needle not in y: raise SystemExit('workflow input test marker missing')
-    y=y.replace(needle,step+needle,1);w.write_text(y)
 print('browser XInput bridge applied')

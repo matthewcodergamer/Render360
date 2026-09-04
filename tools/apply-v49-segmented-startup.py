@@ -4,7 +4,7 @@ import re
 MARK='R360_SEGMENTED_BOOT_V49'
 
 def replace_once(text, old, new, label):
-    if new in text:
+    if new and new in text:
         return text
     if old not in text:
         raise SystemExit(f'{label}: expected source marker missing')

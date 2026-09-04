@@ -235,6 +235,19 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const memoryFaultCodeFn=maybe(bootstrap,'r360_sparse_guest_memory_last_fault_code');
   const memoryFaultAddress=memoryFaultAddressFn?(memoryFaultAddressFn()>>>0):0;
   const memoryFaultCode=memoryFaultCodeFn?(memoryFaultCodeFn()>>>0):0;
+  const stackTraceRead=name=>{const f=maybe(bootstrap,name);return f?(f()>>>0):undefined;};
+  const stackTrace={
+    blockerR1:stackTraceRead('r360_ppc_probe_stack_blocker_r1'),
+    initialR1:stackTraceRead('r360_ppc_probe_stack_initial_r1'),
+    lastWriteAddress:stackTraceRead('r360_ppc_probe_stack_last_write_address'),
+    lastOldR1:stackTraceRead('r360_ppc_probe_stack_last_old_r1'),
+    lastNewR1:stackTraceRead('r360_ppc_probe_stack_last_new_r1'),
+    lastWriteDepth:stackTraceRead('r360_ppc_probe_stack_last_write_depth'),
+    lastCallSource:stackTraceRead('r360_ppc_probe_stack_last_call_source'),
+    lastCallTarget:stackTraceRead('r360_ppc_probe_stack_last_call_target'),
+    lastCallR1:stackTraceRead('r360_ppc_probe_stack_last_call_r1'),
+    lastCallDepth:stackTraceRead('r360_ppc_probe_stack_last_call_depth'),
+  };
   const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
   const kernelCalls=kernelCallsFn?(kernelCallsFn()>>>0):0;
@@ -250,5 +263,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

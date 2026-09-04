@@ -45,7 +45,7 @@ elif text.count(fallback_new) != 2:
 # the tail callee's final `blr` must still complete the host-side title slice.
 # Track that state explicitly instead of weakening nested-return validation.
 globals_anchor = '''thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;\nthread_local uint32_t g_execution_depth = 0;\n'''
-globals_replacement = '''thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;\nthread_local uint32_t g_execution_depth = 0;\n\nconstexpr uint32_t kR360MaxGuestCallDepth = 64;\nconstexpr size_t kR360PpcR1ContextOffset =\n    offsetof(xe::cpu::ppc::PPCContext, r) + sizeof(uint64_t);\nthread_local std::array<uint64_t, kR360MaxGuestCallDepth>\n    g_expected_guest_returns{};\nthread_local std::array<bool, kR360MaxGuestCallDepth>\n    g_expected_guest_return_valid{};\nthread_local std::array<bool, kR360MaxGuestCallDepth>\n    g_guest_tail_terminal{};\nthread_local uint64_t g_next_guest_return_address = 0;\nthread_local bool g_next_guest_return_valid = false;\nthread_local uint32_t g_current_source_address = 0;\n\nstruct R360StackTraceState {\n  uint64_t initial_r1 = 0;\n  uint64_t last_old_r1 = 0;\n  uint64_t last_new_r1 = 0;\n  uint64_t last_call_r1 = 0;\n  uint32_t last_write_address = 0;\n  uint32_t last_write_depth = 0;\n  uint32_t last_call_source = 0;\n  uint32_t last_call_target = 0;\n  uint32_t last_call_depth = 0;\n};\nthread_local R360StackTraceState g_r360_stack_trace{};\n\nbool CurrentExpectedGuestReturn(uint64_t* out) {\n  if (!out || g_execution_depth == 0 ||\n      g_execution_depth > kR360MaxGuestCallDepth) {\n    return false;\n  }\n  const size_t index = size_t(g_execution_depth - 1);\n  if (!g_expected_guest_return_valid[index]) return false;\n  *out = g_expected_guest_returns[index];\n  return true;\n}\n\nbool CurrentGuestTailTerminal() {\n  if (g_execution_depth == 0 ||\n      g_execution_depth > kR360MaxGuestCallDepth) {\n    return false;\n  }\n  return g_guest_tail_terminal[size_t(g_execution_depth - 1)];\n}\n\nvoid PrepareNestedGuestReturn(uint32_t flags) {\n  if (g_execution_depth >= kR360MaxGuestCallDepth) {\n    g_next_guest_return_valid = false;\n    return;\n  }\n  uint64_t expected = 0;\n  bool valid = false;\n  if (g_next_guest_return_valid) {\n    expected = g_next_guest_return_address;\n    valid = true;\n  } else {\n    // Tail calls have no fresh SET_RETURN_ADDRESS and inherit the caller's.\n    valid = CurrentExpectedGuestReturn(&expected);\n  }\n  g_expected_guest_returns[g_execution_depth] = expected;\n  g_expected_guest_return_valid[g_execution_depth] = valid;\n  g_guest_tail_terminal[g_execution_depth] =\n      !valid && (flags & xe::cpu::hir::CALL_TAIL) != 0;\n  g_next_guest_return_valid = false;\n}\n\nvoid ClearNestedGuestReturn() {\n  if (g_execution_depth < kR360MaxGuestCallDepth) {\n    g_expected_guest_return_valid[g_execution_depth] = false;\n    g_guest_tail_terminal[g_execution_depth] = false;\n  }\n}\n\nvoid RecordGuestCall(uint32_t target) {\n  if (!g_active_context) return;\n  g_r360_stack_trace.last_call_r1 = g_active_context->r[1];\n  g_r360_stack_trace.last_call_source = g_current_source_address;\n  g_r360_stack_trace.last_call_target = target;\n  g_r360_stack_trace.last_call_depth = g_execution_depth;\n  std::fprintf(stderr,\n               "R360_STACK_CALL source=0x%08X target=0x%08X depth=%u r1=0x%08X\\n",\n               g_current_source_address, target, g_execution_depth,\n               static_cast<uint32_t>(g_active_context->r[1]));\n}\n'''
+globals_replacement = '''thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;\nthread_local uint32_t g_execution_depth = 0;\n\nconstexpr uint32_t kR360MaxGuestCallDepth = 64;\nconstexpr size_t kR360PpcR1ContextOffset =\n    offsetof(xe::cpu::ppc::PPCContext, r) + sizeof(uint64_t);\nthread_local std::array<uint64_t, kR360MaxGuestCallDepth>\n    g_expected_guest_returns{};\nthread_local std::array<bool, kR360MaxGuestCallDepth>\n    g_expected_guest_return_valid{};\nthread_local std::array<bool, kR360MaxGuestCallDepth>\n    g_guest_tail_terminal{};\nthread_local uint64_t g_next_guest_return_address = 0;\nthread_local bool g_next_guest_return_valid = false;\nthread_local uint32_t g_current_source_address = 0;\n\nstruct R360StackTraceState {\n  uint64_t initial_r1 = 0;\n  uint64_t blocker_r1 = 0;\n  uint64_t last_old_r1 = 0;\n  uint64_t last_new_r1 = 0;\n  uint64_t last_call_r1 = 0;\n  uint32_t last_write_address = 0;\n  uint32_t last_write_depth = 0;\n  uint32_t last_call_source = 0;\n  uint32_t last_call_target = 0;\n  uint32_t last_call_depth = 0;\n};\nthread_local R360StackTraceState g_r360_stack_trace{};\n\nbool CurrentExpectedGuestReturn(uint64_t* out) {\n  if (!out || g_execution_depth == 0 ||\n      g_execution_depth > kR360MaxGuestCallDepth) {\n    return false;\n  }\n  const size_t index = size_t(g_execution_depth - 1);\n  if (!g_expected_guest_return_valid[index]) return false;\n  *out = g_expected_guest_returns[index];\n  return true;\n}\n\nbool CurrentGuestTailTerminal() {\n  if (g_execution_depth == 0 ||\n      g_execution_depth > kR360MaxGuestCallDepth) {\n    return false;\n  }\n  return g_guest_tail_terminal[size_t(g_execution_depth - 1)];\n}\n\nvoid PrepareNestedGuestReturn(uint32_t flags) {\n  if (g_execution_depth >= kR360MaxGuestCallDepth) {\n    g_next_guest_return_valid = false;\n    return;\n  }\n  uint64_t expected = 0;\n  bool valid = false;\n  if (g_next_guest_return_valid) {\n    expected = g_next_guest_return_address;\n    valid = true;\n  } else {\n    // Tail calls have no fresh SET_RETURN_ADDRESS and inherit the caller's.\n    valid = CurrentExpectedGuestReturn(&expected);\n  }\n  g_expected_guest_returns[g_execution_depth] = expected;\n  g_expected_guest_return_valid[g_execution_depth] = valid;\n  g_guest_tail_terminal[g_execution_depth] =\n      !valid && (flags & xe::cpu::hir::CALL_TAIL) != 0;\n  g_next_guest_return_valid = false;\n}\n\nvoid ClearNestedGuestReturn() {\n  if (g_execution_depth < kR360MaxGuestCallDepth) {\n    g_expected_guest_return_valid[g_execution_depth] = false;\n    g_guest_tail_terminal[g_execution_depth] = false;\n  }\n}\n\nvoid RecordGuestCall(uint32_t target) {\n  if (!g_active_context) return;\n  g_r360_stack_trace.last_call_r1 = g_active_context->r[1];\n  g_r360_stack_trace.last_call_source = g_current_source_address;\n  g_r360_stack_trace.last_call_target = target;\n  g_r360_stack_trace.last_call_depth = g_execution_depth;\n  std::fprintf(stderr,\n               "R360_STACK_CALL source=0x%08X target=0x%08X depth=%u r1=0x%08X\\n",\n               g_current_source_address, target, g_execution_depth,\n               static_cast<uint32_t>(g_active_context->r[1]));\n}\n'''
 replace_once(globals_anchor, globals_replacement, 'guest return/stack globals')
 
 function_resolver_old = '''bool ResolveFunctionCallWithNestedFailure(xe::cpu::Function* function) {\n  ClearPendingNestedFailure();\n  if (!g_call_resolver || !g_call_resolver(function)) return false;\n  ClearPendingNestedFailure();\n  return true;\n}\n'''
@@ -104,12 +104,54 @@ replace_once(context_init_old, context_init_new, 'initial r1 trace')
 # the last instruction that actually wrote r1, instead of inferring stack state
 # from an unrelated boundary instruction.
 memory_log_old = '''                   guest_address, sparse_fault, sparse_fault_address,\n                   static_cast<unsigned>(size));\n      return false;\n'''
-memory_log_new = '''                   guest_address, sparse_fault, sparse_fault_address,\n                   static_cast<unsigned>(size));\n      if (g_active_context) {\n        std::fprintf(stderr,\n                     "R360_STACK_BLOCKER fault=0x%08X r1=0x%08X initial=0x%08X last_write=0x%08X old=0x%08X new=0x%08X write_depth=%u call_source=0x%08X call_target=0x%08X call_r1=0x%08X call_depth=%u\\n",\n                     guest_address,\n                     static_cast<uint32_t>(g_active_context->r[1]),\n                     static_cast<uint32_t>(g_r360_stack_trace.initial_r1),\n                     g_r360_stack_trace.last_write_address,\n                     static_cast<uint32_t>(g_r360_stack_trace.last_old_r1),\n                     static_cast<uint32_t>(g_r360_stack_trace.last_new_r1),\n                     g_r360_stack_trace.last_write_depth,\n                     g_r360_stack_trace.last_call_source,\n                     g_r360_stack_trace.last_call_target,\n                     static_cast<uint32_t>(g_r360_stack_trace.last_call_r1),\n                     g_r360_stack_trace.last_call_depth);\n      }\n      return false;\n'''
+memory_log_new = '''                   guest_address, sparse_fault, sparse_fault_address,\n                   static_cast<unsigned>(size));\n      if (g_active_context) {\n        g_r360_stack_trace.blocker_r1 = g_active_context->r[1];\n        std::fprintf(stderr,\n                     "R360_STACK_BLOCKER fault=0x%08X r1=0x%08X initial=0x%08X last_write=0x%08X old=0x%08X new=0x%08X write_depth=%u call_source=0x%08X call_target=0x%08X call_r1=0x%08X call_depth=%u\\n",\n                     guest_address,\n                     static_cast<uint32_t>(g_active_context->r[1]),\n                     static_cast<uint32_t>(g_r360_stack_trace.initial_r1),\n                     g_r360_stack_trace.last_write_address,\n                     static_cast<uint32_t>(g_r360_stack_trace.last_old_r1),\n                     static_cast<uint32_t>(g_r360_stack_trace.last_new_r1),\n                     g_r360_stack_trace.last_write_depth,\n                     g_r360_stack_trace.last_call_source,\n                     g_r360_stack_trace.last_call_target,\n                     static_cast<uint32_t>(g_r360_stack_trace.last_call_r1),\n                     g_r360_stack_trace.last_call_depth);\n      }\n      return false;\n'''
 log_count = text.count(memory_log_old)
 if log_count == 2:
     text = text.replace(memory_log_old, memory_log_new, 2)
 elif text.count('R360_STACK_BLOCKER fault=') != 2:
     raise SystemExit('hir call/return stack overlay: memory blocker log anchors changed')
+
+# Persist the most useful stack/call trace fields in exported ABI getters so
+# browser diagnostics can capture them after ExecuteHIRCorrectnessProbe returns.
+# The anonymous-namespace state remains visible to functions in the enclosing
+# render360::xenia_web namespace within this translation unit.
+trace_exports_anchor = '\n}  // namespace render360::xenia_web\n'
+trace_exports_replacement = (
+    '\nextern "C" {\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_blocker_r1() {\n'
+    '  return static_cast<uint32_t>(g_r360_stack_trace.blocker_r1);\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_initial_r1() {\n'
+    '  return static_cast<uint32_t>(g_r360_stack_trace.initial_r1);\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_write_address() {\n'
+    '  return g_r360_stack_trace.last_write_address;\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_old_r1() {\n'
+    '  return static_cast<uint32_t>(g_r360_stack_trace.last_old_r1);\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_new_r1() {\n'
+    '  return static_cast<uint32_t>(g_r360_stack_trace.last_new_r1);\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_write_depth() {\n'
+    '  return g_r360_stack_trace.last_write_depth;\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_call_source() {\n'
+    '  return g_r360_stack_trace.last_call_source;\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_call_target() {\n'
+    '  return g_r360_stack_trace.last_call_target;\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_call_r1() {\n'
+    '  return static_cast<uint32_t>(g_r360_stack_trace.last_call_r1);\n'
+    '}\n'
+    '__attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_last_call_depth() {\n'
+    '  return g_r360_stack_trace.last_call_depth;\n'
+    '}\n'
+    '}  // extern "C"\n\n'
+    '}  // namespace render360::xenia_web\n'
+)
+replace_once(trace_exports_anchor, trace_exports_replacement, 'stack trace ABI exports')
 
 required = [
     'R360_STACK_INITIAL',
@@ -120,6 +162,8 @@ required = [
     'CurrentGuestTailTerminal',
     'g_guest_tail_terminal',
     'in_probe_window',
+    'r360_ppc_probe_stack_blocker_r1',
+    'r360_ppc_probe_stack_last_write_address',
 ]
 for marker in required:
     if marker not in text:

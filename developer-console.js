@@ -46,6 +46,20 @@ function memoryDiagnostics(state,result){
   const faultCodeFn=fn('r360_sparse_guest_memory_last_fault_code');
   const mappedPagesFn=fn('r360_sparse_guest_memory_mapped_pages');
   const backingPagesFn=fn('r360_sparse_guest_memory_backing_pages');
+  const readStackU32=name=>{const f=fn(name);return f?(f()>>>0):undefined;};
+  const resultStack=result?.stackTrace||{};
+  const stackTrace=compact({
+    blockerR1:address(number(resultStack.blockerR1)??readStackU32('r360_ppc_probe_stack_blocker_r1')),
+    initialR1:address(number(resultStack.initialR1)??readStackU32('r360_ppc_probe_stack_initial_r1')),
+    lastWriteAddress:address(number(resultStack.lastWriteAddress)??readStackU32('r360_ppc_probe_stack_last_write_address')),
+    lastOldR1:address(number(resultStack.lastOldR1)??readStackU32('r360_ppc_probe_stack_last_old_r1')),
+    lastNewR1:address(number(resultStack.lastNewR1)??readStackU32('r360_ppc_probe_stack_last_new_r1')),
+    lastWriteDepth:number(resultStack.lastWriteDepth)??readStackU32('r360_ppc_probe_stack_last_write_depth'),
+    lastCallSource:address(number(resultStack.lastCallSource)??readStackU32('r360_ppc_probe_stack_last_call_source')),
+    lastCallTarget:address(number(resultStack.lastCallTarget)??readStackU32('r360_ppc_probe_stack_last_call_target')),
+    lastCallR1:address(number(resultStack.lastCallR1)??readStackU32('r360_ppc_probe_stack_last_call_r1')),
+    lastCallDepth:number(resultStack.lastCallDepth)??readStackU32('r360_ppc_probe_stack_last_call_depth'),
+  });
   const capturedFaultAddress=number(result?.memoryFaultAddress);
   const capturedFaultCode=number(result?.memoryFaultCode);
   const faultAddress=capturedFaultAddress!==undefined?capturedFaultAddress:(faultAddressFn?(faultAddressFn()>>>0):undefined);
@@ -64,6 +78,16 @@ function memoryDiagnostics(state,result){
       instructionKind='d-form-memory';
       rt=(instructionWord>>>21)&31;ra=(instructionWord>>>16)&31;
       displacement=(instructionWord<<16)>>16;
+      if(faultAddress!==undefined&&faultCode){
+        effectiveAddress=faultAddress>>>0;
+        baseRegisterValue=ra===0?0:(effectiveAddress-(displacement|0))>>>0;
+      }
+    }else if(primaryOpcode===58||primaryOpcode===62){
+      instructionKind='ds-form-memory';
+      rt=(instructionWord>>>21)&31;ra=(instructionWord>>>16)&31;
+      let ds=(instructionWord>>>2)&0x3FFF;
+      if(ds&0x2000)ds-=0x4000;
+      displacement=(ds<<2)|0;
       if(faultAddress!==undefined&&faultCode){
         effectiveAddress=faultAddress>>>0;
         baseRegisterValue=ra===0?0:(effectiveAddress-(displacement|0))>>>0;
@@ -97,16 +121,21 @@ function memoryDiagnostics(state,result){
     baseRegisterValue:baseRegisterValue===undefined?undefined:address(baseRegisterValue),
     branchDisplacement,branchTarget:branchTarget===undefined?undefined:address(branchTarget),
     branchAbsolute,branchLink,branchBO,branchBI,
-    faultInstructionAttribution:faultCode&&instructionKind!=='d-form-memory'?'fault-not-derived-from-boundary-instruction':undefined,
+    faultInstructionAttribution:faultCode&&instructionKind!=='d-form-memory'&&instructionKind!=='ds-form-memory'?'fault-not-derived-from-boundary-instruction':undefined,
     mappedPages:mappedPagesFn?(mappedPagesFn()>>>0):undefined,backingPages:backingPagesFn?(backingPagesFn()>>>0):undefined,
     stackTop:address(context.stackTop),stackLimit:address(context.stackLimit),stackBase:address(context.stackBase),stackSlotBase:address(context.stackSlotBase),stackGuardBytes:number(context.stackGuardBytes),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
+    stackTrace:Object.keys(stackTrace).length?stackTrace:undefined,
   });
 }
 function ppcDiagnosticSummary(memory){
   if(!memory?.blockerInstruction)return undefined;
-  if(memory.instructionKind==='d-form-memory'&&present(memory.ra))return `PPC memory: rA=${memory.ra}=${memory.baseRegisterValue||'—'} rT=${memory.rt??'—'} disp=${memory.displacement??'—'} EA=${memory.effectiveAddress||'—'}`;
+  if((memory.instructionKind==='d-form-memory'||memory.instructionKind==='ds-form-memory')&&present(memory.ra))return `PPC memory: rA=${memory.ra}=${memory.baseRegisterValue||'—'} rT=${memory.rt??'—'} disp=${memory.displacement??'—'} EA=${memory.effectiveAddress||'—'}`;
   if(memory.instructionKind==='direct-branch'||memory.instructionKind==='conditional-branch')return `PPC ${memory.instructionKind}: target=${memory.branchTarget||'—'} disp=${memory.branchDisplacement??'—'} AA=${memory.branchAbsolute?1:0} LK=${memory.branchLink?1:0}${memory.faultInstructionAttribution?' · memory fault belongs to an earlier/different boundary':''}`;
   return `PPC ${memory.instructionKind||'other'} · primary opcode ${memory.ppcPrimaryOpcode??'—'}`;
+}
+function stackDiagnosticSummary(memory){
+  const trace=memory?.stackTrace;if(!trace?.blockerR1)return undefined;
+  return `stack r1=${trace.blockerR1} initial=${trace.initialR1||'—'} · last write ${trace.lastWriteAddress||'—'} ${trace.lastOldR1||'—'}→${trace.lastNewR1||'—'} depth=${trace.lastWriteDepth??'—'} · last call ${trace.lastCallSource||'—'}→${trace.lastCallTarget||'—'} r1=${trace.lastCallR1||'—'} depth=${trace.lastCallDepth??'—'}`;
 }
 function addEntry(level,message){
   if(!enabled)return;
@@ -141,7 +170,7 @@ function installEntryPoints(){
 }
 function removeEntryPoints(){$('r360RuntimeConsole')?.remove();$('appDeveloperConsoleButton')?.remove();$('r360DevConsole')?.classList.add('hidden');opened=false;}
 function render(){
-  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.memory?.faultName&&`memory: ${summary.memory.faultName} @ ${summary.memory.faultAddress||'—'} · PPC ${summary.memory.blockerInstruction||'—'}`,ppcDiagnosticSummary(summary.memory),summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
+  if(!enabled)return;const blocker=$('r360DevBlocker'),log=$('r360DevLog');if(blocker){const summary=report();if(summary.blocker||summary.cpu.entry){blocker.hidden=false;blocker.textContent=['CURRENT BLOCKER',summary.blocker?.message,summary.blocker?.kind&&`kind: ${summary.blocker.kind}`,summary.blocker?.address&&`address: ${summary.blocker.address}`,present(summary.blocker?.opcode)&&`HIR opcode: ${summary.blocker.opcode}`,summary.cpu.entry&&`entry: ${summary.cpu.entry} · HIR: ${summary.cpu.hir??'—'}`,present(summary.cpu.instructions)&&`instructions: ${summary.cpu.instructions} · generated functions: ${summary.cpu.translatedFunctions??'—'}`,summary.memory?.faultName&&`memory: ${summary.memory.faultName} @ ${summary.memory.faultAddress||'—'} · PPC ${summary.memory.blockerInstruction||'—'}`,ppcDiagnosticSummary(summary.memory),stackDiagnosticSummary(summary.memory),summary.runtimeAsset?.verified&&`runtime: ${summary.runtimeAsset.sourceCommit.slice(0,12)} · ${summary.runtimeAsset.sha256.slice(0,12)}`].filter(Boolean).join('\n');}else{blocker.hidden=true;}}
   if(!log)return;log.innerHTML='';for(const e of entries){const row=document.createElement('div');row.className=`r360-dev-line ${e.level}`;row.innerHTML='<time></time><strong></strong><span></span>';row.children[0].textContent=new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});row.children[1].textContent=e.level.toUpperCase();row.children[2].textContent=`${e.message}${e.count>1?` ×${e.count}`:''}`;log.appendChild(row);}if(!entries.length)log.innerHTML='<div class="r360-dev-line"><span></span><strong>INFO</strong><span>No runtime events captured yet.</span></div>';
 }
 function report(){

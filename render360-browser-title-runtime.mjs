@@ -4,8 +4,9 @@ import {createPersistentPpcSession,persistentPpcSessionContract} from './render3
 import {createGuestThreadScheduler,guestThreadSchedulerContract} from './render360-browser-thread-scheduler.mjs';
 installRender360Buffer();
 
-export const PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm';
-export const PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json';
+// R360_STABLE_RENDERER_V50: stable player lane verified from Render360 v45.
+export const PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.stable.wasm';
+export const PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.stable.meta.json';
 const BOOTSTRAP_SINGLETON_KEY=Symbol.for('render360.ppc.bootstrap.singleton');
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[

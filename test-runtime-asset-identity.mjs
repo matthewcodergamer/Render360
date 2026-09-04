@@ -16,8 +16,8 @@ assert.ok(fs.readFileSync('app.js','utf8').includes('Emulator ready · Core buil
 
 const titleRuntime=fs.readFileSync('render360-browser-title-runtime.mjs','utf8');
 for(const marker of [
-  "PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm'",
-  "PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json'",
+  "PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.stable.wasm'",
+  "PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.stable.meta.json'",
   "Symbol.for('render360.ppc.bootstrap.singleton')",
   'validatePpcBootstrapAsset(bytes,metadata',
   "cryptoImpl.subtle.digest('SHA-256',view)",

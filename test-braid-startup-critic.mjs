@@ -6,8 +6,8 @@ const isoController=fs.readFileSync('render360-iso-title-controller.mjs','utf8')
 const titleRuntime=fs.readFileSync('render360-browser-title-runtime.mjs','utf8');
 for(const marker of ["const lowMemoryPages=0x10000/pageSize","map(0,lowMemoryPages,lowMemoryBacking,0,readWrite)","const stackSlotBase=0x70000000","const stackLimit=(stackSlotBase+stackGuardBytes)>>>0","map(stackLimit,stackPages,stackBacking,0,readWrite)","be32(threadAddress+0x0D0,stackBasePointer)","lowMemoryCompatBytes:lowMemoryPages*pageSize","applyInitialGprs(bootstrap,{1:mainThreadContext.stackTop,13:mainThreadContext.pcrAddress})","r360_ppc_probe_page_sparse_code","xenia-main-thread-context"]) if(!controller.includes(marker)) throw new Error(`missing Braid startup invariant: ${marker}`);
 if(!isoController.includes("handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true})")) throw new Error('production HIR fallback does not enable the Xenia main-thread context');
-if(!titleRuntime.includes("PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm'")) throw new Error('canonical browser bootstrap URL is missing');
-if(!titleRuntime.includes("PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json'")) throw new Error('browser bootstrap provenance URL is missing');
+if(!titleRuntime.includes("PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.stable.wasm'")) throw new Error('canonical browser bootstrap URL is missing');
+if(!titleRuntime.includes("PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.stable.meta.json'")) throw new Error('browser bootstrap provenance URL is missing');
 if(!titleRuntime.includes("Symbol.for('render360.ppc.bootstrap.singleton')")) throw new Error('browser bootstrap singleton is missing');
 if(titleRuntime.includes('?v=')) throw new Error('versioned module/runtime URLs can create duplicate PPC loader state');
 const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));

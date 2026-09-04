@@ -11,6 +11,15 @@ const zipImporter=()=>zipImporterPromise??=import('./import/zip-importer.js');
 const scheduleIdle=(fn,timeout=1500)=>{if(typeof requestIdleCallback==='function')requestIdleCallback(()=>fn(),{timeout});else setTimeout(fn,60);};
 const yieldUi=()=>new Promise(resolve=>setTimeout(resolve,0));
 
+// R360_RUNTIME_CONSOLE_V50: console is cold during app startup, guaranteed during title launch.
+let runtimeConsolePromise=null;
+async function ensureRuntimeDeveloperConsole(){
+  runtimeConsolePromise??=Promise.all([import('./developer-console.js'),import('./developer-console-fab.js')]);
+  await runtimeConsolePromise;
+  globalThis.render360DeveloperConsole?.setEnabled?.(true);
+  return globalThis.render360DeveloperConsole||null;
+}
+
 const $=id=>document.getElementById(id);
 const runtime=new Render360Runtime();
 const coverUrls=new Map();
@@ -94,7 +103,14 @@ async function handleRelink(file){
   }catch(error){closeSheets();showAlert('File Could Not Be Opened',error.message,[{label:'OK'}]);}
 }
 
-async function playCurrent(){if(!currentGame)return;const source=runtime.getSource(currentGame.id);if(!source){startRelink();return;}closeSheets();setState('BOOTING_GAME');$('bootOverlay').classList.remove('frame-live');setText('bootTitle',currentGame.name);setText('bootMessage','Preparing Xbox 360 runtime…');setText('bootStage',String(currentGame.sourceType||'game').toUpperCase());const profile=resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings);runtime.configure(profile);try{await markPlayed(currentGame.id);const result=await runtime.play(currentGame,source,profile);if(appState==='BOOTING_GAME')setState('RUNNING');setText('bootMessage','Guest execution is running. Waiting for real title pixels…');return result;}catch(error){setState('GAME_DETAILS');await renderDetail();showAlert('Game Stopped',error.message,[{label:'Done'}]);}}
+async function playCurrent(){
+  if(!currentGame)return;const source=runtime.getSource(currentGame.id);if(!source){startRelink();return;}
+  closeSheets();setState('BOOTING_GAME');$('bootOverlay').classList.remove('frame-live');setText('bootTitle',currentGame.name);setText('bootMessage','Preparing Xbox 360 runtime…');setText('bootStage',String(currentGame.sourceType||'game').toUpperCase());
+  try{await ensureRuntimeDeveloperConsole();}catch(error){log('warn',`Developer console unavailable: ${error.message}`);}
+  const profile=resolveTitleProfile(currentGame,loadTitleProfile(currentGame),appSettings);runtime.configure(profile);
+  try{await markPlayed(currentGame.id);const result=await runtime.play(currentGame,source,profile);if(appState==='BOOTING_GAME')setState('RUNNING');setText('bootMessage','Guest execution is running. Waiting for real title pixels…');return result;}catch(error){setState('GAME_DETAILS');await renderDetail();showAlert('Game Stopped',error.message,[{label:'Done'}]);}
+}
+
 
 function renderGameSettings(){if(!currentGame)return;const p=loadTitleProfile(currentGame);setText('gameSettingsName',`${currentGame.name} · ${titleIdText(currentGame)}`);$('gameRenderer').value=p.renderer;$('gameResolutionScale').value=String(p.resolutionScale);$('gameTargetFps').value=String(p.targetFps);$('gameDynamicResolution').checked=!!p.dynamicResolution;$('gameHalfPixel').checked=!!p.halfPixelOffset;$('gameTextures2D').checked=!!p.treat3DTexturesAs2D;$('gameInvalidFetch').checked=!!p.allowInvalidFetchConstants;$('gameReadback').checked=!!p.readbackResolves;$('gameTextureCache').value=p.textureCache||'auto';$('gameSchedulerQuantum').value=String(p.schedulerQuantum||1);$('gameAudioEnabled').value=p.audioEnabled||'inherit';$('gameAudioLatency').value=p.audioLatency||'inherit';$('gameLanguage').value=p.language||'system';$('gameDeveloper').checked=!!p.developerMode;$('gameStrictKernel').checked=true;}
 function saveGameSettings(){if(!currentGame)return;const p=loadTitleProfile(currentGame);Object.assign(p,{renderer:$('gameRenderer').value,resolutionScale:$('gameResolutionScale').value,targetFps:$('gameTargetFps').value,dynamicResolution:$('gameDynamicResolution').checked,halfPixelOffset:$('gameHalfPixel').checked,treat3DTexturesAs2D:$('gameTextures2D').checked,allowInvalidFetchConstants:$('gameInvalidFetch').checked,readbackResolves:$('gameReadback').checked,textureCache:$('gameTextureCache').value,schedulerQuantum:Number($('gameSchedulerQuantum').value)||1,strictKernelHle:true,audioEnabled:$('gameAudioEnabled').value,audioLatency:$('gameAudioLatency').value,language:$('gameLanguage').value,developerMode:$('gameDeveloper').checked});saveTitleProfile(currentGame,p);setState('GAME_DETAILS');}

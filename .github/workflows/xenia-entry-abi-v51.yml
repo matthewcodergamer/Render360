@@ -26,6 +26,20 @@ jobs:
         run: |
           git fetch origin main
           git rebase origin/main
+      - name: Repair patch-script quoting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/apply-xenia-entry-abi-v51.py')
+          s=p.read_text()
+          s=s.replace("    injection = r'''\n", '    injection = r"""\n', 1)
+          needle="\n'''\n    # Inject immediately before the final required-marker validation"
+          replacement='\n"""\n    # Inject immediately before the final required-marker validation'
+          if needle in s:
+            s=s.replace(needle,replacement,1)
+          p.write_text(s)
+          PY
+          python3 -m py_compile tools/apply-xenia-entry-abi-v51.py
       - name: Apply Xenia title-entry ABI repair
         run: python3 tools/apply-xenia-entry-abi-v51.py
       - name: Validate patched sources
@@ -40,7 +54,7 @@ jobs:
         run: |
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add src/xenia_web_bootstrap/hir_correctness_executor.h src/xenia_web_bootstrap/ppc_translation_probe.cpp prepare-hir-return-metadata-v3-overlay.py render360-title-controller.mjs link-xenia-ppc-bootstrap.sh
+          git add tools/apply-xenia-entry-abi-v51.py src/xenia_web_bootstrap/hir_correctness_executor.h src/xenia_web_bootstrap/ppc_translation_probe.cpp prepare-hir-return-metadata-v3-overlay.py render360-title-controller.mjs link-xenia-ppc-bootstrap.sh
           if git diff --cached --quiet; then
             echo 'Xenia title-entry ABI repair already applied.'
             exit 0

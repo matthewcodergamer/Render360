@@ -1,0 +1,25 @@
+import fs from 'node:fs';
+const read=p=>fs.readFileSync(p,'utf8');
+const must=(ok,msg)=>{if(!ok)throw new Error(msg);};
+const app=read('app.js'),core=read('wasm-core.js'),ui=read('ui-behavior.js'),fab=read('developer-console-fab.js'),profile=read('v47-ui.js'),html=read('index.html');
+
+must(core.includes("import('./render360_xenia_core_embedded.js')"),'embedded core fallback is not lazy');
+must(!core.includes("import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js'"),'embedded core remains in startup graph');
+must(app.includes('R360_SEGMENTED_BOOT_V49'),'app segmented startup marker missing');
+must(app.includes('const hydrate=[];'),'library artwork is not split into background hydration');
+must(app.includes("import('./import/zip-importer.js')"),'ZIP importer is not lazy');
+must(app.includes("import('./library/cover-resolver.js')"),'cover resolver is not lazy');
+must(!app.includes("import {prepareZipGame} from './import/zip-importer.js'"),'ZIP importer remains eager');
+must(!app.includes("import {resolveTitleCover} from './library/cover-resolver.js'"),'cover resolver remains eager');
+for(const eager of ["import './developer-console.js'","import './developer-console-fab.js'","import './render360-browser-features.mjs'","import './ui.js'"])must(!ui.includes(eager),`secondary UI remains eager: ${eager}`);
+must(ui.includes('bindLazySecondaryUi()'),'secondary UI on-demand hook missing');
+must(ui.includes('idleTask(()=>hydrateMissingArtwork(),4200)'),'artwork network work is not idle-deferred');
+must(!fab.startsWith("import './v47-ui.js'"),'console FAB still eagerly imports profile UI');
+must(profile.includes('R360_SEGMENTED_BOOT_V49'),'profile stylesheet ownership marker missing');
+must(!html.includes('<script type="module" src="developer-console-fab.js"></script>'),'index still starts console FAB eagerly');
+console.log('V49_SEGMENTED_CORE_FALLBACK=PASS');
+console.log('V49_IMMEDIATE_LIBRARY_PAINT=PASS');
+console.log('V49_LAZY_IMPORT_TOOLS=PASS');
+console.log('V49_LAZY_SECONDARY_UI=PASS');
+console.log('V49_IDLE_ARTWORK=PASS');
+console.log('V49_SEGMENTED_STARTUP=PASS');

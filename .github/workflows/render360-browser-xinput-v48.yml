@@ -34,7 +34,7 @@ jobs:
         run: |
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add src/xenia_web_bootstrap/kernel_runtime_foundation.cpp runtime/render360-runtime.js .github/workflows/xenia-wasm32-bootstrap.yml
+          git add src/xenia_web_bootstrap/kernel_runtime_foundation.cpp runtime/render360-runtime.js
           if git diff --cached --quiet; then
             echo 'Browser XInput bridge already applied.'
             exit 0

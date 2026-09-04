@@ -1,4 +1,5 @@
 import './v47-ui.js';
+import './v48-dashboard-gamerpics.js';
 if(!document.querySelector('link[data-r360-ui="v47"]')){const link=document.createElement('link');link.rel='stylesheet';link.href='./styles/v47.css';link.dataset.r360Ui='v47';document.head.appendChild(link);}
 
 // Render360 movable developer-console launcher. Tap opens; hold/drag moves it; pushing to an edge docks it.

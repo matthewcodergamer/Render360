@@ -1,5 +1,7 @@
 // Render360 v47/v48 UI — import reliability, responsive profile UI and Xbox 360-era gamerpics.
 const $=id=>document.getElementById(id);
+// R360_SEGMENTED_BOOT_V49: profile styling follows the profile module.
+if(!document.querySelector('link[data-r360-ui="v47"]')){const link=document.createElement('link');link.rel='stylesheet';link.href='./styles/v47.css';link.dataset.r360Ui='v47';document.head.appendChild(link);}
 const PROFILE_KEY='render360.profile.v1';
 const AVATARS=[
 ['orbit',`<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#57d4ff"/><stop offset="1" stop-color="#6e5cff"/></linearGradient></defs><circle cx="32" cy="32" r="30" fill="#101116"/><circle cx="32" cy="32" r="18" fill="none" stroke="url(#a)" stroke-width="5"/><circle cx="49" cy="22" r="5" fill="#fff"/><path d="M17 42c10 7 22 7 31-1" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>`],

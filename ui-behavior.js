@@ -1,10 +1,23 @@
-import './developer-console.js';
-import './developer-console-fab.js';
-import './render360-browser-features.mjs';
-import './ui.js';
 import {listGames,putGame,putCover} from './library/game-library.js';
 import {resolveTitleCover} from './library/cover-resolver.js';
 import {clearGamesDirectory,storageInfo} from './storage/game-storage.js';
+
+// R360_SEGMENTED_BOOT_V49: secondary feature packs load after first paint or on demand.
+let secondaryUiPromise=null,secondaryUiReady=false,developerToolsPromise=null;
+function loadSecondaryUi(){
+  if(!secondaryUiPromise)secondaryUiPromise=Promise.allSettled([import('./render360-browser-features.mjs'),import('./ui.js').then(()=>import('./v47-ui.js'))]).then(result=>{secondaryUiReady=true;return result;});
+  return secondaryUiPromise;
+}
+function loadDeveloperTools(){return developerToolsPromise??=Promise.allSettled([import('./developer-console.js'),import('./developer-console-fab.js')]);}
+function idleTask(fn,timeout=1800){if(typeof requestIdleCallback==='function')requestIdleCallback(()=>fn(),{timeout});else setTimeout(fn,500);}
+function bindLazySecondaryUi(){
+  const profile=$('profileButton');
+  profile?.addEventListener('pointerdown',()=>{void loadSecondaryUi();},{capture:true});
+  profile?.addEventListener('click',event=>{if(secondaryUiReady)return;event.preventDefault();event.stopImmediatePropagation();void loadSecondaryUi().then(()=>requestAnimationFrame(()=>profile.click()));},true);
+  const maybeDev=()=>{const state=document.body?.dataset?.state||'';if(['BOOTING_GAME','RUNNING','PAUSED'].includes(state))void loadDeveloperTools();};
+  maybeDev();new MutationObserver(maybeDev).observe(document.body,{attributes:true,attributeFilter:['data-state']});
+  idleTask(()=>loadSecondaryUi(),1700);
+}
 
 const $=id=>document.getElementById(id);
 const holdState=new WeakMap();
@@ -46,5 +59,5 @@ async function refreshStorageNumbers(){const info=await storageInfo();if($('stor
 async function clearGameCopies(){if(storageClearRunning)return;storageClearRunning=true;try{const games=await listGames();let affected=0;await clearGamesDirectory();for(const game of games){if(!game.persistentSource&&!game.opfsPath)continue;game.opfsPath=null;game.persistentSource=false;game.needsRelink=true;affected++;await putGame(game);}await refreshStorageNumbers();patchAlert('Game Copies Cleared',affected?`${affected} saved game cop${affected===1?'y was':'ies were'} removed, including legacy ZIP extracts. Library entries and covers were kept. Safari may take a moment to show the reclaimed storage.`:'No saved Render360 game copies were found.',[{label:'Done',action:()=>location.reload()}]);}finally{storageClearRunning=false;}}
 function bindReliableStorageClear(){const button=$('clearGameStorage');if(!button)return;button.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();patchAlert('Clear Saved Game Copies?','Delete every game file Render360 stored in Safari, including old ZIP extracts? Library entries and artwork stay, but affected games will need their original file selected again.',[{label:'Cancel'},{label:'Clear',action:clearGameCopies}]);},true);}
 
-function bootUiBehavior(){syncThemeChrome();new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});bindLibraryLaunchGestures();bindGlobalCoverProtection();bindReliableStorageClear();decorateTiles();const app=$('app');if(app)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(app,{childList:true,subtree:true});setTimeout(hydrateMissingArtwork,450);console.log('[Render360] Direct-play library and iOS interaction behavior active');}
+function bootUiBehavior(){syncThemeChrome();new MutationObserver(syncThemeChrome).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});bindLibraryLaunchGestures();bindGlobalCoverProtection();bindReliableStorageClear();decorateTiles();const app=$('app');if(app)new MutationObserver(()=>queueMicrotask(decorateTiles)).observe(app,{childList:true,subtree:true});bindLazySecondaryUi();idleTask(()=>hydrateMissingArtwork(),4200);console.log('[Render360] Direct-play library and segmented startup behavior active');}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootUiBehavior,{once:true});else bootUiBehavior();

@@ -1,10 +1,15 @@
 import {Render360Runtime,fmtHex,RENDER360_RELEASE} from './runtime/render360-runtime.js';
 import {listGames,putGame,getGame,deleteGame,putCover,getCover,makeGameId,markPlayed,sourceKindFromName} from './library/game-library.js';
-import {resolveTitleCover} from './library/cover-resolver.js';
-import {prepareZipGame} from './import/zip-importer.js';
 import {loadTitleProfile,saveTitleProfile,resetTitleProfile,resolveTitleProfile} from './profiles/title-profile-store.js';
 import {loadAppSettings,saveAppSettings,resetAppSettings,resolveAppearance} from './settings/app-settings-store.js';
 import {storageSupported,ensureGamesDirectory,storageInfo,requestPersistentStorage,persistGameSource,openPersistentSource,deletePersistentSource,clearGamesDirectory,cleanupGameStorage} from './storage/game-storage.js';
+
+// R360_SEGMENTED_BOOT_V49: load import-only modules only when the user asks for them.
+let coverResolverPromise=null,zipImporterPromise=null;
+const coverResolver=()=>coverResolverPromise??=import('./library/cover-resolver.js');
+const zipImporter=()=>zipImporterPromise??=import('./import/zip-importer.js');
+const scheduleIdle=(fn,timeout=1500)=>{if(typeof requestIdleCallback==='function')requestIdleCallback(()=>fn(),{timeout});else setTimeout(fn,60);};
+const yieldUi=()=>new Promise(resolve=>setTimeout(resolve,0));
 
 const $=id=>document.getElementById(id);
 const runtime=new Render360Runtime();
@@ -50,22 +55,27 @@ async function refreshLibrary(){games=await listGames();await renderLibrary();}
 async function renderLibrary(){
   const q=($('librarySearch')?.value||'').trim().toLowerCase(),filtered=games.filter(g=>!q||String(g.name).toLowerCase().includes(q)||titleIdText(g).toLowerCase().includes(q));
   $('emptyLibrary')?.classList.toggle('hidden',games.length>0);const grid=$('gameGrid');if(!grid)return;grid.innerHTML='';
-  for(const game of filtered){const url=await coverUrl(game),button=document.createElement('button');button.type='button';button.className='game-tile';button.dataset.gameId=game.id;const linked=!!runtime.getSource(game.id),persistent=!!game.persistentSource;button.innerHTML=`<div class="cover-shell">${coverMarkup(game,url)}</div><span class="game-tile-title">${escapeHtml(game.name)}</span><span class="game-tile-meta"><i class="status-dot ${linked?'ready':'link'}"></i>${linked?'Ready':persistent?'Restoring…':'Needs file'} · ${escapeHtml(String(game.sourceType||'game').toUpperCase())}</span>`;button.addEventListener('click',()=>openGame(game.id));grid.appendChild(button);}
+  const hydrate=[];
+  for(const game of filtered){
+    const cached=game?.coverKey?coverUrls.get(game.coverKey):null,button=document.createElement('button');button.type='button';button.className='game-tile';button.dataset.gameId=game.id;const linked=!!runtime.getSource(game.id),persistent=!!game.persistentSource;button.innerHTML=`<div class="cover-shell">${coverMarkup(game,cached)}</div><span class="game-tile-title">${escapeHtml(game.name)}</span><span class="game-tile-meta"><i class="status-dot ${linked?'ready':'link'}"></i>${linked?'Ready':persistent?'Restoring…':'Needs file'} · ${escapeHtml(String(game.sourceType||'game').toUpperCase())}</span>`;button.addEventListener('click',()=>openGame(game.id));grid.appendChild(button);
+    if(game.coverKey&&!cached)hydrate.push(async()=>{const url=await coverUrl(game);if(!url||!button.isConnected)return;const shell=button.querySelector('.cover-shell');if(shell)shell.innerHTML=coverMarkup(game,url);});
+  }
+  if(hydrate.length)scheduleIdle(()=>Promise.allSettled(hydrate.map(task=>task())).catch(()=>{}),900);
 }
-async function restorePersistentSources(){let restored=0;for(const game of games){if(!game.persistentSource||!game.opfsPath||runtime.getSource(game.id))continue;try{const file=await openPersistentSource(game.opfsPath,game.sourceName);if(file){runtime.bindSource(game.id,file);game.needsRelink=false;restored++;}}catch(error){log('warn',`Stored source unavailable for ${game.name}: ${error.message}`);game.needsRelink=true;game.persistentSource=false;game.opfsPath=null;await putGame(game);}}if(restored)await renderLibrary();return restored;}
+async function restorePersistentSources(){let restored=0,seen=0;for(const game of games){if(!game.persistentSource||!game.opfsPath||runtime.getSource(game.id))continue;try{const file=await openPersistentSource(game.opfsPath,game.sourceName);if(file){runtime.bindSource(game.id,file);game.needsRelink=false;restored++;}}catch(error){log('warn',`Stored source unavailable for ${game.name}: ${error.message}`);game.needsRelink=true;game.persistentSource=false;game.opfsPath=null;await putGame(game);}if((++seen&1)===0)await yieldUi();}if(restored)await renderLibrary();return restored;}
 
 async function openGame(id){currentGame=await getGame(id);if(!currentGame)return;await renderDetail();setState('GAME_DETAILS');}
 async function renderDetail(){if(!currentGame)return;const game=currentGame,url=await coverUrl(game);$('detailCover').innerHTML=coverMarkup(game,url);setText('detailName',game.name);setText('detailTitleId',titleIdText(game));setText('detailMediaId',mediaIdText(game));setText('detailType',String(game.sourceType||'Unknown').toUpperCase());setText('detailSize',formatBytes(game.size||0));setText('detailCompatibility',game.compatibility||'Testing');setText('detailSource',game.archiveName||game.sourceName||'Imported game');const linked=!!runtime.getSource(game.id);setText('detailStorage',game.persistentSource?'Saved in Render360':linked?'Current browser session':'Needs file');setText('playGameButton',linked?'Play':'Choose File & Play');}
 
 function setImportProgress(title,percent,meta=''){setText('importTitle',title);$('importProgressFill').style.width=`${Math.max(0,Math.min(100,Number(percent)||0))}%`;setText('importProgressPercent',`${Math.round(Number(percent)||0)}%`);setText('importProgressMeta',meta);}
 function openImport(){const input=$('importInput');input.value='';input.click();}
-async function resolveImportCover(info,coverFile){if(coverFile)return {coverFile,name:null};if(!info?.titleId)return {coverFile:null,name:null};setImportProgress('Finding game artwork…',96,`Title ID ${hex8(info.titleId)}`);const resolved=await resolveTitleCover({titleId:info.titleId,timeoutMs:4200});return {coverFile:resolved?.blob?new File([resolved.blob],`cover-${hex8(info.titleId)}.jpg`,{type:resolved.blob.type}):null,name:resolved?.name||null};}
+async function resolveImportCover(info,coverFile){if(coverFile)return {coverFile,name:null};if(!info?.titleId)return {coverFile:null,name:null};setImportProgress('Finding game artwork…',96,`Title ID ${hex8(info.titleId)}`);const {resolveTitleCover}=await coverResolver();const resolved=await resolveTitleCover({titleId:info.titleId,timeoutMs:4200});return {coverFile:resolved?.blob?new File([resolved.blob],`cover-${hex8(info.titleId)}.jpg`,{type:resolved.blob.type}):null,name:resolved?.name||null};}
 async function maybePersistSource(file,id,existingStorage=null){if(existingStorage?.persistent)return existingStorage;if(!appSettings.autoPersistImports||!storageSupported())return null;try{setImportProgress('Saving game to Render360…',42,`${formatBytes(0)} / ${formatBytes(file.size)}`);return await persistGameSource(file,id,{onProgress:p=>setImportProgress('Saving game to Render360…',42+(p.percent||0)*.48,`${formatBytes(p.done||0)} / ${formatBytes(p.total||file.size)}`)});}catch(error){log('warn',`Game stays session-only: ${error.message}`);return null;}}
 
 async function importSelectedFile(file){
   if(!file)return;showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);let gameFile=file,coverFile=null,archiveName=null,storage=null;
   try{
-    if(sourceKindFromName(file.name)==='zip'){archiveName=file.name;const prepared=await prepareZipGame(file,{onProgress:p=>{const pct=p.phase==='index'?Math.min(18,p.percent||4):18+(p.percent||0)*.52;setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,pct,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…');}});gameFile=prepared.gameFile;coverFile=prepared.coverFile;storage=prepared.gameStorage;}
+    if(sourceKindFromName(file.name)==='zip'){archiveName=file.name;const {prepareZipGame}=await zipImporter();const prepared=await prepareZipGame(file,{onProgress:p=>{const pct=p.phase==='index'?Math.min(18,p.percent||4):18+(p.percent||0)*.52;setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,pct,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…');}});gameFile=prepared.gameFile;coverFile=prepared.coverFile;storage=prepared.gameStorage;}
     setImportProgress('Reading Xbox metadata…',72,gameFile.name);const info=await runtime.inspectFile(gameFile),id=makeGameId();storage=await maybePersistSource(gameFile,id,storage);const resolved=await resolveImportCover(info,coverFile);coverFile=resolved.coverFile||coverFile;let coverKey=null;if(coverFile)coverKey=await putCover(coverFile);
     const game={id,name:resolved.name||info.name||gameFile.name,titleId:Number(info.titleId||0)>>>0,mediaId:Number(info.mediaId||0)>>>0,contentType:info.displayType||'Xbox 360 Game',sourceType:info.sourceType||sourceKindFromName(gameFile.name),sourceName:gameFile.name,archiveName,size:gameFile.size,coverKey,compatibility:'Testing',profileId:`title-${hex8(info.titleId||0)}`,importedAt:Date.now(),lastPlayed:0,opfsPath:storage?.opfsPath||null,persistentSource:Boolean(storage?.persistent),needsRelink:!storage?.persistent,inspectionWarning:info.inspectionWarning||null};
     runtime.bindSource(id,gameFile);await putGame(game);games.unshift(game);currentGame=game;setImportProgress('Added to Library',100,`${game.name} is ready`);setTimeout(async()=>{closeSheets();await renderLibrary();await renderDetail();setState('GAME_DETAILS');},350);
@@ -76,7 +86,7 @@ function startRelink(){if(!currentGame)return;relinkTarget=currentGame;const inp
 async function handleRelink(file){
   if(!relinkTarget||!file)return;let source=file,actual=sourceKindFromName(file.name),storage=null;
   try{
-    if(actual==='zip'){showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);const prepared=await prepareZipGame(file,{onProgress:p=>setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,p.percent||0,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…')});source=prepared.gameFile;actual=sourceKindFromName(source.name);storage=prepared.gameStorage;closeSheets();}
+    if(actual==='zip'){showSheet('importSheet');setImportProgress('Preparing game…',1,`Indexing ${file.name}`);const {prepareZipGame}=await zipImporter();const prepared=await prepareZipGame(file,{onProgress:p=>setImportProgress(p.phase==='index'?'Indexing archive…':`Extracting ${p.name}`,p.percent||0,p.total?`${formatBytes(p.done||0)} / ${formatBytes(p.total)}`:'Reading ZIP…')});source=prepared.gameFile;actual=sourceKindFromName(source.name);storage=prepared.gameStorage;closeSheets();}
     const expected=String(relinkTarget.sourceType||'').toLowerCase();if(expected&&expected!=='unknown'&&actual!==expected){showAlert('Wrong File',`This library entry expects ${expected.toUpperCase()}, but you selected ${actual.toUpperCase()}.`,[{label:'OK'}]);return;}
     if(appSettings.autoPersistImports&&!storage?.persistent){showSheet('importSheet');storage=await maybePersistSource(source,relinkTarget.id,storage);closeSheets();}
     if(storage?.persistent){if(relinkTarget.opfsPath&&relinkTarget.opfsPath!==storage.opfsPath)await deletePersistentSource(relinkTarget.opfsPath);relinkTarget.opfsPath=storage.opfsPath;relinkTarget.persistentSource=true;relinkTarget.needsRelink=false;await putGame(relinkTarget);}
@@ -136,9 +146,11 @@ async function boot(){
   const runtimePromise=runtime.init();
   let runtimeReady=false;
   try{await runtimePromise;runtimeReady=true;const c=runtime.contract();$('runtimeSyncStatus').classList.add('ready');setText('runtimeSyncText',`Emulator ready · Core build ${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutCore',`Build ${c.loadedCoreBuild} · ${c.coreSource} · ${c.stfsExtraction}`);setText('aboutAbi',fmtHex(c.loadedAbi));$('importButton').disabled=false;$('emptyImportButton').disabled=false;log('ok',`Render360 ready · Core build ${c.loadedCoreBuild} · ABI ${fmtHex(c.loadedAbi)} · ${c.stfsExtraction} · ISO/XEX/STFS launch adapters active`);}catch(error){$('runtimeSyncStatus').classList.add('error');setText('runtimeSyncText',`Runtime contract failed · ${error.message}`);setText('aboutCore','Unavailable');setText('aboutAbi','Unavailable');log('error',error.message);}
-  await libraryPromise;
-  if(runtimeReady)void restorePersistentSources().catch(error=>log('warn',`Saved game restore: ${error.message}`));
-  void cleanupGameStorage(games.map(game=>game.opfsPath).filter(Boolean)).catch(error=>log('warn',`Storage cleanup skipped: ${error.message}`));
-  void updateStorageUi().catch(error=>log('warn',`Storage status: ${error.message}`));
+  // The visible shell and core are ready independently. Everything below is maintenance.
+  void libraryPromise.then(()=>{
+    if(runtimeReady)scheduleIdle(()=>restorePersistentSources().catch(error=>log('warn',`Saved game restore: ${error.message}`)),700);
+    scheduleIdle(()=>cleanupGameStorage(games.map(game=>game.opfsPath).filter(Boolean)).catch(error=>log('warn',`Storage cleanup skipped: ${error.message}`)),2400);
+    scheduleIdle(()=>updateStorageUi().catch(error=>log('warn',`Storage status: ${error.message}`)),1800);
+  });
 }
 boot();

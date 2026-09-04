@@ -1,4 +1,4 @@
-import './v47-ui.js';
+// R360_SEGMENTED_BOOT_V49: profile UI is loaded by the secondary UI lane, not the console FAB.
 import './v48-dashboard-gamerpics.js';
 if(!document.querySelector('link[data-r360-ui="v47"]')){const link=document.createElement('link');link.rel='stylesheet';link.href='./styles/v47.css';link.dataset.r360Ui='v47';document.head.appendChild(link);}
 

@@ -1,5 +1,7 @@
-import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js';
 import {extractStfsEntryBrowser,browserStfsExtractorContract} from './render360-stfs-browser-extractor.mjs';
+// R360_SEGMENTED_BOOT_V49: cold fallback modules stay out of the normal startup path.
+let embeddedCorePromise=null;
+const embeddedCore=()=>embeddedCorePromise??=import('./render360_xenia_core_embedded.js');
 const U32 = 0x100000000;
 const STFS_STATUS = {
   0:'Idle', 1:'Working', 2:'Mounted', 3:'Mounted (partial)',
@@ -23,9 +25,13 @@ export class Render360Core {
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
       validateInstance(result.instance,'Network');this.source='network';
     }catch(error){networkError=error;result=null;}
-    if(!result&&CORE_WASM_GZIP_BASE64){
-      try{result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
-      catch(error){embeddedError=error;result=null;}
+    if(!result){
+      try{
+        const {CORE_WASM_GZIP_BASE64}=await embeddedCore();
+        if(!CORE_WASM_GZIP_BASE64)throw new Error('Embedded core unavailable');
+        result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});
+        validateInstance(result.instance,'Embedded');this.source='embedded';
+      }catch(error){embeddedError=error;result=null;}
     }
     if(!result)throw new Error(`Render360 core could not start${networkError?` · network: ${networkError.message}`:''}${embeddedError?` · embedded: ${embeddedError.message}`:''}`);
     this.networkError=networkError;this.instance=result.instance;this.exports=this.instance.exports;return this;

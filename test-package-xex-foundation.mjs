@@ -85,6 +85,8 @@ function makeStfs({nextXexBlock=4, validBlocks=2, allocatedBlocks=2}={}) {
   return {bytes,xex};
 }
 
+const expectedVersion=Number(fs.readFileSync('VERSION','utf8').trim());
+if(!Number.isInteger(expectedVersion)||expectedVersion<1) throw new Error(`Invalid VERSION: ${expectedVersion}`);
 const wasm=fs.readFileSync('render360_xenia_core.wasm');
 const {instance}=await WebAssembly.instantiate(wasm,{});
 const e=instance.exports;
@@ -103,8 +105,8 @@ const required=[
   'r360_stfs_extract_expected_blocks','r360_stfs_extract_declared_valid_blocks',
   'r360_stfs_extract_declared_allocated_blocks','r360_feature_bits'
 ];
-for(const name of required) if(!(name in e)) throw new Error(`Missing V32 package/XEX ABI export: ${name}`);
-if((e.r360_build_version()>>>0)!==32) throw new Error(`Expected V32 core, got V${e.r360_build_version()>>>0}`);
+for(const name of required) if(!(name in e)) throw new Error(`Missing V${expectedVersion} package/XEX ABI export: ${name}`);
+if((e.r360_build_version()>>>0)!==expectedVersion) throw new Error(`Expected V${expectedVersion} core, got V${e.r360_build_version()>>>0}`);
 if(((e.r360_feature_bits()>>>0)&(1<<12))===0) throw new Error('Strict STFS extraction feature bit is missing');
 
 const io=e.r360_io_ptr()>>>0;

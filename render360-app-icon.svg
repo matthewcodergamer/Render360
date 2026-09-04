@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Render360">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Render360">
   <defs>
     <linearGradient id="bg" x1="170" y1="110" x2="850" y2="930" gradientUnits="userSpaceOnUse">
       <stop stop-color="#171A18"/>
@@ -15,7 +15,7 @@
       <stop offset="0.52" stop-color="#E8ECE9"/>
       <stop offset="1" stop-color="#9EA7A1"/>
     </linearGradient>
-    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(512 472) rotate(90) scale(334)">
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(512 512) rotate(90) scale(334)" gradientUnits="userSpaceOnUse">
       <stop stop-color="#30D158" stop-opacity="0.18"/>
       <stop offset="0.58" stop-color="#30D158" stop-opacity="0.045"/>
       <stop offset="1" stop-color="#30D158" stop-opacity="0"/>
@@ -25,14 +25,16 @@
     </filter>
   </defs>
 
-  <!-- Apple-like icon shell: simple, quiet, high-contrast. -->
+  <!-- Centered square shell shared by the PWA icon and browser favicon. -->
   <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
   <rect x="24" y="24" width="976" height="976" rx="208" fill="none" stroke="#FFFFFF" stroke-opacity="0.055" stroke-width="4"/>
   <circle cx="512" cy="512" r="344" fill="url(#halo)"/>
 
-  <!-- Render360 orbit. The broken ring suggests 360-degree emulation without copying a console logo. -->
-  <path d="M298 365C347 282 438 228 539 228c151 0 273 122 273 273 0 121-79 224-188 260" fill="none" stroke="url(#green)" stroke-width="54" stroke-linecap="round"/>
-  <circle cx="315" cy="696" r="27" fill="#30D158"/>
+  <!-- Keep the orbit optically centered around the 512/516 core mark. -->
+  <g transform="translate(-27 15)">
+    <path d="M298 365C347 282 438 228 539 228c151 0 273 122 273 273 0 121-79 224-188 260" fill="none" stroke="url(#green)" stroke-width="54" stroke-linecap="round"/>
+    <circle cx="315" cy="696" r="27" fill="#30D158"/>
+  </g>
 
   <!-- Original Xenia/Xbox-inspired core: two soft ribbons forming a restrained X/R360 mark. -->
   <g filter="url(#shadow)">
@@ -40,7 +42,6 @@
     <path d="M512 420 632 328c16-12 39-1 39 19v54c0 15-7 30-19 39l-99 76 99 76c12 9 19 24 19 39v54c0 20-23 31-39 19L512 612Z" fill="url(#green)"/>
   </g>
 
-  <!-- Tiny center aperture gives the mark a machined, console-core feel at large sizes. -->
   <circle cx="512" cy="516" r="25" fill="#080A09"/>
   <circle cx="512" cy="516" r="10" fill="#30D158"/>
 </svg>

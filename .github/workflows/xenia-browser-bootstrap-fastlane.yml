@@ -8,9 +8,12 @@ on:
       - 'prepare-vmx-executor-overlay.py'
       - 'prepare-title-runtime-memory-overlay.py'
       - 'prepare-hir-call-return-stack-overlay.py'
+      - 'prepare-hir-return-metadata-v3-overlay.py'
+      - 'tools/apply-xenia-entry-abi-v51.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
+      - 'render360-title-controller.mjs'
       - 'test-wasm-backend-cfg.mjs'
       - 'test-wasm-backend-calls.mjs'
       - 'test-browser-thread-scheduler.mjs'
@@ -49,8 +52,6 @@ jobs:
             emscripten/emsdk:latest \
             bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh'
 
-      # Upload before the runtime tests so a failing/hanging test never strands
-      # the newly linked binary inside an expired Actions runner again.
       - name: Upload freshly linked browser bootstrap
         uses: actions/upload-artifact@v4
         with:
@@ -79,6 +80,21 @@ jobs:
       - name: Verify signed PPC LOAD_OFFSET effective addresses
         run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
+      - name: Verify Xenia title-entry LR ABI
+        run: |
+          node - build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm <<'NODE'
+          const fs=require('fs');
+          const bytes=fs.readFileSync(process.argv[2]);
+          WebAssembly.instantiate(bytes,{}).then(({instance})=>{
+            const e=instance.exports;
+            if(typeof e.r360_ppc_probe_set_initial_lr!=='function'||typeof e.r360_ppc_probe_initial_lr!=='function')throw new Error('initial LR ABI exports missing');
+            e.r360_ppc_probe_reset();
+            if((e.r360_ppc_probe_set_initial_lr(0xBCBCBCBCn)>>>0)!==1)throw new Error('initial LR setter rejected sentinel');
+            if((e.r360_ppc_probe_initial_lr()&0xFFFFFFFFn)!==0xBCBCBCBCn)throw new Error('initial LR sentinel did not persist');
+            console.log('XENIA_ENTRY_LR_ABI=PASS');
+          }).catch(error=>{console.error(error);process.exit(1)});
+          NODE
+
       - name: Verify browser bootstrap runtime contract
         run: |
           mkdir -p .fastlane-published
@@ -90,9 +106,6 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_RUN: ${{ github.run_id }}
         run: |
-          # main may have advanced while this build was running. Refresh the
-          # tracked source tree first; build/ is ignored/untracked and keeps the
-          # exact verified artifact that was just tested above.
           git fetch origin main
           git reset --hard origin/main
           cp build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.wasm

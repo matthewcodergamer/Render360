@@ -1,0 +1,47 @@
+name: Braid Stack History V4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-braid-stack-history-v4.py'
+      - '.github/workflows/braid-stack-history-v4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: braid-stack-history-v4
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply V4 stack-history integration
+        run: python3 tools/apply-braid-stack-history-v4.py
+
+      - name: Validate browser JavaScript
+        run: |
+          node --check render360-title-controller.mjs
+          node --check developer-console.js
+          node test-braid-stack-history-v4.mjs
+
+      - name: Commit integration
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'actions@users.noreply.github.com'
+          git add prepare-title-runtime-memory-overlay.py render360-title-controller.mjs developer-console.js
+          if git diff --cached --quiet; then
+            echo 'V4 stack-history integration already present.'
+            exit 0
+          fi
+          git commit -m 'diagnostics: integrate bounded Braid stack history'
+          git pull --rebase origin main
+          git push origin HEAD:main

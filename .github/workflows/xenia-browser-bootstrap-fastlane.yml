@@ -8,14 +8,18 @@ on:
       - 'prepare-vmx-executor-overlay.py'
       - 'prepare-title-runtime-memory-overlay.py'
       - 'prepare-hir-call-return-stack-overlay.py'
+      - 'prepare-hir-stack-history-v4-overlay.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
+      - 'render360-title-controller.mjs'
+      - 'developer-console.js'
       - 'test-wasm-backend-cfg.mjs'
       - 'test-wasm-backend-calls.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
       - 'test-hir-load-offset-addressing.mjs'
+      - 'test-braid-stack-history-v4.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -78,6 +82,9 @@ jobs:
 
       - name: Verify signed PPC LOAD_OFFSET effective addresses
         run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify bounded Braid stack history diagnostics
+        run: timeout 90s node ./test-braid-stack-history-v4.mjs
 
       - name: Verify browser bootstrap runtime contract
         run: |

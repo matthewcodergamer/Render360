@@ -130,14 +130,14 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
   }
   const uint32_t sparse_fault = SparseGuestLastFaultCode();
   const uint32_t sparse_fault_address = SparseGuestLastFaultAddress();
-  uint8_t* host = nullptr;
-  if (!TranslateGuestRange(memory, guest_address, size, &host)) {
-    std::fprintf(stderr,
-                 "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
-                 guest_address, sparse_fault, sparse_fault_address,
-                 static_cast<unsigned>(size));
-    return false;
-  }
+    uint8_t* host = nullptr;
+    if (!TranslateGuestRange(memory, guest_address, size, &host)) {
+      std::fprintf(stderr,
+                   "R360_HIR_MEMORY_FAIL op=store address=0x%08X fault=%u fault_address=0x%08X size=%u\n",
+                   guest_address, sparse_fault, sparse_fault_address,
+                   static_cast<unsigned>(size));
+      return false;
+    }
   std::memcpy(host, &stored.value, size);
   return true;
 }

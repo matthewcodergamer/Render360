@@ -114,10 +114,11 @@ export async function extractZipEntry(file,entry,{onProgress=()=>{},persistent=t
   if(!estimate.ok)throw new Error(`Not enough browser storage to extract ${entry.name}`);
   const source=file.slice(start,start+entry.compressedSize).stream();
   const inflated=source.pipeThrough(new DecompressionStream('deflate-raw'));
-  const safeName=`${Date.now()}-${sanitizeName(entry.name)}`;
+  const safeName=`zip-${Date.now()}-${sanitizeName(entry.name)}`;
   if(persistent&&navigator.storage?.getDirectory){
     const root=await navigator.storage.getDirectory();
-    const dir=await root.getDirectoryHandle('render360-imports',{create:true});
+    const render360=await root.getDirectoryHandle('Render360',{create:true});
+    const dir=await render360.getDirectoryHandle('Games',{create:true});
     const handle=await dir.getFileHandle(safeName,{create:true});
     const writer=await handle.createWritable();
     const reader=inflated.getReader();let done=0;
@@ -126,7 +127,7 @@ export async function extractZipEntry(file,entry,{onProgress=()=>{},persistent=t
       await writer.close();
     }catch(error){try{await writer.abort();}catch{}throw error;}
     const extracted=await handle.getFile();
-    return {file:new File([extracted],sanitizeName(entry.name),{type:mimeFor(entry.name)}),persistent:true,opfsPath:`render360-imports/${safeName}`,stored:false};
+    return {file:new File([extracted],sanitizeName(entry.name),{type:mimeFor(entry.name)}),persistent:true,opfsPath:`Render360/Games/${safeName}`,stored:false};
   }
   if(entry.uncompressedSize>256*1024*1024)throw new Error('Large compressed ZIP extraction requires Origin Private File System support');
   const blob=await new Response(inflated).blob();onProgress({phase:'extract',name:entry.name,done:blob.size,total:entry.uncompressedSize,percent:100});

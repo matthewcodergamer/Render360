@@ -1,0 +1,42 @@
+/* Render360 v45 mobile Safari refinements. */
+@supports (-webkit-touch-callout:none){
+  /* Avoid stacking Render360's own 28px blur under iOS Liquid Glass. The
+     double compositing is what makes the Render360 title/status look smeared. */
+  #libraryView .navbar{
+    background:var(--bg)!important;
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+    isolation:isolate;
+  }
+  #libraryView .r360-brand,#libraryView .nav-actions,#libraryView .r360-library-title-row{
+    filter:none!important;
+    -webkit-filter:none!important;
+  }
+}
+
+.r360-console-fab.r360-fab-v45{
+  position:fixed!important;
+  inset:auto!important;
+  left:18px;
+  top:max(82px,calc(env(safe-area-inset-top) + 58px));
+  transform:none!important;
+  z-index:100500!important;
+  touch-action:none!important;
+  user-select:none!important;
+  -webkit-user-select:none!important;
+  cursor:grab;
+  box-shadow:0 4px 18px rgba(0,0,0,.32)!important;
+  transition:width .18s ease,border-radius .18s ease,background .18s ease;
+}
+.r360-console-fab.r360-fab-v45:active{cursor:grabbing}
+.r360-console-fab.r360-fab-docked{
+  width:30px!important;
+  height:58px!important;
+  border-radius:15px 0 0 15px!important;
+  padding:0!important;
+  font-size:22px!important;
+  background:rgba(32,32,34,.88)!important;
+}
+.r360-console-fab.r360-fab-docked[data-dock="left"]{border-radius:0 15px 15px 0!important}
+#r360DevConsole{box-sizing:border-box;padding-top:max(8px,env(safe-area-inset-top))}
+#r360DevConsole .r360-dev-panel{height:min(74dvh,700px)!important;max-height:calc(100dvh - max(64px,env(safe-area-inset-top)))!important}

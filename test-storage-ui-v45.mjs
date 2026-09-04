@@ -1,0 +1,24 @@
+import fs from 'node:fs';
+const read=p=>fs.readFileSync(new URL(p,import.meta.url),'utf8');
+const storage=read('./storage/game-storage.js');
+const zip=read('./import/zip-importer.js');
+const app=read('./app.js');
+const behavior=read('./ui-behavior.js');
+const html=read('./index.html');
+const fab=read('./developer-console-fab.js');
+const css=read('./styles/mobile-safari-fixes.css');
+const fail=[];const must=(v,m)=>{if(!v)fail.push(m)};
+must(storage.includes("LEGACY_IMPORT_DIR='render360-imports'"),'legacy ZIP namespace must be known');
+must(storage.includes('cleanupGameStorage'),'orphan cleanup API missing');
+must(storage.includes('deviceFreeAvailable:false'),'storage UI must not fake iPhone free-space access');
+must(zip.includes('Render360/Games/${safeName}'),'ZIP extracts must live in managed game storage');
+must(!zip.includes('opfsPath:`render360-imports/'),'new ZIP extracts must not use legacy root');
+must(app.includes('cleanupGameStorage(games.map'),'app must sweep orphan copies');
+must(app.includes('browser quota headroom, not iPhone free space'),'app must label quota honestly');
+must(behavior.includes('including legacy ZIP extracts'),'reliable clear path must include legacy copies');
+must(html.includes('Keep One Local Game Copy')&&html.includes('Safari Site Storage'),'settings copy must explain persistent storage');
+must(html.includes('developer-console-fab.js')&&html.includes('mobile-safari-fixes.css'),'mobile UI patch assets must load');
+must(fab.includes('setPointerCapture')&&fab.includes("state.dock='left'")&&fab.includes("state.dock='right'"),'developer console launcher must drag and dock');
+must(css.includes('-webkit-backdrop-filter:none!important'),'iOS library navbar blur must be disabled');
+if(fail.length){console.error('STORAGE_UI_V45 FAIL');for(const m of fail)console.error(' - '+m);process.exit(1)}
+console.log('STORAGE_UI_V45 PASS');

@@ -10,6 +10,30 @@ PE_IMAGE="$ROOT/src/xenia_web_bootstrap/xex_pe_image.cpp"
 PE_EXPORTS="$ROOT/src/xenia_web_bootstrap/xex_pe_image_exports.cpp"
 OUT="$ROOT/render360_xenia_core.wasm"
 CXX="${CXX:-clang++}"
+VERSION_FILE="$ROOT/VERSION"
+
+if [[ ! -f "$VERSION_FILE" ]]; then
+  echo "Missing Render360 VERSION file: $VERSION_FILE" >&2
+  exit 1
+fi
+R360_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+if [[ -z "$R360_VERSION" || "$R360_VERSION" == *[!0-9]* ]]; then
+  echo "Invalid Render360 VERSION: $R360_VERSION" >&2
+  exit 1
+fi
+
+# package-core.cpp historically hard-coded V32 in r360_build_version(), which
+# let the deployed package WASM drift away from the repository VERSION. Build a
+# temporary source copy whose exported runtime build number always comes from
+# VERSION. This keeps runtime-worker.js, Settings, diagnostics and the binary
+# itself on one authoritative version without mutating the checked-in source.
+VERSIONED_SRC="$ROOT/.package-core-versioned.cpp"
+trap 'rm -f "$VERSIONED_SRC"' EXIT
+sed -E "s/(uint32_t r360_build_version\(\) \{ return )[0-9]+u(; \})/\1${R360_VERSION}u\2/" "$SRC" > "$VERSIONED_SRC"
+if ! grep -Fq "uint32_t r360_build_version() { return ${R360_VERSION}u; }" "$VERSIONED_SRC"; then
+  echo "Could not synchronize package-core r360_build_version() with VERSION=$R360_VERSION" >&2
+  exit 1
+fi
 
 EXPORTS=(
   r360_build_version r360_abi_version r360_io_capacity r360_io_ptr
@@ -98,6 +122,6 @@ ARGS=(
 for symbol in "${EXPORTS[@]}"; do ARGS+=("-Wl,--export=$symbol"); done
 
 "$CXX" "${ARGS[@]}" -o "$OUT" \
-  "$SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS" \
+  "$VERSIONED_SRC" "$DECODER" "$DECODER_EXPORTS" "$PREPARER" "$PREPARER_EXPORTS" \
   "$PE_IMAGE" "$PE_EXPORTS"
-printf 'Built %s from canonical package core + XEX decode/preparation/PE layers\n' "$OUT"
+printf 'Built %s as Render360 V%s from canonical package core + XEX decode/preparation/PE layers\n' "$OUT" "$R360_VERSION"

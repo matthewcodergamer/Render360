@@ -21,10 +21,13 @@ const required = [
   'r360_ppc_probe_input_buffer',
   'r360_ppc_probe_load_at',
   'r360_ppc_probe_set_initial_gpr',
-  'r360_ppc_probe_write_guest_u32_be',
   'r360_ppc_probe_translate',
   'r360_ppc_probe_correctness_status',
   'r360_ppc_probe_correctness_r3',
+  'r360_sparse_guest_memory_reset',
+  'r360_sparse_guest_memory_alloc',
+  'r360_sparse_guest_memory_map',
+  'r360_sparse_guest_memory_write_u32_be',
 ];
 for (const name of required) {
   if (typeof pick(name) !== 'function') {
@@ -38,6 +41,10 @@ for (const name of required) {
 // The guest memory backend intentionally uses the low 32 bits of the effective
 // address, so base + (-4) must wrap in 32-bit address space rather than being
 // rejected as a uint64 overflow.
+//
+// SparseGuestMemory is authoritative for real-title loads. Keep this regression
+// on that production path instead of relying on the movable xe::Memory decoder
+// window, which is intentionally allowed only for synthetic code staging.
 const codeBase = 0x22000000;
 const dataAddress = codeBase + 0x100;
 const initialR1 = dataAddress + 4;
@@ -46,6 +53,20 @@ const words = [
   0x8061FFFC, // lwz r3,-4(r1)
   0x4E800020, // blr
 ];
+
+pick('r360_sparse_guest_memory_reset')();
+const dataBacking = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+if (!dataBacking) {
+  throw new Error('could not allocate sparse page for signed LOAD_OFFSET regression');
+}
+// Read/write is sufficient: the instruction stream is still staged in the
+// bounded decoder window, while the data access must come from guest RAM.
+if ((pick('r360_sparse_guest_memory_map')(codeBase, 1, dataBacking, 0, 3) >>> 0) !== 1) {
+  throw new Error('could not map sparse guest data for signed LOAD_OFFSET regression');
+}
+if ((pick('r360_sparse_guest_memory_write_u32_be')(dataAddress, expected) >>> 0) !== 1) {
+  throw new Error('could not seed sparse guest data for signed LOAD_OFFSET regression');
+}
 
 pick('r360_ppc_probe_reset')();
 const input = pick('r360_ppc_probe_input_buffer')() >>> 0;
@@ -62,9 +83,6 @@ if ((pick('r360_ppc_probe_load_at')(codeBase, input, bytes.length) >>> 0) !== by
 }
 if ((pick('r360_ppc_probe_set_initial_gpr')(1, BigInt(initialR1)) >>> 0) !== 1) {
   throw new Error('could not seed r1 for signed LOAD_OFFSET regression');
-}
-if ((pick('r360_ppc_probe_write_guest_u32_be')(dataAddress, expected) >>> 0) !== 1) {
-  throw new Error('could not seed guest data for signed LOAD_OFFSET regression');
 }
 if (!(pick('r360_ppc_probe_translate')() >>> 0)) {
   throw new Error('signed LOAD_OFFSET translation failed');

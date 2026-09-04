@@ -4,12 +4,18 @@ import {loadTitleProfile,saveTitleProfile} from '../profiles/title-profile-store
 
 const SETTINGS_KEY='render360.settings.v44';
 const MODES=new Set(['auto','emulator','recompiled']);
+const MEMORY_RESERVES_MB=new Set([0,96,128,160,192,256,384,512]);
 const normalize=value=>MODES.has(String(value))?String(value):'auto';
+const normalizeMemory=value=>{const mb=Number(value);return MEMORY_RESERVES_MB.has(mb)?mb:0;};
 const readGlobal=()=>{try{return JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}')||{};}catch{return {};}};
 const currentGlobalMode=()=>normalize(readGlobal().preferredExecutionMode||globalThis.render360ExecutionModePreference||'auto');
+const currentGlobalMemory=()=>normalizeMemory(globalThis.render360MemoryReserveMb??readGlobal().wasmMemoryReserveMb??0);
 function publishGlobalMode(mode){const next=normalize(mode);globalThis.render360ExecutionModePreference=next;return next;}
+function publishGlobalMemory(mb){const next=normalizeMemory(mb);globalThis.render360MemoryReserveMb=next;return next;}
 function writeGlobalMode(mode){const settings=readGlobal();settings.preferredExecutionMode=publishGlobalMode(mode);localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings));globalThis.dispatchEvent(new CustomEvent('render360:executionModeChanged',{detail:{mode:settings.preferredExecutionMode,scope:'global'}}));return settings.preferredExecutionMode;}
+function writeGlobalMemory(mb){const settings=readGlobal();settings.wasmMemoryReserveMb=publishGlobalMemory(mb);localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings));globalThis.dispatchEvent(new CustomEvent('render360:memoryReserveChanged',{detail:{memoryReserveMb:settings.wasmMemoryReserveMb,scope:'global'}}));return settings.wasmMemoryReserveMb;}
 publishGlobalMode(currentGlobalMode());
+publishGlobalMemory(currentGlobalMemory());
 
 function installRuntimeRouter(){
   const proto=Render360Runtime.prototype;
@@ -44,15 +50,31 @@ function installRuntimeRouter(){
 
 function option(value,label){const el=document.createElement('option');el.value=value;el.textContent=label;return el;}
 function makeSelect(id,perTitle=false){const select=document.createElement('select');select.id=id;select.className='settings-select';if(perTitle)select.append(option('inherit','Use Global'));select.append(option('auto','Auto · Recompiled if available'));select.append(option('emulator','Xbox 360 Emulator'));select.append(option('recompiled','Recompiled WebAssembly'));return select;}
-function makeRow(title,description,select){const row=document.createElement('div');row.className='row';const copy=document.createElement('div');copy.className='setting-copy';const name=document.createElement('span');name.textContent=title;const small=document.createElement('small');small.textContent=description;copy.append(name,small);const tail=document.createElement('div');tail.className='setting-tail';const badge=document.createElement('span');badge.className='capability live';badge.textContent='Live router';tail.append(select,badge);row.append(copy,tail);return row;}
+function isIosLike(){const nav=globalThis.navigator;const ua=String(nav?.userAgent||'');return /iPad|iPhone|iPod/i.test(ua)||(nav?.platform==='MacIntel'&&Number(nav?.maxTouchPoints||0)>1);}
+function makeMemorySelect(){
+  const select=document.createElement('select');select.id='appMemoryReserve';select.className='settings-select';
+  select.append(option('0','Auto · grow on demand'));
+  for(const [mb,label] of [[96,'96 MB'],[128,'128 MB'],[160,'160 MB'],[192,'192 MB'],[256,'256 MB · high on mobile'],[384,'384 MB · desktop only'],[512,'512 MB · desktop only']]){
+    const item=option(String(mb),label);if(isIosLike()&&mb>256)item.disabled=true;select.append(item);
+  }
+  return select;
+}
+function makeRow(title,description,select,badgeText='Live router'){const row=document.createElement('div');row.className='row';const copy=document.createElement('div');copy.className='setting-copy';const name=document.createElement('span');name.textContent=title;const small=document.createElement('small');small.textContent=description;copy.append(name,small);const tail=document.createElement('div');tail.className='setting-tail';const badge=document.createElement('span');badge.className='capability live';badge.textContent=badgeText;tail.append(select,badge);row.append(copy,tail);return row;}
 
 function installGlobalControl(){
-  if(document.getElementById('appExecutionMode'))return;
   const renderer=document.getElementById('appRenderer'),anchor=renderer?.closest('.row'),group=anchor?.parentElement;if(!anchor||!group)return;
-  const select=makeSelect('appExecutionMode',false),row=makeRow('Execution Engine','CPU path: general Xbox 360 emulation or a title-specific ahead-of-time WebAssembly build.',select);group.insertBefore(row,anchor);
-  select.value=currentGlobalMode();select.addEventListener('change',()=>writeGlobalMode(select.value));
-  document.getElementById('settingsButton')?.addEventListener('click',()=>{select.value=currentGlobalMode();});
-  document.getElementById('resetAppSettings')?.addEventListener('click',()=>setTimeout(()=>{publishGlobalMode('auto');select.value='auto';},0));
+  if(!document.getElementById('appExecutionMode')){
+    const select=makeSelect('appExecutionMode',false),row=makeRow('Execution Engine','CPU path: general Xbox 360 emulation or a title-specific ahead-of-time WebAssembly build.',select);group.insertBefore(row,anchor);
+    select.value=currentGlobalMode();select.addEventListener('change',()=>writeGlobalMode(select.value));
+    document.getElementById('settingsButton')?.addEventListener('click',()=>{select.value=currentGlobalMode();});
+    document.getElementById('resetAppSettings')?.addEventListener('click',()=>setTimeout(()=>{publishGlobalMode('auto');select.value='auto';},0));
+  }
+  if(!document.getElementById('appMemoryReserve')){
+    const select=makeMemorySelect(),row=makeRow('WASM Memory Reserve','Pre-grows the host WebAssembly heap before title launch. Auto grows only when needed. This is not Xbox guest RAM and it does not map missing guest pages.',select,'Safe reserve');group.insertBefore(row,anchor);
+    select.value=String(currentGlobalMemory());select.addEventListener('change',()=>writeGlobalMemory(select.value));
+    document.getElementById('settingsButton')?.addEventListener('click',()=>{select.value=String(currentGlobalMemory());});
+    document.getElementById('resetAppSettings')?.addEventListener('click',()=>setTimeout(()=>{publishGlobalMemory(0);select.value='0';},0));
+  }
 }
 function currentGameTitleId(){const text=document.getElementById('gameSettingsName')?.textContent||'';const match=text.match(/(?:^|·|\s)([0-9A-F]{8})\s*$/i);return match?parseInt(match[1],16)>>>0:0;}
 function syncGameControl(select){const titleId=currentGameTitleId();if(!titleId){select.value='inherit';select.disabled=true;return;}select.disabled=false;select.dataset.titleId=String(titleId);select.value=loadTitleProfile({titleId}).executionMode||'inherit';}

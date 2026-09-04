@@ -1,0 +1,43 @@
+name: Render360 V48 Fast Start Input
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-v48-fast-start-input.py'
+      - '.github/workflows/render360-v48-fast-start-input.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-v48-fast-start-input
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply V48 startup and touch fixes
+        run: python3 tools/apply-v48-fast-start-input.py
+      - name: Validate JavaScript
+        run: |
+          node --check app.js
+          node --check wasm-core.js
+          node --check runtime/render360-runtime.js
+      - name: Commit fixes
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add app.js wasm-core.js runtime/render360-runtime.js
+          if git diff --cached --quiet; then
+            echo 'V48 startup/input fixes already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: speed startup and harden touch controller input'
+          git pull --rebase origin main
+          git push origin HEAD:main

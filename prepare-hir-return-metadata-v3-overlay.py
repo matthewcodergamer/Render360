@@ -231,12 +231,31 @@ context_new = '''    for (size_t i = 0; i < g_initial_gprs.size(); ++i) {
     std::fprintf(stderr,
                  "R360_INITIAL_SPECIALS lr=0x%08X\\n",
                  static_cast<uint32_t>(local_context.lr));
+
+    // R360_XENIA_ENTRY_RETURN_V52
+    // Xenia Function::Call receives Processor::Execute's LR sentinel as the
+    // guest-call return address. Seed the compatibility executor's expected
+    // return token with the same value so a top-level CALL_TAIL chain inherits
+    // a real return address. Without this, the old permissive tail-terminal
+    // fallback may treat an unrelated bclr as a completed host return and skip
+    // live guest control flow before a shared EABI epilogue.
+    if (g_initial_lr != 0) {
+      g_expected_guest_returns[0] = g_initial_lr;
+      g_expected_guest_return_valid[0] = true;
+      g_guest_tail_terminal[0] = false;
+      std::fprintf(stderr,
+                   "R360_GUEST_RETURN_SEED depth=1 return=0x%08X\\n",
+                   static_cast<uint32_t>(g_initial_lr));
+    }
+
     g_r360_stack_trace.initial_r1 = local_context.r[1];
 '''
-replace_once(context_old, context_new, 'initial LR context application')
+replace_once(context_old, context_new, 'initial LR context application and return token')
 
 required = [
     'R360_GUEST_RETURN_DISCARD',
+    'R360_GUEST_RETURN_SEED',
+    'R360_XENIA_ENTRY_RETURN_V52',
     'internal-branch',
     'internal-conditional-branch-taken',
     'conditional-call-not-taken',

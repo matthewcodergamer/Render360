@@ -14,7 +14,7 @@ namespace ppc {
 typedef struct PPCContext_s PPCContext;
 }
 }  // namespace cpu
-}  // namespace xe
+}  // namespace xe;
 
 namespace render360::xenia_web {
 
@@ -42,6 +42,8 @@ using HIRCorrectnessAddressResolver = bool (*)(uint32_t guest_address);
 
 void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
+bool SetHIRCorrectnessInitialLR(uint64_t value);
+uint64_t GetHIRCorrectnessInitialLR();
 
 // ProbeBackend installs resolvers that send direct symbols and runtime-resolved
 // indirect targets back through the real Xenia PPCScanner/PPCFrontend. Nested

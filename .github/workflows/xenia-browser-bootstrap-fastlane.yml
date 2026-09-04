@@ -19,6 +19,7 @@ on:
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
       - 'test-hir-load-offset-addressing.mjs'
+      - 'test-xenia-entry-lr-abi.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
@@ -81,19 +82,7 @@ jobs:
         run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify Xenia title-entry LR ABI
-        run: |
-          node - build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm <<'NODE'
-          const fs=require('fs');
-          const bytes=fs.readFileSync(process.argv[2]);
-          WebAssembly.instantiate(bytes,{}).then(({instance})=>{
-            const e=instance.exports;
-            if(typeof e.r360_ppc_probe_set_initial_lr!=='function'||typeof e.r360_ppc_probe_initial_lr!=='function')throw new Error('initial LR ABI exports missing');
-            e.r360_ppc_probe_reset();
-            if((e.r360_ppc_probe_set_initial_lr(0xBCBCBCBCn)>>>0)!==1)throw new Error('initial LR setter rejected sentinel');
-            if((e.r360_ppc_probe_initial_lr()&0xFFFFFFFFn)!==0xBCBCBCBCn)throw new Error('initial LR sentinel did not persist');
-            console.log('XENIA_ENTRY_LR_ABI=PASS');
-          }).catch(error=>{console.error(error);process.exit(1)});
-          NODE
+        run: timeout 90s node ./test-xenia-entry-lr-abi.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

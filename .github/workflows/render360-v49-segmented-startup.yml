@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'tools/apply-v49-segmented-startup.py'
+      - 'tools/apply-v49-preload-lane.py'
       - 'test-v49-segmented-startup.mjs'
       - '.github/workflows/render360-v49-segmented-startup.yml'
   workflow_dispatch:
@@ -28,7 +29,9 @@ jobs:
           git fetch origin main
           git rebase origin/main
       - name: Apply segmented startup patch
-        run: python3 tools/apply-v49-segmented-startup.py
+        run: |
+          python3 tools/apply-v49-segmented-startup.py
+          python3 tools/apply-v49-preload-lane.py
       - name: Validate JavaScript and startup contract
         run: |
           node --check app.js
@@ -46,6 +49,6 @@ jobs:
             echo 'Render360 V49 segmented startup is already applied.'
             exit 0
           fi
-          git commit -m 'perf: segment Render360 startup work'
+          git commit -m 'perf: preload emulator core before secondary UI'
           git pull --rebase origin main
           git push origin HEAD:main

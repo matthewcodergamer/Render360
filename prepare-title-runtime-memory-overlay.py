@@ -145,6 +145,20 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
 '''
 
 text = text[:start] + replacement + text[end:]
+
+# The authoritative executor now declares probe helpers in an extern "C" block,
+# while the call/return ABI surgery originally targeted the older single-line
+# declaration. Normalize only the generated overlay so that the next pass is
+# compatible with both source layouts without duplicating a declaration.
+modern_probe_decls = '''extern "C" {
+uint32_t r360_ppc_probe_guest_base();
+uint32_t r360_ppc_probe_loaded_size();
+}
+'''
+legacy_probe_decl = 'extern "C" uint32_t r360_ppc_probe_guest_base();\n'
+if modern_probe_decls in text:
+    text = text.replace(modern_probe_decls, legacy_probe_decl, 1)
+
 path.write_text(text)
 print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PASS')
 

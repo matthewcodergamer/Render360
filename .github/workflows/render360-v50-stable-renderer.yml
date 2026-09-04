@@ -1,0 +1,74 @@
+name: Render360 V50 Stable Renderer Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-v50-stable-renderer-console-art.py'
+      - '.github/workflows/render360-v50-stable-renderer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-v50-stable-renderer
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebase onto current main
+        run: |
+          git fetch origin main
+          git rebase origin/main
+
+      - name: Restore the verified v45 player bootstrap as a pinned stable lane
+        run: |
+          git show b8fdf93560767e870c68c30d0371cfb663f7fefa:xenia_ppc_bootstrap.wasm > xenia_ppc_bootstrap.stable.wasm
+          git show b8fdf93560767e870c68c30d0371cfb663f7fefa:xenia_ppc_bootstrap.meta.json > xenia_ppc_bootstrap.stable.meta.json
+          test "$(sha256sum xenia_ppc_bootstrap.stable.wasm | awk '{print $1}')" = "4cc9552bf8e28a5fbf90e23ee964f8fa8eb37d9c229db4615d71238433eb163a"
+          test "$(wc -c < xenia_ppc_bootstrap.stable.wasm | tr -d ' ')" = "2591402"
+          grep -q '6db5d5fcd30251b1d507a5561aad01a83592f15d' xenia_ppc_bootstrap.stable.meta.json
+
+      - name: Apply runtime, console and profile-art recovery
+        run: python3 tools/apply-v50-stable-renderer-console-art.py
+
+      - name: Validate recovery contract
+        run: |
+          node --check app.js
+          node --check v47-ui.js
+          node --check developer-console.js
+          node --check developer-console-fab.js
+          node --check render360-browser-title-runtime.mjs
+          node test-browser-title-runtime.mjs
+          node test-runtime-asset-identity.mjs
+          node test-braid-startup-critic.mjs xenia_ppc_bootstrap.stable.wasm
+          grep -q "xenia_ppc_bootstrap.stable.wasm" render360-browser-title-runtime.mjs
+          grep -q "R360_RUNTIME_CONSOLE_V50" app.js
+          grep -q "R360_XBOX_HERO_ART_V50" v47-ui.js
+
+      - name: Commit stable renderer recovery
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add \
+            xenia_ppc_bootstrap.stable.wasm \
+            xenia_ppc_bootstrap.stable.meta.json \
+            render360-browser-title-runtime.mjs \
+            app.js v47-ui.js \
+            test-browser-title-runtime.mjs \
+            test-runtime-asset-identity.mjs \
+            test-braid-startup-critic.mjs
+          if git diff --cached --quiet; then
+            echo 'Stable renderer recovery is already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: restore stable Braid renderer lane'
+          git pull --rebase origin main
+          git push origin HEAD:main

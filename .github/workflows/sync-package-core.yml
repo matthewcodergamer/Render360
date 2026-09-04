@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'build-core.sh'
+      - 'package-core.cpp'
       - 'render360_xenia_core.cpp'
       - 'render360_xenia_core_v32.cpp'
       - 'src/xenia_web_bootstrap/xex_image_decoder.cpp'
@@ -16,6 +17,7 @@ on:
       - 'src/xenia_web_bootstrap/xex_pe_image.cpp'
       - 'src/xenia_web_bootstrap/xex_pe_image.h'
       - 'src/xenia_web_bootstrap/xex_pe_image_exports.cpp'
+      - 'test-package-xex-foundation.mjs'
       - 'tools/embed-render360-core.py'
       - 'VERSION'
       - '.github/workflows/sync-package-core.yml'

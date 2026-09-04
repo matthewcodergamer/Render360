@@ -1,0 +1,29 @@
+name: Package Render360 V45 Source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/package-render360-v45.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+      - name: Build source ZIP
+        run: |
+          git archive --format=zip --output=Render360-v45-storage-ui.zip HEAD
+          zip -d Render360-v45-storage-ui.zip '.github/workflows/package-render360-v45.yml' || true
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: render360-v45-source
+          path: Render360-v45-storage-ui.zip
+          if-no-files-found: error
+          retention-days: 2

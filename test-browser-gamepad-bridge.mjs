@@ -1,0 +1,23 @@
+import fs from 'node:fs';
+import {WASI} from 'node:wasi';
+const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
+const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
+const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
+const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
+const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports,pick=n=>e[n]??e[`_${n}`];
+for(const n of ['r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_sparse_guest_memory_read_u8','r360_kernel_input_set_mask','r360_kernel_input_set_analog','r360_kernel_service_call'])if(typeof pick(n)!=='function')throw new Error(`missing browser input export ${n}`);
+const call=(m,o,...a)=>pick('r360_kernel_service_call')(m,o,...[...a,0,0,0,0,0,0,0,0].slice(0,8))>>>0;
+const u16=(addr)=>((pick('r360_sparse_guest_memory_read_u8')(addr)>>>0)<<8)|(pick('r360_sparse_guest_memory_read_u8')(addr+1)>>>0);
+const s16=(addr)=>{const v=u16(addr);return v&0x8000?v-0x10000:v};
+pick('r360_sparse_guest_memory_reset')();const backing=pick('r360_sparse_guest_memory_alloc')(1)>>>0;if(!backing)throw new Error('input state backing alloc failed');
+if((pick('r360_sparse_guest_memory_map')(0x51000000,1,backing,0,3)>>>0)!==1)throw new Error('input state map failed');
+// Render360 browser bits: A,B,X,Y,LT,RT,LB,RB,START,BACK.
+pick('r360_kernel_input_set_mask')((1<<0)|(1<<5)|(1<<6)|(1<<8));
+pick('r360_kernel_input_set_analog')(12345,-23456,-16000,24000);
+if(call(2,0x191,0,1,0x51000000)!==0)throw new Error('XamInputGetState failed');
+const buttons=u16(0x51000004);if((buttons&0x1000)===0||(buttons&0x0100)===0||(buttons&0x0010)===0)throw new Error(`button map mismatch 0x${buttons.toString(16)}`);
+if((pick('r360_sparse_guest_memory_read_u8')(0x51000006)>>>0)!==0)throw new Error('left trigger should be released');
+if((pick('r360_sparse_guest_memory_read_u8')(0x51000007)>>>0)!==255)throw new Error('right trigger should be fully pressed');
+if(s16(0x51000008)!==12345||s16(0x5100000A)!==-23456||s16(0x5100000C)!==-16000||s16(0x5100000E)!==24000)throw new Error('analog state mismatch');
+console.log('BROWSER_GAMEPAD_TO_XAM_INPUT_STATE=PASS');
+console.log('BROWSER_TOUCH_ANALOG_BIG_ENDIAN=PASS');

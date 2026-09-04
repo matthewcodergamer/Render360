@@ -1,0 +1,51 @@
+name: Render360 V49 Segmented Startup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-v49-segmented-startup.py'
+      - 'test-v49-segmented-startup.mjs'
+      - '.github/workflows/render360-v49-segmented-startup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-v49-segmented-startup
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase onto current main
+        run: |
+          git fetch origin main
+          git rebase origin/main
+      - name: Apply segmented startup patch
+        run: python3 tools/apply-v49-segmented-startup.py
+      - name: Validate JavaScript and startup contract
+        run: |
+          node --check app.js
+          node --check wasm-core.js
+          node --check ui-behavior.js
+          node --check developer-console-fab.js
+          node --check v47-ui.js
+          node test-v49-segmented-startup.mjs
+      - name: Commit startup optimization
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add app.js wasm-core.js ui-behavior.js developer-console-fab.js v47-ui.js index.html
+          if git diff --cached --quiet; then
+            echo 'Render360 V49 segmented startup is already applied.'
+            exit 0
+          fi
+          git commit -m 'perf: segment Render360 startup work'
+          git pull --rebase origin main
+          git push origin HEAD:main

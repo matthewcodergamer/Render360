@@ -1,4 +1,7 @@
-// Render360 v45 movable developer-console launcher.
+import './v47-ui.js';
+if(!document.querySelector('link[data-r360-ui="v47"]')){const link=document.createElement('link');link.rel='stylesheet';link.href='./styles/v47.css';link.dataset.r360Ui='v47';document.head.appendChild(link);}
+
+// Render360 movable developer-console launcher. Tap opens; hold/drag moves it; pushing to an edge docks it.
 const KEY='render360.dev-console-fab.v45';
 const BUTTON_ID='r360RuntimeConsole';
 const EDGE=42;
@@ -43,7 +46,7 @@ function bind(button){
   button.addEventListener('pointermove',event=>{
     if(!drag||drag.id!==event.pointerId)return;
     const {w:vw,h:vh}=viewport(),size=dimensions(button);
-    if(Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)>5)drag.moved=true;
+    if(Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)>5){drag.moved=true;button.classList.add('r360-fab-dragging');}
     if(!drag.moved)return;
     state.dock=null;button.classList.remove('r360-fab-docked');button.dataset.dock='';button.textContent='>_';
     state.x=clamp(event.clientX-drag.offsetX,PAD,Math.max(PAD,vw-size.w-PAD));
@@ -52,18 +55,16 @@ function bind(button){
   });
   const finish=event=>{
     if(!drag||drag.id!==event.pointerId)return;
-    const moved=drag.moved;drag=null;try{button.releasePointerCapture(event.pointerId)}catch{}
+    const moved=drag.moved;drag=null;button.classList.remove('r360-fab-dragging');try{button.releasePointerCapture(event.pointerId)}catch{}
     const {w:vw}=viewport(),r=button.getBoundingClientRect();
     if(moved){
       if(r.left<=EDGE)state.dock='left';else if(vw-r.right<=EDGE)state.dock='right';else state.dock=null;
       state.x=r.left;state.y=r.top;apply(button,state);return;
     }
-    if(state.dock){
-      const dock=state.dock;state.dock=null;state.x=dock==='left'?PAD+8:Math.max(PAD,vw-64);apply(button,state);return;
-    }
+    if(state.dock){const dock=state.dock;state.dock=null;state.x=dock==='left'?PAD+8:Math.max(PAD,vw-64);apply(button,state);return;}
     globalThis.render360DeveloperConsole?.open?.();
   };
-  button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',()=>{drag=null;apply(button,state)});
+  button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',()=>{drag=null;button.classList.remove('r360-fab-dragging');apply(button,state)});
 }
 
 function scan(){const button=document.getElementById(BUTTON_ID);if(button)bind(button)}

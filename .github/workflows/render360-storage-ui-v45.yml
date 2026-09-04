@@ -1,0 +1,50 @@
+name: Render360 Storage UI V45
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/render360-storage-ui-v45.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-storage-ui-v45
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply storage and mobile UI surgery
+        run: python3 ./tools/render360-storage-ui-v45.py
+
+      - name: Verify JavaScript syntax
+        run: |
+          node --check app.js
+          node --check ui-behavior.js
+          node --check developer-console-fab.js
+          node --check storage/game-storage.js
+          node --check import/zip-importer.js
+
+      - name: Verify v45 storage and UI contract
+        run: node ./test-storage-ui-v45.mjs
+
+      - name: Verify canonical UI contract
+        run: node ./test-ui-contract.mjs
+
+      - name: Commit product changes
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: persistent game storage and movable dev console'
+          git push origin HEAD:main

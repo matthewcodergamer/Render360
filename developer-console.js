@@ -26,6 +26,13 @@ function present(value){return value!==undefined&&value!==null&&value!=='';}
 function number(value){return present(value)&&Number.isFinite(Number(value))?Number(value):undefined;}
 function address(value){const n=number(value);return n===undefined?undefined:`0x${(n>>>0).toString(16).toUpperCase().padStart(8,'0')}`;}
 function compact(value){return Object.fromEntries(Object.entries(value).filter(([,item])=>present(item)));}
+function knownPpcHelper(word){
+  const value=number(word);if(value===undefined)return undefined;const p=value>>>0;
+  if((p>>>26)!==58)return undefined;
+  const rt=(p>>>21)&31,ra=(p>>>16)&31;if(rt<14||rt>31||ra!==1)return undefined;
+  let ds=(p>>>2)&0x3FFF;if(ds&0x2000)ds-=0x4000;const disp=(ds<<2)|0;
+  return disp===-8*(33-rt)?`__restgprlr_${rt}`:undefined;
+}
 function compactBlocker(detail){
   const source=detail?.blocker||detail?.schedulerBlocker||detail||{};
   return compact({
@@ -60,6 +67,14 @@ function memoryDiagnostics(state,result){
     lastCallR1:address(number(resultStack.lastCallR1)??readStackU32('r360_ppc_probe_stack_last_call_r1')),
     lastCallDepth:number(resultStack.lastCallDepth)??readStackU32('r360_ppc_probe_stack_last_call_depth'),
   });
+  const rawHistory=Array.isArray(resultStack.history)?resultStack.history:[];
+  const stackHistory=rawHistory.map(event=>compact({
+    index:number(event.index),kind:event.kindName||number(event.kind),
+    source:address(event.source),instruction:address(event.sourceInstruction),
+    target:number(event.target)?address(event.target):undefined,flags:number(event.flags),depth:number(event.depth),
+    oldR1:address(event.oldR1),newR1:address(event.newR1),
+  }));
+  if(stackHistory.length)stackTrace.history=stackHistory;
   const capturedFaultAddress=number(result?.memoryFaultAddress);
   const capturedFaultCode=number(result?.memoryFaultCode);
   const faultAddress=capturedFaultAddress!==undefined?capturedFaultAddress:(faultAddressFn?(faultAddressFn()>>>0):undefined);
@@ -109,6 +124,7 @@ function memoryDiagnostics(state,result){
       instructionKind='other';
     }
   }
+  const knownHelper=knownPpcHelper(instructionWord);
   const faultNames={0:'none',1:'unmapped',2:'read-protection',3:'write-protection',4:'invalid-argument',5:'already-mapped'};
   const context=result?.mainThreadContext||{};
   return compact({
@@ -116,7 +132,7 @@ function memoryDiagnostics(state,result){
     faultCode,faultName:faultCode===undefined?undefined:(faultNames[faultCode]||`fault-${faultCode}`),
     faultCapturedAtExecution:capturedFaultCode!==undefined,
     blockerInstruction:instructionWord===undefined?undefined:`0x${instructionWord.toString(16).toUpperCase().padStart(8,'0')}`,
-    instructionKind,ppcPrimaryOpcode:primaryOpcode,rt,ra,displacement,
+    instructionKind,knownHelper,ppcPrimaryOpcode:primaryOpcode,rt,ra,displacement,
     effectiveAddress:effectiveAddress===undefined?undefined:address(effectiveAddress),
     baseRegisterValue:baseRegisterValue===undefined?undefined:address(baseRegisterValue),
     branchDisplacement,branchTarget:branchTarget===undefined?undefined:address(branchTarget),
@@ -129,7 +145,7 @@ function memoryDiagnostics(state,result){
 }
 function ppcDiagnosticSummary(memory){
   if(!memory?.blockerInstruction)return undefined;
-  if((memory.instructionKind==='d-form-memory'||memory.instructionKind==='ds-form-memory')&&present(memory.ra))return `PPC memory: rA=${memory.ra}=${memory.baseRegisterValue||'—'} rT=${memory.rt??'—'} disp=${memory.displacement??'—'} EA=${memory.effectiveAddress||'—'}`;
+  if((memory.instructionKind==='d-form-memory'||memory.instructionKind==='ds-form-memory')&&present(memory.ra))return `PPC memory: rA=${memory.ra}=${memory.baseRegisterValue||'—'} rT=${memory.rt??'—'} disp=${memory.displacement??'—'} EA=${memory.effectiveAddress||'—'}${memory.knownHelper?` · ${memory.knownHelper}`:''}`;
   if(memory.instructionKind==='direct-branch'||memory.instructionKind==='conditional-branch')return `PPC ${memory.instructionKind}: target=${memory.branchTarget||'—'} disp=${memory.branchDisplacement??'—'} AA=${memory.branchAbsolute?1:0} LK=${memory.branchLink?1:0}${memory.faultInstructionAttribution?' · memory fault belongs to an earlier/different boundary':''}`;
   return `PPC ${memory.instructionKind||'other'} · primary opcode ${memory.ppcPrimaryOpcode??'—'}`;
 }

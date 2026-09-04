@@ -248,6 +248,28 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
     lastCallR1:stackTraceRead('r360_ppc_probe_stack_last_call_r1'),
     lastCallDepth:stackTraceRead('r360_ppc_probe_stack_last_call_depth'),
   };
+  const stackHistoryCountFn=maybe(bootstrap,'r360_ppc_probe_stack_history_count');
+  const stackHistoryRead=(name,index)=>{const f=maybe(bootstrap,name);return f?(f(index)>>>0):undefined;};
+  const stackHistory=[];
+  if(stackHistoryCountFn){
+    const count=Math.min(stackHistoryCountFn()>>>0,24);
+    for(let i=0;i<count;i++){
+      const kind=stackHistoryRead('r360_ppc_probe_stack_history_kind',i);
+      stackHistory.push({
+        index:i,
+        kind,
+        kindName:kind===1?'stack-write':kind===2?'guest-call':`event-${kind}`,
+        source:stackHistoryRead('r360_ppc_probe_stack_history_source',i),
+        sourceInstruction:stackHistoryRead('r360_ppc_probe_stack_history_instruction',i),
+        target:stackHistoryRead('r360_ppc_probe_stack_history_target',i),
+        flags:stackHistoryRead('r360_ppc_probe_stack_history_flags',i),
+        depth:stackHistoryRead('r360_ppc_probe_stack_history_depth',i),
+        oldR1:stackHistoryRead('r360_ppc_probe_stack_history_old_r1',i),
+        newR1:stackHistoryRead('r360_ppc_probe_stack_history_new_r1',i),
+      });
+    }
+  }
+  if(stackHistory.length)stackTrace.history=stackHistory;
   const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
   const kernelCalls=kernelCallsFn?(kernelCallsFn()>>>0):0;

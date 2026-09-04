@@ -177,3 +177,10 @@ subprocess.run(
     [sys.executable, str(root / 'prepare-hir-return-metadata-v3-overlay.py')],
     check=True,
 )
+
+# Finally capture the bounded r1/call history used to diagnose real-title
+# prologue/epilogue balance without weakening the Xbox stack guards.
+subprocess.run(
+    [sys.executable, str(root / 'prepare-hir-stack-history-v4-overlay.py')],
+    check=True,
+)

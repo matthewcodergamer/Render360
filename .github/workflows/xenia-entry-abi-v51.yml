@@ -1,0 +1,50 @@
+name: Xenia Title Entry ABI V51
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-xenia-entry-abi-v51.py'
+      - '.github/workflows/xenia-entry-abi-v51.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xenia-title-entry-abi-v51
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase onto current main
+        run: |
+          git fetch origin main
+          git rebase origin/main
+      - name: Apply Xenia title-entry ABI repair
+        run: python3 tools/apply-xenia-entry-abi-v51.py
+      - name: Validate patched sources
+        run: |
+          python3 -m py_compile prepare-hir-return-metadata-v3-overlay.py tools/apply-xenia-entry-abi-v51.py
+          node --check render360-title-controller.mjs
+          grep -q 'r360_ppc_probe_set_initial_lr' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'SetHIRCorrectnessInitialLR' src/xenia_web_bootstrap/hir_correctness_executor.h
+          grep -q 'R360_XENIA_ENTRY_ABI_V51' prepare-hir-return-metadata-v3-overlay.py
+          grep -q 'r360_ppc_probe_set_initial_lr' link-xenia-ppc-bootstrap.sh
+      - name: Commit ABI repair
+        run: |
+          git config user.name 'render360-ci'
+          git config user.email 'render360-ci@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/hir_correctness_executor.h src/xenia_web_bootstrap/ppc_translation_probe.cpp prepare-hir-return-metadata-v3-overlay.py render360-title-controller.mjs link-xenia-ppc-bootstrap.sh
+          if git diff --cached --quiet; then
+            echo 'Xenia title-entry ABI repair already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: mirror Xenia title-entry LR ABI'
+          git pull --rebase origin main
+          git push origin HEAD:main

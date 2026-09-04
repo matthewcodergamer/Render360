@@ -21,7 +21,7 @@ export class Render360Core {
   async init() {
     let result=null,networkError=null,embeddedError=null;
     try{
-      const response=await fetch(this.url,{cache:'force-cache'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const response=await fetch(this.url,{cache:'force-cache',credentials:'omit'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
       validateInstance(result.instance,'Network');this.source='network';
     }catch(error){networkError=error;result=null;}

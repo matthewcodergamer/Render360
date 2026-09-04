@@ -32,6 +32,9 @@
   <link rel="stylesheet" href="styles/xenios.css" data-r360-ui="xenios">
   <link rel="stylesheet" href="styles/controller.css" data-r360-ui="controller">
   <link rel="stylesheet" href="styles/mobile-safari-fixes.css">
+<!-- R360_CORE_PRELOAD_V49: begin the emulator core fetch while the shell is still parsing. -->
+<link rel="modulepreload" href="./runtime/render360-runtime.js">
+<link rel="preload" href="./render360_xenia_core.wasm" as="fetch" type="application/wasm" crossorigin="anonymous" fetchpriority="high">
 </head>
 <body>
 <div id="app">
@@ -56,6 +59,10 @@
   <div id="scrim" class="scrim hidden"></div><section id="importSheet" class="sheet hidden" aria-label="Importing game"><div class="sheet-handle"></div><div class="sheet-head"><b id="importTitle">Preparing game…</b></div><div class="sheet-content"><div class="import-progress"><div class="progress-track"><div id="importProgressFill" class="progress-fill"></div></div><div class="progress-meta"><span id="importProgressMeta">Reading file…</span><span id="importProgressPercent">0%</span></div></div></div></section><section id="pauseSheet" class="sheet hidden" aria-label="Game paused"><div class="sheet-handle"></div><div class="sheet-head"><b>Paused</b></div><button id="resumeButton" class="sheet-action primary-action" type="button">Resume</button><button id="leaveGameButton" class="sheet-action" type="button">Return to Game Details</button></section><section id="diagnosticsSheet" class="sheet hidden" aria-label="Diagnostics"><div class="sheet-handle"></div><div class="sheet-head"><b>Diagnostics</b></div><div class="sheet-content"><div id="diagnosticsLog" class="diagnostics-log"></div></div><button class="sheet-action" data-close-sheet type="button">Done</button></section><section id="iosAlert" class="alert hidden" role="alertdialog" aria-modal="true"><div class="alert-body"><h3 id="alertTitle">Render360</h3><p id="alertMessage"></p></div><div id="alertActions" class="alert-actions"></div></section>
 </div>
 <script type="module" src="app.js"></script>
-<script type="module" src="ui-behavior.js"></script>
+<script type="module">
+// R360_SECONDARY_UI_LANE_V49: give the emulator core the first network/CPU lane.
+const loadSecondaryUi=()=>import('./ui-behavior.js').catch(error=>console.error('[Render360] secondary UI load failed',error));
+if(typeof requestIdleCallback==='function')requestIdleCallback(loadSecondaryUi,{timeout:800});else setTimeout(loadSecondaryUi,250);
+</script>
 </body>
 </html>

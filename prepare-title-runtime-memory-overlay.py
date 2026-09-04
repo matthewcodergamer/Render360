@@ -162,11 +162,18 @@ if modern_probe_decls in text:
 path.write_text(text)
 print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PASS')
 
-# This second pass fixes guest call/return ABI semantics and records exact r1
-# provenance in the file that is actually compiled into xenia_ppc_bootstrap.wasm.
+# First keep the existing HIR call/return ABI surgery and exact r1 provenance.
 import subprocess
 import sys
 subprocess.run(
     [sys.executable, str(root / 'prepare-hir-call-return-stack-overlay.py')],
+    check=True,
+)
+
+# Then remove stale SET_RETURN_ADDRESS helper metadata that can survive an
+# internal linked branch or an untaken conditional call. This operates on the
+# same generated translation unit after the established call/return overlay.
+subprocess.run(
+    [sys.executable, str(root / 'prepare-hir-return-metadata-v3-overlay.py')],
     check=True,
 )

@@ -10,6 +10,7 @@ thread_local std::array<uint32_t,kR360MaxGuestCallDepth> g_logical_guest_depth{}
 thread_local uint32_t g_pending_logical_depth=0;
 thread_local bool g_pending_logical_depth_valid=false;
 thread_local uint32_t g_requested_execution_entry=0;
+uint32_t CurrentLogicalGuestDepth();
 ''','state')
 one('bool CurrentExpectedGuestReturn(uint64_t* out) {\n','''uint32_t CurrentLogicalGuestDepth(){if(!g_execution_depth||g_execution_depth>kR360MaxGuestCallDepth)return 0;const uint32_t d=g_logical_guest_depth[size_t(g_execution_depth-1)];return d?d:g_execution_depth;}
 void PrepareNestedLogicalDepth(uint32_t flags){const uint32_t d=CurrentLogicalGuestDepth();g_pending_logical_depth=d+((flags&xe::cpu::hir::CALL_TAIL)?0u:1u);if(!g_pending_logical_depth)g_pending_logical_depth=1;g_pending_logical_depth_valid=true;}
@@ -68,4 +69,3 @@ one('''  ++g_execution_depth;
   --g_execution_depth;
 ''','execute')
 p.write_text(s);print('HIR_TAIL_FRAME_BOUNDARY_OVERLAY=PASS')
-# V55 source landed; this comment intentionally triggers the fastlane rebuild.

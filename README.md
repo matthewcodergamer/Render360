@@ -32,9 +32,9 @@ COMMERCIAL GAMEPLAY                        NOT YET VERIFIED
 
 The current work is deliberately focused on **correct CPU execution before GPU bring-up**. Braid still stops before the first kernel HLE call and before Xenos ring initialization, so mapping fake memory, returning fake kernel success, or drawing placeholder pixels would only hide the real blocker.
 
-## Current Braid real-device blocker — old bootstrap measurement / V58 source fix
+## Current Braid real-device blocker — V57 measurement / V58 fix
 
-The September 5 iPhone run reports the V58 app surface, but its verified runtime asset still has the older bootstrap provenance:
+The September 5 iPhone run is still using the verified pre-V58 generated PPC bootstrap even though the JavaScript/UI release reports V58:
 
 ```text
 sourceCommit: 525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0
@@ -50,53 +50,41 @@ operation:    ld r29,-32(r1)
 caller r1:    0x70080EF0
 call:         0x8236C7CC -> 0x8234F5AC
 call flags:   0x2 (CALL_TAIL)
-helper:       Xenia kEpilogReturn / __restgprlr_29-style entry
 kernel calls: 0
 GPU:          ring-not-initialized
 ```
 
-This run is different from the old `0x70081020` guard fault. The frame allocation and teardown around `0x8236C6E0` are balanced (`-0x70`, then `+0x70`). The older published bootstrap correctly identifies the target as a Xenia epilog-return helper, but sending that helper back through an isolated nested HIR translation loses the value materialization required by the helper's loads; the diagnostic therefore reports no concrete sparse-memory fault even though HIR opcode 37 stops execution.
+The frame evidence is now strong: `0x8236C6E8` allocates `-0x70`, `0x8236C7C8` restores `+0x70`, and the next instruction is the tail branch into the shared restore sequence at `0x8234F5AC`. The zero-address diagnostic is not a real sparse-memory fault; the compatibility executor is translating the interior restore label as an isolated HIR entry and reaches `ld r29,-32(r1)` without the HIR value materialization that would exist in the owning translation.
 
 ### V58: execute shared epilog helpers on the live PPC context
 
-V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For a tail target that Xenia has already classified as `Function::Behavior::kEpilogReturn`, Render360 now handles the Microsoft `__restgprlr_N` helper as the ABI helper it actually is rather than constructing a standalone nested HIR function.
-
-The finalized V58 source implementation is on `main` at:
-
-```text
-d837ffe5ffdfc6077a576538bdd36bda1b0a7b13
-fix: execute Xenia epilog helpers on live PPC context
-```
-
-The V58 application workflow is now marker-idempotent, and the helper restores the full 64-bit LR value. The kernel-HLE ABI verification fixture was also corrected to map its synthetic data pointer in the authoritative sparse guest address space (`f60d8963af0c3747cae8b32c37610507d5280e30`) instead of relying on the decoder staging window. That CI correction is a test/runtime-contract fix; it does not weaken real title memory validation.
-
-A new browser bootstrap must complete its full Xenia WASM32 verification and publish step before a real-device run can test this source. The user-facing V58 label by itself is not proof that the generated bootstrap contains the V58 helper behavior; `runtimeAsset.sourceCommit` is the authority.
+V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For `CALL_TAIL` targets, Render360 now accepts either Xenia `Function::Behavior::kEpilogReturn` metadata or a strict canonical `__restgprlr_N` PPC signature. This matters for Braid's interior label `0x8234F5AC`, which may not be registered as a standalone function even though its instruction stream is the canonical shared restore helper.
 
 The helper bridge:
 
 ```text
-CALL_TAIL -> Xenia kEpilogReturn
+CALL_TAIL -> kEpilogReturn metadata OR strict __restgprlr_N signature
         ↓
-validate first instruction as ld rN,disp(r1)
+validate ld rN..r31 offsets from the live r1
         ↓
-restore rN..r31 from live sparse guest stack
+restore rN..r31 from authoritative sparse guest memory
         ↓
-restore full LR from -8(r1)
+restore 32-bit LR from lwz r12,-8(r1)
         ↓
-return through the caller's existing tail-call boundary
+complete the existing tail-call return boundary
 ```
 
-The implementation remains fail-closed. It validates the helper's first instruction and expected register/stack offset pattern, reads only through authoritative `SparseGuestMemory`, and returns a real failure if any helper load is unmapped. It does not map the upper guard, clamp `r1`, fabricate register values, or bypass unrelated memory faults.
+The implementation remains fail-closed. It validates the complete helper signature when metadata is unavailable, reads only through `SparseGuestMemory`, and returns a real failure if code or stack data is unmapped. It does not map the upper guard, clamp `r1`, fabricate register values, or bypass unrelated memory faults.
 
 ### What remains ruled out
 
 - The initial Xbox stack reservation is correct (`r1 = 0x70080F50`).
 - The upper stack guard remains protected.
-- The measured blocker has a matching `-0x70` allocation and `+0x70` teardown, so it is not the earlier missing-prologue case.
-- No XAM/xboxkrnl HLE call has executed yet in the published measurement.
+- The current blocker has a matching `-0x70` allocation and `+0x70` teardown, so it is not the earlier missing-prologue case.
+- No XAM/xboxkrnl HLE call has executed yet.
 - The Xenos ring is still downstream of the CPU blocker.
 
-The next real-device Copy Report should use a newly published V58 bootstrap whose `runtimeAsset.sourceCommit` is no longer `525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0`, and should show whether execution advances beyond the `0x8234F5AC` shared restore helper.
+The next real-device Copy Report must show a newly published `xenia_ppc_bootstrap.wasm` provenance (`sourceCommit` / `sourceRun`) before it counts as a V58 helper test. The success criterion is that execution advances beyond `0x8234F5AC` / 17 instructions and reports the next measured boundary.
 
 ## Browser execution architecture
 
@@ -172,15 +160,15 @@ Audio, save data, networking and title-specific compatibility may remain separat
 ## Near-term engineering order
 
 ```text
-1. complete and publish the V58 bootstrap built from d837ffe5...
-2. run Braid on the real iPhone and capture a new Copy Report
-3. verify execution advances beyond 0x8234F5AC / 17 instructions
-4. confirm the later 0x8236EB74 tail fragment still uses .pdata owner/interior routing
-5. implement only the next measured PPC/HIR blocker
-6. reach the first real xboxkrnl/XAM HLE call
-7. bring the guest scheduler online
-8. reach Xenos ring initialization and PM4 traffic
-9. reach VdSwap and present the first genuine Braid frame
+1. build and publish the hardened V58 shared-epilog bootstrap
+2. verify xenia_ppc_bootstrap.meta.json has new sourceCommit/sourceRun provenance
+3. run Braid on the real iPhone and capture a new Copy Report
+4. verify execution advances beyond 0x8234F5AC / 17 instructions
+5. confirm later ordinary tail fragments still use .pdata owner/interior routing
+6. implement only the next measured PPC/HIR blocker
+7. reach the first real xboxkrnl/XAM HLE call
+8. bring the guest scheduler online
+9. reach Xenos ring initialization, PM4 traffic, VdSwap, and the first genuine frame
 10. only then move from first-frame bring-up to sustained gameplay
 ```
 

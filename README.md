@@ -32,9 +32,9 @@ COMMERCIAL GAMEPLAY                        NOT YET VERIFIED
 
 The current work is deliberately focused on **correct CPU execution before GPU bring-up**. Braid still stops before the first kernel HLE call and before Xenos ring initialization, so mapping fake memory, returning fake kernel success, or drawing placeholder pixels would only hide the real blocker.
 
-## Current Braid real-device blocker — V57 measurement / V58 fix
+## Current Braid real-device blocker — old bootstrap measurement / V58 source fix
 
-The September 5 iPhone run reports the V58 app surface, but its verified runtime asset still has V57 provenance:
+The September 5 iPhone run reports the V58 app surface, but its verified runtime asset still has the older bootstrap provenance:
 
 ```text
 sourceCommit: 525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0
@@ -55,20 +55,22 @@ kernel calls: 0
 GPU:          ring-not-initialized
 ```
 
-This run is different from the old `0x70081020` guard fault. The frame allocation and teardown around `0x8236C6E0` are balanced (`-0x70`, then `+0x70`). V57 correctly identifies the target as a Xenia epilog-return helper, but sending that helper back through an isolated nested HIR translation still loses the value materialization required by the helper's loads; the diagnostic therefore reports no concrete sparse-memory fault even though HIR opcode 37 stops execution.
+This run is different from the old `0x70081020` guard fault. The frame allocation and teardown around `0x8236C6E0` are balanced (`-0x70`, then `+0x70`). The older published bootstrap correctly identifies the target as a Xenia epilog-return helper, but sending that helper back through an isolated nested HIR translation loses the value materialization required by the helper's loads; the diagnostic therefore reports no concrete sparse-memory fault even though HIR opcode 37 stops execution.
 
 ### V58: execute shared epilog helpers on the live PPC context
 
 V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For a tail target that Xenia has already classified as `Function::Behavior::kEpilogReturn`, Render360 now handles the Microsoft `__restgprlr_N` helper as the ABI helper it actually is rather than constructing a standalone nested HIR function.
 
-The V58 source implementation is now on `main` at:
+The finalized V58 source implementation is on `main` at:
 
 ```text
-4c3a88c1fe14f628a5f2fd84cf024ce9be2f6974
+d837ffe5ffdfc6077a576538bdd36bda1b0a7b13
 fix: execute Xenia epilog helpers on live PPC context
 ```
 
-The browser bootstrap must now be rebuilt and published from that source before a real-device run can test the fix.
+The V58 application workflow is now marker-idempotent, and the helper restores the full 64-bit LR value. The kernel-HLE ABI verification fixture was also corrected to map its synthetic data pointer in the authoritative sparse guest address space (`f60d8963af0c3747cae8b32c37610507d5280e30`) instead of relying on the decoder staging window. That CI correction is a test/runtime-contract fix; it does not weaken real title memory validation.
+
+A new browser bootstrap must complete its full Xenia WASM32 verification and publish step before a real-device run can test this source. The user-facing V58 label by itself is not proof that the generated bootstrap contains the V58 helper behavior; `runtimeAsset.sourceCommit` is the authority.
 
 The helper bridge:
 
@@ -79,7 +81,7 @@ validate first instruction as ld rN,disp(r1)
         ↓
 restore rN..r31 from live sparse guest stack
         ↓
-restore LR from -8(r1)
+restore full LR from -8(r1)
         ↓
 return through the caller's existing tail-call boundary
 ```
@@ -90,11 +92,11 @@ The implementation remains fail-closed. It validates the helper's first instruct
 
 - The initial Xbox stack reservation is correct (`r1 = 0x70080F50`).
 - The upper stack guard remains protected.
-- The current V57 blocker has a matching `-0x70` allocation and `+0x70` teardown, so it is not the earlier missing-prologue case.
-- No XAM/xboxkrnl HLE call has executed yet.
+- The measured blocker has a matching `-0x70` allocation and `+0x70` teardown, so it is not the earlier missing-prologue case.
+- No XAM/xboxkrnl HLE call has executed yet in the published measurement.
 - The Xenos ring is still downstream of the CPU blocker.
 
-The next real-device Copy Report should use a V58 published bootstrap whose `runtimeAsset.sourceCommit` is no longer `525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0`, and should show whether execution advances beyond the `0x8234F5AC` shared restore helper.
+The next real-device Copy Report should use a newly published V58 bootstrap whose `runtimeAsset.sourceCommit` is no longer `525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0`, and should show whether execution advances beyond the `0x8234F5AC` shared restore helper.
 
 ## Browser execution architecture
 
@@ -170,7 +172,7 @@ Audio, save data, networking and title-specific compatibility may remain separat
 ## Near-term engineering order
 
 ```text
-1. rebuild and publish the V58 shared-epilog helper bootstrap from 4c3a88c1...
+1. complete and publish the V58 bootstrap built from d837ffe5...
 2. run Braid on the real iPhone and capture a new Copy Report
 3. verify execution advances beyond 0x8234F5AC / 17 instructions
 4. confirm the later 0x8236EB74 tail fragment still uses .pdata owner/interior routing
@@ -189,6 +191,7 @@ Audio, save data, networking and title-specific compatibility may remain separat
 - `src/xenia_web_bootstrap/hir_correctness_executor.cpp` — base correctness executor source.
 - `prepare-hir-call-return-stack-overlay.py` — nested call/return semantics, sparse-memory fail-closed behavior and stack provenance.
 - `prepare-hir-return-metadata-v3-overlay.py` — return-token lifetime rules, Xenia entry LR state and V52 depth-1 return seeding plus V55-V58 tail/epilog routing.
+- `src/xenia_web_bootstrap/probe_backend.cpp` — nested-call resolver and V58 live-context shared-epilog helper bridge.
 - `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — authoritative sparse Xbox virtual memory.
 - `src/xenia_web_bootstrap/kernel_import_probe.cpp` — imported thunk / HLE boundary.
 - `src/xenia_web_bootstrap/kernel_runtime_foundation.cpp` — browser kernel service foundation.

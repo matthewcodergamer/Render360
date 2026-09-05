@@ -91,7 +91,6 @@ jobs:
               tools/braid-frame-history-surgery.py \
               build-xenia-ppc-bootstrap.sh \
               prepare-hir-stack-history-overlay.py \
-              .github/workflows/xenia-browser-bootstrap-fastlane.yml \
               render360-title-controller.mjs \
               developer-console.js \
               test-braid-frame-history.mjs \
@@ -99,6 +98,8 @@ jobs:
             git diff --cached --check
             git status --short
             git commit -m 'diag: trace Braid stack frame history'
+            git fetch origin main
+            git rebase origin/main
             git push origin HEAD:main
           } 2>&1 | tee braid-frame-history-commit.log
 

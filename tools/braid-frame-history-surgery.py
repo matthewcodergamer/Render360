@@ -34,7 +34,7 @@ p.write_text(s)
 # enough to prove the guard violation but not enough to distinguish a missing
 # prologue from a duplicate epilogue.
 p = Path('prepare-hir-stack-history-overlay.py')
-p.write_text(r'''#!/usr/bin/env python3
+p.write_text(r"""#!/usr/bin/env python3
 from pathlib import Path
 
 root = Path(__file__).resolve().parent
@@ -244,7 +244,7 @@ for marker in [
 
 path.write_text(text)
 print('HIR_STACK_HISTORY_OVERLAY=PASS')
-''')
+""")
 
 
 # 3) Keep the fastlane synchronized with this new runtime overlay.

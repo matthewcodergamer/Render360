@@ -3,7 +3,7 @@ import fs from 'node:fs';
 const dev=fs.readFileSync('developer-console.js','utf8');
 const controller=fs.readFileSync('render360-title-controller.mjs','utf8');
 const overlay=fs.readFileSync('prepare-hir-call-return-stack-overlay.py','utf8');
-for(const marker of ["instructionKind='ds-form-memory'",'primaryOpcode===58||primaryOpcode===62','stackDiagnosticSummary(summary.memory)','r360_ppc_probe_stack_blocker_r1']){
+for(const marker of ["kind:'ds-form-memory'",'primary===58||primary===62','blockerDecoded','r360_ppc_probe_stack_blocker_r1']){
   if(!dev.includes(marker))throw new Error(`developer diagnostic marker missing: ${marker}`);
 }
 for(const marker of ['stackTraceRead','r360_ppc_probe_stack_blocker_r1','stackTrace,translatedFunctionCount']){

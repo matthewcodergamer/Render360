@@ -1,5 +1,5 @@
 // Render360 developer tools are opt-in. Production mode keeps only the tiny UI guard.
-// V53: Braid blocker console — diagnosis first, full report always retained.
+// V54: Braid frame-history console — prove prologue vs duplicate teardown.
 const SETTINGS_KEY='render360.settings.v44';
 const $=id=>document.getElementById(id);
 const entries=[];
@@ -126,6 +126,12 @@ function memoryDiagnostics(state,result){
   const read8=fn('r360_sparse_guest_memory_read_u8');
   const readStackU32=name=>{const f=fn(name);return f?(f()>>>0):undefined;};
   const resultStack=result?.stackTrace||{};
+  const writeHistory=(Array.isArray(resultStack.writeHistory)?resultStack.writeHistory:[]).map(event=>compact({
+    sequence:number(event.sequence),address:address(event.address),oldR1:address(event.oldR1),newR1:address(event.newR1),depth:number(event.depth),
+  }));
+  const callHistory=(Array.isArray(resultStack.callHistory)?resultStack.callHistory:[]).map(event=>compact({
+    sequence:number(event.sequence),source:address(event.source),target:address(event.target),r1:address(event.r1),depth:number(event.depth),flags:number(event.flags),
+  }));
   const stackTrace=compact({
     blockerR1:address(number(resultStack.blockerR1)??readStackU32('r360_ppc_probe_stack_blocker_r1')),
     initialR1:address(number(resultStack.initialR1)??readStackU32('r360_ppc_probe_stack_initial_r1')),
@@ -137,6 +143,8 @@ function memoryDiagnostics(state,result){
     lastCallTarget:address(number(resultStack.lastCallTarget)??readStackU32('r360_ppc_probe_stack_last_call_target')),
     lastCallR1:address(number(resultStack.lastCallR1)??readStackU32('r360_ppc_probe_stack_last_call_r1')),
     lastCallDepth:number(resultStack.lastCallDepth)??readStackU32('r360_ppc_probe_stack_last_call_depth'),
+    writeHistory:writeHistory.length?writeHistory:undefined,
+    callHistory:callHistory.length?callHistory:undefined,
   });
   const capturedFaultAddress=number(result?.memoryFaultAddress);
   const capturedFaultCode=number(result?.memoryFaultCode);
@@ -177,6 +185,7 @@ function memoryDiagnostics(state,result){
     stackGuardBytes:number(context.stackGuardBytes),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
     stackTrace:Object.keys(stackTrace).length?stackTrace:undefined,
     codeWindows:compact({
+      entry:readPpcWindow(read8,result?.entry,4),
       r1Write:readPpcWindow(read8,stackTrace.lastWriteAddress,3),
       callSite:readPpcWindow(read8,stackTrace.lastCallSource,2),
       blocker:readPpcWindow(read8,blockerAddress,2),
@@ -209,7 +218,22 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const isR1Fault=memory?.ra===1&&ea!==undefined&&fault!==undefined&&ea===fault;
   const writeWindow=memory?.codeWindows?.r1Write||[];
   const writeInstruction=writeWindow.find(row=>row.current);
-  const classification=crossedGuard&&isR1Fault?'STACK_FRAME_TEARDOWN_MISMATCH':memory?.faultCode?'GUEST_MEMORY_BOUNDARY':'CPU_RUNTIME_BLOCKER';
+  const writes=trace.writeHistory||[],calls=trace.callHistory||[];
+  const suspectWrite=[...writes].reverse().find(event=>event.address===trace.lastWriteAddress&&event.newR1===trace.lastNewR1)||writes.at(-1);
+  const suspectSequence=number(suspectWrite?.sequence),suspectDepth=number(suspectWrite?.depth)??number(trace.lastWriteDepth);
+  const enteringCall=suspectDepth===undefined?undefined:[...calls].reverse().find(event=>number(event.depth)===suspectDepth-1&&(suspectSequence===undefined||number(event.sequence)<suspectSequence));
+  const frameWrites=writes.filter(event=>{
+    const seq=number(event.sequence),depth=number(event.depth);
+    return depth===suspectDepth&&(!enteringCall||seq>number(enteringCall.sequence))&&(suspectSequence===undefined||seq<=suspectSequence);
+  });
+  const frameDeltas=frameWrites.map(event=>({event,delta:(number(event.newR1)-number(event.oldR1))})).filter(item=>Number.isFinite(item.delta));
+  const matchingAllocation=r1WriteDelta>0?[...frameDeltas].reverse().find(item=>item.delta===-r1WriteDelta&&item.event.address!==trace.lastWriteAddress):undefined;
+  const historyReady=writes.length>0&&calls.length>0;
+  const missingAllocation=historyReady&&r1WriteDelta>0&&suspectDepth>1&&!!enteringCall&&!matchingAllocation;
+  const classification=crossedGuard&&isR1Fault?(missingAllocation?'FRAME_ENTRY_MISSING_PROLOGUE':historyReady?'STACK_BALANCE_OR_EPILOGUE_MISMATCH':'STACK_FRAME_TEARDOWN_MISMATCH'):memory?.faultCode?'GUEST_MEMORY_BOUNDARY':'CPU_RUNTIME_BLOCKER';
+  const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'
+    ?`#${event.sequence} CALL d${event.depth} ${event.source} → ${event.target} r1=${event.r1} flags=0x${(number(event.flags)||0).toString(16).toUpperCase()}`
+    :`#${event.sequence} r1 d${event.depth} ${event.address} ${event.oldR1} → ${event.newR1} (${hexDelta((number(event.newR1)||0)-(number(event.oldR1)||0))})`);
   const evidence=[
     initialAbiCorrect?`Entry r1 is correct: ${trace.initialR1} == stackTop ${memory.stackTop}.`:undefined,
     r1WriteDelta!==undefined?`Last r1 write: ${trace.lastWriteAddress} moved ${trace.lastOldR1} → ${trace.lastNewR1} (${hexDelta(r1WriteDelta)}).`:undefined,
@@ -218,6 +242,9 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     faultIntoGuard!==undefined&&faultIntoGuard>=0?`Fault address ${memory.faultAddress} is ${hexDelta(faultIntoGuard)} into the protected upper stack guard.`:undefined,
     isR1Fault?`Fault equation: ${memory.baseRegisterValue} + (${memory.displacement}) = ${memory.effectiveAddress}.`:undefined,
     trace.lastCallSource&&trace.lastCallTarget?`Immediate call edge: ${trace.lastCallSource} → ${trace.lastCallTarget}, depth ${trace.lastCallDepth??'—'}, r1=${trace.lastCallR1||'—'}.`:undefined,
+    historyReady&&enteringCall?`Frame-entry call for depth ${suspectDepth}: ${enteringCall.source} → ${enteringCall.target} with r1=${enteringCall.r1}.`:undefined,
+    historyReady&&matchingAllocation?`Matching frame allocation found at ${matchingAllocation.event.address}: ${matchingAllocation.event.oldR1} → ${matchingAllocation.event.newR1} (${hexDelta(matchingAllocation.delta)}).`:undefined,
+    missingAllocation?`No ${hexDelta(-r1WriteDelta)} r1 allocation was observed in depth ${suspectDepth} after its entry call and before the ${hexDelta(r1WriteDelta)} teardown.`:undefined,
   ].filter(Boolean);
   const ruledOut=[
     initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
@@ -226,13 +253,13 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
   ].filter(Boolean);
   const next=[
-    trace.lastWriteAddress?`Inspect the frame teardown at ${trace.lastWriteAddress}; determine whether its positive r1 restore has a matching earlier allocation in the same guest frame.`:undefined,
-    trace.lastCallSource?`Verify function/shared-epilogue classification around ${trace.lastCallSource} and the target ${trace.lastCallTarget||'—'}.`:undefined,
+    missingAllocation&&enteringCall?`Inspect the translated function entered at ${enteringCall.target}; the runtime reached its +0x100 teardown without recording a -0x100 r1 allocation in that frame.`:trace.lastWriteAddress?`Inspect the frame teardown at ${trace.lastWriteAddress}; determine whether its positive r1 restore has a matching earlier allocation in the same guest frame.`:undefined,
+    historyReady&&matchingAllocation?`A matching allocation exists, so inspect intervening r1 writes/branches for a duplicate restore or wrong shared epilogue.`:trace.lastCallSource?`Verify function/shared-epilogue classification around ${trace.lastCallSource} and the target ${trace.lastCallTarget||'—'}.`:undefined,
     `Do not patch ${memory?.faultAddress||'the fault address'} writable; preserve Xenia's stack guard and fix the control-flow/frame state that reached it.`,
   ].filter(Boolean);
   return compact({
     classification,
-    headline:crossedGuard?'r1 crossed the Xenia stack base before the restore load':'CPU execution stopped at a guest-memory boundary',
+    headline:missingAllocation?`depth ${suspectDepth} reached a ${hexDelta(r1WriteDelta)} epilogue without its matching allocation`:crossedGuard?'r1 crossed the Xenia stack base before the restore load':'CPU execution stopped at a guest-memory boundary',
     primarySuspect:trace.lastWriteAddress,
     primarySuspectInstruction:writeInstruction,
     stackCrossingBytes:stackCrossing,
@@ -241,7 +268,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     initialAbiCorrect,
     faultDerivedFromR1:isR1Fault,
     callEdge:trace.lastCallSource&&trace.lastCallTarget?`${trace.lastCallSource} -> ${trace.lastCallTarget}`:undefined,
-    evidence,ruledOut,next,
+    historyReady,missingAllocation,frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,
+    timeline,evidence,ruledOut,next,
     runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
     cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
   });
@@ -367,6 +395,8 @@ function renderFocus(summary){
   );
   card.appendChild(grid);root.appendChild(card);
   appendTextList(root,'Evidence',focus.evidence);
+  appendTextList(root,'Stack / call timeline',focus.timeline);
+  appendCodeWindow(root,'PPC around title entry',summary.memory?.codeWindows?.entry);
   appendCodeWindow(root,'PPC around last r1 write',summary.memory?.codeWindows?.r1Write);
   appendCodeWindow(root,'PPC around call site',summary.memory?.codeWindows?.callSite);
   appendCodeWindow(root,'PPC around fault',summary.memory?.codeWindows?.blocker);

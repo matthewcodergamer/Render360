@@ -242,7 +242,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const memoryFaultCodeFn=maybe(bootstrap,'r360_sparse_guest_memory_last_fault_code');
   const memoryFaultAddress=memoryFaultAddressFn?(memoryFaultAddressFn()>>>0):0;
   const memoryFaultCode=memoryFaultCodeFn?(memoryFaultCodeFn()>>>0):0;
-  const stackTraceRead=name=>{const f=maybe(bootstrap,name);return f?(f()>>>0):undefined;};
+  const stackTraceRead=(name,...args)=>{const f=maybe(bootstrap,name);return f?(f(...args)>>>0):undefined;};
   const stackTrace={
     blockerR1:stackTraceRead('r360_ppc_probe_stack_blocker_r1'),
     initialR1:stackTraceRead('r360_ppc_probe_stack_initial_r1'),
@@ -255,6 +255,23 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
     lastCallR1:stackTraceRead('r360_ppc_probe_stack_last_call_r1'),
     lastCallDepth:stackTraceRead('r360_ppc_probe_stack_last_call_depth'),
   };
+  const stackWriteCount=Math.min(stackTraceRead('r360_ppc_probe_stack_write_count')??0,32);
+  const stackCallCount=Math.min(stackTraceRead('r360_ppc_probe_stack_call_count')??0,32);
+  stackTrace.writeHistory=Array.from({length:stackWriteCount},(_,index)=>({
+    sequence:stackTraceRead('r360_ppc_probe_stack_write_sequence',index),
+    address:stackTraceRead('r360_ppc_probe_stack_write_address',index),
+    oldR1:stackTraceRead('r360_ppc_probe_stack_write_old_r1',index),
+    newR1:stackTraceRead('r360_ppc_probe_stack_write_new_r1',index),
+    depth:stackTraceRead('r360_ppc_probe_stack_write_depth',index),
+  }));
+  stackTrace.callHistory=Array.from({length:stackCallCount},(_,index)=>({
+    sequence:stackTraceRead('r360_ppc_probe_stack_call_sequence',index),
+    source:stackTraceRead('r360_ppc_probe_stack_call_source',index),
+    target:stackTraceRead('r360_ppc_probe_stack_call_target',index),
+    r1:stackTraceRead('r360_ppc_probe_stack_call_r1',index),
+    depth:stackTraceRead('r360_ppc_probe_stack_call_depth',index),
+    flags:stackTraceRead('r360_ppc_probe_stack_call_flags',index),
+  }));
   const translatedFunctionCount=callCountFn?(callCountFn()>>>0):0;
   const firstTranslatedFunction=callAddressFn&&translatedFunctionCount?(callAddressFn(0)>>>0):0;
   const kernelCalls=kernelCallsFn?(kernelCallsFn()>>>0):0;

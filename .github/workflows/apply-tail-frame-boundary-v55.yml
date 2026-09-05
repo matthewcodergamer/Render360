@@ -1,0 +1,50 @@
+name: Apply Tail Frame Boundary V55
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-frame-boundary-v55.py'
+      - '.github/workflows/apply-tail-frame-boundary-v55.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-tail-frame-boundary-v55
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+
+      - name: Apply tail-frame boundary fix
+        run: python3 tools/apply-tail-frame-boundary-v55.py
+
+      - name: Verify patch contracts
+        shell: bash
+        run: |
+          python3 -m py_compile tools/apply-tail-frame-boundary-v55.py prepare-hir-tail-frame-overlay.py
+          node ./test-braid-frame-history.mjs
+          grep -q 'PreparedPeGuestFindRuntimeFunction' src/xenia_web_bootstrap/xex_pe_guest_loader.cpp
+          grep -q 'SetHIRCorrectnessExecutionEntry' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'CurrentLogicalGuestDepth' prepare-hir-tail-frame-overlay.py
+          grep -q 'prepare-hir-tail-frame-overlay.py' build-xenia-ppc-bootstrap.sh
+          git diff --check
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name 'Render360 Tail Frame Fix Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'Tail-frame boundary fix already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: preserve Xbox tail-frame function boundaries'
+          git push origin HEAD:main

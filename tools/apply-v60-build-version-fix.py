@@ -12,13 +12,7 @@ def require(condition: bool, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# V60 build compatibility.
-#
-# The historical call/return stack overlay used an exact replacement for the
-# STORE_CONTEXT implementation. V60 legitimately inserted provenance recovery
-# between StoreResolvedValue and break, so that brittle replacement aborts before
-# the C++ compiler ever runs. Replace only that overlay section with a structural
-# STORE_CONTEXT patch that survives additional logic inside the case.
+# V60 build compatibility: STORE_CONTEXT stack tracing.
 # ---------------------------------------------------------------------------
 overlay_path = ROOT / 'prepare-hir-call-return-stack-overlay.py'
 overlay = overlay_path.read_text()
@@ -70,10 +64,55 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# V60 build compatibility: V59 interior-tail execution entry setter.
+#
+# V60 added SetHIRCorrectnessContextProvenanceRecovery between the address
+# resolver and IsHIRCorrectnessExecutionActive. The older tail-frame overlay
+# assumed those two declarations were adjacent and aborted with
+# "tail frame entry setter: 0 anchors". Insert the V59 execution-entry API after
+# the address-resolver function itself, independent of whatever newer setters
+# follow it.
+# ---------------------------------------------------------------------------
+tail_path = ROOT / 'prepare-hir-tail-frame-overlay.py'
+tail = tail_path.read_text()
+tail_marker = '# R360_V60_TAIL_ENTRY_SETTER_COMPAT'
+if tail_marker not in tail:
+    section_start = tail.find("one('''void SetHIRCorrectnessAddressResolver")
+    section_end_marker = "''','entry setter')\n"
+    section_end = tail.find(section_end_marker, section_start)
+    require(section_start >= 0 and section_end >= 0,
+            'V60 build fix: legacy tail-frame entry-setter section not found')
+    section_end += len(section_end_marker)
+
+    replacement = r"""# R360_V60_TAIL_ENTRY_SETTER_COMPAT
+# V60 may place additional correctness-executor setters after the address
+# resolver. Anchor only on the resolver function and append the V59 interior
+# entry API without assuming the next function name.
+entry_setter_anchor = '''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
+  g_address_resolver = resolver;
+}
+'''
+entry_setter_api = '''void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;if(guest_address)g_last_interior_entry_missing=0;}
+uint32_t GetHIRCorrectnessCurrentCallFlags(){return g_current_call_flags;}
+uint32_t ConsumeHIRCorrectnessInteriorEntryMissing(){const uint32_t address=g_last_interior_entry_missing;g_last_interior_entry_missing=0;return address;}
+'''
+if 'void SetHIRCorrectnessExecutionEntry(uint32_t guest_address)' not in s:
+    if s.count(entry_setter_anchor) != 1:
+        raise SystemExit(f'tail frame entry setter resolver anchor: {s.count(entry_setter_anchor)} anchors')
+    s = s.replace(entry_setter_anchor, entry_setter_anchor + entry_setter_api, 1)
+"""
+    tail = tail[:section_start] + replacement + tail[section_end:]
+    tail_path.write_text(tail)
+    print('V60 structural tail-frame entry setter: applied')
+else:
+    print('V60 structural tail-frame entry setter: already applied')
+
+
+# ---------------------------------------------------------------------------
 # Release/version contract.
 # Keep every user-visible website release marker on the current emulator release.
-# VERSION also triggers sync-package-core.yml, rebuilding render360_xenia_core.wasm
-# so the settings screen's Core Build value becomes a truthful 60.
+# The package-core workflow is explicitly dispatched by the apply workflow after
+# this commit so Core Build is rebuilt from the same VERSION value.
 # ---------------------------------------------------------------------------
 (ROOT / 'VERSION').write_text(f'{RELEASE}\n')
 

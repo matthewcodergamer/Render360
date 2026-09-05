@@ -1,0 +1,53 @@
+name: Update Render360 Release V58
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/update-release-v58.py'
+      - '.github/workflows/update-release-v58.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-render360-release-v58
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply release V58 text
+        run: python3 tools/update-release-v58.py
+
+      - name: Verify version labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "58"
+          grep -q 'const RENDER360_RELEASE=58;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:58,' runtime/render360-runtime.js
+          grep -q 'Render360 58' index.html
+          grep -q 'Current Braid real-device blocker — V57 measurement / V58 fix' README.md
+
+      - name: Commit release V58 text
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add VERSION runtime/render360-runtime.js index.html README.md
+          if git diff --cached --quiet; then
+            echo 'Release V58 text already current.'
+            exit 0
+          fi
+          git commit -m 'chore: align app and README with Render360 58'
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -1,0 +1,2 @@
+Render360 XEX entrypoint parity build trigger.
+Xenia launches the XEX optional-header entrypoint, not PE AddressOfEntryPoint.

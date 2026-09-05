@@ -66,15 +66,16 @@ if 'void SetHIRCorrectnessExecutionEntry(uint32_t guest_address)' not in s:
     if s.count(entry_setter_anchor) != 1:
         raise SystemExit(f'tail frame entry setter resolver anchor: {s.count(entry_setter_anchor)} anchors')
     s = s.replace(entry_setter_anchor, entry_setter_anchor + entry_setter_api, 1)
+# V65 snapshots the architectural GPRs immediately after ExecuteBuilder returns.
+# Patch only the call prefix so that snapshot remains between the call and the
+# depth decrement. Older releases without the snapshot use the same prefix.
 one('''  ++g_execution_depth;
   result = ExecuteBuilder(builder, memory, *g_active_context);
-  --g_execution_depth;
 ''','''  ++g_execution_depth;
   if(g_execution_depth<=kR360MaxGuestCallDepth){const size_t slot=size_t(g_execution_depth-1);if(outermost)g_logical_guest_depth[slot]=1;else if(g_pending_logical_depth_valid)g_logical_guest_depth[slot]=g_pending_logical_depth;else g_logical_guest_depth[slot]=g_execution_depth;}
   g_pending_logical_depth=0;g_pending_logical_depth_valid=false;
   const uint32_t execution_entry=g_requested_execution_entry;g_requested_execution_entry=0;
   result = ExecuteBuilder(builder, memory, *g_active_context, execution_entry);
-  --g_execution_depth;
 ''','execute')
 p.write_text(s);print('HIR_TAIL_FRAME_BOUNDARY_OVERLAY=PASS')
 # V56 linked-call exact-entry dispatch landed; this direct commit triggers Fastlane.

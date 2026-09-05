@@ -33,7 +33,14 @@ jobs:
           set -euo pipefail
           grep -q 'R360_EPILOG_HELPER executed' src/xenia_web_bootstrap/probe_backend.cpp
           grep -q 'ExecuteSharedEpilogReturn' src/xenia_web_bootstrap/probe_backend.cpp
-          grep -q 'is_tail && is_epilog_return' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'MatchSharedEpilogReturnSignature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'epilog_by_signature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'uint8_t lr_raw\[4\]' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'context->lr = ReadBigEndian32(lr_raw)' src/xenia_web_bootstrap/probe_backend.cpp
+          if grep -q 'uint8_t lr_raw\[8\]' src/xenia_web_bootstrap/probe_backend.cpp; then
+            echo 'V58 contract violation: shared epilog LR restore is still 64-bit.' >&2
+            exit 1
+          fi
 
       - name: Commit V58 source
         shell: bash
@@ -46,6 +53,6 @@ jobs:
             echo 'V58 source already applied.'
             exit 0
           fi
-          git commit -m 'fix: execute Xenia epilog helpers on live PPC context'
+          git commit -m 'fix: execute Braid shared epilog on live PPC context'
           git pull --rebase origin main
           git push origin HEAD:main

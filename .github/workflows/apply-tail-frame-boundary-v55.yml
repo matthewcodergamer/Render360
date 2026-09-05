@@ -44,6 +44,18 @@ jobs:
           elif new_len not in s:
               raise SystemExit('tail patcher .pdata FunctionLength expression not recognized')
 
+          old_fastlane = """s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')
+s=one(s,\"      - 'prepare-hir-stack-history-overlay.py'\\n\",\"      - 'prepare-hir-stack-history-overlay.py'\\n      - 'prepare-hir-tail-frame-overlay.py'\\n\",'fastlane path')
+w('.github/workflows/xenia-browser-bootstrap-fastlane.yml',s)
+"""
+          new_fastlane = """s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')
+if \"      - 'prepare-hir-tail-frame-overlay.py'\\n\" not in s: raise SystemExit('fastlane tail-frame path missing')
+"""
+          if old_fastlane in s:
+              s = s.replace(old_fastlane, new_fastlane, 1)
+          elif new_fastlane not in s:
+              raise SystemExit('tail patcher fastlane mutation block not recognized')
+
           p.write_text(s)
           print('TAIL_FRAME_PATCHER_PREFLIGHT=PASS')
           PY
@@ -74,6 +86,7 @@ jobs:
           grep -q 'SetHIRCorrectnessExecutionEntry' src/xenia_web_bootstrap/probe_backend.cpp
           grep -q 'CurrentLogicalGuestDepth' prepare-hir-tail-frame-overlay.py
           grep -q 'prepare-hir-tail-frame-overlay.py' build-xenia-ppc-bootstrap.sh
+          grep -q "prepare-hir-tail-frame-overlay.py" .github/workflows/xenia-browser-bootstrap-fastlane.yml
           ! grep -q 'insn=((data>>30)&1u)?4u:2u' tools/apply-tail-frame-boundary-v55.py
           grep -q 'insn=4u' tools/apply-tail-frame-boundary-v55.py
           git diff --check
@@ -88,6 +101,11 @@ jobs:
           if git diff --cached --quiet; then
             echo 'Tail-frame boundary fix already applied.'
             exit 0
+          fi
+          if git diff --cached --name-only | grep -q '^.github/workflows/'; then
+            echo 'Refusing bot commit that mutates workflow files.' >&2
+            git diff --cached --name-only >&2
+            exit 3
           fi
           git commit -m 'fix: preserve Xbox tail-frame function boundaries'
           git push origin HEAD:main

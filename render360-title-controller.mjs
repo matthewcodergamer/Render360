@@ -95,15 +95,11 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   const contextPages=3;
   const readWrite=3;
 
-  // Compatibility fallback for the native-HIR title path. Braid's current
-  // startup load is `lwz r11,0x46C0(r31)` while r31 is still zero, so its
-  // effective address is 0x000046C0. The previous workaround mapped only one
-  // 4 KiB page (0x0000-0x0FFF), leaving that exact address unmapped. Keep this
-  // workaround bounded to Xenia's first 64 KiB low-memory region rather than
-  // turning sparse memory into an unrestricted low-address alias.
-  const lowMemoryPages=0x10000/pageSize;
-  const lowMemoryBacking=alloc(lowMemoryPages)>>>0;
-  if(!lowMemoryBacking||(map(0,lowMemoryPages,lowMemoryBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map title low-memory compatibility aperture');
+  // Xenia protects 0x00000000-0x0000FFFF by default. Do not map a synthetic
+  // zero-filled title aperture here. If guest code reaches this region through
+  // a zero base register, preserve the fault so the missing loader/register
+  // state is diagnosed at the first incorrect dependency instead of being
+  // hidden until a later stack teardown.
 
   const stackBacking=alloc(stackPages)>>>0;
   if(!stackBacking||(map(stackLimit,stackPages,stackBacking,0,readWrite)>>>0)!==1)throw new Error('unable to map Xbox main-thread stack');
@@ -133,7 +129,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
 
-  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
+  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:false,lowMemoryCompatBytes:0,lowMemoryPolicy:'xenia-protected'};
 }
 
 function stagePreparedPeImage(bootstrap,prepared,xexEntry){

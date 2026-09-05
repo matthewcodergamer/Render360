@@ -280,6 +280,38 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const tailCall=lastCall&&(((number(lastCall.flags)||0)&2)!==0)?lastCall:undefined;
   const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
   const unsupportedTail=cpu?.runtimeBoundary==='unsupported-hir'&&number(cpu?.executionBlockerKind)===1&&!!tailCall;
+  const lowApertureFault=!!memory?.faultCode&&fault!==undefined&&fault<0x10000&&
+    (memory?.instructionKind==='d-form-memory'||memory?.instructionKind==='ds-form-memory')&&number(memory?.baseRegisterValue)===0;
+  if(lowApertureFault){
+    const baseReg=number(memory?.ra);
+    return compact({
+      classification:'XENIA_ZERO_APERTURE_STATE_MISSING',
+      headline:`guest memory reached Xenia-protected low memory through r${baseReg??'A'}=0`,
+      primarySuspect:cpu?.executionBlockerAddress,
+      initialAbiCorrect,
+      faultDerivedFromBaseRegister:true,
+      evidence:[
+        `Failing PPC: ${memory?.blockerDecoded||'memory instruction'} at ${cpu?.executionBlockerAddress||'—'}.`,
+        `Effective address ${memory?.effectiveAddress||memory?.faultAddress||'—'} came from r${baseReg??'A'}=${memory?.baseRegisterValue||'0x00000000'} plus displacement ${memory?.displacement??'—'}.`,
+        `The access is inside 0x00000000-0x0000FFFF. V64 intentionally leaves that aperture inaccessible instead of returning synthetic zero data.`,
+        initialAbiCorrect?`Entry r1 remains correct: ${trace.initialR1} == stackTop ${memory.stackTop}.`:undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
+        'The later +0x100 teardown as the first cause; V63 proved it was downstream of this masked state path',
+        'Making low memory writable as a compatibility fix',
+        number(kernel?.calls)===0?'XAM/xboxkrnl HLE as the current cause (kernel calls = 0)':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
+      ].filter(Boolean),
+      next:[
+        `Trace why live r${baseReg??'A'} is zero at ${cpu?.executionBlockerAddress||'this instruction'} and restore the missing Xenia loader/title startup state.`,
+        'Keep 0x00000000-0x0000FFFF inaccessible; do not reintroduce a zero-filled low-memory aperture.',
+        'Do not change the verified r1/stackTop geometry while fixing this register/runtime-state dependency.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
   if(unresolvedTail){
     const stackHealthy=present(trace.lastNewR1)&&present(memory?.stackTop)&&trace.lastNewR1===memory.stackTop;
     const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'

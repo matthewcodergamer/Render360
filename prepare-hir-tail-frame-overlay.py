@@ -68,3 +68,4 @@ one('''  ++g_execution_depth;
   --g_execution_depth;
 ''','execute')
 p.write_text(s);print('HIR_TAIL_FRAME_BOUNDARY_OVERLAY=PASS')
+# V55 source landed; this comment intentionally triggers the fastlane rebuild.

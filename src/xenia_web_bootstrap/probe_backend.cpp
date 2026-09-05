@@ -109,7 +109,7 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   }
 
   const uint32_t lr_ea = r1 - 8u;
-  uint8_t lr_raw[4] = {};
+  uint8_t lr_raw[8] = {};
   if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
     std::fprintf(stderr,
                  "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\n",
@@ -117,7 +117,7 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
                  SparseGuestLastFaultAddress());
     return false;
   }
-  context->lr = ReadBigEndian32(lr_raw);
+  context->lr = ReadBigEndian64(lr_raw);
   std::fprintf(stderr,
                "R360_EPILOG_HELPER executed target=0x%08X first_gpr=%u r1=0x%08X lr=0x%08X\n",
                address, first_gpr, r1, static_cast<uint32_t>(context->lr));

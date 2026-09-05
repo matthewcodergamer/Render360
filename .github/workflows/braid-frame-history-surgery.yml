@@ -29,7 +29,10 @@ jobs:
           node-version: '22'
 
       - name: Apply ordered Braid stack/call history plumbing
-        run: python3 tools/braid-frame-history-surgery.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/braid-frame-history-surgery.py 2>&1 | tee braid-frame-history-surgery.log
 
       - name: Validate surgery
         shell: bash
@@ -60,3 +63,12 @@ jobs:
           git diff --cached --check
           git commit -m 'diag: trace Braid stack frame history' || exit 0
           git push origin HEAD:main
+
+      - name: Upload surgery diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: braid-frame-history-surgery-log
+          path: braid-frame-history-surgery.log
+          if-no-files-found: warn
+          retention-days: 2

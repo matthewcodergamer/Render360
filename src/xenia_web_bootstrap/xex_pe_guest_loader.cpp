@@ -33,8 +33,8 @@ bool ExecutableAddress(const render360::xex::PEImageMetadata& m,uint32_t a){
 }
 void ParseRuntimeFunctions(const uint8_t* image,uint32_t length,const render360::xex::PEImageMetadata& m){
   g_runtime_functions.clear();
-  for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(std::strncmp(q.name,".pdata",8)!=0)continue;if(uint64_t(q.raw_address)+q.raw_size>length)break;
-    for(uint32_t o=0;o+8<=q.raw_size;o+=8){const uint8_t* p=image+q.raw_address+o;uint32_t begin=ReadBe32(p),data=ReadBe32(p+4);const uint32_t prolog=data&0xFFu,count=(data>>8)&0x003FFFFFu,insn=4u;if(!begin||!count)continue;
+  for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(std::strncmp(q.name,".pdata",8)!=0)continue;const uint32_t virtual_span=q.virtual_size>q.raw_size?q.virtual_size:q.raw_size;const bool virtual_ready=virtual_span&&uint64_t(q.virtual_address)+virtual_span<=length;const bool raw_ready=q.raw_size&&uint64_t(q.raw_address)+q.raw_size<=length;if(!virtual_ready&&!raw_ready)break;const uint32_t source_offset=virtual_ready?q.virtual_address:q.raw_address;const uint32_t source_span=virtual_ready?virtual_span:q.raw_size;
+    for(uint32_t o=0;o+8<=source_span;o+=8){const uint8_t* p=image+source_offset+o;uint32_t begin=ReadBe32(p),data=ReadBe32(p+4);const uint32_t prolog=data&0xFFu,count=(data>>8)&0x003FFFFFu,insn=4u;if(!begin||!count)continue;
       if(!ExecutableAddress(m,begin)){const uint64_t rebased=uint64_t(m.image_base)+begin;if(rebased>UINT32_MAX||!ExecutableAddress(m,uint32_t(rebased)))continue;begin=uint32_t(rebased);}const uint64_t bytes=uint64_t(count)*insn,end=uint64_t(begin)+bytes;if(!bytes||end>UINT32_MAX||!ExecutableAddress(m,uint32_t(end-1)))continue;g_runtime_functions.push_back({begin,uint32_t(end),uint32_t(uint64_t(prolog)*insn)});
     }break;
   }
@@ -164,9 +164,13 @@ bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
 
   if (!MapPreparedPePages(page_protections)) return Fail(kPeGuestMapFailed);
 
-  // Copy the original section bytes only after all required pages are mapped.
-  // LoadXexGuestSectionData accepts spans covered by multiple adjacent mapping
-  // ranges, so a single PE section may cross page-protection boundaries safely.
+  // Xenia's XEX image readers write the decrypted/decompressed payload directly
+  // into image-base memory. Therefore a prepared XEX image is already a memory
+  // image: section bytes live at image + VirtualAddress. PointerToRawData is PE
+  // metadata only and re-copying from it corrupts title code (the V65 Braid entry
+  // blocker was exactly this). Keep a raw-offset fallback solely for standalone
+  // file-layout PE fixtures where the virtual span is not present in the buffer.
+  // LoadXexGuestSectionData accepts spans covered by adjacent mapping ranges.
   for (uint32_t i = 0; i < metadata.section_count; ++i) {
     const auto& section = metadata.sections[i];
     const uint32_t virtual_span =
@@ -178,15 +182,24 @@ bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
     if (!Add32(metadata.image_base, section.virtual_address, &guest_address)) {
       return Fail(kPeGuestAddressOverflow);
     }
-    if (section.raw_size) {
-      if (!LoadXexGuestSectionData(guest_address, image + section.raw_address,
-                                   section.raw_size)) {
-        return Fail(kPeGuestLoadFailed);
-      }
-      const uint64_t total = uint64_t(g_raw_bytes) + section.raw_size;
-      g_raw_bytes = total > UINT32_MAX ? UINT32_MAX
-                                      : static_cast<uint32_t>(total);
+    const bool virtual_ready =
+        uint64_t(section.virtual_address) + virtual_span <= length;
+    const bool raw_ready = section.raw_size &&
+        uint64_t(section.raw_address) + section.raw_size <= length;
+    if (!virtual_ready && !raw_ready) return Fail(kPeGuestLoadFailed);
+
+    const uint32_t source_offset =
+        virtual_ready ? section.virtual_address : section.raw_address;
+    const uint32_t source_bytes =
+        virtual_ready ? virtual_span : section.raw_size;
+    if (source_bytes &&
+        !LoadXexGuestSectionData(guest_address, image + source_offset,
+                                 source_bytes)) {
+      return Fail(kPeGuestLoadFailed);
     }
+    const uint64_t total = uint64_t(g_raw_bytes) + source_bytes;
+    g_raw_bytes = total > UINT32_MAX ? UINT32_MAX
+                                    : static_cast<uint32_t>(total);
     ++g_sections;
   }
 

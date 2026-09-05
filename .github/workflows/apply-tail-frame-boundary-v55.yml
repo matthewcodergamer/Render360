@@ -22,20 +22,36 @@ jobs:
       - name: Checkout Render360
         uses: actions/checkout@v7
 
+      - name: Normalize tail-frame patcher
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/apply-tail-frame-boundary-v55.py')
+          s = p.read_text()
+
+          old_anchor = "s=one(s,'#include \"sparse_guest_memory.h\"\\n','#include \"sparse_guest_memory.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
+          new_anchor = "s=one(s,'#include \"kernel_import_probe.h\"\\n','#include \"kernel_import_probe.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
+          if old_anchor in s:
+              s = s.replace(old_anchor, new_anchor, 1)
+          elif new_anchor not in s:
+              raise SystemExit('tail patcher backend include anchor not recognized')
+
+          old_len = 'insn=((data>>30)&1u)?4u:2u'
+          new_len = 'insn=4u'
+          if old_len in s:
+              s = s.replace(old_len, new_len, 1)
+          elif new_len not in s:
+              raise SystemExit('tail patcher .pdata FunctionLength expression not recognized')
+
+          p.write_text(s)
+          print('TAIL_FRAME_PATCHER_PREFLIGHT=PASS')
+          PY
+
       - name: Apply tail-frame boundary fix
         shell: bash
         run: |
           rm -f tail-frame-apply-error.txt
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('tools/apply-tail-frame-boundary-v55.py')
-          s=p.read_text()
-          old="s=one(s,'#include \"sparse_guest_memory.h\"\\n','#include \"sparse_guest_memory.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
-          new="s=one(s,'#include \"kernel_import_probe.h\"\\n','#include \"kernel_import_probe.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
-          if old not in s:
-              raise SystemExit('tail patcher backend include anchor hotfix missing')
-          p.write_text(s.replace(old,new,1))
-          PY
           set +e
           python3 tools/apply-tail-frame-boundary-v55.py > tail-frame-apply-error.txt 2>&1
           code=$?
@@ -58,6 +74,8 @@ jobs:
           grep -q 'SetHIRCorrectnessExecutionEntry' src/xenia_web_bootstrap/probe_backend.cpp
           grep -q 'CurrentLogicalGuestDepth' prepare-hir-tail-frame-overlay.py
           grep -q 'prepare-hir-tail-frame-overlay.py' build-xenia-ppc-bootstrap.sh
+          ! grep -q 'insn=((data>>30)&1u)?4u:2u' tools/apply-tail-frame-boundary-v55.py
+          grep -q 'insn=4u' tools/apply-tail-frame-boundary-v55.py
           git diff --check
 
       - name: Commit implementation

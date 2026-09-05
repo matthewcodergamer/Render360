@@ -237,13 +237,8 @@ headline_new = '''    headline:missingAllocation&&(frameEntrySameOwner||immediat
 d = replace_once(d, headline_old, headline_new, "V62 owner-aware headline")
 
 # Make the report explicitly carry the owner topology as structured data.
-focus_anchor = '''    historyReady,
-    missingAllocation,
-    frameEntryCall:enteringCall,'''
-focus_new = '''    historyReady,
-    missingAllocation,
-    ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),
-    frameEntryCall:enteringCall,'''
+focus_anchor = '''    historyReady,missingAllocation,frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,'''
+focus_new = '''    historyReady,missingAllocation,ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,'''
 d = replace_once(d, focus_anchor, focus_new, "V62 structured owner topology")
 
 CONSOLE.write_text(d)

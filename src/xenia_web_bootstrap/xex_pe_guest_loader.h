@@ -43,6 +43,9 @@ uint32_t r360_pe_guest_entry_address();
 uint32_t r360_pe_guest_pe_entry_address();
 uint32_t r360_pe_guest_section_count();
 uint32_t r360_pe_guest_raw_bytes();
+uint32_t r360_pe_guest_runtime_function_begin(uint32_t address);
+uint32_t r360_pe_guest_runtime_function_end(uint32_t address);
+uint32_t r360_pe_guest_runtime_function_prolog_bytes(uint32_t address);
 }
 
 #endif

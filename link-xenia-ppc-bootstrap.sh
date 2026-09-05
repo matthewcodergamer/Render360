@@ -66,6 +66,9 @@ CRITICAL_EXPORTS=(
   r360_ppc_probe_scan_hir_instructions
   r360_xex_guest_mapper_reserve_input
   r360_xex_guest_mapper_input_max_capacity
+  r360_pe_guest_runtime_function_begin
+  r360_pe_guest_runtime_function_end
+  r360_pe_guest_runtime_function_prolog_bytes
   r360_guest_thread_entry
   r360_guest_thread_context
   r360_guest_thread_flags

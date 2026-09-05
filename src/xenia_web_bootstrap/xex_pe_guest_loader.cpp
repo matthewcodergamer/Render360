@@ -249,4 +249,25 @@ uint32_t r360_pe_guest_section_count() {
 uint32_t r360_pe_guest_raw_bytes() {
   return render360::xenia_web::PreparedPeGuestRawBytes();
 }
+uint32_t r360_pe_guest_runtime_function_begin(uint32_t address) {
+  uint32_t begin = 0;
+  return render360::xenia_web::PreparedPeGuestFindRuntimeFunction(
+             address, &begin, nullptr, nullptr)
+             ? begin
+             : 0u;
+}
+uint32_t r360_pe_guest_runtime_function_end(uint32_t address) {
+  uint32_t end = 0;
+  return render360::xenia_web::PreparedPeGuestFindRuntimeFunction(
+             address, nullptr, &end, nullptr)
+             ? end
+             : 0u;
+}
+uint32_t r360_pe_guest_runtime_function_prolog_bytes(uint32_t address) {
+  uint32_t prolog = 0;
+  return render360::xenia_web::PreparedPeGuestFindRuntimeFunction(
+             address, nullptr, nullptr, &prolog)
+             ? prolog
+             : 0u;
+}
 }

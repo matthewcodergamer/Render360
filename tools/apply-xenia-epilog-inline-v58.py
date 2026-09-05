@@ -5,9 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / "src/xenia_web_bootstrap/probe_backend.cpp"
 s = PATH.read_text()
 
-def one(old: str, new: str, label: str):
+def one(old: str, new: str, label: str, applied_marker: str | None = None):
     global s
-    if new in s:
+    marker = applied_marker if applied_marker is not None else new
+    if marker in s:
         print(f"{label}: already applied")
         return
     count = s.count(old)
@@ -109,7 +110,8 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
 }
 
 bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
-''', 'epilog helper implementation')
+''', 'epilog helper implementation',
+    'bool ExecuteSharedEpilogReturn(uint32_t address) {')
 
 one('''  const bool is_epilog_return =
       target_function &&
@@ -129,7 +131,8 @@ one('''  const bool is_epilog_return =
   }
 
   uint32_t fn_begin = address, fn_end = 0, prolog = 0;
-''', 'epilog helper fast path')
+''', 'epilog helper fast path',
+    'R360_CALL_RESOLVE epilog-inline target=0x%08X')
 
 one('''  const uint32_t lr_ea = r1 - 8u;
   uint8_t lr_raw[4] = {};
@@ -151,7 +154,8 @@ one('''  const uint32_t lr_ea = r1 - 8u;
     return false;
   }
   context->lr = ReadBigEndian64(lr_raw);
-''', 'full 64-bit LR restore')
+''', 'full 64-bit LR restore',
+    'context->lr = ReadBigEndian64(lr_raw);')
 
 PATH.write_text(s)
 print('R360_V58_EPILOG_INLINE_PATCH=PASS')

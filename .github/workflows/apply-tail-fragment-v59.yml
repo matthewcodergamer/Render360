@@ -1,0 +1,70 @@
+name: Apply Tail Fragment V59
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-fragment-v59.py'
+      - '.github/workflows/apply-tail-fragment-v59.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-tail-fragment-v59
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply V59 tail-fragment fallback
+        run: python3 tools/apply-tail-fragment-v59.py
+
+      - name: Verify V59 source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          # V58 must remain intact.
+          grep -q 'ExecuteSharedEpilogReturn' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'MatchSharedEpilogReturnSignature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'epilog_by_signature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'uint8_t lr_raw\[4\]' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'context->lr = ReadBigEndian32(lr_raw)' src/xenia_web_bootstrap/probe_backend.cpp
+
+          # V59 exact interior-missing detection and target-rooted retry.
+          grep -q 'ConsumeHIRCorrectnessInteriorEntryMissing' src/xenia_web_bootstrap/hir_correctness_executor.h
+          grep -q 'g_last_interior_entry_missing' prepare-hir-tail-frame-overlay.py
+          grep -q 'R360_TAIL_INTERIOR' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'R360_TAIL_FRAGMENT_FALLBACK' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'R360_TAIL_FRAGMENT_EXECUTED' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'ProbeGuestFunction fragment(module, address)' src/xenia_web_bootstrap/probe_backend.cpp
+
+          # Diagnostics must not present faultCode=0 as a memory fault.
+          grep -q 'CPU execution stopped at an unresolved tail target' developer-console.js
+          grep -q 'faultCapturedAtExecution:capturedFaultCode!==undefined&&capturedFaultCode!==0' developer-console.js
+
+      - name: Commit V59 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V59 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/probe_backend.cpp \
+            src/xenia_web_bootstrap/hir_correctness_executor.h \
+            prepare-hir-tail-frame-overlay.py \
+            developer-console.js
+          if git diff --cached --quiet; then
+            echo 'V59 source already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: retry missing HIR tail targets from exact PPC entry'
+          git pull --rebase origin main
+          git push origin HEAD:main

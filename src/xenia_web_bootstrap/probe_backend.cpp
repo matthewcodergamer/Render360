@@ -13,6 +13,7 @@
 #include "wasm_backend_memory_probe.h"
 #include "wasm_backend_probe.h"
 #include "wasm_backend_vmx_probe.h"
+#include "xenia/cpu/function.h"
 #include "xenia/cpu/function_debug_info.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -83,6 +84,19 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   const uint32_t call_flags = GetHIRCorrectnessCurrentCallFlags();
   const bool is_tail = (call_flags & xe::cpu::hir::CALL_TAIL) != 0;
 
+  // Xenia explicitly registers the Microsoft shared __restgprlr_* entries as
+  // kEpilogReturn functions. They are valid tail-call entry points in their own
+  // right: the caller has already restored r1 before branching into the helper,
+  // and the helper consumes that live caller frame. Do not remap one of these
+  // entries back to an enclosing .pdata owner and then jump into the middle of
+  // the owner's HIR. Doing that skips HIR value definitions emitted before the
+  // SOURCE_OFFSET marker and turns a valid stack load into a fake
+  // guest-memory-dependency with faultAddress == 0.
+  auto* target_function = g_probe_backend->processor()->QueryFunction(address);
+  const bool is_epilog_return =
+      target_function &&
+      target_function->behavior() == xe::cpu::Function::Behavior::kEpilogReturn;
+
   uint32_t fn_begin = address, fn_end = 0, prolog = 0;
   bool pdata = PreparedPeGuestFindRuntimeFunction(address, &fn_begin, &fn_end,
                                                   &prolog);
@@ -94,11 +108,11 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
     prolog = 0;
   }
 
-  // Only tail branches inherit the owning .pdata function. A linked call (`bl`)
-  // is an ABI function-entry call, so preserve its exact target even if a
-  // malformed/overlapping .pdata range happens to contain it. This restores
-  // the working direct-call behavior while keeping V55's interior-tail fix.
-  const bool use_owner = is_tail && pdata;
+  // Ordinary tail fragments may inherit the owning .pdata function, but Xenia
+  // shared epilog helpers are already canonical function entries. Keep those
+  // exact, just like linked calls, while retaining the owner/interior route for
+  // real compiler-generated tail fragments such as Braid's 0x8236EB74 path.
+  const bool use_owner = is_tail && pdata && !is_epilog_return;
   if (!use_owner) {
     fn_begin = address;
     fn_end = 0;
@@ -112,9 +126,10 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   };
   std::fprintf(stderr,
                "R360_CALL_RESOLVE target=0x%08X function=0x%08X flags=0x%X "
-               "tail=%u pdata=%u owner=%u prolog=%u\n",
+               "tail=%u epilog=%u pdata=%u owner=%u prolog=%u\n",
                address, fn_begin, call_flags, is_tail ? 1u : 0u,
-               pdata ? 1u : 0u, use_owner ? 1u : 0u, prolog);
+               is_epilog_return ? 1u : 0u, pdata ? 1u : 0u,
+               use_owner ? 1u : 0u, prolog);
 
   if (!loaded()) {
     const uint32_t paged = r360_ppc_probe_page_sparse_code(fn_begin);

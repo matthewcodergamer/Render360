@@ -9,6 +9,7 @@ on:
       - 'prepare-title-runtime-memory-overlay.py'
       - 'prepare-hir-call-return-stack-overlay.py'
       - 'prepare-hir-return-metadata-v3-overlay.py'
+      - 'prepare-hir-stack-history-overlay.py'
       - 'tools/apply-xenia-entry-abi-v51.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'

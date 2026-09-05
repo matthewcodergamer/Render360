@@ -47,6 +47,22 @@ jobs:
           set -o pipefail
           python3 tools/braid-frame-history-surgery.py 2>&1 | tee braid-frame-history-surgery.log
 
+      - name: Refresh legacy Braid diagnostic contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('test-braid-r1-boundary-diagnostics.mjs')
+          s=p.read_text()
+          old='for(const marker of ["instructionKind=\'ds-form-memory\'",\'primaryOpcode===58||primaryOpcode===62\',\'stackDiagnosticSummary(summary.memory)\',\'r360_ppc_probe_stack_blocker_r1\']){'
+          new="for(const marker of [\"kind:'ds-form-memory'\",'primary===58||primary===62','blockerDecoded','r360_ppc_probe_stack_blocker_r1']){"
+          if old in s:
+            s=s.replace(old,new,1)
+          elif new not in s:
+            raise SystemExit('legacy Braid diagnostic marker contract changed')
+          p.write_text(s)
+          PY
+
       - name: Validate surgery
         shell: bash
         run: |
@@ -76,7 +92,8 @@ jobs:
             .github/workflows/xenia-browser-bootstrap-fastlane.yml \
             render360-title-controller.mjs \
             developer-console.js \
-            test-braid-frame-history.mjs
+            test-braid-frame-history.mjs \
+            test-braid-r1-boundary-diagnostics.mjs
           git diff --cached --check
           git commit -m 'diag: trace Braid stack frame history' || exit 0
           git push origin HEAD:main

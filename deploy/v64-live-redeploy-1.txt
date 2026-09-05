@@ -1,0 +1,4 @@
+Render360 V64 forced GitHub Pages redeploy marker.
+
+Purpose: force a fresh Pages build after the V64 zero-aperture/startup-state correction landed on main.
+UI release remains 64; this file changes no emulator behavior.

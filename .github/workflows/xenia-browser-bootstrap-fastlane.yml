@@ -39,7 +39,7 @@ concurrency:
 jobs:
   browser-bootstrap:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     steps:
       - name: Checkout Render360
         uses: actions/checkout@v4

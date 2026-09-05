@@ -1,0 +1,78 @@
+name: Apply V63 Tail Path Diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-path-v63.py'
+      - '.github/workflows/apply-tail-path-v63.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-tail-path-v63
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V63 updater syntax
+        run: python3 -m py_compile tools/apply-tail-path-v63.py
+
+      - name: Apply V63 tail path diagnostics
+        run: python3 tools/apply-tail-path-v63.py
+
+      - name: Verify V63 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "63"
+          grep -q 'tailCallDiagnostics=callHistory' developer-console.js
+          grep -q 'CROSS_PDATA_INTERIOR_TAIL_STACK_MISMATCH' developer-console.js
+          grep -q 'frameEntryCrossPdataInterior' developer-console.js
+          grep -q 'tailPath:memory?.tailCallDiagnostics' developer-console.js
+          grep -q 'sourceWindow:readPpcWindow(read8,event.source,10)' developer-console.js
+          grep -q 'targetOwnerPrologue:runtimeOwnerWindow(event.targetOwner)' developer-console.js
+          grep -q 'const RENDER360_RELEASE=63;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:63,' runtime/render360-runtime.js
+          grep -q 'Render360 63' index.html
+          grep -q '<span>UI Release</span><span class="value">63</span>' index.html
+          grep -q "const VERSION='63';" render360-sw.js
+
+      - name: Commit V63 website diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V63 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add developer-console.js VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V63 source/release already current.'
+          else
+            git commit -m 'diagnostic: expose Braid cross-pdata tail PPC path and release V63'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Rebuild release-63 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

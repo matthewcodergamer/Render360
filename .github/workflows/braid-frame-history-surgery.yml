@@ -82,21 +82,25 @@ jobs:
       - name: Commit verified surgery
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            tools/braid-frame-history-surgery.py \
-            build-xenia-ppc-bootstrap.sh \
-            prepare-hir-stack-history-overlay.py \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
-            render360-title-controller.mjs \
-            developer-console.js \
-            test-braid-frame-history.mjs \
-            test-braid-r1-boundary-diagnostics.mjs
-          git diff --cached --check
-          git commit -m 'diag: trace Braid stack frame history' || exit 0
-          git push origin HEAD:main
+          set -o pipefail
+          {
+            set -eux
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add \
+              tools/braid-frame-history-surgery.py \
+              build-xenia-ppc-bootstrap.sh \
+              prepare-hir-stack-history-overlay.py \
+              .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+              render360-title-controller.mjs \
+              developer-console.js \
+              test-braid-frame-history.mjs \
+              test-braid-r1-boundary-diagnostics.mjs
+            git diff --cached --check
+            git status --short
+            git commit -m 'diag: trace Braid stack frame history'
+            git push origin HEAD:main
+          } 2>&1 | tee braid-frame-history-commit.log
 
       - name: Upload surgery diagnostics
         if: always()
@@ -106,5 +110,6 @@ jobs:
           path: |
             braid-frame-history-surgery.log
             braid-frame-history-validation.log
+            braid-frame-history-commit.log
           if-no-files-found: warn
           retention-days: 2

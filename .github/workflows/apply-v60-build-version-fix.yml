@@ -65,6 +65,11 @@ jobs:
           git push origin HEAD:main
           echo 'changed=1' >> "$GITHUB_OUTPUT"
 
+      - name: Rebuild release-60 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run sync-package-core.yml --ref main
+
       - name: Start fresh V60 bootstrap build
         env:
           GH_TOKEN: ${{ github.token }}

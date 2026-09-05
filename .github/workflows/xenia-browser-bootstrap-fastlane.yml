@@ -13,6 +13,7 @@ on:
       - 'prepare-hir-tail-frame-overlay.py'
       - 'tools/apply-xenia-entry-abi-v51.py'
       - 'tools/apply-xenia-epilog-tail-v57.py'
+      - 'tools/apply-xenia-epilog-inline-v58.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
@@ -55,6 +56,22 @@ jobs:
     steps:
       - name: Checkout Render360
         uses: actions/checkout@v7
+
+      - name: Verify hardened V58 shared epilog source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'MatchSharedEpilogReturnSignature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'epilog_by_signature' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'uint8_t lr_raw\[4\]' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'context->lr = ReadBigEndian32(lr_raw)' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q '0x8181FFF8u' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q '0x7D8803A6u' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q '0x4E800020u' src/xenia_web_bootstrap/probe_backend.cpp
+          if grep -q 'uint8_t lr_raw\[8\]' src/xenia_web_bootstrap/probe_backend.cpp; then
+            echo 'V58 shared epilog LR restore regressed to 64-bit.' >&2
+            exit 1
+          fi
 
       - name: Restore pinned Xenia source cache
         id: xenia-cache

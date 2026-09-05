@@ -43,6 +43,8 @@ must(has(worker,"from './wasm-core.js'"),'runtime worker must load canonical cor
 must(has(core,'render360_xenia_core.wasm'),'canonical core loader must still load the package WASM artifact');
 for(const token of ['runtimeBlocker','fatalError','render360-blocker-report-v1','render360PpcRuntimeIdentity'])must(has(developerConsole,token),`developer console missing ${token}`);
 for(const token of ['instructionKind','direct-branch','branchTarget','fault-not-derived-from-boundary-instruction','ppcDiagnosticSummary'])must(has(developerConsole,token),`developer console missing opcode-aware diagnostic ${token}`);
+for(const token of ['Braid CPU Diagnostic','problemFocus','STACK_FRAME_TEARDOWN_MISMATCH','codeWindows','PPC around last r1 write','Ruled out right now','Next diagnostic target'])must(has(developerConsole,token),`developer console missing problem-first diagnostic ${token}`);
+must(has(developerConsole,'Full event log')&&has(developerConsole,'Copy Report still includes the complete JSON'),'problem-first console must preserve complete raw diagnostics');
 
 if(failures.length){console.error('UI_CANONICAL_CONTRACT FAIL');for(const failure of failures)console.error(` - ${failure}`);process.exit(1);}
 console.log('UI_CANONICAL_CONTRACT PASS');

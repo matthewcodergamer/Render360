@@ -26,6 +26,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Normalize V62 compact report anchor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/apply-tail-owner-provenance-v62.py')
+          s=p.read_text()
+          old="""focus_anchor = '''    historyReady,\n    missingAllocation,\n    frameEntryCall:enteringCall,'''
+          focus_new = '''    historyReady,\n    missingAllocation,\n    ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),\n    frameEntryCall:enteringCall,'''
+          """
+          new="""focus_anchor = '''    historyReady,missingAllocation,frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,'''
+          focus_new = '''    historyReady,missingAllocation,ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,'''
+          """
+          if new not in s:
+              if s.count(old) != 1:
+                  raise SystemExit(f'V62 compact anchor repair expected 1 old block, got {s.count(old)}')
+              s=s.replace(old,new,1)
+              p.write_text(s)
+          PY
+
       - name: Validate V62 updater syntax
         run: python3 -m py_compile tools/apply-tail-owner-provenance-v62.py
 
@@ -60,6 +80,7 @@ jobs:
           git config user.name 'Render360 V62 Bot'
           git config user.email 'actions@users.noreply.github.com'
           git add \
+            tools/apply-tail-owner-provenance-v62.py \
             src/xenia_web_bootstrap/xex_pe_guest_loader.h \
             src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
             developer-console.js \

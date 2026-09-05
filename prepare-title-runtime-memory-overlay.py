@@ -162,18 +162,9 @@ if modern_probe_decls in text:
 path.write_text(text)
 print('TITLE_RUNTIME_ENDIAN_SPARSE_MMIO_OVERLAY=PASS')
 
-# First keep the existing HIR call/return ABI surgery and exact r1 provenance.
-import subprocess
-import sys
-subprocess.run(
-    [sys.executable, str(root / 'prepare-hir-call-return-stack-overlay.py')],
-    check=True,
-)
-
-# Then remove stale SET_RETURN_ADDRESS helper metadata that can survive an
-# internal linked branch or an untaken conditional call. This operates on the
-# same generated translation unit after the established call/return overlay.
-subprocess.run(
-    [sys.executable, str(root / 'prepare-hir-return-metadata-v3-overlay.py')],
-    check=True,
-)
+# Overlay orchestration intentionally lives in build-xenia-ppc-bootstrap.sh.
+# Do not invoke the HIR call/return or return-metadata passes from this script:
+# applying them both here and from the build driver mutates the same generated
+# translation unit twice and breaks exact-anchor instrumentation such as the
+# initial-r1 trace. The build driver applies, in order, title memory ->
+# call/return -> return metadata -> frame history exactly once each.

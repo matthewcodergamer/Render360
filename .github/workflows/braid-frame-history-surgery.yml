@@ -50,15 +50,18 @@ jobs:
       - name: Validate surgery
         shell: bash
         run: |
-          set -euo pipefail
-          python3 -m py_compile tools/braid-frame-history-surgery.py prepare-hir-stack-history-overlay.py
-          node --check render360-title-controller.mjs
-          node --check developer-console.js
-          node --check test-braid-frame-history.mjs
-          node test-braid-frame-history.mjs
-          node test-braid-r1-boundary-diagnostics.mjs
-          node test-ui-contract.mjs
-          git diff --check
+          set -o pipefail
+          {
+            set -eux
+            python3 -m py_compile tools/braid-frame-history-surgery.py prepare-hir-stack-history-overlay.py
+            node --check render360-title-controller.mjs
+            node --check developer-console.js
+            node --check test-braid-frame-history.mjs
+            node test-braid-frame-history.mjs
+            node test-braid-r1-boundary-diagnostics.mjs
+            node test-ui-contract.mjs
+            git diff --check
+          } 2>&1 | tee braid-frame-history-validation.log
 
       - name: Commit verified surgery
         shell: bash
@@ -83,6 +86,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: braid-frame-history-surgery-log
-          path: braid-frame-history-surgery.log
+          path: |
+            braid-frame-history-surgery.log
+            braid-frame-history-validation.log
           if-no-files-found: warn
           retention-days: 2

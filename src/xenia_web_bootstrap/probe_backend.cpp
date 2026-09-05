@@ -17,6 +17,7 @@
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
 #include "xenia/cpu/hir/instr.h"
+#include "xenia/cpu/hir/opcodes.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/ppc/ppc_scanner.h"
 #include "xenia/cpu/processor.h"
@@ -79,20 +80,83 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   }
   auto* frontend = g_probe_backend->processor()->frontend();
   if (!frontend) { std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n"); return false; }
-  uint32_t fn_begin=address,fn_end=0,prolog=0;
-  bool pdata=PreparedPeGuestFindRuntimeFunction(address,&fn_begin,&fn_end,&prolog);
-  if(pdata&&(fn_end<=fn_begin||uint64_t(fn_end)-fn_begin>kProbeGuestSize)){pdata=false;fn_begin=address;fn_end=0;prolog=0;}
-  auto loaded=[&](){return IsInLoadedProbeWindow(fn_begin)&&(!pdata||(fn_end>=fn_begin+4&&IsInLoadedProbeWindow(fn_end-4)));};
-  std::fprintf(stderr,"R360_CALL_RESOLVE target=0x%08X function=0x%08X pdata=%u prolog=%u\n",address,fn_begin,pdata?1u:0u,prolog);
-  if(!loaded()){const uint32_t paged=r360_ppc_probe_page_sparse_code(fn_begin);if(!paged||!loaded()){std::fprintf(stderr,"R360_CALL_RESOLVE rejected: owning function unavailable\n");return false;}}
-  ProbeGuestFunction nested_function(module,fn_begin);
-  const uint32_t loaded_base=r360_ppc_probe_guest_base(),loaded_size=r360_ppc_probe_loaded_size();if(loaded_size<4)return false;
-  const uint32_t scan_end=pdata?fn_end-4:loaded_base+loaded_size-4;nested_function.set_end_address(scan_end);
-  xe::cpu::ppc::PPCScanner scanner(frontend);if(!scanner.Scan(&nested_function,nullptr)){std::fprintf(stderr,"R360_CALL_RESOLVE scan failed target=0x%08X\n",address);return false;}
-  if(pdata&&nested_function.end_address()<address)nested_function.set_end_address(scan_end);
-  SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);
-  const bool translated=frontend->DefineFunction(&nested_function,0);SetHIRCorrectnessExecutionEntry(0u);
-  std::fprintf(stderr,"R360_CALL_RESOLVE translated target=0x%08X function=0x%08X end=0x%08X pdata=%u result=%u\n",address,fn_begin,nested_function.end_address(),pdata?1u:0u,translated?1u:0u);
+  const uint32_t call_flags = GetHIRCorrectnessCurrentCallFlags();
+  const bool is_tail = (call_flags & xe::cpu::hir::CALL_TAIL) != 0;
+
+  uint32_t fn_begin = address, fn_end = 0, prolog = 0;
+  bool pdata = PreparedPeGuestFindRuntimeFunction(address, &fn_begin, &fn_end,
+                                                  &prolog);
+  if (pdata &&
+      (fn_end <= fn_begin || uint64_t(fn_end) - fn_begin > kProbeGuestSize)) {
+    pdata = false;
+    fn_begin = address;
+    fn_end = 0;
+    prolog = 0;
+  }
+
+  // Only tail branches inherit the owning .pdata function. A linked call (`bl`)
+  // is an ABI function-entry call, so preserve its exact target even if a
+  // malformed/overlapping .pdata range happens to contain it. This restores
+  // the working direct-call behavior while keeping V55's interior-tail fix.
+  const bool use_owner = is_tail && pdata;
+  if (!use_owner) {
+    fn_begin = address;
+    fn_end = 0;
+    prolog = 0;
+  }
+
+  auto loaded = [&]() {
+    return IsInLoadedProbeWindow(fn_begin) &&
+           (!use_owner ||
+            (fn_end >= fn_begin + 4 && IsInLoadedProbeWindow(fn_end - 4)));
+  };
+  std::fprintf(stderr,
+               "R360_CALL_RESOLVE target=0x%08X function=0x%08X flags=0x%X "
+               "tail=%u pdata=%u owner=%u prolog=%u\n",
+               address, fn_begin, call_flags, is_tail ? 1u : 0u,
+               pdata ? 1u : 0u, use_owner ? 1u : 0u, prolog);
+
+  if (!loaded()) {
+    const uint32_t paged = r360_ppc_probe_page_sparse_code(fn_begin);
+    if (!paged || !loaded()) {
+      std::fprintf(stderr,
+                   "R360_CALL_RESOLVE rejected: target/function unavailable "
+                   "target=0x%08X function=0x%08X owner=%u\n",
+                   address, fn_begin, use_owner ? 1u : 0u);
+      return false;
+    }
+  }
+
+  ProbeGuestFunction nested_function(module, fn_begin);
+  const uint32_t loaded_base = r360_ppc_probe_guest_base();
+  const uint32_t loaded_size = r360_ppc_probe_loaded_size();
+  if (loaded_size < 4) return false;
+  const uint32_t scan_end =
+      use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
+  nested_function.set_end_address(scan_end);
+
+  xe::cpu::ppc::PPCScanner scanner(frontend);
+  if (!scanner.Scan(&nested_function, nullptr)) {
+    std::fprintf(stderr,
+                 "R360_CALL_RESOLVE scan failed target=0x%08X function=0x%08X "
+                 "owner=%u\n",
+                 address, fn_begin, use_owner ? 1u : 0u);
+    return false;
+  }
+  if (use_owner && nested_function.end_address() < address) {
+    nested_function.set_end_address(scan_end);
+  }
+
+  const uint32_t interior_entry =
+      use_owner && address != fn_begin ? address : 0u;
+  SetHIRCorrectnessExecutionEntry(interior_entry);
+  const bool translated = frontend->DefineFunction(&nested_function, 0);
+  SetHIRCorrectnessExecutionEntry(0u);
+  std::fprintf(stderr,
+               "R360_CALL_RESOLVE translated target=0x%08X function=0x%08X "
+               "end=0x%08X flags=0x%X owner=%u interior=0x%08X result=%u\n",
+               address, fn_begin, nested_function.end_address(), call_flags,
+               use_owner ? 1u : 0u, interior_entry, translated ? 1u : 0u);
   return translated;
 }
 bool ResolveNestedGuestCall(xe::cpu::Function* function) { return function && TranslateNestedGuestAddress(function->address(), function->module()); }

@@ -10,10 +10,11 @@ thread_local std::array<uint32_t,kR360MaxGuestCallDepth> g_logical_guest_depth{}
 thread_local uint32_t g_pending_logical_depth=0;
 thread_local bool g_pending_logical_depth_valid=false;
 thread_local uint32_t g_requested_execution_entry=0;
+thread_local uint32_t g_current_call_flags=0;
 uint32_t CurrentLogicalGuestDepth();
 ''','state')
 one('bool CurrentExpectedGuestReturn(uint64_t* out) {\n','''uint32_t CurrentLogicalGuestDepth(){if(!g_execution_depth||g_execution_depth>kR360MaxGuestCallDepth)return 0;const uint32_t d=g_logical_guest_depth[size_t(g_execution_depth-1)];return d?d:g_execution_depth;}
-void PrepareNestedLogicalDepth(uint32_t flags){const uint32_t d=CurrentLogicalGuestDepth();g_pending_logical_depth=d+((flags&xe::cpu::hir::CALL_TAIL)?0u:1u);if(!g_pending_logical_depth)g_pending_logical_depth=1;g_pending_logical_depth_valid=true;}
+void PrepareNestedLogicalDepth(uint32_t flags){g_current_call_flags=flags;const uint32_t d=CurrentLogicalGuestDepth();g_pending_logical_depth=d+((flags&xe::cpu::hir::CALL_TAIL)?0u:1u);if(!g_pending_logical_depth)g_pending_logical_depth=1;g_pending_logical_depth_valid=true;}
 
 bool CurrentExpectedGuestReturn(uint64_t* out) {
 ''','helpers')
@@ -56,6 +57,7 @@ bool IsHIRCorrectnessExecutionActive()''','''void SetHIRCorrectnessAddressResolv
   g_address_resolver = resolver;
 }
 void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;}
+uint32_t GetHIRCorrectnessCurrentCallFlags(){return g_current_call_flags;}
 
 bool IsHIRCorrectnessExecutionActive()''','entry setter')
 one('''  ++g_execution_depth;

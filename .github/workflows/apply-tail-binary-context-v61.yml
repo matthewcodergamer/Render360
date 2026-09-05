@@ -1,0 +1,98 @@
+name: Apply V61 Tail Binary Context Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-binary-context-v61.py'
+      - '.github/workflows/apply-tail-binary-context-v61.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-tail-binary-context-v61
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V61 updater syntax
+        run: python3 -m py_compile tools/apply-tail-binary-context-v61.py
+
+      - name: Apply V61 source and release
+        run: python3 tools/apply-tail-binary-context-v61.py
+
+      - name: Verify V61 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "61"
+          grep -q 'R360_V61_BINARY_CONTEXT_RECOVERY' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'resolve_binary_operand' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'ResolveContextProvenance(operand, \*g_active_context' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'R360_CONTEXT_VALUE_RECOVERY stage=binary' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'const lastCall=calls.length?calls\[calls.length-1\]:undefined;' developer-console.js
+          grep -q 'tailTarget:tailCall.target' developer-console.js
+          grep -q 'const RENDER360_RELEASE=61;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:61,' runtime/render360-runtime.js
+          grep -q 'Render360 61' index.html
+          grep -q '<span>UI Release</span><span class="value">61</span>' index.html
+          grep -q "const VERSION='61';" render360-sw.js
+
+      - name: Commit V61 source and website release
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V61 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            developer-console.js \
+            VERSION \
+            runtime/render360-runtime.js \
+            index.html \
+            render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V61 source/release already current.'
+            exit 0
+          fi
+          git commit -m 'fix: recover exact-tail binary context operands and release V61'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Rebuild release-61 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Build, verify and publish V61 bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Fastlane run: $run_id"
+          gh run watch "$run_id" --exit-status

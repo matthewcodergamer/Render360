@@ -44,6 +44,7 @@ HIRCorrectnessCallResolver g_call_resolver = nullptr;
 HIRCorrectnessAddressResolver g_address_resolver = nullptr;
 thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;
 thread_local uint32_t g_execution_depth = 0;
+thread_local bool g_context_provenance_recovery_enabled = false;
 
 // Resolver callbacks are boolean, but real title calls may recursively execute
 // another HIR builder. Preserve the exact nested blocker across that boundary.
@@ -173,6 +174,54 @@ bool ResolveUint64(const Value* value, const RuntimeValues& values,
   RuntimeValue resolved;
   return ResolveRuntimeValue(value, values, &resolved) &&
          GetUnsigned(resolved, out);
+}
+
+// Recover a value only when HIR itself proves that the value originated from
+// PPCContext. This is intentionally narrow: V59 exact tail fragments can begin
+// at a valid PPC instruction whose finalized HIR retains a STORE_CONTEXT using
+// a context-derived SSA value whose defining LOAD_CONTEXT is no longer visited
+// by the compatibility walk. Reading that proven context source from the live
+// PPCContext is equivalent to entering the fragment with the guest registers it
+// actually had at the tail boundary. Do not synthesize arbitrary missing SSA.
+bool ResolveContextProvenance(const Value* value,
+                              const xe::cpu::ppc::PPCContext& context,
+                              RuntimeValue* out, uint64_t* context_offset,
+                              uint32_t depth = 0) {
+  if (!value || !out || depth > 8 || value->IsConstant()) return false;
+  auto* def = value->def;
+  if (!def || !def->opcode) return false;
+
+  if (def->opcode->num == xe::cpu::hir::OPCODE_LOAD_CONTEXT) {
+    const size_t size = xe::cpu::hir::GetTypeSize(value->type);
+    const uint64_t offset = def->src1.offset;
+    if (offset > sizeof(context) || size > sizeof(context) - size_t(offset)) {
+      return false;
+    }
+    RuntimeValue recovered;
+    recovered.type = value->type;
+    recovered.value = {};
+    std::memcpy(&recovered.value,
+                reinterpret_cast<const uint8_t*>(&context) + offset, size);
+    *out = recovered;
+    if (context_offset) *context_offset = offset;
+    return true;
+  }
+
+  // Context promotion can rewrite a repeated LOAD_CONTEXT as ASSIGN. Follow
+  // only that identity chain; conversions/arithmetic are not safe to invent.
+  if (def->opcode->num == xe::cpu::hir::OPCODE_ASSIGN && def->src1.value) {
+    RuntimeValue recovered;
+    uint64_t recovered_offset = 0;
+    if (!ResolveContextProvenance(def->src1.value, context, &recovered,
+                                  &recovered_offset, depth + 1) ||
+        recovered.type != value->type) {
+      return false;
+    }
+    *out = recovered;
+    if (context_offset) *context_offset = recovered_offset;
+    return true;
+  }
+  return false;
 }
 
 bool ResolveCondition(const Value* value, const RuntimeValues& values,
@@ -942,6 +991,31 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
           supported = StoreResolvedValue(
               source, values, reinterpret_cast<uint8_t*>(&context) + offset,
               size);
+          if (!supported && g_context_provenance_recovery_enabled) {
+            RuntimeValue recovered;
+            uint64_t recovered_offset = 0;
+            if (ResolveContextProvenance(source, context, &recovered,
+                                         &recovered_offset)) {
+              values[source] = recovered;
+              supported = StoreResolvedValue(
+                  source, values,
+                  reinterpret_cast<uint8_t*>(&context) + offset, size);
+              if (supported) {
+                const uint32_t def_opcode =
+                    source->def && source->def->opcode
+                        ? source->def->opcode->num
+                        : 0u;
+                std::fprintf(
+                    stderr,
+                    "R360_CONTEXT_VALUE_RECOVERY ppc=0x%08X store=0x%llX "
+                    "load=0x%llX def=%u type=%u\n",
+                    current_source_address,
+                    static_cast<unsigned long long>(offset),
+                    static_cast<unsigned long long>(recovered_offset),
+                    def_opcode, static_cast<unsigned>(source->type));
+              }
+            }
+          }
           break;
         }
         case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
@@ -1193,6 +1267,10 @@ void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver) {
 
 void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
   g_address_resolver = resolver;
+}
+
+void SetHIRCorrectnessContextProvenanceRecovery(bool enabled) {
+  g_context_provenance_recovery_enabled = enabled;
 }
 
 bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }

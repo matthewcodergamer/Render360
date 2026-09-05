@@ -221,6 +221,7 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const writes=trace.writeHistory||[],calls=trace.callHistory||[];
   const tailCall=[...calls].reverse().find(event=>event.target===cpu?.executionBlockerAddress&&((number(event.flags)||0)&2)!==0);
   const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
+  const unsupportedTail=cpu?.runtimeBoundary==='unsupported-hir'&&number(cpu?.executionBlockerKind)===1&&!!tailCall;
   if(unresolvedTail){
     const stackHealthy=present(trace.lastNewR1)&&present(memory?.stackTop)&&trace.lastNewR1===memory.stackTop;
     const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'
@@ -255,6 +256,44 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
         `Retry ${tailCall.target} as an exact target-rooted PPC fragment bounded by its owning .pdata end.`,
         'Do not resume at the nearest earlier or later SOURCE_OFFSET; preserve exact PPC side effects.',
         'Do not modify the balanced stack restore and do not map address 0 writable.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
+  if(unsupportedTail){
+    const stackHealthy=present(trace.lastNewR1)&&present(memory?.stackTop)&&trace.lastNewR1===memory.stackTop;
+    const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'
+      ?`#${event.sequence} CALL d${event.depth} ${event.source} → ${event.target} r1=${event.r1} flags=0x${(number(event.flags)||0).toString(16).toUpperCase()}`
+      :`#${event.sequence} r1 d${event.depth} ${event.address} ${event.oldR1} → ${event.newR1} (${hexDelta((number(event.newR1)||0)-(number(event.oldR1)||0))})`);
+    return compact({
+      classification:'CPU_RUNTIME_BLOCKER',
+      headline:'CPU execution stopped on unsupported HIR in a tail fragment',
+      tailTarget:cpu.executionBlockerAddress,
+      tailSource:tailCall.source,
+      reason:`HIR opcode ${cpu.executionBlockerOpcode??'—'} failed in the compatibility executor`,
+      stackState:stackHealthy?`Healthy · restored to ${memory.stackTop}`:`r1=${trace.lastNewR1||trace.lastCallR1||'—'}`,
+      primarySuspect:cpu.executionBlockerAddress,
+      initialAbiCorrect,
+      callEdge:`${tailCall.source} -> ${tailCall.target}`,
+      historyReady:writes.length>0&&calls.length>0,
+      timeline,
+      evidence:[
+        `Tail fragment reached ${tailCall.target} from ${tailCall.source}.`,
+        `Compatibility HIR stopped on opcode ${cpu.executionBlockerOpcode??'—'} at ${cpu.executionBlockerAddress}; this is not a sparse-memory fault.`,
+        `No sparse-memory fault was captured (faultCode ${memory?.faultCode??'—'}).`,
+        stackHealthy?`Stack is balanced at the boundary: ${trace.lastNewR1} == stackTop ${memory.stackTop}.`:undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
+        stackHealthy?'The completed r1 teardown as the current cause':undefined,
+        'A guest-memory fault at the displayed PPC instruction',
+        number(kernel?.calls)===0?'XAM/xboxkrnl HLE as the current cause (kernel calls = 0)':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
+      ].filter(Boolean),
+      next:[
+        `Resolve HIR opcode ${cpu.executionBlockerOpcode??'—'} using proven live-context provenance at ${cpu.executionBlockerAddress}.`,
+        'Do not alter the balanced stack restore or map address 0 writable.',
       ],
       runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
       cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),

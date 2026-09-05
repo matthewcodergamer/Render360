@@ -349,7 +349,9 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   // address is now the fragment's real beginning, so requesting an interior HIR
   // entry would recreate the bug this fallback is intended to avoid.
   SetHIRCorrectnessExecutionEntry(0u);
+  SetHIRCorrectnessContextProvenanceRecovery(true);
   const bool fragment_translated = frontend->DefineFunction(&fragment, 0);
+  SetHIRCorrectnessContextProvenanceRecovery(false);
   SetHIRCorrectnessExecutionEntry(0u);
   std::fprintf(stderr,
                "R360_TAIL_FRAGMENT_FALLBACK target=0x%08X owner=0x%08X "

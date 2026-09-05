@@ -53,6 +53,7 @@ void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver);
 void SetHIRCorrectnessExecutionEntry(uint32_t guest_address);
 uint32_t GetHIRCorrectnessCurrentCallFlags();
 uint32_t ConsumeHIRCorrectnessInteriorEntryMissing();
+void SetHIRCorrectnessContextProvenanceRecovery(bool enabled);
 bool IsHIRCorrectnessExecutionActive();
 
 // The kernel/XAM import bridge uses this only while finalized HIR is actively

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = 60
@@ -30,7 +31,7 @@ if compat_marker not in overlay:
             'V60 build fix: legacy STORE_CONTEXT overlay section not found')
     section_end += len(end_marker)
 
-    replacement = r'''# R360_V60_STORE_CONTEXT_STACK_COMPAT
+    replacement = r"""# R360_V60_STORE_CONTEXT_STACK_COMPAT
 # Patch the STORE_CONTEXT case structurally rather than matching its complete
 # body. V60 may recover a missing HIR source from live PPC context before the
 # final break; stack tracing belongs after that recovery so it observes the
@@ -60,7 +61,7 @@ if 'R360_STACK_WRITE ppc=' not in store_case:
         raise SystemExit('hir call/return stack overlay: STORE_CONTEXT final break changed')
     store_case = store_case[:break_at] + trace + store_case[break_at:]
     text = text[:store_case_start] + store_case + text[store_case_end:]
-'''
+"""
     overlay = overlay[:section_start] + replacement + overlay[section_end:]
     overlay_path.write_text(overlay)
     print('V60 structural STORE_CONTEXT stack overlay: applied')
@@ -105,7 +106,6 @@ index_path.write_text(index)
 
 sw_path = ROOT / 'render360-sw.js'
 sw = sw_path.read_text()
-import re
 sw, count = re.subn(r"const VERSION='\d+';",
                     f"const VERSION='{RELEASE}';", sw, count=1)
 require(count == 1, 'V60 release fix: service-worker cache version anchor missing')

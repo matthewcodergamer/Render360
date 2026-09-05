@@ -22,7 +22,9 @@ const required = [
   'r360_xex_guest_mapper_entry_address','r360_xex_guest_mapper_section_count',
   'r360_xex_guest_mapper_mapped_bytes','r360_xex_guest_mapper_input_buffer',
   'r360_xex_guest_mapper_input_capacity','r360_xex_guest_mapper_reserve_input',
-  'r360_xex_guest_mapper_input_max_capacity','r360_sparse_guest_memory_read_u8',
+  'r360_xex_guest_mapper_input_max_capacity','r360_pe_guest_load_at_entry',
+  'r360_pe_guest_status','r360_pe_guest_entry_address','r360_pe_guest_pe_entry_address',
+  'r360_sparse_guest_memory_read_u8',
   'r360_sparse_guest_memory_write_u8','r360_sparse_guest_memory_last_fault_code'
 ];
 for (const n of required) if (typeof pick(n) !== 'function') throw new Error(`Missing XEX mapper export ${n}`);
@@ -54,6 +56,31 @@ if(stageView[0]!==0x58||stageView[braidPreparedBytes-1]!==0x45)throw new Error('
 pick('r360_xex_guest_mapper_reset')();
 if((pick('r360_xex_guest_mapper_input_capacity')()>>>0)!==capacity)throw new Error('mapper reset unexpectedly shrank prepared PE staging');
 console.log(`XEX_PE_STAGING_GROWTH=PASS initial=${initialCapacity} grown=${capacity} memory=${initialMemoryBytes}->${instance.exports.memory.buffer.byteLength}`);
+
+// Xenia UserModule launches XEX_HEADER_ENTRY_POINT, not PE AddressOfEntryPoint.
+// Build a minimal valid Xbox PE whose COFF entry is 0x82001000, then select
+// 0x82001020 as the XEX entry before mapper finalization.
+const makeXboxPe=()=>{
+  const b=Buffer.alloc(0x400);
+  const w16=(o,v)=>b.writeUInt16LE(v>>>0,o);
+  const w32=(o,v)=>b.writeUInt32LE(v>>>0,o);
+  w16(0,0x5A4D); w32(0x3C,0x80); w32(0x80,0x00004550);
+  const file=0x84; w16(file+0,0x01F2); w16(file+2,1); w16(file+16,224); w16(file+18,0x0100);
+  const opt=0x98; w16(opt+0,0x010B); w32(opt+16,0x1000); w32(opt+28,0x82000000);
+  w32(opt+32,0x1000); w32(opt+36,0x200); w32(opt+56,0x2000); w32(opt+60,0x200); w16(opt+68,14);
+  const sh=opt+224; b.write('.text',sh,'ascii'); w32(sh+8,0x1000); w32(sh+12,0x1000);
+  w32(sh+16,0x200); w32(sh+20,0x200); w32(sh+36,0x60000020);
+  b.writeUInt32BE(0x4E800020,0x200);
+  return b;
+};
+const entryPe=makeXboxPe();
+input=pick('r360_xex_guest_mapper_input_buffer')()>>>0;
+new Uint8Array(instance.exports.memory.buffer,input,entryPe.length).set(entryPe);
+ok(pick('r360_pe_guest_load_at_entry')(input,entryPe.length,0x82001020),'PE load with XEX entry override');
+eq(pick('r360_pe_guest_pe_entry_address')(),0x82001000,'PE/COFF entry telemetry');
+eq(pick('r360_pe_guest_entry_address')(),0x82001020,'XEX entry selection');
+eq(pick('r360_pe_guest_status')(),1,'entry-aware PE load status');
+console.log('XEX_OPTIONAL_ENTRY_OVERRIDES_PE_ENTRY=PASS');
 
 // Realistic Xbox 360 user image addresses: separate RX, R, and RW regions.
 pick('r360_xex_guest_mapper_reset')();

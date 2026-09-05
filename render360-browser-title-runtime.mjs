@@ -18,7 +18,7 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_wasm_backend_call_function_generation','r360_wasm_backend_call_module_ptr','r360_wasm_backend_call_module_size',
   'r360_wasm_backend_call_lowered_instructions','r360_wasm_backend_call_context_ptr',
   'r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_xex_guest_mapper_reserve_input','r360_xex_guest_mapper_input_max_capacity',
-  'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
+  'r360_pe_guest_load','r360_pe_guest_load_at_entry','r360_pe_guest_entry_address','r360_pe_guest_pe_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_kernel_runtime_reset',
   'r360_generated_guest_load_scalar','r360_generated_guest_load_status',
   'r360_sparse_guest_memory_last_fault_address','r360_sparse_guest_memory_last_fault_code',

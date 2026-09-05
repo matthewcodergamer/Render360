@@ -20,8 +20,11 @@ enum PeGuestLoadStatus : uint32_t {
 
 void ResetPreparedPeGuestLoad();
 bool LoadPreparedPeImageToGuest(const uint8_t* image, uint32_t length);
+bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
+                                       uint32_t entry_address);
 uint32_t PreparedPeGuestLoadStatus();
 uint32_t PreparedPeGuestEntryAddress();
+uint32_t PreparedPeGuestPeEntryAddress();
 uint32_t PreparedPeGuestSectionCount();
 uint32_t PreparedPeGuestRawBytes();
 
@@ -30,8 +33,11 @@ uint32_t PreparedPeGuestRawBytes();
 extern "C" {
 void r360_pe_guest_reset();
 uint32_t r360_pe_guest_load(uint32_t source_ptr, uint32_t length);
+uint32_t r360_pe_guest_load_at_entry(uint32_t source_ptr, uint32_t length,
+                                      uint32_t entry_address);
 uint32_t r360_pe_guest_status();
 uint32_t r360_pe_guest_entry_address();
+uint32_t r360_pe_guest_pe_entry_address();
 uint32_t r360_pe_guest_section_count();
 uint32_t r360_pe_guest_raw_bytes();
 }

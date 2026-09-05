@@ -7,6 +7,19 @@ const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
 const maybe=(bootstrap,n)=>typeof pick(bootstrap,n)==='function'?pick(bootstrap,n):null;
 const moduleId=name=>name.toLowerCase()==='xboxkrnl.exe'?1:name.toLowerCase()==='xam.xex'?2:0;
+const XEX_HEADER_ENTRY_POINT=0x00010100;
+
+function readXexEntryPoint(xex,headerSize){
+  const count=be32(xex,0x14);
+  if(headerSize<0x18||count>((headerSize-0x18)>>>3))throw new Error('XEX optional-header table out of bounds');
+  for(let i=0,p=0x18;i<count;i++,p+=8){
+    if(be32(xex,p)!==XEX_HEADER_ENTRY_POINT)continue;
+    const entry=be32(xex,p+4);
+    if(!entry)throw new Error('XEX entry point is zero');
+    return entry>>>0;
+  }
+  throw new Error('XEX entry point optional header missing');
+}
 
 function hasNativeTitleGpuRuntime(bootstrap){
   return ['r360_title_gpu_ring_base','r360_title_gpu_ring_size_log2','r360_title_gpu_ring_bytes','r360_title_gpu_ring_word_capacity','r360_title_gpu_write_pointer','r360_title_gpu_status'].every(n=>!!maybe(bootstrap,n));
@@ -123,7 +136,7 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:true,lowMemoryCompatBytes:lowMemoryPages*pageSize};
 }
 
-function stagePreparedPeImage(bootstrap,prepared){
+function stagePreparedPeImage(bootstrap,prepared,xexEntry){
   const inputBuffer=pick(bootstrap,'r360_xex_guest_mapper_input_buffer');
   const inputCapacity=pick(bootstrap,'r360_xex_guest_mapper_input_capacity');
   let input=inputBuffer()>>>0;
@@ -153,7 +166,7 @@ function stagePreparedPeImage(bootstrap,prepared){
 
   if(!input||prepared.length>cap)throw new Error(`prepared image exceeds current PE staging capacity ${prepared.length}/${cap}`);
   new Uint8Array(bootstrap.exports.memory.buffer,input,prepared.length).set(prepared);
-  if((pick(bootstrap,'r360_pe_guest_load')(input,prepared.length)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
+  if((pick(bootstrap,'r360_pe_guest_load_at_entry')(input,prepared.length,xexEntry>>>0)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
   return {input,capacity:cap,stagingGrew};
 }
 
@@ -162,13 +175,17 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
   const headerSize=be32(xex,8);
   if(headerSize<0x18||headerSize>xex.length)throw new Error('default.xex header size out of bounds');
+  const xexEntry=readXexEntryPoint(xex,headerSize);
   const importedLibraries=decodeXexImportLibraries(xex);
   const header=xex.subarray(0,headerSize),body=xex.subarray(headerSize);
   const prepared=await prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey,useDevkitKey});
 
-  for(const n of ['r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_pe_guest_load','r360_pe_guest_status','r360_pe_guest_entry_address','r360_title_handoff_reset','r360_title_handoff_translate_entry','r360_title_handoff_status','r360_title_handoff_entry_address','r360_title_handoff_bytes','r360_title_handoff_hir_instructions'])if(typeof pick(bootstrap,n)!=='function')throw new Error(`missing title-controller export ${n}`);
-  const peStage=stagePreparedPeImage(bootstrap,prepared);
+  for(const n of ['r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_pe_guest_load','r360_pe_guest_load_at_entry','r360_pe_guest_status','r360_pe_guest_entry_address','r360_pe_guest_pe_entry_address','r360_title_handoff_reset','r360_title_handoff_translate_entry','r360_title_handoff_status','r360_title_handoff_entry_address','r360_title_handoff_bytes','r360_title_handoff_hir_instructions'])if(typeof pick(bootstrap,n)!=='function')throw new Error(`missing title-controller export ${n}`);
+  const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
+  const peEntry=pick(bootstrap,'r360_pe_guest_pe_entry_address')()>>>0;
+  if(entry!==xexEntry)throw new Error(`XEX entry selection mismatch 0x${entry.toString(16)}/0x${xexEntry.toString(16)}`);
+  if(peEntry!==entry)console.info(`[Render360] Xenia entry parity: XEX optional entry 0x${entry.toString(16).toUpperCase()} overrides PE entry 0x${peEntry.toString(16).toUpperCase()}`);
 
   // Modern bootstraps route decoded real-title imports through the live PPC
   // context directly into the native WASM kernel/Xenos service layer. Keep the
@@ -287,5 +304,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

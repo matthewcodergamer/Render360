@@ -18,6 +18,7 @@ constexpr uint32_t kGuestPageMask = kGuestPageSize - 1u;
 
 uint32_t g_status = kPeGuestIdle;
 uint32_t g_entry = 0;
+uint32_t g_pe_entry = 0;
 uint32_t g_sections = 0;
 uint32_t g_raw_bytes = 0;
 
@@ -91,12 +92,14 @@ bool MapPreparedPePages(const std::map<uint32_t, uint32_t>& pages) {
 void ResetPreparedPeGuestLoad() {
   g_status = kPeGuestIdle;
   g_entry = 0;
+  g_pe_entry = 0;
   g_sections = 0;
   g_raw_bytes = 0;
   ResetXexGuestMapper();
 }
 
-bool LoadPreparedPeImageToGuest(const uint8_t* image, uint32_t length) {
+bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
+                                       uint32_t entry_override) {
   ResetPreparedPeGuestLoad();
   if (!image || !length) return Fail(kPeGuestInvalidArgument);
 
@@ -165,10 +168,12 @@ bool LoadPreparedPeImageToGuest(const uint8_t* image, uint32_t length) {
     ++g_sections;
   }
 
-  uint32_t entry = 0;
-  if (!Add32(metadata.image_base, metadata.entry_rva, &entry)) {
+  uint32_t pe_entry = 0;
+  if (!Add32(metadata.image_base, metadata.entry_rva, &pe_entry)) {
     return Fail(kPeGuestAddressOverflow);
   }
+  g_pe_entry = pe_entry;
+  const uint32_t entry = entry_override ? entry_override : pe_entry;
   if (!SetXexGuestEntry(entry)) return Fail(kPeGuestEntryFailed);
   if (!FinalizeXexGuestMapping()) return Fail(kPeGuestFinalizeFailed);
 
@@ -177,8 +182,13 @@ bool LoadPreparedPeImageToGuest(const uint8_t* image, uint32_t length) {
   return true;
 }
 
+bool LoadPreparedPeImageToGuest(const uint8_t* image, uint32_t length) {
+  return LoadPreparedPeImageToGuestAtEntry(image, length, 0);
+}
+
 uint32_t PreparedPeGuestLoadStatus() { return g_status; }
 uint32_t PreparedPeGuestEntryAddress() { return g_entry; }
+uint32_t PreparedPeGuestPeEntryAddress() { return g_pe_entry; }
 uint32_t PreparedPeGuestSectionCount() { return g_sections; }
 uint32_t PreparedPeGuestRawBytes() { return g_raw_bytes; }
 
@@ -192,11 +202,23 @@ uint32_t r360_pe_guest_load(uint32_t source_ptr, uint32_t length) {
   return render360::xenia_web::LoadPreparedPeImageToGuest(source, length) ? 1u
                                                                          : 0u;
 }
+uint32_t r360_pe_guest_load_at_entry(uint32_t source_ptr, uint32_t length,
+                                      uint32_t entry_address) {
+  const auto* source =
+      reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(source_ptr));
+  return render360::xenia_web::LoadPreparedPeImageToGuestAtEntry(
+             source, length, entry_address)
+             ? 1u
+             : 0u;
+}
 uint32_t r360_pe_guest_status() {
   return render360::xenia_web::PreparedPeGuestLoadStatus();
 }
 uint32_t r360_pe_guest_entry_address() {
   return render360::xenia_web::PreparedPeGuestEntryAddress();
+}
+uint32_t r360_pe_guest_pe_entry_address() {
+  return render360::xenia_web::PreparedPeGuestPeEntryAddress();
 }
 uint32_t r360_pe_guest_section_count() {
   return render360::xenia_web::PreparedPeGuestSectionCount();

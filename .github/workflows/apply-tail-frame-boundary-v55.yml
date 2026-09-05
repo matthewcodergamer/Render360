@@ -26,13 +26,13 @@ jobs:
         shell: bash
         run: |
           set +e
-          python3 tools/apply-tail-frame-boundary-v55.py > tail-frame-apply.log 2>&1
+          python3 tools/apply-tail-frame-boundary-v55.py > tail-frame-apply-error.txt 2>&1
           code=$?
-          cat tail-frame-apply.log
+          cat tail-frame-apply-error.txt
           if [ "$code" -ne 0 ]; then
             git config user.name 'Render360 Tail Frame Fix Bot'
             git config user.email 'actions@users.noreply.github.com'
-            git add tail-frame-apply.log
+            git add tail-frame-apply-error.txt
             git commit -m 'ci: capture tail-frame patch failure' || true
             git push origin HEAD:main || true
             exit "$code"
@@ -54,7 +54,7 @@ jobs:
         run: |
           git config user.name 'Render360 Tail Frame Fix Bot'
           git config user.email 'actions@users.noreply.github.com'
-          rm -f tail-frame-apply.log
+          rm -f tail-frame-apply-error.txt
           git add -A
           if git diff --cached --quiet; then
             echo 'Tail-frame boundary fix already applied.'

@@ -44,13 +44,17 @@ jobs:
           elif new_len not in s:
               raise SystemExit('tail patcher .pdata FunctionLength expression not recognized')
 
-          old_fastlane = """s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')
-s=one(s,\"      - 'prepare-hir-stack-history-overlay.py'\\n\",\"      - 'prepare-hir-stack-history-overlay.py'\\n      - 'prepare-hir-tail-frame-overlay.py'\\n\",'fastlane path')
-w('.github/workflows/xenia-browser-bootstrap-fastlane.yml',s)
-"""
-          new_fastlane = """s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')
-if \"      - 'prepare-hir-tail-frame-overlay.py'\\n\" not in s: raise SystemExit('fastlane tail-frame path missing')
-"""
+          old_fastlane = (
+              "s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')\n"
+              "s=one(s,\"      - 'prepare-hir-stack-history-overlay.py'\\n\","
+              "\"      - 'prepare-hir-stack-history-overlay.py'\\n      - 'prepare-hir-tail-frame-overlay.py'\\n\",'fastlane path')\n"
+              "w('.github/workflows/xenia-browser-bootstrap-fastlane.yml',s)\n"
+          )
+          new_fastlane = (
+              "s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')\n"
+              "if \"      - 'prepare-hir-tail-frame-overlay.py'\\n\" not in s: "
+              "raise SystemExit('fastlane tail-frame path missing')\n"
+          )
           if old_fastlane in s:
               s = s.replace(old_fastlane, new_fastlane, 1)
           elif new_fastlane not in s:

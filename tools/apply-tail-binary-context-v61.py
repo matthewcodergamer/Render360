@@ -68,8 +68,23 @@ new_binary = """  RuntimeValue a, b;
     return false;
   }
 """
-s = replace_once(s, old_binary, new_binary,
-                 "V61 binary context provenance recovery")
+if "R360_V61_BINARY_CONTEXT_RECOVERY" not in s:
+    func_start = s.find("bool StoreBinaryValue(")
+    if func_start < 0:
+        raise SystemExit("V61 binary recovery: StoreBinaryValue not found")
+    func_end = s.find("\nbool ", func_start + len("bool StoreBinaryValue("))
+    if func_end < 0:
+        raise SystemExit("V61 binary recovery: end of StoreBinaryValue not found")
+    func = s[func_start:func_end]
+    if func.count(old_binary) != 1:
+        raise SystemExit(
+            f"V61 binary recovery: StoreBinaryValue anchor count {func.count(old_binary)}"
+        )
+    func = func.replace(old_binary, new_binary, 1)
+    s = s[:func_start] + func + s[func_end:]
+    print("V61 binary context provenance recovery: applied")
+else:
+    print("V61 binary context provenance recovery: already applied")
 EXECUTOR.write_text(s)
 
 

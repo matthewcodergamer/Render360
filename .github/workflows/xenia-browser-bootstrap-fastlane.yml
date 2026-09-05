@@ -22,6 +22,7 @@ on:
       - 'test-hir-load-offset-addressing.mjs'
       - 'test-xenia-entry-lr-abi.mjs'
       - 'test-xex-guest-mapper.mjs'
+      - 'test-braid-frame-history.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_bootstrap/**'
@@ -45,6 +46,9 @@ jobs:
 
       - name: Fetch upstream Xenia
         run: bash ./fetch-xenia.sh
+
+      - name: Verify Braid frame-history instrumentation contract
+        run: node ./test-braid-frame-history.mjs
 
       - name: Build and link browser bootstrap
         shell: bash

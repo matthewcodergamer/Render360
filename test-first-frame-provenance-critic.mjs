@@ -6,16 +6,32 @@ const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
 const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
 const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const f=n=>e[n]??e[`_${n}`];
-const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_read_guest_u32_be','r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_frame_buffer','r360_xenos_frame_size','r360_xenos_frame_width','r360_xenos_frame_height','r360_xenos_frame_generation','r360_xenos_frame_hash','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frontbuffer_ptr','r360_xenos_frontbuffer_width','r360_xenos_frontbuffer_height'];for(const n of required)if(typeof f(n)!=='function')throw new Error(`missing provenance export ${n}`);
+const required=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_load','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_generated_guest_load_scalar','r360_generated_guest_load_status','r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_frame_buffer','r360_xenos_frame_size','r360_xenos_frame_width','r360_xenos_frame_height','r360_xenos_frame_generation','r360_xenos_frame_hash','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frontbuffer_ptr','r360_xenos_frontbuffer_width','r360_xenos_frontbuffer_height'];for(const n of required)if(typeof f(n)!=='function')throw new Error(`missing provenance export ${n}`);
 const be=(...w)=>Uint8Array.from(w.flatMap(x=>[(x>>>24)&255,(x>>>16)&255,(x>>>8)&255,x&255]));
 const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0,stw=(rs,ra,d)=>dform(36,rs,ra,d),blr=0x4E800020;
 const good=[0x00012000,64,0,0x00002104,0xF,0xC0003600,4,((3<<30)|(3<<16)|(0x64<<8))>>>0,0x50415753,0x00123000,1280,720].map(x=>x>>>0);
 const program=be(...Array.from({length:good.length},(_,i)=>stw(5+i,4,i*4)),blr);
+const guestPageBase=0x80000000;
 const commandAddress=0x80000400;
+function prepareSparseGuestBuffer(){
+  f('r360_sparse_guest_memory_reset')();
+  const backing=f('r360_sparse_guest_memory_alloc')(1)>>>0;
+  if(!backing)throw new Error('critic sparse backing allocation failed');
+  if((f('r360_sparse_guest_memory_map')(guestPageBase,1,backing,0,3)>>>0)!==1)throw new Error('critic sparse guest page map failed');
+}
+function readSparseU32(address){
+  const value=Number(f('r360_generated_guest_load_scalar')(address>>>0,4,1))>>>0;
+  if((f('r360_generated_guest_load_status')()>>>0)!==1)throw new Error(`critic sparse read failed @ 0x${(address>>>0).toString(16)}`);
+  return value;
+}
 function produce(words){
-  f('r360_ppc_probe_reset')();const p=f('r360_ppc_probe_input_buffer')()>>>0;new Uint8Array(e.memory.buffer,p,program.length).set(program);f('r360_ppc_probe_set_initial_gpr')(4,BigInt(commandAddress));
+  f('r360_ppc_probe_reset')();
+  // The probe input buffer is a decoder staging window. The command stream is
+  // guest data and must live in the authoritative sparse Xbox address space.
+  prepareSparseGuestBuffer();
+  const p=f('r360_ppc_probe_input_buffer')()>>>0;new Uint8Array(e.memory.buffer,p,program.length).set(program);f('r360_ppc_probe_set_initial_gpr')(4,BigInt(commandAddress));
   for(let i=0;i<good.length;i++)if((f('r360_ppc_probe_set_initial_gpr')(5+i,BigInt(words[i]>>>0))>>>0)!==1)throw new Error(`critic set r${5+i} failed`);
-  if((f('r360_ppc_probe_load')(p,program.length)>>>0)!==program.length)throw new Error('critic producer load failed');if(!(f('r360_ppc_probe_translate')()>>>0))throw new Error('critic producer translate failed');if((f('r360_ppc_probe_correctness_status')()>>>0)!==3)throw new Error('critic producer did not return');return Array.from({length:good.length},(_,i)=>f('r360_ppc_probe_read_guest_u32_be')(commandAddress+i*4)>>>0);
+  if((f('r360_ppc_probe_load')(p,program.length)>>>0)!==program.length)throw new Error('critic producer load failed');if(!(f('r360_ppc_probe_translate')()>>>0))throw new Error('critic producer translate failed');if((f('r360_ppc_probe_correctness_status')()>>>0)!==3)throw new Error('critic producer did not return');return Array.from({length:good.length},(_,i)=>readSparseU32(commandAddress+i*4));
 }
 function submit(words){f('r360_xenos_reset')();const ptr=f('r360_xenos_ring_buffer')()>>>0,cap=f('r360_xenos_ring_capacity')()>>>0;if(words.length>cap)throw new Error('critic ring overflow');const ring=new Uint32Array(e.memory.buffer,ptr,cap);ring.fill(0);ring.set(words.map(x=>x>>>0));return f('r360_xenos_submit')(words.length)>>>0;}
 const produced=produce(good);for(let i=0;i<good.length;i++)if(produced[i]!==good[i])throw new Error(`critic provenance mismatch at ${i}`);console.log('FRAME_CRITIC_TRANSLATED_PPC_PROVENANCE=PASS');

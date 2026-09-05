@@ -1,4 +1,4 @@
-const VERSION='45';
+const VERSION='60';
 const SHELL_CACHE=`render360-shell-v${VERSION}`;
 const SHELL_ASSETS=[
   './index.html',

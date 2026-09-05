@@ -88,9 +88,36 @@ source_old = '''        case xe::cpu::hir::OPCODE_SOURCE_OFFSET:\n          curr
 source_new = '''        case xe::cpu::hir::OPCODE_SOURCE_OFFSET:\n          current_source_address = static_cast<uint32_t>(instr->src1.offset);\n          g_current_source_address = current_source_address;\n          break;\n'''
 replace_once(source_old, source_new, 'source address tracing')
 
-store_context_old = '''          supported = StoreResolvedValue(\n              source, values, reinterpret_cast<uint8_t*>(&context) + offset,\n              size);\n          break;\n'''
-store_context_new = '''          const uint64_t old_r1 = context.r[1];\n          supported = StoreResolvedValue(\n              source, values, reinterpret_cast<uint8_t*>(&context) + offset,\n              size);\n          if (supported && offset == kR360PpcR1ContextOffset &&\n              size == sizeof(uint64_t)) {\n            const int64_t delta = static_cast<int64_t>(context.r[1]) -\n                                  static_cast<int64_t>(old_r1);\n            g_r360_stack_trace.last_old_r1 = old_r1;\n            g_r360_stack_trace.last_new_r1 = context.r[1];\n            g_r360_stack_trace.last_write_address = current_source_address;\n            g_r360_stack_trace.last_write_depth = g_execution_depth;\n            std::fprintf(stderr,\n                         "R360_STACK_WRITE ppc=0x%08X depth=%u old=0x%08X new=0x%08X delta=%lld\\n",\n                         current_source_address, g_execution_depth,\n                         static_cast<uint32_t>(old_r1),\n                         static_cast<uint32_t>(context.r[1]),\n                         static_cast<long long>(delta));\n          }\n          break;\n'''
-replace_once(store_context_old, store_context_new, 'r1 STORE_CONTEXT tracing')
+# R360_V60_STORE_CONTEXT_STACK_COMPAT
+# Patch the STORE_CONTEXT case structurally rather than matching its complete
+# body. V60 may recover a missing HIR source from live PPC context before the
+# final break; stack tracing belongs after that recovery so it observes the
+# actual committed r1 value without deleting or bypassing V60 behavior.
+store_case_anchor = '        case xe::cpu::hir::OPCODE_STORE_CONTEXT: {'
+load_case_anchor = '        case xe::cpu::hir::OPCODE_LOAD_CONTEXT:'
+store_case_start = text.find(store_case_anchor)
+store_case_end = text.find(load_case_anchor, store_case_start)
+if store_case_start < 0 or store_case_end < 0:
+    raise SystemExit('hir call/return stack overlay: STORE_CONTEXT case boundary changed')
+store_case = text[store_case_start:store_case_end]
+if 'R360_STACK_WRITE ppc=' not in store_case:
+    first_store = '          supported = StoreResolvedValue(\n'
+    if 'const uint64_t old_r1 = context.r[1];' not in store_case:
+        if first_store not in store_case:
+            raise SystemExit('hir call/return stack overlay: STORE_CONTEXT write anchor changed')
+        store_case = store_case.replace(
+            first_store,
+            '          const uint64_t old_r1 = context.r[1];\n' + first_store,
+            1,
+        )
+
+    trace = '''          if (supported && offset == kR360PpcR1ContextOffset &&\n              size == sizeof(uint64_t)) {\n            const int64_t delta = static_cast<int64_t>(context.r[1]) -\n                                  static_cast<int64_t>(old_r1);\n            g_r360_stack_trace.last_old_r1 = old_r1;\n            g_r360_stack_trace.last_new_r1 = context.r[1];\n            g_r360_stack_trace.last_write_address = current_source_address;\n            g_r360_stack_trace.last_write_depth = g_execution_depth;\n            std::fprintf(stderr,\n                         "R360_STACK_WRITE ppc=0x%08X depth=%u old=0x%08X new=0x%08X delta=%lld\\n",\n                         current_source_address, g_execution_depth,\n                         static_cast<uint32_t>(old_r1),\n                         static_cast<uint32_t>(context.r[1]),\n                         static_cast<long long>(delta));\n          }\n'''
+    break_anchor = '          break;\n'
+    break_at = store_case.rfind(break_anchor)
+    if break_at < 0:
+        raise SystemExit('hir call/return stack overlay: STORE_CONTEXT final break changed')
+    store_case = store_case[:break_at] + trace + store_case[break_at:]
+    text = text[:store_case_start] + store_case + text[store_case_end:]
 
 outer_old = '''  const bool outermost = g_active_context == nullptr;\n  if (outermost) ClearPendingNestedFailure();\n  xe::cpu::ppc::PPCContext local_context{};\n'''
 outer_new = '''  const bool outermost = g_active_context == nullptr;\n  if (outermost) {\n    ClearPendingNestedFailure();\n    g_expected_guest_return_valid.fill(false);\n    g_guest_tail_terminal.fill(false);\n    g_next_guest_return_address = 0;\n    g_next_guest_return_valid = false;\n    g_current_source_address = 0;\n    g_r360_stack_trace = {};\n  }\n  xe::cpu::ppc::PPCContext local_context{};\n'''

@@ -24,6 +24,7 @@ bool LoadXexGuestSectionData(uint32_t virtual_address, const void* data,
                              uint32_t size);
 bool SetXexGuestEntry(uint32_t entry_address);
 bool FinalizeXexGuestMapping();
+bool PatchFinalizedXexGuestU32BE(uint32_t address, uint32_t value);
 bool ReserveXexGuestInput(uint32_t required_capacity);
 uint32_t XexGuestMapperStatusValue();
 uint32_t XexGuestEntryAddress();
@@ -44,6 +45,7 @@ uint32_t r360_xex_guest_mapper_load(uint32_t virtual_address,
                                     uint32_t source_ptr, uint32_t size);
 uint32_t r360_xex_guest_mapper_set_entry(uint32_t entry_address);
 uint32_t r360_xex_guest_mapper_finalize();
+uint32_t r360_xex_guest_mapper_patch_u32_be(uint32_t address, uint32_t value);
 uint32_t r360_xex_guest_mapper_reserve_input(uint32_t required_capacity);
 uint32_t r360_xex_guest_mapper_status();
 uint32_t r360_xex_guest_mapper_entry_address();

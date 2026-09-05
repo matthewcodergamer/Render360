@@ -202,6 +202,49 @@ bool FinalizeXexGuestMapping() {
   return true;
 }
 
+bool PatchFinalizedXexGuestU32BE(uint32_t address, uint32_t value) {
+  // Xenia performs kernel import relocation after loading the image but before
+  // installing final section protection. Render360's PE loader finalizes the
+  // sparse mapping in one call, so expose one deliberately narrow relocation
+  // operation that temporarily widens exactly the containing page, writes one
+  // aligned big-endian import slot, then restores the original protection.
+  if (g_status != kXexMapperFinalized || (address & 3u) ||
+      uint64_t(address) + 4u > (uint64_t{1} << 32)) {
+    return Fail(kXexMapperInvalidArgument);
+  }
+
+  const XexMappedSection* owner = nullptr;
+  for (const auto& section : g_sections) {
+    const uint64_t begin = section.address;
+    const uint64_t end = begin + uint64_t(section.virtual_size);
+    if (uint64_t(address) >= begin && uint64_t(address) + 4u <= end) {
+      owner = &section;
+      break;
+    }
+  }
+  if (!owner) return Fail(kXexMapperInvalidArgument);
+
+  const uint32_t page = address & ~kPageMask;
+  const uint32_t original = owner->final_protection;
+  const bool widen = (original & kGuestWrite) == 0;
+  if (widen &&
+      !ProtectSparseGuestMemory(page, 1u, original | kGuestWrite)) {
+    return Fail(kXexMapperFinalizationFailed);
+  }
+
+  const uint8_t bytes[4] = {static_cast<uint8_t>(value >> 24),
+                            static_cast<uint8_t>(value >> 16),
+                            static_cast<uint8_t>(value >> 8),
+                            static_cast<uint8_t>(value)};
+  const bool wrote = WriteSparseGuestMemory(address, bytes, sizeof(bytes));
+  const bool restored =
+      !widen || ProtectSparseGuestMemory(page, 1u, original);
+  if (!wrote) return Fail(kXexMapperLoadFailed);
+  if (!restored) return Fail(kXexMapperFinalizationFailed);
+  g_status = kXexMapperFinalized;
+  return true;
+}
+
 uint32_t XexGuestMapperStatusValue() { return g_status; }
 uint32_t XexGuestEntryAddress() { return g_entry_address; }
 uint32_t XexGuestSectionCount() {
@@ -245,6 +288,11 @@ uint32_t r360_xex_guest_mapper_set_entry(uint32_t entry_address) {
 }
 uint32_t r360_xex_guest_mapper_finalize() {
   return render360::xenia_web::FinalizeXexGuestMapping() ? 1u : 0u;
+}
+uint32_t r360_xex_guest_mapper_patch_u32_be(uint32_t address, uint32_t value) {
+  return render360::xenia_web::PatchFinalizedXexGuestU32BE(address, value)
+             ? 1u
+             : 0u;
 }
 uint32_t r360_xex_guest_mapper_reserve_input(uint32_t required_capacity) {
   return render360::xenia_web::ReserveXexGuestInput(required_capacity) ? 1u

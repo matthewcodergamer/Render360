@@ -66,6 +66,7 @@ CRITICAL_EXPORTS=(
   r360_ppc_probe_scan_function_end
   r360_ppc_probe_scan_hir_instructions
   r360_xex_guest_mapper_reserve_input
+  r360_xex_guest_mapper_patch_u32_be
   r360_xex_guest_mapper_input_max_capacity
   r360_pe_guest_runtime_function_begin
   r360_pe_guest_runtime_function_end

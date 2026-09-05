@@ -130,3 +130,6 @@ one('''  const bool is_epilog_return =
 
 PATH.write_text(s)
 print('R360_V58_EPILOG_INLINE_PATCH=PASS')
+
+# Retriggered after the September 5 real-device report confirmed the browser
+# UI said V58 while the published WASM provenance was still the V57 source.

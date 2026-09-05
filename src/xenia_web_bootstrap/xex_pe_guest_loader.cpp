@@ -1,7 +1,10 @@
 #include "xex_pe_guest_loader.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <map>
+#include <vector>
 
 #include "sparse_guest_memory.h"
 #include "xex_guest_mapper.h"
@@ -21,6 +24,23 @@ uint32_t g_entry = 0;
 uint32_t g_pe_entry = 0;
 uint32_t g_sections = 0;
 uint32_t g_raw_bytes = 0;
+
+struct PeRuntimeFunction { uint32_t begin=0,end=0,prolog_bytes=0; };
+std::vector<PeRuntimeFunction> g_runtime_functions;
+uint32_t ReadBe32(const uint8_t* p){return (uint32_t(p[0])<<24)|(uint32_t(p[1])<<16)|(uint32_t(p[2])<<8)|p[3];}
+bool ExecutableAddress(const render360::xex::PEImageMetadata& m,uint32_t a){
+  for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(!(q.characteristics&kPeMemExecute))continue;const uint32_t n=q.virtual_size>q.raw_size?q.virtual_size:q.raw_size;const uint64_t b=uint64_t(m.image_base)+q.virtual_address,e=b+n;if(uint64_t(a)>=b&&uint64_t(a)<e)return true;}return false;
+}
+void ParseRuntimeFunctions(const uint8_t* image,uint32_t length,const render360::xex::PEImageMetadata& m){
+  g_runtime_functions.clear();
+  for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(std::strncmp(q.name,".pdata",8)!=0)continue;if(uint64_t(q.raw_address)+q.raw_size>length)break;
+    for(uint32_t o=0;o+8<=q.raw_size;o+=8){const uint8_t* p=image+q.raw_address+o;uint32_t begin=ReadBe32(p),data=ReadBe32(p+4);const uint32_t prolog=data&0xFFu,count=(data>>8)&0x003FFFFFu,insn=4u;if(!begin||!count)continue;
+      if(!ExecutableAddress(m,begin)){const uint64_t rebased=uint64_t(m.image_base)+begin;if(rebased>UINT32_MAX||!ExecutableAddress(m,uint32_t(rebased)))continue;begin=uint32_t(rebased);}const uint64_t bytes=uint64_t(count)*insn,end=uint64_t(begin)+bytes;if(!bytes||end>UINT32_MAX||!ExecutableAddress(m,uint32_t(end-1)))continue;g_runtime_functions.push_back({begin,uint32_t(end),uint32_t(uint64_t(prolog)*insn)});
+    }break;
+  }
+  std::sort(g_runtime_functions.begin(),g_runtime_functions.end(),[](const auto&a,const auto&b){return a.begin<b.begin;});
+}
+const PeRuntimeFunction* FindRuntimeFunction(uint32_t a){if(g_runtime_functions.empty())return nullptr;auto it=std::upper_bound(g_runtime_functions.begin(),g_runtime_functions.end(),a,[](uint32_t v,const auto&f){return v<f.begin;});if(it==g_runtime_functions.begin())return nullptr;--it;return a>=it->begin&&a<it->end?&*it:nullptr;}
 
 bool Fail(uint32_t status) {
   g_status = status;
@@ -95,6 +115,7 @@ void ResetPreparedPeGuestLoad() {
   g_pe_entry = 0;
   g_sections = 0;
   g_raw_bytes = 0;
+  g_runtime_functions.clear();
   ResetXexGuestMapper();
 }
 
@@ -108,6 +129,7 @@ bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
       render360::xex::kPEPass) {
     return Fail(kPeGuestDecodeFailed);
   }
+  ParseRuntimeFunctions(image, length, metadata);
 
   // Build a page-level mapping plan before touching guest memory. PE section
   // alignment is not guaranteed to equal our 4 KiB sparse-memory page size.
@@ -191,6 +213,7 @@ uint32_t PreparedPeGuestEntryAddress() { return g_entry; }
 uint32_t PreparedPeGuestPeEntryAddress() { return g_pe_entry; }
 uint32_t PreparedPeGuestSectionCount() { return g_sections; }
 uint32_t PreparedPeGuestRawBytes() { return g_raw_bytes; }
+bool PreparedPeGuestFindRuntimeFunction(uint32_t address,uint32_t* begin,uint32_t* end_exclusive,uint32_t* prolog_bytes){const auto* f=FindRuntimeFunction(address);if(!f)return false;if(begin)*begin=f->begin;if(end_exclusive)*end_exclusive=f->end;if(prolog_bytes)*prolog_bytes=f->prolog_bytes;return true;}
 
 }  // namespace render360::xenia_web
 

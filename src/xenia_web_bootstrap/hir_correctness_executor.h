@@ -50,6 +50,7 @@ uint64_t GetHIRCorrectnessInitialLR();
 // finalized HIR then executes against the same active PPCContext as the caller.
 void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver);
 void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver);
+void SetHIRCorrectnessExecutionEntry(uint32_t guest_address);
 bool IsHIRCorrectnessExecutionActive();
 
 // The kernel/XAM import bridge uses this only while finalized HIR is actively

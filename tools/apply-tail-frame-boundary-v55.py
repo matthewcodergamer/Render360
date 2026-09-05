@@ -34,7 +34,7 @@ bool ExecutableAddress(const render360::xex::PEImageMetadata& m,uint32_t a){
 void ParseRuntimeFunctions(const uint8_t* image,uint32_t length,const render360::xex::PEImageMetadata& m){
   g_runtime_functions.clear();
   for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(std::strncmp(q.name,".pdata",8)!=0)continue;if(uint64_t(q.raw_address)+q.raw_size>length)break;
-    for(uint32_t o=0;o+8<=q.raw_size;o+=8){const uint8_t* p=image+q.raw_address+o;uint32_t begin=ReadBe32(p),data=ReadBe32(p+4);const uint32_t prolog=data&0xFFu,count=(data>>8)&0x003FFFFFu,insn=((data>>30)&1u)?4u:2u;if(!begin||!count)continue;
+    for(uint32_t o=0;o+8<=q.raw_size;o+=8){const uint8_t* p=image+q.raw_address+o;uint32_t begin=ReadBe32(p),data=ReadBe32(p+4);const uint32_t prolog=data&0xFFu,count=(data>>8)&0x003FFFFFu,insn=4u;if(!begin||!count)continue;
       if(!ExecutableAddress(m,begin)){const uint64_t rebased=uint64_t(m.image_base)+begin;if(rebased>UINT32_MAX||!ExecutableAddress(m,uint32_t(rebased)))continue;begin=uint32_t(rebased);}const uint64_t bytes=uint64_t(count)*insn,end=uint64_t(begin)+bytes;if(!bytes||end>UINT32_MAX||!ExecutableAddress(m,uint32_t(end-1)))continue;g_runtime_functions.push_back({begin,uint32_t(end),uint32_t(uint64_t(prolog)*insn)});
     }break;
   }
@@ -58,7 +58,7 @@ w('src/xenia_web_bootstrap/hir_correctness_executor.h',h)
 
 # Translate nested tail targets using their owning .pdata function, then begin execution at the exact PPC branch target.
 s=r('src/xenia_web_bootstrap/probe_backend.cpp')
-s=one(s,'#include "sparse_guest_memory.h"\n','#include "sparse_guest_memory.h"\n#include "xex_pe_guest_loader.h"\n','backend loader include')
+s=one(s,'#include "kernel_import_probe.h"\n','#include "kernel_import_probe.h"\n#include "xex_pe_guest_loader.h"\n','backend loader include')
 a='  std::fprintf(stderr, "R360_CALL_RESOLVE target=0x%08X active_base=0x%08X\\n",\n               address, r360_ppc_probe_guest_base());\n'
 b='bool ResolveNestedGuestCall'
 x=r'''  uint32_t fn_begin=address,fn_end=0,prolog=0;
@@ -182,8 +182,7 @@ s=one(s,'python3 "$ROOT/prepare-hir-stack-history-overlay.py"\npython3 "$ROOT/pr
 w('build-xenia-ppc-bootstrap.sh',s)
 
 s=r('.github/workflows/xenia-browser-bootstrap-fastlane.yml')
-s=one(s,"      - 'prepare-hir-stack-history-overlay.py'\n","      - 'prepare-hir-stack-history-overlay.py'\n      - 'prepare-hir-tail-frame-overlay.py'\n",'fastlane path')
-w('.github/workflows/xenia-browser-bootstrap-fastlane.yml',s)
+if "      - 'prepare-hir-tail-frame-overlay.py'\n" not in s: raise SystemExit('fastlane tail-frame path missing')
 
 # Keep the existing source-contract test aware of the final HIR overlay order.
 s=r('test-braid-frame-history.mjs')

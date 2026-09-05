@@ -27,6 +27,9 @@ uint32_t PreparedPeGuestEntryAddress();
 uint32_t PreparedPeGuestPeEntryAddress();
 uint32_t PreparedPeGuestSectionCount();
 uint32_t PreparedPeGuestRawBytes();
+bool PreparedPeGuestFindRuntimeFunction(uint32_t address, uint32_t* begin,
+                                        uint32_t* end_exclusive,
+                                        uint32_t* prolog_bytes);
 
 }  // namespace render360::xenia_web
 

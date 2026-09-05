@@ -8,6 +8,7 @@
 #include "probe_backend.h"
 #include "sparse_guest_memory.h"
 #include "wasm_backend_call_probe.h"
+#include "xex_pe_guest_loader.h"
 #include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/ppc/ppc_scanner.h"
@@ -334,52 +335,17 @@ uint32_t r360_ppc_probe_translate() {
 }
 
 uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
-  using namespace render360::xenia_web;
-  ResetScanDiagnostic();
-  g_scan_address = address;
-  g_scan_window_end =
-      g_loaded_size >= 4u ? g_active_guest_base + g_loaded_size - 4u : 0u;
-
-  if (!EnsureRuntime() || !g_loaded_size || !g_probe_module || (address & 3u) ||
-      !IsProbeGuestRange(address, 4u)) {
-    g_scan_diagnostic = kProbeScanGuardRejected;
-    if (g_status < 0xE000) g_status = kProbeErrorInput;
-    return 0;
-  }
-
-  ResetProbeTelemetry();
-  ProbeGuestFunction function(g_probe_module, address);
-  // Give upstream Xenia a hard upper bound equal to the RX bytes currently
-  // paged into the movable wasm32 code window, then let PPCScanner discover the
-  // actual function end (blr/bctr/control-flow) within that real title span.
-  function.set_end_address(g_active_guest_base + g_loaded_size - 4u);
-  xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());
-  if (!scanner.Scan(&function, nullptr)) {
-    g_scan_diagnostic = kProbeScanScannerFailed;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-  // scanWindowEnd is only the input ceiling. Preserve the boundary the Xenia
-  // scanner actually discovered so a one-instruction thunk/stub can be
-  // distinguished from a normal function whose assembler emitted zero HIR.
-  g_scan_function_end = function.end_address();
-  if (!g_processor->frontend()->DefineFunction(&function, 0)) {
-    g_scan_diagnostic = kProbeScanDefineFailed;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-
-  const uint32_t hir = GetProbeTelemetry().hir_instructions;
-  g_scan_hir_instructions = hir;
-  if (!hir) {
-    g_scan_diagnostic = kProbeScanZeroHIR;
-    g_status = kProbeErrorTranslate;
-    return 0;
-  }
-
-  g_scan_diagnostic = kProbeScanTranslated;
-  g_status = kProbeTranslated;
-  return hir;
+  using namespace render360::xenia_web;ResetScanDiagnostic();g_scan_address=address;
+  uint32_t fn_begin=address,fn_end=0,prolog=0;bool pdata=PreparedPeGuestFindRuntimeFunction(address,&fn_begin,&fn_end,&prolog);
+  if(pdata&&(fn_end<=fn_begin||uint64_t(fn_end)-fn_begin>kProbeMaxBytes)){pdata=false;fn_begin=address;fn_end=0;prolog=0;}
+  auto loaded=[&](){return IsProbeGuestRange(fn_begin,4)&&(!pdata||(fn_end>=fn_begin+4&&IsProbeGuestRange(fn_end-4,4)));};
+  if(!loaded()&&(!PageSparseCodeWindow(fn_begin)||!loaded())){g_scan_diagnostic=kProbeScanGuardRejected;if(g_status<0xE000)g_status=kProbeErrorInput;return 0;}
+  g_scan_window_end=g_loaded_size>=4?g_active_guest_base+g_loaded_size-4:0;if(!EnsureRuntime()||!g_probe_module||(address&3u)){g_scan_diagnostic=kProbeScanGuardRejected;return 0;}
+  ResetProbeTelemetry();ProbeGuestFunction function(g_probe_module,fn_begin);const uint32_t scan_end=pdata?fn_end-4:g_active_guest_base+g_loaded_size-4;function.set_end_address(scan_end);
+  xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());if(!scanner.Scan(&function,nullptr)){g_scan_diagnostic=kProbeScanScannerFailed;g_status=kProbeErrorTranslate;return 0;}if(pdata&&function.end_address()<address)function.set_end_address(scan_end);g_scan_function_end=function.end_address();
+  SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);const bool defined=g_processor->frontend()->DefineFunction(&function,0);SetHIRCorrectnessExecutionEntry(0u);if(!defined){g_scan_diagnostic=kProbeScanDefineFailed;g_status=kProbeErrorTranslate;return 0;}
+  const uint32_t hir=GetProbeTelemetry().hir_instructions;g_scan_hir_instructions=hir;if(!hir){g_scan_diagnostic=kProbeScanZeroHIR;g_status=kProbeErrorTranslate;return 0;}
+  std::fprintf(stderr,"R360_SCAN_RANGE entry=0x%08X function=0x%08X end=0x%08X pdata=%u prolog=%u\n",address,fn_begin,g_scan_function_end,pdata?1u:0u,prolog);g_scan_diagnostic=kProbeScanTranslated;g_status=kProbeTranslated;return hir;
 }
 
 uint32_t r360_ppc_probe_status() {

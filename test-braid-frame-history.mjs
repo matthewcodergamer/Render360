@@ -11,6 +11,7 @@ const orderedOverlays=[
   'prepare-hir-call-return-stack-overlay.py',
   'prepare-hir-return-metadata-v3-overlay.py',
   'prepare-hir-stack-history-overlay.py',
+  'prepare-hir-tail-frame-overlay.py',
 ];
 let previous=-1;
 for(const marker of orderedOverlays){

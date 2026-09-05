@@ -71,3 +71,4 @@ one('''  ++g_execution_depth;
   --g_execution_depth;
 ''','execute')
 p.write_text(s);print('HIR_TAIL_FRAME_BOUNDARY_OVERLAY=PASS')
+# V56 linked-call exact-entry dispatch landed; this direct commit triggers Fastlane.

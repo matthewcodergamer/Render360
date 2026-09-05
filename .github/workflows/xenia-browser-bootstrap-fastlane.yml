@@ -193,6 +193,9 @@ jobs:
       - name: Verify commercial-title PE staging growth
         run: timeout 90s node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
+      - name: Verify XEX prepared memory-image section sourcing
+        run: timeout 90s node ./test-xex-prepared-memory-image-loader.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
       - name: Verify resumable integer CFG backend
         run: timeout 90s node ./test-wasm-backend-cfg.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 

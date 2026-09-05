@@ -1,0 +1,103 @@
+name: Apply V62 Tail Owner Provenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-owner-provenance-v62.py'
+      - '.github/workflows/apply-tail-owner-provenance-v62.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-tail-owner-provenance-v62
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V62 updater syntax
+        run: python3 -m py_compile tools/apply-tail-owner-provenance-v62.py
+
+      - name: Apply V62 owner provenance and release
+        run: python3 tools/apply-tail-owner-provenance-v62.py
+
+      - name: Verify V62 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "62"
+          grep -q 'r360_pe_guest_runtime_function_begin' src/xenia_web_bootstrap/xex_pe_guest_loader.h
+          grep -q 'r360_pe_guest_runtime_function_end' src/xenia_web_bootstrap/xex_pe_guest_loader.h
+          grep -q 'r360_pe_guest_runtime_function_prolog_bytes' src/xenia_web_bootstrap/xex_pe_guest_loader.h
+          grep -q 'PreparedPeGuestFindRuntimeFunction' src/xenia_web_bootstrap/xex_pe_guest_loader.cpp
+          grep -q 'r360_pe_guest_runtime_function_begin' link-xenia-ppc-bootstrap.sh
+          grep -q 'runtimeOwner=value' developer-console.js
+          grep -q 'sourceOwner:runtimeOwner(event.source)' developer-console.js
+          grep -q 'SAME_PDATA_TAIL_FRAME_SPLIT' developer-console.js
+          grep -q 'ownerTopology:compact' developer-console.js
+          grep -q 'entryOwnerPrologue' developer-console.js
+          grep -q 'const RENDER360_RELEASE=62;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:62,' runtime/render360-runtime.js
+          grep -q 'Render360 62' index.html
+          grep -q '<span>UI Release</span><span class="value">62</span>' index.html
+          grep -q "const VERSION='62';" render360-sw.js
+
+      - name: Commit V62 source and website release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V62 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/xex_pe_guest_loader.h \
+            src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
+            developer-console.js \
+            link-xenia-ppc-bootstrap.sh \
+            VERSION \
+            runtime/render360-runtime.js \
+            index.html \
+            render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V62 source/release already current.'
+          else
+            git commit -m 'diagnostic: prove .pdata ownership across Braid tail fragments and release V62'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Rebuild release-62 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Build, verify and publish V62 bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Fastlane run: $run_id"
+          gh run watch "$run_id" --exit-status

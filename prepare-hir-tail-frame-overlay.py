@@ -50,18 +50,22 @@ one('''  auto* block = builder->first_block();
     for (auto* instr = first_instr;
          instr && supported && !reached_return; instr = instr->next) {
 ''','interior start')
-one('''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
+# R360_V60_TAIL_ENTRY_SETTER_COMPAT
+# V60 may place additional correctness-executor setters after the address
+# resolver. Anchor only on the resolver function and append the V59 interior
+# entry API without assuming the next function name.
+entry_setter_anchor = '''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
   g_address_resolver = resolver;
 }
-
-bool IsHIRCorrectnessExecutionActive()''','''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
-  g_address_resolver = resolver;
-}
-void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;if(guest_address)g_last_interior_entry_missing=0;}
+'''
+entry_setter_api = '''void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;if(guest_address)g_last_interior_entry_missing=0;}
 uint32_t GetHIRCorrectnessCurrentCallFlags(){return g_current_call_flags;}
 uint32_t ConsumeHIRCorrectnessInteriorEntryMissing(){const uint32_t address=g_last_interior_entry_missing;g_last_interior_entry_missing=0;return address;}
-
-bool IsHIRCorrectnessExecutionActive()''','entry setter')
+'''
+if 'void SetHIRCorrectnessExecutionEntry(uint32_t guest_address)' not in s:
+    if s.count(entry_setter_anchor) != 1:
+        raise SystemExit(f'tail frame entry setter resolver anchor: {s.count(entry_setter_anchor)} anchors')
+    s = s.replace(entry_setter_anchor, entry_setter_anchor + entry_setter_api, 1)
 one('''  ++g_execution_depth;
   result = ExecuteBuilder(builder, memory, *g_active_context);
   --g_execution_depth;

@@ -79,6 +79,19 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Build and publish V65 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V65 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
       - name: Rebuild release-65 package core
         env:
           GH_TOKEN: ${{ github.token }}

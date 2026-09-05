@@ -28,6 +28,19 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Repair embedded overlay literal
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/braid-frame-history-surgery.py')
+          s=p.read_text()
+          s=s.replace("p.write_text(r'''#!/usr/bin/env python3\n", 'p.write_text(r"""#!/usr/bin/env python3\n', 1)
+          s=s.replace("print('HIR_STACK_HISTORY_OVERLAY=PASS')\n''')\n\n\n# 3)", "print('HIR_STACK_HISTORY_OVERLAY=PASS')\n\"\"\")\n\n\n# 3)", 1)
+          p.write_text(s)
+          PY
+          python3 -m py_compile tools/braid-frame-history-surgery.py
+
       - name: Apply ordered Braid stack/call history plumbing
         shell: bash
         run: |
@@ -54,6 +67,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
+            tools/braid-frame-history-surgery.py \
             build-xenia-ppc-bootstrap.sh \
             prepare-hir-stack-history-overlay.py \
             .github/workflows/xenia-browser-bootstrap-fastlane.yml \

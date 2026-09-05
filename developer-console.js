@@ -166,6 +166,16 @@ function memoryDiagnostics(state,result){
     sequence:number(event.sequence),source:address(event.source),target:address(event.target),r1:address(event.r1),depth:number(event.depth),flags:number(event.flags),
     sourceOwner:runtimeOwner(event.source),targetOwner:runtimeOwner(event.target),
   }));
+  const tailCallDiagnostics=callHistory
+    .filter(event=>(((number(event.flags)||0)&2)!==0))
+    .map(event=>compact({
+      sequence:event.sequence,source:event.source,target:event.target,r1:event.r1,depth:event.depth,flags:event.flags,
+      sourceOwner:event.sourceOwner,targetOwner:event.targetOwner,
+      sourceWindow:readPpcWindow(read8,event.source,10),
+      targetWindow:readPpcWindow(read8,event.target,5),
+      sourceOwnerPrologue:runtimeOwnerWindow(event.sourceOwner),
+      targetOwnerPrologue:runtimeOwnerWindow(event.targetOwner),
+    }));
   const stackTrace=compact({
     blockerR1:address(number(resultStack.blockerR1)??readStackU32('r360_ppc_probe_stack_blocker_r1')),
     initialR1:address(number(resultStack.initialR1)??readStackU32('r360_ppc_probe_stack_initial_r1')),
@@ -226,6 +236,7 @@ function memoryDiagnostics(state,result){
     stackGuardBytes:number(context.stackGuardBytes),pcrAddress:address(context.pcrAddress),tlsAddress:address(context.tlsAddress),
     stackTrace:Object.keys(stackTrace).length?stackTrace:undefined,
     runtimeFunctions:Object.keys(runtimeFunctions).length?runtimeFunctions:undefined,
+    tailCallDiagnostics:tailCallDiagnostics.length?tailCallDiagnostics:undefined,
     codeWindows:compact({
       entry:readPpcWindow(read8,result?.entry,4),
       r1Write:readPpcWindow(read8,stackTrace.lastWriteAddress,3),
@@ -353,6 +364,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const frameEntrySameOwner=!!enteringCall&&sameOwner(enteringCall.sourceOwner,enteringCall.targetOwner);
   const immediateCall=calls.length?calls[calls.length-1]:undefined;
   const immediateTailSameOwner=!!immediateCall&&(((number(immediateCall.flags)||0)&2)!==0)&&sameOwner(immediateCall.sourceOwner,immediateCall.targetOwner);
+  const frameEntryCrossPdataInterior=!!enteringCall&&(((number(enteringCall.flags)||0)&2)!==0)&&!!enteringCall.sourceOwner?.begin&&!!enteringCall.targetOwner?.begin&&!frameEntrySameOwner&&Number(enteringCall.targetOwner.offset||0)>0;
+  const immediateCrossPdataInterior=!!immediateCall&&(((number(immediateCall.flags)||0)&2)!==0)&&!!immediateCall.sourceOwner?.begin&&!!immediateCall.targetOwner?.begin&&!immediateTailSameOwner&&Number(immediateCall.targetOwner.offset||0)>0;
   const frameWrites=writes.filter(event=>{
     const seq=number(event.sequence),depth=number(event.depth);
     return depth===suspectDepth&&(!enteringCall||seq>number(enteringCall.sequence))&&(suspectSequence===undefined||seq<=suspectSequence);
@@ -363,7 +376,9 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const missingAllocation=historyReady&&r1WriteDelta>0&&suspectDepth>1&&!!enteringCall&&!matchingAllocation;
   const classification=missingAllocation&&(frameEntrySameOwner||immediateTailSameOwner)
     ?'SAME_PDATA_TAIL_FRAME_SPLIT'
-    :crossedGuard&&isR1Fault?(missingAllocation?'FRAME_ENTRY_MISSING_PROLOGUE':historyReady?'STACK_BALANCE_OR_EPILOGUE_MISMATCH':'STACK_FRAME_TEARDOWN_MISMATCH'):memory?.faultCode?'GUEST_MEMORY_BOUNDARY':'CPU_RUNTIME_BLOCKER';
+    :missingAllocation&&(frameEntryCrossPdataInterior||immediateCrossPdataInterior)
+      ?'CROSS_PDATA_INTERIOR_TAIL_STACK_MISMATCH'
+      :crossedGuard&&isR1Fault?(missingAllocation?'FRAME_ENTRY_MISSING_PROLOGUE':historyReady?'STACK_BALANCE_OR_EPILOGUE_MISMATCH':'STACK_FRAME_TEARDOWN_MISMATCH'):memory?.faultCode?'GUEST_MEMORY_BOUNDARY':'CPU_RUNTIME_BLOCKER';
   const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'
     ?`#${event.sequence} CALL d${event.depth} ${event.source} → ${event.target} r1=${event.r1} flags=0x${(number(event.flags)||0).toString(16).toUpperCase()}`
     :`#${event.sequence} r1 d${event.depth} ${event.address} ${event.oldR1} → ${event.newR1} (${hexDelta((number(event.newR1)||0)-(number(event.oldR1)||0))})`);
@@ -376,6 +391,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     isR1Fault?`Fault equation: ${memory.baseRegisterValue} + (${memory.displacement}) = ${memory.effectiveAddress}.`:undefined,
     frameEntrySameOwner?`Frame-entry tail ${enteringCall.source} → ${enteringCall.target} stays inside .pdata owner ${enteringCall.sourceOwner.begin}-${enteringCall.sourceOwner.end}; target offset +0x${Number(enteringCall.targetOwner.offset||0).toString(16).toUpperCase()}.`:undefined,
     immediateTailSameOwner?`Immediate tail ${immediateCall.source} → ${immediateCall.target} stays inside .pdata owner ${immediateCall.sourceOwner.begin}-${immediateCall.sourceOwner.end}; the synthetic fragment boundary can therefore change an internal branch into CALL_TAIL.`:undefined,
+    frameEntryCrossPdataInterior?`Frame-entry tail ${enteringCall.source} → ${enteringCall.target} crosses .pdata ${enteringCall.sourceOwner.begin}-${enteringCall.sourceOwner.end} → ${enteringCall.targetOwner.begin}-${enteringCall.targetOwner.end} and lands +0x${Number(enteringCall.targetOwner.offset||0).toString(16).toUpperCase()} inside the target record; the V59 same-owner split hypothesis is ruled out for this edge.`:undefined,
+    immediateCrossPdataInterior?`Immediate tail ${immediateCall.source} → ${immediateCall.target} crosses .pdata ${immediateCall.sourceOwner.begin}-${immediateCall.sourceOwner.end} → ${immediateCall.targetOwner.begin}-${immediateCall.targetOwner.end} and lands +0x${Number(immediateCall.targetOwner.offset||0).toString(16).toUpperCase()} inside the target record.`:undefined,
     enteringCall?.targetOwner?`Frame-entry target owner ${enteringCall.targetOwner.begin}-${enteringCall.targetOwner.end} prologue=${enteringCall.targetOwner.prologBytes??'—'} bytes offset=+0x${Number(enteringCall.targetOwner.offset||0).toString(16).toUpperCase()}.`:undefined,
     trace.lastCallSource&&trace.lastCallTarget?`Immediate call edge: ${trace.lastCallSource} → ${trace.lastCallTarget}, depth ${trace.lastCallDepth??'—'}, r1=${trace.lastCallR1||'—'}.`:undefined,
     historyReady&&enteringCall?`Frame-entry call for depth ${suspectDepth}: ${enteringCall.source} → ${enteringCall.target} with r1=${enteringCall.r1}.`:undefined,
@@ -389,13 +406,13 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
   ].filter(Boolean);
   const next=[
-    missingAllocation&&enteringCall?`Inspect the translated function entered at ${enteringCall.target}; the runtime reached its +0x100 teardown without recording a -0x100 r1 allocation in that frame.`:trace.lastWriteAddress?`Inspect the frame teardown at ${trace.lastWriteAddress}; determine whether its positive r1 restore has a matching earlier allocation in the same guest frame.`:undefined,
+    missingAllocation&&(frameEntryCrossPdataInterior||immediateCrossPdataInterior)?`Inspect memory.tailCallDiagnostics for the cross-.pdata tail chain. Compare each source window with the source-owner prologue and each target window with the target-owner prologue; specifically look for an update-form stack allocation (stdu/stwu r1,-0x100) that the live path bypassed.`:missingAllocation&&enteringCall?`Inspect the translated function entered at ${enteringCall.target}; the runtime reached its +0x100 teardown without recording a -0x100 r1 allocation in that frame.`:trace.lastWriteAddress?`Inspect the frame teardown at ${trace.lastWriteAddress}; determine whether its positive r1 restore has a matching earlier allocation in the same guest frame.`:undefined,
     historyReady&&matchingAllocation?`A matching allocation exists, so inspect intervening r1 writes/branches for a duplicate restore or wrong shared epilogue.`:trace.lastCallSource?`Verify function/shared-epilogue classification around ${trace.lastCallSource} and the target ${trace.lastCallTarget||'—'}.`:undefined,
-    `Do not patch ${memory?.faultAddress||'the fault address'} writable; preserve Xenia's stack guard and fix the control-flow/frame state that reached it.`,
+    `Do not synthesize a -0x100 frame and do not patch ${memory?.faultAddress||'the fault address'} writable; preserve Xenia's stack guard until the exact skipped/incorrect control-flow edge is proven.`,
   ].filter(Boolean);
   return compact({
     classification,
-    headline:missingAllocation&&(frameEntrySameOwner||immediateTailSameOwner)?`same .pdata owner tail split reached a ${hexDelta(r1WriteDelta)} teardown without its frame allocation`:missingAllocation?`depth ${suspectDepth} reached a ${hexDelta(r1WriteDelta)} epilogue without its matching allocation`:crossedGuard?'r1 crossed the Xenia stack base before the restore load':'CPU execution stopped at a guest-memory boundary',
+    headline:missingAllocation&&(frameEntrySameOwner||immediateTailSameOwner)?`same .pdata owner tail split reached a ${hexDelta(r1WriteDelta)} teardown without its frame allocation`:missingAllocation&&(frameEntryCrossPdataInterior||immediateCrossPdataInterior)?`cross-.pdata interior tail chain reached a ${hexDelta(r1WriteDelta)} teardown without a live matching allocation`:missingAllocation?`depth ${suspectDepth} reached a ${hexDelta(r1WriteDelta)} epilogue without its matching allocation`:crossedGuard?'r1 crossed the Xenia stack base before the restore load':'CPU execution stopped at a guest-memory boundary',
     primarySuspect:trace.lastWriteAddress,
     primarySuspectInstruction:writeInstruction,
     stackCrossingBytes:stackCrossing,
@@ -404,7 +421,7 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     initialAbiCorrect,
     faultDerivedFromR1:isR1Fault,
     callEdge:trace.lastCallSource&&trace.lastCallTarget?`${trace.lastCallSource} -> ${trace.lastCallTarget}`:undefined,
-    historyReady,missingAllocation,ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,
+    historyReady,missingAllocation,ownerTopology:compact({frameEntrySameOwner,immediateTailSameOwner,frameEntryCrossPdataInterior,immediateCrossPdataInterior,frameEntrySource:enteringCall?.sourceOwner,frameEntryTarget:enteringCall?.targetOwner,immediateSource:immediateCall?.sourceOwner,immediateTarget:immediateCall?.targetOwner}),tailPath:memory?.tailCallDiagnostics,frameEntryCall:enteringCall,matchingAllocation:matchingAllocation?.event,
     timeline,evidence,ruledOut,next,
     runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
     cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),

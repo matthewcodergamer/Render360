@@ -1,0 +1,78 @@
+name: Apply Tail Context V60
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-tail-context-v60.py'
+      - '.github/workflows/apply-tail-context-v60.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-tail-context-v60
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply V60 tail context recovery
+        run: python3 tools/apply-tail-context-v60.py
+
+      - name: Verify V60 source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Preserve V58/V59 behavior.
+          grep -q 'ExecuteSharedEpilogReturn' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'R360_TAIL_FRAGMENT_FALLBACK' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'R360_TAIL_FRAGMENT_EXECUTED' src/xenia_web_bootstrap/probe_backend.cpp
+
+          # V60 recovery is provenance-based and fragment-scoped.
+          grep -q 'SetHIRCorrectnessContextProvenanceRecovery' src/xenia_web_bootstrap/hir_correctness_executor.h
+          grep -q 'ResolveContextProvenance' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'OPCODE_LOAD_CONTEXT' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'OPCODE_ASSIGN' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'R360_CONTEXT_VALUE_RECOVERY' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'SetHIRCorrectnessContextProvenanceRecovery(true)' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'SetHIRCorrectnessContextProvenanceRecovery(false)' src/xenia_web_bootstrap/probe_backend.cpp
+
+          # Unsupported HIR must no longer masquerade as a memory fault.
+          grep -q 'CPU execution stopped on unsupported HIR in a tail fragment' developer-console.js
+
+      - name: Commit V60 source
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V60 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            src/xenia_web_bootstrap/hir_correctness_executor.h \
+            src/xenia_web_bootstrap/probe_backend.cpp \
+            developer-console.js \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          if git diff --cached --quiet; then
+            echo 'changed=0' >> "$GITHUB_OUTPUT"
+            echo 'V60 source already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: recover exact tail context values from live PPC state'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo 'changed=1' >> "$GITHUB_OUTPUT"
+
+      - name: Start verified V60 bootstrap build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main

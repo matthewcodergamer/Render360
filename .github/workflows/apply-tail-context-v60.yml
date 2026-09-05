@@ -56,12 +56,15 @@ jobs:
           set -euo pipefail
           git config user.name 'Render360 V60 Bot'
           git config user.email 'actions@users.noreply.github.com'
+          # The patcher also prepares a Fastlane verification gate, but the
+          # workflow token is intentionally not permitted to rewrite workflow
+          # files. Keep that local-only and commit just the runtime/UI source.
+          git restore .github/workflows/xenia-browser-bootstrap-fastlane.yml
           git add \
             src/xenia_web_bootstrap/hir_correctness_executor.cpp \
             src/xenia_web_bootstrap/hir_correctness_executor.h \
             src/xenia_web_bootstrap/probe_backend.cpp \
-            developer-console.js \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml
+            developer-console.js
           if git diff --cached --quiet; then
             echo 'changed=0' >> "$GITHUB_OUTPUT"
             echo 'V60 source already applied.'

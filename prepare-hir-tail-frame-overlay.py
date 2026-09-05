@@ -11,6 +11,7 @@ thread_local uint32_t g_pending_logical_depth=0;
 thread_local bool g_pending_logical_depth_valid=false;
 thread_local uint32_t g_requested_execution_entry=0;
 thread_local uint32_t g_current_call_flags=0;
+thread_local uint32_t g_last_interior_entry_missing=0;
 uint32_t CurrentLogicalGuestDepth();
 ''','state')
 one('bool CurrentExpectedGuestReturn(uint64_t* out) {\n','''uint32_t CurrentLogicalGuestDepth(){if(!g_execution_depth||g_execution_depth>kR360MaxGuestCallDepth)return 0;const uint32_t d=g_logical_guest_depth[size_t(g_execution_depth-1)];return d?d:g_execution_depth;}
@@ -40,7 +41,7 @@ one('''  auto* block = builder->first_block();
          instr && supported && !reached_return; instr = instr->next) {
 ''','''  auto* block=builder->first_block();
   auto* entry_instr=static_cast<xe::cpu::hir::Instr*>(nullptr);
-  if(execution_entry){bool found=false;for(auto* b=builder->first_block();b&&!found;b=b->next){for(auto* i=b->instr_head;i;i=i->next){if(i->opcode&&i->opcode->num==xe::cpu::hir::OPCODE_SOURCE_OFFSET&&uint32_t(i->src1.offset)==execution_entry){block=b;entry_instr=i;found=true;break;}}}if(!found){result.blocker_kind=kHIRBlockerUnresolvedCall;result.blocker_address=execution_entry;std::fprintf(stderr,"R360_HIR_INTERIOR_ENTRY_MISSING address=0x%08X\\n",execution_entry);return result;}std::fprintf(stderr,"R360_HIR_INTERIOR_ENTRY address=0x%08X logical=%u host=%u\\n",execution_entry,CurrentLogicalGuestDepth(),g_execution_depth);}
+  if(execution_entry){bool found=false;for(auto* b=builder->first_block();b&&!found;b=b->next){for(auto* i=b->instr_head;i;i=i->next){if(i->opcode&&i->opcode->num==xe::cpu::hir::OPCODE_SOURCE_OFFSET&&uint32_t(i->src1.offset)==execution_entry){block=b;entry_instr=i;found=true;break;}}}if(!found){g_last_interior_entry_missing=execution_entry;result.blocker_kind=kHIRBlockerUnresolvedCall;result.blocker_address=execution_entry;std::fprintf(stderr,"R360_HIR_INTERIOR_ENTRY_MISSING address=0x%08X\\n",execution_entry);return result;}std::fprintf(stderr,"R360_HIR_INTERIOR_ENTRY address=0x%08X logical=%u host=%u\\n",execution_entry,CurrentLogicalGuestDepth(),g_execution_depth);}
   bool first_execution_block=true;
   while (block && supported && !reached_return) {
     auto* next_block = block->next;
@@ -56,8 +57,9 @@ one('''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resol
 bool IsHIRCorrectnessExecutionActive()''','''void SetHIRCorrectnessAddressResolver(HIRCorrectnessAddressResolver resolver) {
   g_address_resolver = resolver;
 }
-void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;}
+void SetHIRCorrectnessExecutionEntry(uint32_t guest_address){g_requested_execution_entry=guest_address;if(guest_address)g_last_interior_entry_missing=0;}
 uint32_t GetHIRCorrectnessCurrentCallFlags(){return g_current_call_flags;}
+uint32_t ConsumeHIRCorrectnessInteriorEntryMissing(){const uint32_t address=g_last_interior_entry_missing;g_last_interior_entry_missing=0;return address;}
 
 bool IsHIRCorrectnessExecutionActive()''','entry setter')
 one('''  ++g_execution_depth;

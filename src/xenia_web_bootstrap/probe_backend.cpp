@@ -304,15 +304,65 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
 
   const uint32_t interior_entry =
       use_owner && address != fn_begin ? address : 0u;
+  if (interior_entry) {
+    // Clear any stale marker before this one exact owner/interior attempt.
+    (void)ConsumeHIRCorrectnessInteriorEntryMissing();
+  }
   SetHIRCorrectnessExecutionEntry(interior_entry);
   const bool translated = frontend->DefineFunction(&nested_function, 0);
   SetHIRCorrectnessExecutionEntry(0u);
+  const uint32_t missing_entry =
+      interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
   std::fprintf(stderr,
                "R360_CALL_RESOLVE translated target=0x%08X function=0x%08X "
                "end=0x%08X flags=0x%X owner=%u interior=0x%08X result=%u\n",
                address, fn_begin, nested_function.end_address(), call_flags,
                use_owner ? 1u : 0u, interior_entry, translated ? 1u : 0u);
-  return translated;
+
+  // A compiler tail target may be a valid PPC instruction without surviving as
+  // an exact SOURCE_OFFSET in finalized owner HIR. Do not guess a nearby marker:
+  // replaying earlier HIR can duplicate side effects and starting later can skip
+  // the target instruction. Re-translate only this exact PPC target as a
+  // synthetic fragment, while keeping the owning .pdata end as the hard scan
+  // boundary and the existing live PPCContext as execution state.
+  const bool exact_interior_marker_missing =
+      !translated && is_tail && use_owner && interior_entry &&
+      missing_entry == interior_entry;
+  if (!exact_interior_marker_missing) return translated;
+
+  std::fprintf(stderr,
+               "R360_TAIL_INTERIOR target=0x%08X owner=0x%08X end=0x%08X marker=0\n",
+               address, fn_begin, fn_end);
+
+  ProbeGuestFunction fragment(module, address);
+  fragment.set_end_address(scan_end);
+  xe::cpu::ppc::PPCScanner fragment_scanner(frontend);
+  const bool fragment_scanned = fragment_scanner.Scan(&fragment, nullptr);
+  if (!fragment_scanned) {
+    std::fprintf(stderr,
+                 "R360_TAIL_FRAGMENT_FALLBACK target=0x%08X owner=0x%08X "
+                 "end=0x%08X scan=0 define=0\n",
+                 address, fn_begin, fn_end);
+    return false;
+  }
+
+  // address is now the fragment's real beginning, so requesting an interior HIR
+  // entry would recreate the bug this fallback is intended to avoid.
+  SetHIRCorrectnessExecutionEntry(0u);
+  const bool fragment_translated = frontend->DefineFunction(&fragment, 0);
+  SetHIRCorrectnessExecutionEntry(0u);
+  std::fprintf(stderr,
+               "R360_TAIL_FRAGMENT_FALLBACK target=0x%08X owner=0x%08X "
+               "end=0x%08X scan=1 define=%u\n",
+               address, fn_begin, fn_end, fragment_translated ? 1u : 0u);
+  if (fragment_translated) {
+    auto* context = GetHIRCorrectnessActiveContext();
+    std::fprintf(stderr,
+                 "R360_TAIL_FRAGMENT_EXECUTED target=0x%08X r1=0x%08X\n",
+                 address,
+                 context ? static_cast<uint32_t>(context->r[1]) : 0u);
+  }
+  return fragment_translated;
 }
 bool ResolveNestedGuestCall(xe::cpu::Function* function) { return function && TranslateNestedGuestAddress(function->address(), function->module()); }
 bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAddress(address, nullptr); }

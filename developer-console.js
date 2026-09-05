@@ -164,7 +164,7 @@ function memoryDiagnostics(state,result){
     faultAddress:faultAddress===undefined?undefined:address(faultAddress),
     faultCode,
     faultName:faultCode===undefined?undefined:(faultNames[faultCode]||`fault-${faultCode}`),
-    faultCapturedAtExecution:capturedFaultCode!==undefined,
+    faultCapturedAtExecution:capturedFaultCode!==undefined&&capturedFaultCode!==0,
     blockerInstruction:instructionWord===undefined?undefined:`0x${instructionWord.toString(16).toUpperCase().padStart(8,'0')}`,
     blockerDecoded:decoded?.text,
     instructionKind:decoded?.kind||'unknown',
@@ -219,6 +219,47 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const writeWindow=memory?.codeWindows?.r1Write||[];
   const writeInstruction=writeWindow.find(row=>row.current);
   const writes=trace.writeHistory||[],calls=trace.callHistory||[];
+  const tailCall=[...calls].reverse().find(event=>event.target===cpu?.executionBlockerAddress&&((number(event.flags)||0)&2)!==0);
+  const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
+  if(unresolvedTail){
+    const stackHealthy=present(trace.lastNewR1)&&present(memory?.stackTop)&&trace.lastNewR1===memory.stackTop;
+    const timeline=[...writes.map(event=>({kind:'r1',...event})),...calls.map(event=>({kind:'call',...event}))].sort((a,b)=>(number(a.sequence)||0)-(number(b.sequence)||0)).map(event=>event.kind==='call'
+      ?`#${event.sequence} CALL d${event.depth} ${event.source} → ${event.target} r1=${event.r1} flags=0x${(number(event.flags)||0).toString(16).toUpperCase()}`
+      :`#${event.sequence} r1 d${event.depth} ${event.address} ${event.oldR1} → ${event.newR1} (${hexDelta((number(event.newR1)||0)-(number(event.oldR1)||0))})`);
+    return compact({
+      classification:'CPU_RUNTIME_BLOCKER',
+      headline:'CPU execution stopped at an unresolved tail target',
+      tailTarget:cpu.executionBlockerAddress,
+      tailSource:tailCall.source,
+      reason:'HIR interior entry unavailable',
+      stackState:stackHealthy?`Healthy · restored to ${memory.stackTop}`:`r1=${trace.lastNewR1||trace.lastCallR1||'—'}`,
+      primarySuspect:cpu.executionBlockerAddress,
+      initialAbiCorrect,
+      callEdge:`${tailCall.source} -> ${tailCall.target}`,
+      historyReady:writes.length>0&&calls.length>0,
+      timeline,
+      evidence:[
+        `Tail branch reached ${tailCall.target} from ${tailCall.source} with flags=0x${(number(tailCall.flags)||0).toString(16).toUpperCase()}.`,
+        `Runtime boundary is unresolved-guest-call with blocker opcode 0; the PPC instruction at ${cpu.executionBlockerAddress} has not been proven to execute.`,
+        `No sparse-memory fault was captured (faultCode ${memory?.faultCode??'—'}).`,
+        stackHealthy?`Stack is balanced at the boundary: ${trace.lastNewR1} == stackTop ${memory.stackTop}.`:undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
+        stackHealthy?'The completed inner/outer r1 teardown as the current cause':undefined,
+        'A guest-memory fault at the displayed target instruction',
+        number(kernel?.calls)===0?'XAM/xboxkrnl HLE as the current cause (kernel calls = 0)':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
+      ].filter(Boolean),
+      next:[
+        `Retry ${tailCall.target} as an exact target-rooted PPC fragment bounded by its owning .pdata end.`,
+        'Do not resume at the nearest earlier or later SOURCE_OFFSET; preserve exact PPC side effects.',
+        'Do not modify the balanced stack restore and do not map address 0 writable.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
   const suspectWrite=[...writes].reverse().find(event=>event.address===trace.lastWriteAddress&&event.newR1===trace.lastNewR1)||writes.at(-1);
   const suspectSequence=number(suspectWrite?.sequence),suspectDepth=number(suspectWrite?.depth)??number(trace.lastWriteDepth);
   const enteringCall=suspectDepth===undefined?undefined:[...calls].reverse().find(event=>number(event.depth)===suspectDepth-1&&(suspectSequence===undefined||number(event.sequence)<suspectSequence));
@@ -385,21 +426,32 @@ function renderFocus(summary){
   const title=document.createElement('h3');title.textContent=focus.headline||summary.blocker?.message||'Braid execution blocked';
   head.append(kicker,title);card.appendChild(head);
   const grid=document.createElement('div');grid.className='r360-focus-grid';
-  grid.append(
-    focusCell('First suspect',focus.primarySuspect||summary.memory?.stackTrace?.lastWriteAddress),
-    focusCell('r1 change',focus.r1WriteDelta!==undefined?`${summary.memory?.stackTrace?.lastOldR1||'—'} → ${summary.memory?.stackTrace?.lastNewR1||'—'} (${hexDelta(focus.r1WriteDelta)})`:'—'),
-    focusCell('Fault',`${summary.memory?.faultName||'—'} @ ${summary.memory?.faultAddress||'—'}`),
-    focusCell('Failing PPC',`${summary.memory?.blockerInstruction||'—'} · ${summary.memory?.blockerDecoded||ppcDiagnosticSummary(summary.memory)||'—'}`),
-    focusCell('Call edge',focus.callEdge||'—'),
-    focusCell('Progress',`${summary.cpu?.instructions??'—'} instructions · HIR ${summary.cpu?.hir??'—'}`)
-  );
+  if(focus.tailTarget){
+    grid.append(
+      focusCell('Tail target',focus.tailTarget),
+      focusCell('Source',focus.tailSource||'—'),
+      focusCell('Reason',focus.reason||'HIR interior entry unavailable'),
+      focusCell('Stack',focus.stackState||'—'),
+      focusCell('Target PPC',`${summary.memory?.blockerInstruction||'—'} · ${summary.memory?.blockerDecoded||ppcDiagnosticSummary(summary.memory)||'—'}`),
+      focusCell('Progress',`${summary.cpu?.instructions??'—'} instructions · HIR ${summary.cpu?.hir??'—'}`)
+    );
+  }else{
+    grid.append(
+      focusCell('First suspect',focus.primarySuspect||summary.memory?.stackTrace?.lastWriteAddress),
+      focusCell('r1 change',focus.r1WriteDelta!==undefined?`${summary.memory?.stackTrace?.lastOldR1||'—'} → ${summary.memory?.stackTrace?.lastNewR1||'—'} (${hexDelta(focus.r1WriteDelta)})`:'—'),
+      focusCell('Fault',`${summary.memory?.faultName||'—'} @ ${summary.memory?.faultAddress||'—'}`),
+      focusCell('Failing PPC',`${summary.memory?.blockerInstruction||'—'} · ${summary.memory?.blockerDecoded||ppcDiagnosticSummary(summary.memory)||'—'}`),
+      focusCell('Call edge',focus.callEdge||'—'),
+      focusCell('Progress',`${summary.cpu?.instructions??'—'} instructions · HIR ${summary.cpu?.hir??'—'}`)
+    );
+  }
   card.appendChild(grid);root.appendChild(card);
   appendTextList(root,'Evidence',focus.evidence);
   appendTextList(root,'Stack / call timeline',focus.timeline);
   appendCodeWindow(root,'PPC around title entry',summary.memory?.codeWindows?.entry);
   appendCodeWindow(root,'PPC around last r1 write',summary.memory?.codeWindows?.r1Write);
   appendCodeWindow(root,'PPC around call site',summary.memory?.codeWindows?.callSite);
-  appendCodeWindow(root,'PPC around fault',summary.memory?.codeWindows?.blocker);
+  appendCodeWindow(root,focus.tailTarget?'PPC around unresolved tail target':'PPC around fault',summary.memory?.codeWindows?.blocker);
   appendTextList(root,'Ruled out right now',focus.ruledOut);
   appendTextList(root,'Next diagnostic target',focus.next);
   const note=document.createElement('div');note.className='r360-dev-note';

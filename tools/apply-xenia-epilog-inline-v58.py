@@ -28,36 +28,25 @@ if '#include "sparse_guest_memory.h"\n' not in s:
 if 'bool ExecuteSharedEpilogReturn(uint32_t address)' not in s:
     raise SystemExit('V58 base epilog bridge is missing; refusing to guess source layout')
 
-# Xenia's canonical __restgprlr_N tail restores LR with lwz r12,-8(r1), so
-# keep this a 32-bit spill restore. An earlier V58 patch-script revision widened
-# this to 64 bits; undo that before building the browser runtime.
-wrong_lr = '''  const uint32_t lr_ea = r1 - 8u;
-  uint8_t lr_raw[8] = {};
-  if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
-    std::fprintf(stderr,
-                 "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\\n",
-                 address, lr_ea, SparseGuestLastFaultCode(), SparseGuestLastFaultAddress());
-    return false;
-  }
-  context->lr = ReadBigEndian64(lr_raw);
-'''
-correct_lr = '''  const uint32_t lr_ea = r1 - 8u;
-  uint8_t lr_raw[4] = {};
-  if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
-    std::fprintf(stderr,
-                 "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\\n",
-                 address, lr_ea, SparseGuestLastFaultCode(), SparseGuestLastFaultAddress());
-    return false;
-  }
-  context->lr = ReadBigEndian32(lr_raw);
-'''
-if wrong_lr in s:
-    s = s.replace(wrong_lr, correct_lr, 1)
-    print('32-bit LR restore: corrected')
-elif correct_lr in s:
-    print('32-bit LR restore: already correct')
+# Xenia's canonical __restgprlr_N tail is `lwz r12,-8(r1); mtlr r12; blr`.
+# LR is therefore a 32-bit spill here. Correct only the two unique helper lines
+# so harmless source formatting changes cannot break this patch.
+if 'uint8_t lr_raw[8] = {};' in s:
+    replace_once('uint8_t lr_raw[8] = {};', 'uint8_t lr_raw[4] = {};',
+                 '32-bit LR buffer')
+elif 'uint8_t lr_raw[4] = {};' not in s:
+    raise SystemExit('32-bit LR buffer: helper declaration not found')
 else:
-    raise SystemExit('32-bit LR restore: expected helper tail not found')
+    print('32-bit LR buffer: already correct')
+
+if 'context->lr = ReadBigEndian64(lr_raw);' in s:
+    replace_once('context->lr = ReadBigEndian64(lr_raw);',
+                 'context->lr = ReadBigEndian32(lr_raw);',
+                 '32-bit LR decode')
+elif 'context->lr = ReadBigEndian32(lr_raw);' not in s:
+    raise SystemExit('32-bit LR decode: helper assignment not found')
+else:
+    print('32-bit LR decode: already correct')
 
 # Braid branches to an interior __restgprlr_N label (0x8234F5AC). Depending on
 # registration timing, QueryFunction(address) may not expose kEpilogReturn for
@@ -161,7 +150,12 @@ new_detection = '''  auto* target_function = g_probe_backend->processor()->Query
     return helper_ok;
   }
 '''
-replace_once(old_detection, new_detection, 'signature fallback routing')
+if old_detection in s:
+    replace_once(old_detection, new_detection, 'signature fallback routing')
+elif new_detection in s:
+    print('signature fallback routing: already applied')
+else:
+    raise SystemExit('signature fallback routing: expected resolver block not found')
 
 PATH.write_text(s)
 print('R360_V58_EPILOG_INLINE_PATCH=PASS')

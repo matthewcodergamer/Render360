@@ -1,0 +1,93 @@
+name: Apply V66 XEX Memory Image Parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-xex-memory-image-v66.py'
+      - '.github/workflows/apply-xex-memory-image-v66.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-xex-memory-image-v66
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V66 updater
+        run: python3 -m py_compile tools/apply-xex-memory-image-v66.py
+
+      - name: Apply V66 XEX memory-image parity fix
+        run: python3 tools/apply-xex-memory-image-v66.py
+
+      - name: Verify V66 source and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "66"
+          grep -q 'virtual_ready ? section.virtual_address : section.raw_address' src/xenia_web_bootstrap/xex_pe_guest_loader.cpp
+          grep -q 'image+source_offset+o' src/xenia_web_bootstrap/xex_pe_guest_loader.cpp
+          grep -q 'prepared XEX image is already a memory' src/xenia_web_bootstrap/xex_pe_guest_loader.cpp
+          grep -q 'test-xex-prepared-memory-image-loader.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=66;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:66,' runtime/render360-runtime.js
+          grep -q 'Render360 66' index.html
+          grep -q '<span>UI Release</span><span class="value">66</span>' index.html
+          grep -q "const VERSION='66';" render360-sw.js
+          node --check test-xex-prepared-memory-image-loader.mjs
+
+      - name: Commit V66 loader and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V66 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V66 source/release already current.'
+          else
+            git commit -m 'fix: load prepared XEX as memory image'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, verify and publish V66 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V66 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Rebuild release-66 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

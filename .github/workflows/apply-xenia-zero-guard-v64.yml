@@ -1,0 +1,80 @@
+name: Apply V64 Xenia Zero Aperture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-xenia-zero-guard-v64.py'
+      - '.github/workflows/apply-xenia-zero-guard-v64.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-xenia-zero-guard-v64
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V64 updater syntax
+        run: python3 -m py_compile tools/apply-xenia-zero-guard-v64.py
+
+      - name: Apply V64 Xenia zero-aperture correction
+        run: python3 tools/apply-xenia-zero-guard-v64.py
+
+      - name: Verify V64 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "64"
+          ! grep -q 'lowMemoryBacking' render360-title-controller.mjs
+          ! grep -q 'map(0,lowMemoryPages' render360-title-controller.mjs
+          grep -q "zeroPageCompat:false,lowMemoryCompatBytes:0,lowMemoryPolicy:'xenia-protected'" render360-title-controller.mjs
+          grep -q 'XENIA_ZERO_APERTURE_STATE_MISSING' developer-console.js
+          grep -q 'lowApertureFault' developer-console.js
+          grep -q 'fault<0x10000' developer-console.js
+          grep -q 'const RENDER360_RELEASE=64;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:64,' runtime/render360-runtime.js
+          grep -q 'Render360 64' index.html
+          grep -q '<span>UI Release</span><span class="value">64</span>' index.html
+          grep -q "const VERSION='64';" render360-sw.js
+          node test-braid-r1-boundary-diagnostics.mjs
+          node test-braid-frame-history.mjs
+
+      - name: Commit V64 title runtime correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V64 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add render360-title-controller.mjs developer-console.js VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V64 source/release already current.'
+          else
+            git commit -m 'fix: expose Braid missing startup state behind Xenia zero guard'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Rebuild release-64 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

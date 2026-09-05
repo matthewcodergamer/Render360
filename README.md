@@ -34,7 +34,7 @@ The current work is deliberately focused on **correct CPU execution before GPU b
 
 ## Current Braid real-device blocker — V57 measurement / V58 fix
 
-The September 5 iPhone run is using the verified V57 bootstrap:
+The September 5 iPhone run reports the V58 app surface, but its verified runtime asset still has V57 provenance:
 
 ```text
 sourceCommit: 525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0
@@ -61,6 +61,15 @@ This run is different from the old `0x70081020` guard fault. The frame allocatio
 
 V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For a tail target that Xenia has already classified as `Function::Behavior::kEpilogReturn`, Render360 now handles the Microsoft `__restgprlr_N` helper as the ABI helper it actually is rather than constructing a standalone nested HIR function.
 
+The V58 source implementation is now on `main` at:
+
+```text
+4c3a88c1fe14f628a5f2fd84cf024ce9be2f6974
+fix: execute Xenia epilog helpers on live PPC context
+```
+
+The browser bootstrap must now be rebuilt and published from that source before a real-device run can test the fix.
+
 The helper bridge:
 
 ```text
@@ -85,7 +94,7 @@ The implementation remains fail-closed. It validates the helper's first instruct
 - No XAM/xboxkrnl HLE call has executed yet.
 - The Xenos ring is still downstream of the CPU blocker.
 
-The next real-device Copy Report should use the V58 published bootstrap and show whether execution advances beyond the `0x8234F5AC` shared restore helper.
+The next real-device Copy Report should use a V58 published bootstrap whose `runtimeAsset.sourceCommit` is no longer `525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0`, and should show whether execution advances beyond the `0x8234F5AC` shared restore helper.
 
 ## Browser execution architecture
 
@@ -161,7 +170,7 @@ Audio, save data, networking and title-specific compatibility may remain separat
 ## Near-term engineering order
 
 ```text
-1. build and publish the V58 shared-epilog helper bootstrap
+1. rebuild and publish the V58 shared-epilog helper bootstrap from 4c3a88c1...
 2. run Braid on the real iPhone and capture a new Copy Report
 3. verify execution advances beyond 0x8234F5AC / 17 instructions
 4. confirm the later 0x8236EB74 tail fragment still uses .pdata owner/interior routing

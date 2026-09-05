@@ -19,14 +19,16 @@ const pick = n => e[n] ?? e[`_${n}`];
 
 const required = [
   'r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr',
-  'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
   'r360_ppc_probe_input_buffer','r360_ppc_probe_load_at','r360_ppc_probe_translate',
   'r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3',
   'r360_ppc_probe_correctness_blocker_kind','r360_ppc_probe_correctness_blocker_opcode',
   'r360_ppc_probe_correctness_blocker_address',
   'r360_kernel_import_reset','r360_kernel_import_register','r360_kernel_import_calls',
   'r360_kernel_import_last_thunk','r360_kernel_import_last_module',
-  'r360_kernel_import_last_ordinal','r360_kernel_import_last_status'
+  'r360_kernel_import_last_ordinal','r360_kernel_import_last_status',
+  'r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc',
+  'r360_sparse_guest_memory_map','r360_sparse_guest_memory_write_u32_be',
+  'r360_generated_guest_load_scalar','r360_generated_guest_load_status'
 ];
 for (const n of required) if (typeof pick(n) !== 'function') throw new Error(`critic missing export ${n}`);
 
@@ -71,9 +73,32 @@ function telemetry() {
     lastStatus: pick('r360_kernel_import_last_status')() >>> 0,
   };
 }
-function runAbi(guestPtr, abiTarget = service, implemented = true) {
+
+// The decoder staging window is code transport, not Xbox guest RAM. Explicitly
+// map one RW sparse page for this synthetic ABI fixture so positive guest-memory
+// stores exercise the same authoritative address space used by real titles.
+function prepareSparseData(seed = 0) {
+  pick('r360_sparse_guest_memory_reset')();
+  const backing = pick('r360_sparse_guest_memory_alloc')(1) >>> 0;
+  if (!backing) throw new Error('critic sparse backing allocation failed');
+  if ((pick('r360_sparse_guest_memory_map')(base, 1, backing, 0, 3) >>> 0) !== 1) {
+    throw new Error('critic sparse data map failed');
+  }
+  if ((pick('r360_sparse_guest_memory_write_u32_be')(ptr, seed >>> 0) >>> 0) !== 1) {
+    throw new Error('critic sparse data seed failed');
+  }
+}
+function readSparseU32(address) {
+  const result = Number(pick('r360_generated_guest_load_scalar')(address >>> 0, 4, 1)) >>> 0;
+  if ((pick('r360_generated_guest_load_status')() >>> 0) !== 1) {
+    throw new Error(`critic sparse read failed @ 0x${(address >>> 0).toString(16)}`);
+  }
+  return result;
+}
+function runAbi(guestPtr, abiTarget = service, implemented = true, seed = 0) {
   pick('r360_ppc_probe_reset')();
   pick('r360_kernel_import_reset')();
+  prepareSparseData(seed);
   writeWords(abiWords);
   if ((pick('r360_ppc_probe_load_at')(base, input, abiWords.length * 4) >>> 0) !== abiWords.length * 4) throw new Error('critic ABI load failed');
   if ((pick('r360_ppc_probe_set_initial_gpr')(3, BigInt(guestPtr >>> 0)) >>> 0) !== 1) throw new Error('critic set r3 failed');
@@ -82,9 +107,10 @@ function runAbi(guestPtr, abiTarget = service, implemented = true) {
   if (!(pick('r360_ppc_probe_translate')() >>> 0)) throw new Error('critic translate failed');
   return telemetry();
 }
-function runControl(implemented, abiTarget = 0) {
+function runControl(implemented, abiTarget = 0, seed = 0) {
   pick('r360_ppc_probe_reset')();
   pick('r360_kernel_import_reset')();
+  prepareSparseData(seed);
   writeWords(controlWords);
   if ((pick('r360_ppc_probe_load_at')(base, input, controlWords.length * 4) >>> 0) !== controlWords.length * 4) throw new Error('critic control load failed');
   if ((pick('r360_kernel_import_register')(thunk, moduleId, ordinal, implemented ? 1 : 0, abiTarget >>> 0) >>> 0) !== 1) throw new Error('critic control register failed');
@@ -93,9 +119,8 @@ function runControl(implemented, abiTarget = 0) {
 }
 
 // Positive path: arguments, guest-visible state, return ABI, and continuation all must agree.
-if ((pick('r360_ppc_probe_write_guest_u32_be')(ptr, 0) >>> 0) !== 1) throw new Error('critic seed failed');
 const ok = runAbi(ptr);
-const stored = pick('r360_ppc_probe_read_guest_u32_be')(ptr) >>> 0;
+const stored = readSparseU32(ptr);
 if (ok.status !== 3 || ok.r3 !== 0x42 || ok.calls !== 1 || ok.lastStatus !== 1 ||
     ok.thunk !== thunk || ok.module !== moduleId || ok.ordinal !== ordinal || stored !== (value >>> 0)) {
   throw new Error(`critic positive ABI mismatch ${JSON.stringify({...ok,stored})}`);
@@ -105,7 +130,8 @@ console.log('KERNEL_ABI_CRITIC_GUEST_MEMORY=PASS');
 console.log('KERNEL_ABI_CRITIC_R3_RETURN=PASS');
 console.log('KERNEL_ABI_CRITIC_CONTINUATION=PASS');
 
-// Exact end-of-window crossing: a 4-byte store beginning at +0xFFFE must fail closed.
+// Exact end-of-page crossing: a 4-byte store beginning at +0xFFFE must fail
+// closed because only the first synthetic sparse page is mapped.
 const boundary = runAbi(base + 0xFFFE);
 if (boundary.status !== 1 || boundary.lastStatus !== 3 || boundary.calls !== 1 ||
     boundary.blockerKind !== 5 || boundary.blockerAddress !== service) {
@@ -114,7 +140,7 @@ if (boundary.status !== 1 || boundary.lastStatus !== 3 || boundary.calls !== 1 |
 console.log('KERNEL_ABI_CRITIC_RANGE_FAIL_CLOSED=PASS');
 console.log('KERNEL_ABI_CRITIC_NESTED_BLOCKER_PROPAGATION=PASS');
 
-// 32-bit wraparound pointer must fail closed, never alias back into the staging window.
+// 32-bit wraparound pointer must fail closed, never alias back into mapped guest RAM.
 const wrap = runAbi(0xFFFFFFFE);
 if (wrap.status !== 1 || wrap.lastStatus !== 3 || wrap.calls !== 1 ||
     wrap.blockerKind !== 5 || wrap.blockerAddress !== service) {
@@ -128,9 +154,8 @@ if (recursive.status !== 1 || recursive.lastStatus !== 3 || recursive.calls !== 
 console.log('KERNEL_ABI_CRITIC_RECURSION_FAIL_CLOSED=PASS');
 
 // Unsupported export must preserve exact blocker telemetry and may not mutate guest state.
-if ((pick('r360_ppc_probe_write_guest_u32_be')(ptr, 0x0BADF00D) >>> 0) !== 1) throw new Error('critic unsupported seed failed');
-const unsupported = runControl(false, 0);
-const unchanged = pick('r360_ppc_probe_read_guest_u32_be')(ptr) >>> 0;
+const unsupported = runControl(false, 0, 0x0BADF00D);
+const unchanged = readSparseU32(ptr);
 if (unsupported.status !== 1 || unsupported.lastStatus !== 2 || unsupported.calls !== 1 ||
     unsupported.blockerKind !== 2 || unsupported.thunk !== thunk || unsupported.module !== moduleId ||
     unsupported.ordinal !== ordinal || unchanged !== 0x0BADF00D) {

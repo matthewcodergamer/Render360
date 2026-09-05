@@ -11,6 +11,7 @@ python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
+# Keep the HIR frame-history overlay last: it instruments the fully patched call/return executor.
 python3 "$ROOT/prepare-hir-call-return-stack-overlay.py"
 python3 "$ROOT/prepare-hir-return-metadata-v3-overlay.py"
 python3 "$ROOT/prepare-hir-stack-history-overlay.py"

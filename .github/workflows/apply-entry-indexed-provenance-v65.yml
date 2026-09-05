@@ -1,0 +1,93 @@
+name: Apply V65 Entry Indexed Provenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-entry-indexed-provenance-v65.py'
+      - '.github/workflows/apply-entry-indexed-provenance-v65.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-entry-indexed-provenance-v65
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V65 updater syntax
+        run: python3 -m py_compile tools/apply-entry-indexed-provenance-v65.py
+
+      - name: Apply V65 entry/indexed provenance correction
+        run: python3 tools/apply-entry-indexed-provenance-v65.py
+
+      - name: Verify V65 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "65"
+          grep -q 'GetHIRCorrectnessLastGPR' src/xenia_web_bootstrap/hir_correctness_executor.h
+          grep -q 'g_last_gprs' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'r360_ppc_probe_correctness_gpr' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'r360_ppc_probe_correctness_gpr' link-xenia-ppc-bootstrap.sh
+          grep -q 'r360_ppc_probe_correctness_gpr' render360-browser-title-runtime.mjs
+          grep -q "23:'lwzx'" developer-console.js
+          grep -q "TITLE_ENTRY_INDEXED_ZERO_DEPENDENCY" developer-console.js
+          grep -q 'xexEntry:address(result.xexEntry)' developer-console.js
+          grep -q 'peEntry:address(result.peEntry)' developer-console.js
+          grep -q 'indexRegisterValue' developer-console.js
+          grep -q 'const RENDER360_RELEASE=65;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:65,' runtime/render360-runtime.js
+          grep -q 'Render360 65' index.html
+          grep -q '<span>UI Release</span><span class="value">65</span>' index.html
+          grep -q "const VERSION='65';" render360-sw.js
+          node --check developer-console.js
+          node --check render360-browser-title-runtime.mjs
+          node test-braid-r1-boundary-diagnostics.mjs
+          node test-braid-frame-history.mjs
+
+      - name: Commit V65 source and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V65 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.h \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            src/xenia_web_bootstrap/ppc_translation_probe.cpp \
+            link-xenia-ppc-bootstrap.sh \
+            render360-browser-title-runtime.mjs \
+            developer-console.js \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V65 source/release already current.'
+          else
+            git commit -m 'diag: prove Braid XEX entry indexed register state'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Rebuild release-65 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

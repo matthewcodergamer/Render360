@@ -56,7 +56,6 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add \
             src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
             VERSION runtime/render360-runtime.js index.html render360-sw.js
           if git diff --cached --quiet; then
             echo 'V66 source/release already current.'

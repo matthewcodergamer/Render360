@@ -6,6 +6,7 @@ on:
     paths:
       - 'tools/apply-entry-indexed-provenance-v65.py'
       - 'tools/fix-v65-hir-return-overlay.py'
+      - 'prepare-hir-tail-frame-overlay.py'
       - '.github/workflows/apply-entry-indexed-provenance-v65.yml'
   workflow_dispatch:
 
@@ -31,6 +32,7 @@ jobs:
         run: |
           python3 -m py_compile tools/apply-entry-indexed-provenance-v65.py
           python3 -m py_compile tools/fix-v65-hir-return-overlay.py
+          python3 -m py_compile prepare-hir-tail-frame-overlay.py
 
       - name: Apply V65 entry/indexed provenance correction
         run: |
@@ -48,6 +50,7 @@ jobs:
           grep -q 'r360_ppc_probe_correctness_gpr' link-xenia-ppc-bootstrap.sh
           grep -q 'r360_ppc_probe_correctness_gpr' render360-browser-title-runtime.mjs
           grep -q 'reset_v65_old' prepare-hir-return-metadata-v3-overlay.py
+          grep -q 'V65 snapshots the architectural GPRs' prepare-hir-tail-frame-overlay.py
           grep -q "23:'lwzx'" developer-console.js
           grep -q "TITLE_ENTRY_INDEXED_ZERO_DEPENDENCY" developer-console.js
           grep -q 'xexEntry:address(result.xexEntry)' developer-console.js
@@ -76,12 +79,13 @@ jobs:
             link-xenia-ppc-bootstrap.sh \
             render360-browser-title-runtime.mjs \
             prepare-hir-return-metadata-v3-overlay.py \
+            prepare-hir-tail-frame-overlay.py \
             developer-console.js \
             VERSION runtime/render360-runtime.js index.html render360-sw.js
           if git diff --cached --quiet; then
             echo 'V65 source/release already current.'
           else
-            git commit -m 'fix: keep V65 GPR snapshot through HIR overlays'
+            git commit -m 'fix: keep V65 diagnostics through all HIR overlays'
             git pull --rebase origin main
             git push origin HEAD:main
           fi

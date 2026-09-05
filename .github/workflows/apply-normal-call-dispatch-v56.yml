@@ -1,0 +1,63 @@
+name: Apply Normal Call Dispatch V56
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/apply-normal-call-dispatch-v56.py"
+      - ".github/workflows/apply-normal-call-dispatch-v56.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-normal-call-dispatch-v56
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply linked-call vs tail-call dispatch fix
+        run: python3 tools/apply-normal-call-dispatch-v56.py
+
+      - name: Verify V56 source contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h = Path('src/xenia_web_bootstrap/hir_correctness_executor.h').read_text()
+          b = Path('src/xenia_web_bootstrap/probe_backend.cpp').read_text()
+          o = Path('prepare-hir-tail-frame-overlay.py').read_text()
+          checks = {
+              'call flags API': 'GetHIRCorrectnessCurrentCallFlags' in h,
+              'linked call exact target': 'const bool use_owner = is_tail && pdata;' in b,
+              'tail flag test': 'xe::cpu::hir::CALL_TAIL' in b,
+              'interior only for owner': 'use_owner && address != fn_begin ? address : 0u' in b,
+              'overlay captures flags': 'g_current_call_flags=flags' in o,
+              'overlay getter': 'GetHIRCorrectnessCurrentCallFlags(){return g_current_call_flags;}' in o,
+          }
+          for name, ok in checks.items():
+              print(f'{name}: {"PASS" if ok else "FAIL"}')
+          if not all(checks.values()):
+              raise SystemExit(1)
+          PY
+          git diff --check
+
+      - name: Commit V56 source
+        run: |
+          if git diff --quiet; then
+            echo "No V56 changes to commit"
+            exit 0
+          fi
+          git config user.name "Render360 V56 Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/xenia_web_bootstrap/hir_correctness_executor.h \
+                  src/xenia_web_bootstrap/probe_backend.cpp \
+                  prepare-hir-tail-frame-overlay.py
+          git commit -m "fix: keep linked guest calls on exact entries"
+          git push origin HEAD:main

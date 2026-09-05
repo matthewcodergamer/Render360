@@ -1,0 +1,45 @@
+name: Apply Xenia Epilog Tail V57
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-xenia-epilog-tail-v57.py'
+      - '.github/workflows/apply-xenia-epilog-tail-v57.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-xenia-epilog-tail-v57
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply V57 epilog-tail resolver fix
+        run: python3 tools/apply-xenia-epilog-tail-v57.py
+      - name: Verify V57 source contract
+        shell: bash
+        run: |
+          grep -q 'Function::Behavior::kEpilogReturn' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'is_tail && pdata && !is_epilog_return' src/xenia_web_bootstrap/probe_backend.cpp
+          grep -q 'epilog=%u pdata=%u owner=%u' src/xenia_web_bootstrap/probe_backend.cpp
+      - name: Commit V57 source
+        shell: bash
+        run: |
+          if git diff --quiet -- src/xenia_web_bootstrap/probe_backend.cpp; then
+            echo 'V57 source already applied'
+            exit 0
+          fi
+          git config user.name 'Render360 V57 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/probe_backend.cpp
+          git commit -m 'fix: preserve Xenia epilog helper tail entries'
+          git push origin HEAD:main

@@ -533,8 +533,31 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
                       uint32_t opcode) {
   if (!destination || !lhs || !rhs) return false;
   RuntimeValue a, b;
-  if (!ResolveRuntimeValue(lhs, values, &a) ||
-      !ResolveRuntimeValue(rhs, values, &b)) {
+  // R360_V61_BINARY_CONTEXT_RECOVERY
+  // Exact target-rooted tail fragments may begin after a context LOAD that
+  // still defines an operand used by the first arithmetic instruction. Keep
+  // normal execution strict; only V60's explicitly-scoped recovery mode may
+  // materialize that proven PPCContext source.
+  auto resolve_binary_operand = [&](const Value* operand, RuntimeValue* out,
+                                    const char* side) -> bool {
+    if (ResolveRuntimeValue(operand, values, out)) return true;
+    if (!g_context_provenance_recovery_enabled || !g_active_context) {
+      return false;
+    }
+    uint64_t context_offset = 0;
+    if (!ResolveContextProvenance(operand, *g_active_context, out,
+                                  &context_offset)) {
+      return false;
+    }
+    std::fprintf(
+        stderr,
+        "R360_CONTEXT_VALUE_RECOVERY stage=binary side=%s load=0x%llX type=%u\n",
+        side, static_cast<unsigned long long>(context_offset),
+        static_cast<unsigned>(operand->type));
+    return true;
+  };
+  if (!resolve_binary_operand(lhs, &a, "lhs") ||
+      !resolve_binary_operand(rhs, &b, "rhs")) {
     return false;
   }
 

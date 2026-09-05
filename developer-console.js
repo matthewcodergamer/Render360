@@ -219,7 +219,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const writeWindow=memory?.codeWindows?.r1Write||[];
   const writeInstruction=writeWindow.find(row=>row.current);
   const writes=trace.writeHistory||[],calls=trace.callHistory||[];
-  const tailCall=[...calls].reverse().find(event=>event.target===cpu?.executionBlockerAddress&&((number(event.flags)||0)&2)!==0);
+  const lastCall=calls.length?calls[calls.length-1]:undefined;
+  const tailCall=lastCall&&(((number(lastCall.flags)||0)&2)!==0)?lastCall:undefined;
   const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
   const unsupportedTail=cpu?.runtimeBoundary==='unsupported-hir'&&number(cpu?.executionBlockerKind)===1&&!!tailCall;
   if(unresolvedTail){
@@ -230,7 +231,7 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     return compact({
       classification:'CPU_RUNTIME_BLOCKER',
       headline:'CPU execution stopped at an unresolved tail target',
-      tailTarget:cpu.executionBlockerAddress,
+      tailTarget:tailCall.target,
       tailSource:tailCall.source,
       reason:'HIR interior entry unavailable',
       stackState:stackHealthy?`Healthy · restored to ${memory.stackTop}`:`r1=${trace.lastNewR1||trace.lastCallR1||'—'}`,
@@ -269,7 +270,7 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
     return compact({
       classification:'CPU_RUNTIME_BLOCKER',
       headline:'CPU execution stopped on unsupported HIR in a tail fragment',
-      tailTarget:cpu.executionBlockerAddress,
+      tailTarget:tailCall.target,
       tailSource:tailCall.source,
       reason:`HIR opcode ${cpu.executionBlockerOpcode??'—'} failed in the compatibility executor`,
       stackState:stackHealthy?`Healthy · restored to ${memory.stackTop}`:`r1=${trace.lastNewR1||trace.lastCallR1||'—'}`,

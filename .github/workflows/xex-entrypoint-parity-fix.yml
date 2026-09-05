@@ -1,0 +1,57 @@
+name: XEX Entrypoint Parity Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apply-xex-entrypoint-parity-fix.py'
+      - '.github/workflows/xex-entrypoint-parity-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xex-entrypoint-parity-fix
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v4
+
+      - name: Apply Xenia XEX entrypoint parity patch
+        run: python3 ./apply-xex-entrypoint-parity-fix.py
+
+      - name: Validate patched JavaScript and diff
+        run: |
+          node --check ./render360-title-controller.mjs
+          node --check ./render360-browser-title-runtime.mjs
+          node --check ./test-xex-guest-mapper.mjs
+          git diff --check
+          git diff -- src/xenia_web_bootstrap/xex_pe_guest_loader.h \
+                     src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
+                     render360-title-controller.mjs \
+                     render360-browser-title-runtime.mjs \
+                     test-xex-guest-mapper.mjs \
+                     .github/workflows/xenia-browser-bootstrap-fastlane.yml
+
+      - name: Commit applied runtime fix
+        run: |
+          git config user.name 'Render360 Entrypoint Fix Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/xex_pe_guest_loader.h \
+                  src/xenia_web_bootstrap/xex_pe_guest_loader.cpp \
+                  render360-title-controller.mjs \
+                  render360-browser-title-runtime.mjs \
+                  test-xex-guest-mapper.mjs \
+                  .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          if git diff --cached --quiet; then
+            echo 'XEX entrypoint parity fix is already applied.'
+            exit 0
+          fi
+          git commit -m 'fix: launch titles from XEX entrypoint like Xenia'
+          git push origin HEAD:main

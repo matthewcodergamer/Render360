@@ -6,7 +6,7 @@
 
 This README is the current public project status. Historical percentages and old screenshots are not compatibility ratings.
 
-## Current status — September 4, 2026
+## Current status — September 5, 2026
 
 Render360 now has the major browser foundations required to keep working toward a real Xbox 360 title frame:
 
@@ -32,94 +32,60 @@ COMMERCIAL GAMEPLAY                        NOT YET VERIFIED
 
 The current work is deliberately focused on **correct CPU execution before GPU bring-up**. Braid still stops before the first kernel HLE call and before Xenos ring initialization, so mapping fake memory, returning fake kernel success, or drawing placeholder pixels would only hide the real blocker.
 
-## Current Braid real-device blocker
+## Current Braid real-device blocker — V57 measurement / V58 fix
 
-The September 4 iPhone run using the verified bootstrap produced:
+The September 5 iPhone run is using the verified V57 bootstrap:
 
 ```text
-sourceCommit: abb0043f16dc835b1dc2f108604153ab0e84e121
-sourceRun:    33888716919
-wasm sha256:  736deb034dd3720daeeffb3afc4f15bc7e6f237f7650c4bed6bf078a091f8e4e
+sourceCommit: 525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0
+sourceRun:    33958433624
+wasm sha256:  0bd12e1d545514ef6e258e38f0efc72bde21990772d5bebf6afab255cc9745d9
 
 entry:        0x8236EF38
 HIR:          340
-executed:     83 instructions
-translated:   1 function
+executed:     17 instructions
 blocker:      HIR guest-memory dependency (opcode 37)
-PPC:          0x8234F5A4 / 0xEB61FFD0
-operation:    ld r27,-48(r1)
-r1:           0x70081050
-fault:        0x70081020 (unmapped)
-initial r1:   0x70080F50
-stack base:   0x70081000
-last r1 write 0x8236EB78: 0x70080F50 -> 0x70081050
-last call:    0x8236EB7C -> 0x8234F5A4 (__restgprlr_27 path)
+PPC:          0x8234F5AC / 0xEBA1FFE0
+operation:    ld r29,-32(r1)
+caller r1:    0x70080EF0
+call:         0x8236C7CC -> 0x8234F5AC
+call flags:   0x2 (CALL_TAIL)
+helper:       Xenia kEpilogReturn / __restgprlr_29-style entry
 kernel calls: 0
 GPU:          ring-not-initialized
 ```
 
-This is important because the fault is now attributed to the live PPC state rather than to a guessed address calculation. The load itself is valid PPC64 DS-form behavior; the problem is that execution reaches the restore helper with `r1` already moved above the Xbox stack high boundary.
+This run is different from the old `0x70081020` guard fault. The frame allocation and teardown around `0x8236C6E0` are balanced (`-0x70`, then `+0x70`). V57 correctly identifies the target as a Xenia epilog-return helper, but sending that helper back through an isolated nested HIR translation still loses the value materialization required by the helper's loads; the diagnostic therefore reports no concrete sparse-memory fault even though HIR opcode 37 stops execution.
 
-### What has been ruled out
+### V58: execute shared epilog helpers on the live PPC context
 
-The main-thread stack geometry is not being widened or wrapped to hide the fault. Upstream Xenia creates a no-access upper guard at `stack_base`, so `0x70081020` must remain invalid.
+V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For a tail target that Xenia has already classified as `Function::Behavior::kEpilogReturn`, Render360 now handles the Microsoft `__restgprlr_N` helper as the ABI helper it actually is rather than constructing a standalone nested HIR function.
 
-Render360 also now mirrors both pieces of Xenia `Processor::Execute` title-entry state:
-
-```text
-ThreadState r1 = stack_base
-Processor::Execute reserve = 64 + 112 bytes
-Render360 initial r1 = stack_base - 176 = 0x70080F50
-initial LR = 0xBCBCBCBC
-```
-
-The real-device run still produced the same 83-instruction blocker after the LR sentinel was added, which rules out a missing initial LR value as the complete explanation.
-
-## September 4 CPU fix: seed the guest return token from Xenia's entry LR
-
-The next correction is now in `main`.
-
-Xenia does not use `0xBCBCBCBC` only as an architectural LR value. `Function::Call` also receives that value as the host-side expected guest return address. Render360's HIR compatibility executor previously initialized architectural LR correctly but left its own expected-return stack empty at depth 1.
-
-That distinction matters for PowerPC control flow. A non-linking direct branch is lowered as `CALL_TAIL`, and a branch through LR is marked `CALL_POSSIBLE_RETURN`. If the top-level expected return is absent, a tail-call chain may accept a `bclr` as terminal without proving that its target is the real guest return address. That can end a guest slice too early and leave later shared EABI epilogue code with the wrong live stack state.
-
-`prepare-hir-return-metadata-v3-overlay.py` now seeds depth 1 from the same non-zero initial LR used by Xenia:
+The helper bridge:
 
 ```text
-initial LR 0xBCBCBCBC
+CALL_TAIL -> Xenia kEpilogReturn
         ↓
-expected guest return depth 1
+validate first instruction as ld rN,disp(r1)
         ↓
-CALL_TAIL inherits the same return token
+restore rN..r31 from live sparse guest stack
         ↓
-CALL_POSSIBLE_RETURN must match it
+restore LR from -8(r1)
+        ↓
+return through the caller's existing tail-call boundary
 ```
 
-The change is intentionally fail-closed. It does **not** clamp `r1`, map the upper guard, rewrite `0x70081020`, or pretend Braid has progressed. Synthetic fixtures that do not provide an initial LR keep the old test-compatible top-level behavior; production title execution supplies the Xenia sentinel and therefore gets strict return matching.
+The implementation remains fail-closed. It validates the helper's first instruction and expected register/stack offset pattern, reads only through authoritative `SparseGuestMemory`, and returns a real failure if any helper load is unmapped. It does not map the upper guard, clamp `r1`, fabricate register values, or bypass unrelated memory faults.
 
-Current source commit for this surgery:
+### What remains ruled out
 
-```text
-010f1a064922298c3cf6e0ab7ceedf1ed56e76cf
-fix: seed Xenia guest return token from entry LR
-```
+- The initial Xbox stack reservation is correct (`r1 = 0x70080F50`).
+- The upper stack guard remains protected.
+- The current V57 blocker has a matching `-0x70` allocation and `+0x70` teardown, so it is not the earlier missing-prologue case.
+- No XAM/xboxkrnl HLE call has executed yet.
+- The Xenos ring is still downstream of the CPU blocker.
 
-The next real-device Copy Report determines whether this changes the `0x8236ECA4 -> 0x8236EB74 -> __restgprlr_27` path. If the exact same stack transition remains, the next target is function-boundary / shared-epilogue classification rather than stack geometry.
-
-## Why this matches upstream Xenia more closely
-
-Render360 follows several upstream behaviors that are relevant to this blocker:
-
-- a new PPC `ThreadState` starts with `r1 = stack_base`;
-- `Processor::Execute` subtracts `64 + 112` bytes before the guest entry;
-- `Processor::Execute` calls the guest function with `0xBCBCBCBC` as its return value/sentinel;
-- linked PPC branches emit both `SET_RETURN_ADDRESS(cia + 4)` and an LR update;
-- non-linking direct branches are lowered as tail calls;
-- LR branches are possible returns, not unconditional returns;
-- Xbox thread stacks have inaccessible guard pages below and above the usable stack;
-- Xenia recognizes the Microsoft `__savegprlr_*` / `__restgprlr_*` families as special function behavior during normal XEX module setup.
-
-The browser compatibility executor is being brought toward those semantics incrementally while keeping sparse guest memory authoritative.
+The next real-device Copy Report should use the V58 published bootstrap and show whether execution advances beyond the `0x8234F5AC` shared restore helper.
 
 ## Browser execution architecture
 
@@ -195,11 +161,11 @@ Audio, save data, networking and title-specific compatibility may remain separat
 ## Near-term engineering order
 
 ```text
-1. rebuild and publish the V52 return-token bootstrap
+1. build and publish the V58 shared-epilog helper bootstrap
 2. run Braid on the real iPhone and capture a new Copy Report
-3. verify whether execution advances beyond 83 instructions
-4. if it advances, implement only the next measured CPU/kernel blocker
-5. if it does not, inspect Xenia function-boundary/shared-epilogue classification
+3. verify execution advances beyond 0x8234F5AC / 17 instructions
+4. confirm the later 0x8236EB74 tail fragment still uses .pdata owner/interior routing
+5. implement only the next measured PPC/HIR blocker
 6. reach the first real xboxkrnl/XAM HLE call
 7. bring the guest scheduler online
 8. reach Xenos ring initialization and PM4 traffic
@@ -213,7 +179,7 @@ Audio, save data, networking and title-specific compatibility may remain separat
 - `src/xenia_web_bootstrap/ppc_translation_probe.cpp` — movable Xenia PPC decoder/scanner window and production probe ABI.
 - `src/xenia_web_bootstrap/hir_correctness_executor.cpp` — base correctness executor source.
 - `prepare-hir-call-return-stack-overlay.py` — nested call/return semantics, sparse-memory fail-closed behavior and stack provenance.
-- `prepare-hir-return-metadata-v3-overlay.py` — return-token lifetime rules, Xenia entry LR state and current V52 depth-1 return seeding.
+- `prepare-hir-return-metadata-v3-overlay.py` — return-token lifetime rules, Xenia entry LR state and V52 depth-1 return seeding plus V55-V58 tail/epilog routing.
 - `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — authoritative sparse Xbox virtual memory.
 - `src/xenia_web_bootstrap/kernel_import_probe.cpp` — imported thunk / HLE boundary.
 - `src/xenia_web_bootstrap/kernel_runtime_foundation.cpp` — browser kernel service foundation.

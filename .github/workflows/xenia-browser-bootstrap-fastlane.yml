@@ -12,6 +12,7 @@ on:
       - 'prepare-hir-stack-history-overlay.py'
       - 'prepare-hir-tail-frame-overlay.py'
       - 'tools/apply-xenia-entry-abi-v51.py'
+      - 'tools/apply-xenia-epilog-tail-v57.py'
       - 'render360-browser-ppc-session.mjs'
       - 'render360-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'

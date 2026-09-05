@@ -25,6 +25,17 @@ jobs:
       - name: Apply tail-frame boundary fix
         shell: bash
         run: |
+          rm -f tail-frame-apply-error.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/apply-tail-frame-boundary-v55.py')
+          s=p.read_text()
+          old="s=one(s,'#include \"sparse_guest_memory.h\"\\n','#include \"sparse_guest_memory.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
+          new="s=one(s,'#include \"kernel_import_probe.h\"\\n','#include \"kernel_import_probe.h\"\\n#include \"xex_pe_guest_loader.h\"\\n','backend loader include')"
+          if old not in s:
+              raise SystemExit('tail patcher backend include anchor hotfix missing')
+          p.write_text(s.replace(old,new,1))
+          PY
           set +e
           python3 tools/apply-tail-frame-boundary-v55.py > tail-frame-apply-error.txt 2>&1
           code=$?
@@ -32,7 +43,7 @@ jobs:
           if [ "$code" -ne 0 ]; then
             git config user.name 'Render360 Tail Frame Fix Bot'
             git config user.email 'actions@users.noreply.github.com'
-            git add tail-frame-apply-error.txt
+            git add tools/apply-tail-frame-boundary-v55.py tail-frame-apply-error.txt
             git commit -m 'ci: capture tail-frame patch failure' || true
             git push origin HEAD:main || true
             exit "$code"

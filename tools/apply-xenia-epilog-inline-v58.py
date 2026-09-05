@@ -7,6 +7,9 @@ s = PATH.read_text()
 
 def one(old: str, new: str, label: str):
     global s
+    if new in s:
+        print(f"{label}: already applied")
+        return
     count = s.count(old)
     if count != 1:
         raise SystemExit(f"{label}: expected 1 anchor, got {count}")
@@ -90,7 +93,7 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   }
 
   const uint32_t lr_ea = r1 - 8u;
-  uint8_t lr_raw[4] = {};
+  uint8_t lr_raw[8] = {};
   if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
     std::fprintf(stderr,
                  "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\\n",
@@ -98,7 +101,7 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
                  SparseGuestLastFaultAddress());
     return false;
   }
-  context->lr = ReadBigEndian32(lr_raw);
+  context->lr = ReadBigEndian64(lr_raw);
   std::fprintf(stderr,
                "R360_EPILOG_HELPER executed target=0x%08X first_gpr=%u r1=0x%08X lr=0x%08X\\n",
                address, first_gpr, r1, static_cast<uint32_t>(context->lr));
@@ -127,6 +130,28 @@ one('''  const bool is_epilog_return =
 
   uint32_t fn_begin = address, fn_end = 0, prolog = 0;
 ''', 'epilog helper fast path')
+
+one('''  const uint32_t lr_ea = r1 - 8u;
+  uint8_t lr_raw[4] = {};
+  if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
+    std::fprintf(stderr,
+                 "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\\n",
+                 address, lr_ea, SparseGuestLastFaultCode(),
+                 SparseGuestLastFaultAddress());
+    return false;
+  }
+  context->lr = ReadBigEndian32(lr_raw);
+''', '''  const uint32_t lr_ea = r1 - 8u;
+  uint8_t lr_raw[8] = {};
+  if (!ReadSparseGuestMemory(lr_ea, lr_raw, sizeof(lr_raw))) {
+    std::fprintf(stderr,
+                 "R360_EPILOG_HELPER lr-fail target=0x%08X ea=0x%08X fault=%u@0x%08X\\n",
+                 address, lr_ea, SparseGuestLastFaultCode(),
+                 SparseGuestLastFaultAddress());
+    return false;
+  }
+  context->lr = ReadBigEndian64(lr_raw);
+''', 'full 64-bit LR restore')
 
 PATH.write_text(s)
 print('R360_V58_EPILOG_INLINE_PATCH=PASS')

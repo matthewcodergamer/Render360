@@ -75,7 +75,7 @@ index.write_text(text)
 
 sw = ROOT / "render360-sw.js"
 text = sw.read_text()
-text, count = re.subn(r"const VERSION='\\d+';", "const VERSION='66';", text, count=1)
+text, count = re.subn(r"const VERSION='\d+';", "const VERSION='66';", text, count=1)
 if count != 1:
     raise SystemExit("V66 service worker version anchor missing")
 sw.write_text(text)

@@ -1,0 +1,62 @@
+name: Braid Frame History Surgery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/braid-frame-history-surgery.yml'
+      - 'tools/braid-frame-history-surgery.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: braid-frame-history-surgery
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply ordered Braid stack/call history plumbing
+        run: python3 tools/braid-frame-history-surgery.py
+
+      - name: Validate surgery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/braid-frame-history-surgery.py prepare-hir-stack-history-overlay.py
+          node --check render360-title-controller.mjs
+          node --check developer-console.js
+          node --check test-braid-frame-history.mjs
+          node test-braid-frame-history.mjs
+          node test-braid-r1-boundary-diagnostics.mjs
+          node test-ui-contract.mjs
+          git diff --check
+
+      - name: Commit verified surgery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            build-xenia-ppc-bootstrap.sh \
+            prepare-hir-stack-history-overlay.py \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            render360-title-controller.mjs \
+            developer-console.js \
+            test-braid-frame-history.mjs
+          git diff --cached --check
+          git commit -m 'diag: trace Braid stack frame history' || exit 0
+          git push origin HEAD:main

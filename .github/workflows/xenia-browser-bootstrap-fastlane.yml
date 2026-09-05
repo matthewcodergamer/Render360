@@ -36,49 +36,140 @@ concurrency:
   group: xenia-browser-bootstrap-fastlane
   cancel-in-progress: true
 
+env:
+  # Pin the toolchain so a new emsdk image/release cannot silently change the
+  # browser ABI or force a multi-gigabyte Docker pull in the critical path.
+  EM_VERSION: '5.0.1'
+  EMSDK_CACHE_FOLDER: 'emsdk-cache'
+  XENIA_REV: '95a5c3ee250f80c3b9d139658649d9ffb6db3eec'
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  R360_BUILD_JOBS: '2'
+
 jobs:
-  browser-bootstrap:
+  browser-bootstrap-build:
+    name: Build browser bootstrap
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout Render360
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Fetch upstream Xenia
-        run: bash ./fetch-xenia.sh
+      - name: Restore pinned Xenia source cache
+        id: xenia-cache
+        uses: actions/cache@v6
+        with:
+          path: upstream/xenia
+          key: render360-xenia-${{ runner.os }}-${{ env.XENIA_REV }}
+
+      - name: Fetch pinned upstream Xenia
+        shell: bash
+        run: |
+          echo "R360_PHASE fetch-xenia start=$(date -u +%FT%TZ)"
+          bash ./fetch-xenia.sh
+          echo "R360_PHASE fetch-xenia done=$(date -u +%FT%TZ)"
 
       - name: Verify Braid frame-history instrumentation contract
         run: node ./test-braid-frame-history.mjs
 
-      - name: Build and link browser bootstrap
+      - name: Restore C/C++ compile cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: render360-ccache-${{ runner.os }}-emscripten-${{ env.EM_VERSION }}-xenia-${{ env.XENIA_REV }}-${{ github.ref_name }}
+          restore-keys: |
+            render360-ccache-${{ runner.os }}-emscripten-${{ env.EM_VERSION }}-xenia-${{ env.XENIA_REV }}-
+
+      - name: Setup pinned Emscripten SDK
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ env.EM_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Prepare native build helpers
         shell: bash
         run: |
+          set -euo pipefail
+          packages=()
+          if ! command -v ccache >/dev/null 2>&1; then
+            packages+=(ccache)
+          fi
+          llvm_include="$(llvm-config --includedir 2>/dev/null || true)"
+          if [ -z "$llvm_include" ] || [ ! -f "$llvm_include/llvm/IR/Module.h" ]; then
+            packages+=(llvm-dev)
+          fi
+          if [ "${#packages[@]}" -gt 0 ]; then
+            echo "Installing missing host helpers only: ${packages[*]}"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "${packages[@]}" >/dev/null
+          else
+            echo "Host ccache and LLVM development headers are already available."
+          fi
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size=2G
+          ccache --zero-stats
+          echo "emcc=$(command -v emcc)"
+          echo "em++=$(command -v em++)"
+          echo "ccache=$(command -v ccache)"
+          echo "llvm-config=$(command -v llvm-config || true)"
+          emcc -v
+
+      - name: Build and link browser bootstrap
+        shell: bash
+        env:
+          # Emscripten invokes ccache around its Clang compiler. ccache hashes
+          # the preprocessed input, so unchanged Xenia translation units are
+          # reused safely even when a Render360 overlay changes elsewhere.
+          EM_COMPILER_WRAPPER: ccache
+        run: |
           set -o pipefail
-          docker run --rm \
-            -v "$PWD:/src" \
-            -w /src \
-            emscripten/emsdk:latest \
-            bash -lc 'apt-get update -qq && apt-get install -y -qq llvm-dev >/dev/null && bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh' \
+          echo "R360_PHASE bootstrap-build start=$(date -u +%FT%TZ) jobs=$R360_BUILD_JOBS"
+          { bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh; } \
             2>&1 | tee browser-bootstrap-build.log
+          echo "R360_PHASE bootstrap-build done=$(date -u +%FT%TZ)"
+
+      - name: Show compiler cache statistics
+        if: always()
+        run: ccache --show-stats || true
 
       - name: Upload bootstrap build diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-bootstrap-build-log
-          path: browser-bootstrap-build.log
+          path: |
+            browser-bootstrap-build.log
+            build/xenia-ppc-bootstrap/report.tsv
+            build/xenia-ppc-bootstrap/link.log
+            build/xenia-ppc-bootstrap/link-report.txt
+            build/xenia-ppc-bootstrap/*.o.log
           if-no-files-found: warn
           retention-days: 2
 
       - name: Upload freshly linked browser bootstrap
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xenia-browser-bootstrap-fastlane
           path: |
             build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
             build/xenia-ppc-bootstrap/report.tsv
+            build/xenia-ppc-bootstrap/link-report.txt
           if-no-files-found: error
           retention-days: 2
+
+  browser-bootstrap-verify:
+    name: Verify and publish browser bootstrap
+    needs: browser-bootstrap-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+
+      - name: Download freshly linked browser bootstrap
+        uses: actions/download-artifact@v8
+        with:
+          name: xenia-browser-bootstrap-fastlane
+          path: build/xenia-ppc-bootstrap
 
       - name: Verify commercial-title PE staging growth
         run: timeout 90s node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

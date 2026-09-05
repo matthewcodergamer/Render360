@@ -6,7 +6,7 @@ const mod=await WebAssembly.compile(fs.readFileSync(wasmPath));
 const wasi=new WASI({version:'preview1',args:[],env:{},preopens:{},returnOnExit:true});
 const imports=wasi.getImportObject(mod);for(const im of WebAssembly.Module.imports(mod))if(im.module==='env'&&im.name==='emscripten_notify_memory_growth'){imports.env||={};imports.env.emscripten_notify_memory_growth=()=>{}};
 const instance=await WebAssembly.instantiate(mod,imports);wasi.initialize(instance);const e=instance.exports;const f=n=>e[n]??e[`_${n}`];
-const req=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_ppc_probe_read_guest_u32_be','r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frontbuffer_ptr','r360_xenos_frontbuffer_width','r360_xenos_frontbuffer_height','r360_xenos_frame_generation','r360_xenos_frame_hash'];for(const n of req)if(typeof f(n)!=='function')throw new Error(`missing first-frame export ${n}`);
+const req=['r360_ppc_probe_reset','r360_ppc_probe_set_initial_gpr','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity','r360_ppc_probe_load','r360_ppc_probe_translate','r360_ppc_probe_correctness_status','r360_sparse_guest_memory_reset','r360_sparse_guest_memory_alloc','r360_sparse_guest_memory_map','r360_generated_guest_load_scalar','r360_generated_guest_load_status','r360_xenos_reset','r360_xenos_ring_buffer','r360_xenos_ring_capacity','r360_xenos_submit','r360_xenos_draws','r360_xenos_presents','r360_xenos_swaps','r360_xenos_frontbuffer_ptr','r360_xenos_frontbuffer_width','r360_xenos_frontbuffer_height','r360_xenos_frame_generation','r360_xenos_frame_hash'];for(const n of req)if(typeof f(n)!=='function')throw new Error(`missing first-frame export ${n}`);
 const wordsToBytes=(...words)=>Uint8Array.from(words.flatMap(w=>[(w>>>24)&255,(w>>>16)&255,(w>>>8)&255,w&255]));
 const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;const stw=(rs,ra,d)=>dform(36,rs,ra,d),blr=0x4E800020;
 // Guest PPC itself writes the full command stream, including the real VdSwap
@@ -14,10 +14,25 @@ const dform=(op,rt,ra,imm)=>((op<<26)|(rt<<21)|(ra<<16)|(imm&0xffff))>>>0;const 
 // execution rather than a JS-authored present call.
 const commandWordCount=12;
 const ppc=wordsToBytes(...Array.from({length:commandWordCount},(_,i)=>stw(5+i,4,i*4)),blr);
+const guestPageBase=0x80000000;
 const guestCommandAddress=0x80000400;
 const pm4=[(1<<16)|0x2000,64,0,0x2104,0xF,((3<<30)|(0x36<<8))>>>0,4,((3<<30)|(3<<16)|(0x64<<8))>>>0,0x50415753,0x00123000,1280,720].map(x=>x>>>0);
+function prepareSparseGuestBuffer(){
+  f('r360_sparse_guest_memory_reset')();
+  const backing=f('r360_sparse_guest_memory_alloc')(1)>>>0;
+  if(!backing)throw new Error('first-frame sparse backing allocation failed');
+  if((f('r360_sparse_guest_memory_map')(guestPageBase,1,backing,0,3)>>>0)!==1)throw new Error('first-frame sparse guest page map failed');
+}
+function readSparseU32(address){
+  const value=Number(f('r360_generated_guest_load_scalar')(address>>>0,4,1))>>>0;
+  if((f('r360_generated_guest_load_status')()>>>0)!==1)throw new Error(`first-frame sparse read failed @ 0x${(address>>>0).toString(16)}`);
+  return value;
+}
 function executeGuestProducer(commandWords){
   f('r360_ppc_probe_reset')();
+  // The PPC decoder input window is only code transport. The command buffer is
+  // real guest data, so map it in SparseGuestMemory before translated PPC stores.
+  prepareSparseGuestBuffer();
   const input=f('r360_ppc_probe_input_buffer')()>>>0,cap=f('r360_ppc_probe_input_capacity')()>>>0;
   if(ppc.length>cap)throw new Error('PPC program exceeds input capacity');
   new Uint8Array(e.memory.buffer,input,ppc.length).set(ppc);
@@ -27,7 +42,7 @@ function executeGuestProducer(commandWords){
   if(loaded!==ppc.length)throw new Error(`guest PPC load failed loaded=${loaded}`);
   if((f('r360_ppc_probe_translate')()>>>0)===0)throw new Error('guest PPC translation failed');
   if((f('r360_ppc_probe_correctness_status')()>>>0)!==3)throw new Error('guest PPC did not execute to return boundary');
-  return Array.from({length:commandWordCount},(_,n)=>f('r360_ppc_probe_read_guest_u32_be')(guestCommandAddress+n*4)>>>0);
+  return Array.from({length:commandWordCount},(_,n)=>readSparseU32(guestCommandAddress+n*4));
 }
 function submitProduced(produced){
   f('r360_xenos_reset')();

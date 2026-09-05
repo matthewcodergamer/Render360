@@ -11,7 +11,7 @@ const BOOTSTRAP_SINGLETON_KEY=Symbol.for('render360.ppc.bootstrap.singleton');
 const REQUIRED_BOOTSTRAP_EXPORTS=[
   'memory','r360_ppc_probe_load_at','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
   'r360_ppc_probe_write_guest_u32_be','r360_ppc_probe_read_guest_u32_be',
-  'r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
+  'r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_gpr',
   'r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate',
   'r360_ppc_context_size','r360_ppc_context_offset_gpr','r360_ppc_context_offset_lr','r360_ppc_context_offset_ctr',
   'r360_wasm_backend_call_status','r360_wasm_backend_call_function_count','r360_wasm_backend_call_function_address',

@@ -247,6 +247,10 @@ uint64_t r360_ppc_probe_initial_lr() {
   return render360::xenia_web::GetHIRCorrectnessInitialLR();
 }
 
+uint64_t r360_ppc_probe_correctness_gpr(uint32_t index) {
+  return render360::xenia_web::GetHIRCorrectnessLastGPR(index);
+}
+
 uint32_t r360_ppc_probe_write_guest_u32_be(uint32_t address, uint32_t value) {
   using namespace render360::xenia_web;
   if (!EnsureRuntime()) return 0;

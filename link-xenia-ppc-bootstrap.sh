@@ -57,6 +57,7 @@ fi
 # buffer used by early bring-up tests.
 CRITICAL_EXPORTS=(
   r360_ppc_probe_set_initial_lr
+  r360_ppc_probe_correctness_gpr
   r360_ppc_probe_set_execute_on_translate
   r360_ppc_probe_execute_on_translate
   r360_ppc_probe_scan_diagnostic

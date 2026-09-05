@@ -44,6 +44,7 @@ void ResetHIRCorrectnessInitialState();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 bool SetHIRCorrectnessInitialLR(uint64_t value);
 uint64_t GetHIRCorrectnessInitialLR();
+uint64_t GetHIRCorrectnessLastGPR(uint32_t index);
 
 // ProbeBackend installs resolvers that send direct symbols and runtime-resolved
 // indirect targets back through the real Xenia PPCScanner/PPCFrontend. Nested

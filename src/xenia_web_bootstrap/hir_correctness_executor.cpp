@@ -40,6 +40,7 @@ struct RuntimeValue {
 using RuntimeValues = std::unordered_map<const Value*, RuntimeValue>;
 
 std::array<uint64_t, 32> g_initial_gprs{};
+std::array<uint64_t, 32> g_last_gprs{};
 HIRCorrectnessCallResolver g_call_resolver = nullptr;
 HIRCorrectnessAddressResolver g_address_resolver = nullptr;
 thread_local xe::cpu::ppc::PPCContext* g_active_context = nullptr;
@@ -1276,12 +1277,19 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
 
 }  // namespace
 
-void ResetHIRCorrectnessInitialState() { g_initial_gprs.fill(0); }
+void ResetHIRCorrectnessInitialState() {
+  g_initial_gprs.fill(0);
+  g_last_gprs.fill(0);
+}
 
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value) {
   if (index >= g_initial_gprs.size()) return false;
   g_initial_gprs[index] = value;
   return true;
+}
+
+uint64_t GetHIRCorrectnessLastGPR(uint32_t index) {
+  return index < g_last_gprs.size() ? g_last_gprs[index] : 0;
 }
 
 void SetHIRCorrectnessCallResolver(HIRCorrectnessCallResolver resolver) {
@@ -1315,6 +1323,14 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
 
   ++g_execution_depth;
   result = ExecuteBuilder(builder, memory, *g_active_context);
+  // Snapshot after the builder returns, including failure. The context still
+  // contains the exact architectural state at the blocker, and outermost
+  // execution owns that state for the complete title call chain.
+  if (outermost && g_active_context) {
+    for (size_t i = 0; i < g_last_gprs.size(); ++i) {
+      g_last_gprs[i] = g_active_context->r[i];
+    }
+  }
   --g_execution_depth;
 
   if (!outermost && !result.supported &&

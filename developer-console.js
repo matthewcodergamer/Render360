@@ -58,6 +58,17 @@ function decodePpcInstruction(word,sourceAddress){
     const imm=(word<<16)>>16;
     return {kind:'addis',text:`addis r${rt},r${ra},${imm}`,rt,ra,immediate:imm};
   }
+  if(primary===31){
+    const rb=(word>>>11)&31,xo=(word>>>1)&0x3FF;
+    const xMemoryNames={
+      23:'lwzx',55:'lwzux',87:'lbzx',119:'lbzux',
+      151:'stwx',183:'stwux',215:'stbx',247:'stbux',
+      279:'lhzx',311:'lhzux',343:'lhax',375:'lhaux',
+      407:'sthx',439:'sthux'
+    };
+    const mnemonic=xMemoryNames[xo];
+    if(mnemonic)return {kind:'x-form-memory',text:`${mnemonic} r${rt},r${ra},r${rb}`,rt,ra,rb,mnemonic,indexed:true};
+  }
   if(primary===58||primary===62){
     let ds=(word>>>2)&0x3FFF;if(ds&0x2000)ds-=0x4000;
     const displacement=(ds<<2)|0;
@@ -143,6 +154,7 @@ function memoryDiagnostics(state,result){
   const mappedPagesFn=fn('r360_sparse_guest_memory_mapped_pages');
   const backingPagesFn=fn('r360_sparse_guest_memory_backing_pages');
   const read8=fn('r360_sparse_guest_memory_read_u8');
+  const gprSnapshotFn=fn('r360_ppc_probe_correctness_gpr');
   const runtimeBeginFn=fn('r360_pe_guest_runtime_function_begin');
   const runtimeEndFn=fn('r360_pe_guest_runtime_function_end');
   const runtimePrologFn=fn('r360_pe_guest_runtime_function_prolog_bytes');
@@ -197,15 +209,30 @@ function memoryDiagnostics(state,result){
   const blockerAddress=number(result?.executionBlockerAddress);
   const instructionWord=readInstructionWord(read8,blockerAddress);
   const decoded=instructionWord===undefined?undefined:decodePpcInstruction(instructionWord,blockerAddress);
-  let baseRegisterValue,effectiveAddress;
+  let baseRegisterValue,indexRegisterValue,effectiveAddress;
+  const readSnapshotGpr=index=>{
+    if(!gprSnapshotFn||index===undefined)return undefined;
+    try{
+      const raw=gprSnapshotFn(index>>>0);
+      return typeof raw==='bigint'?Number(BigInt.asUintN(32,raw))>>>0:Number(raw)>>>0;
+    }catch{return undefined;}
+  };
   if(decoded&&(decoded.kind==='d-form-memory'||decoded.kind==='ds-form-memory')&&faultAddress!==undefined&&faultCode){
     effectiveAddress=faultAddress>>>0;
-    baseRegisterValue=decoded.ra===0?0:(effectiveAddress-(decoded.displacement|0))>>>0;
+    baseRegisterValue=readSnapshotGpr(decoded.ra);
+    if(baseRegisterValue===undefined)baseRegisterValue=decoded.ra===0?0:(effectiveAddress-(decoded.displacement|0))>>>0;
+  }
+  if(decoded?.kind==='x-form-memory'&&faultAddress!==undefined&&faultCode){
+    effectiveAddress=faultAddress>>>0;
+    baseRegisterValue=readSnapshotGpr(decoded.ra);
+    indexRegisterValue=readSnapshotGpr(decoded.rb);
   }
   const faultNames={0:'none',1:'unmapped',2:'read-protection',3:'write-protection',4:'invalid-argument',5:'already-mapped'};
   const context=result?.mainThreadContext||{};
   const runtimeFunctions=compact({
     entry:runtimeOwner(result?.entry),
+    xexEntry:runtimeOwner(result?.xexEntry),
+    peEntry:runtimeOwner(result?.peEntry),
     lastWrite:runtimeOwner(stackTrace.lastWriteAddress),
     lastCallSource:runtimeOwner(stackTrace.lastCallSource),
     lastCallTarget:runtimeOwner(stackTrace.lastCallTarget),
@@ -220,9 +247,10 @@ function memoryDiagnostics(state,result){
     blockerDecoded:decoded?.text,
     instructionKind:decoded?.kind||'unknown',
     ppcPrimaryOpcode:instructionWord===undefined?undefined:instructionWord>>>26,
-    rt:decoded?.rt,ra:decoded?.ra,displacement:decoded?.displacement,
+    rt:decoded?.rt,ra:decoded?.ra,rb:decoded?.rb,displacement:decoded?.displacement,
     effectiveAddress:effectiveAddress===undefined?undefined:address(effectiveAddress),
     baseRegisterValue:baseRegisterValue===undefined?undefined:address(baseRegisterValue),
+    indexRegisterValue:indexRegisterValue===undefined?undefined:address(indexRegisterValue),
     branchDisplacement:decoded?.displacement,
     branchTarget:decoded?.target,
     branchAbsolute:decoded?.absolute,
@@ -239,6 +267,8 @@ function memoryDiagnostics(state,result){
     tailCallDiagnostics:tailCallDiagnostics.length?tailCallDiagnostics:undefined,
     codeWindows:compact({
       entry:readPpcWindow(read8,result?.entry,4),
+      xexEntry:readPpcWindow(read8,result?.xexEntry,4),
+      peEntry:readPpcWindow(read8,result?.peEntry,4),
       r1Write:readPpcWindow(read8,stackTrace.lastWriteAddress,3),
       callSite:readPpcWindow(read8,stackTrace.lastCallSource,2),
       blocker:readPpcWindow(read8,blockerAddress,2),
@@ -280,6 +310,46 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
   const tailCall=lastCall&&(((number(lastCall.flags)||0)&2)!==0)?lastCall:undefined;
   const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
   const unsupportedTail=cpu?.runtimeBoundary==='unsupported-hir'&&number(cpu?.executionBlockerKind)===1&&!!tailCall;
+  const entryAddress=number(cpu?.entry),blockerAddress=number(cpu?.executionBlockerAddress);
+  const indexedEntryZero=!!memory?.faultCode&&fault===0&&memory?.instructionKind==='x-form-memory'&&
+    entryAddress!==undefined&&blockerAddress===((entryAddress+4)>>>0)&&
+    number(memory?.baseRegisterValue)===0&&number(memory?.indexRegisterValue)===0;
+  if(indexedEntryZero){
+    const ra=number(memory?.ra),rb=number(memory?.rb);
+    const selected=cpu?.entry,xex=cpu?.xexEntry,pe=cpu?.peEntry;
+    const xexMatches=present(selected)&&present(xex)&&selected===xex;
+    const peMatches=present(selected)&&present(pe)&&selected===pe;
+    return compact({
+      classification:'TITLE_ENTRY_INDEXED_ZERO_DEPENDENCY',
+      headline:`XEX-selected entry immediately dereferenced r${ra??'A'}+r${rb??'B'}=0`,
+      primarySuspect:cpu?.executionBlockerAddress,
+      initialAbiCorrect,
+      faultDerivedFromBaseRegister:true,
+      entryProvenance:compact({selected,xex,pe,source:cpu?.entrySource,xexMatchesSelected:xexMatches,peMatchesSelected:peMatches}),
+      evidence:[
+        `Failing PPC: ${memory?.blockerDecoded||'indexed memory load'} at ${cpu?.executionBlockerAddress||'—'}, only +0x4 from selected entry ${cpu?.entry||'—'}.`,
+        `Live blocker snapshot: r${ra??'A'}=${memory?.baseRegisterValue||'—'}, r${rb??'B'}=${memory?.indexRegisterValue||'—'} → effective address ${memory?.effectiveAddress||memory?.faultAddress||'—'}.`,
+        `Entry provenance: selected=${selected||'—'} XEX=${xex||'—'} PE=${pe||'—'} source=${cpu?.entrySource||'—'}.`,
+        'V64 strict zero-page behavior exposed this before the later call/epilogue chain; the V63 +0x100 stack failure is downstream evidence, not the first blocker.',
+        initialAbiCorrect?`Entry r1 remains correct: ${trace.initialR1} == stackTop ${memory.stackTop}.`:undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
+        'Synthesizing r11/r29 startup values without proof',
+        'Making 0x00000000-0x0000FFFF writable or zero-filled',
+        'The later +0x100 teardown as the first failure',
+        number(kernel?.calls)===0?'XAM/xboxkrnl HLE as the current cause (kernel calls = 0)':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
+      ].filter(Boolean),
+      next:[
+        'Reconcile XEX optional-header entry, PE AddressOfEntryPoint, and the prepared executable bytes mapped at the selected entry.',
+        'If XEX and PE entries differ, inspect why the selected XEX entry starts with an indexed load requiring pre-existing registers; if they match, audit prepared-image section placement/decompression at that address.',
+        'Keep the strict zero guard and verified r1/LR ABI unchanged while proving image/entry parity.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
   const lowApertureFault=!!memory?.faultCode&&fault!==undefined&&fault<0x10000&&
     (memory?.instructionKind==='d-form-memory'||memory?.instructionKind==='ds-form-memory')&&number(memory?.baseRegisterValue)===0;
   if(lowApertureFault){
@@ -637,7 +707,8 @@ function report(){
   });
   const memory=memoryDiagnostics(state,result);
   const cpu=compact({
-    entry:address(result.entry),hir:number(result.hir),runtimeBoundary:result.runtimeBoundary,
+    entry:address(result.entry),xexEntry:address(result.xexEntry),peEntry:address(result.peEntry),entrySource:result.entrySource,
+    hir:number(result.hir),runtimeBoundary:result.runtimeBoundary,
     executionStatus:number(result.executionStatus),instructions:number(result.executionInstructions??compatibility.executionInstructions),
     executionBlockerKind:result.executionBlockerKind,executionBlockerOpcode:number(result.executionBlockerOpcode),
     executionBlockerAddress:address(result.executionBlockerAddress),translatedFunctions:number(result.translatedFunctionCount),

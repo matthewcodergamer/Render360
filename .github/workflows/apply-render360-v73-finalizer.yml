@@ -47,16 +47,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The GITHUB_TOKEN may update normal source files but GitHub refuses
+          # workflow-file writes from Actions without the separate workflows
+          # permission. The fastlane workflow is published by the connected
+          # GitHub integration after this source commit, so restore it here.
+          git restore .github/workflows/xenia-browser-bootstrap-fastlane.yml
           if git diff --quiet; then
-            echo 'V73 finalizer is already applied.'
+            echo 'V73 source finalizer is already applied.'
             exit 0
           fi
           VERSION="$(tr -d '[:space:]' < VERSION)"
           git config user.name 'Render360 Release Bot'
           git config user.email 'actions@users.noreply.github.com'
           git add runtime/render360-runtime.js render360-sw.js render360-browser-title-runtime.mjs \
-            src/xenia_web_bootstrap/wasm_backend_call_probe.cpp test-wasm-backend-calls.mjs \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml
+            src/xenia_web_bootstrap/wasm_backend_call_probe.cpp test-wasm-backend-calls.mjs
           git commit -m "V${VERSION}: finalize callable CNTLZ and unified release contract"
           git pull --rebase origin main
           git push origin HEAD:main

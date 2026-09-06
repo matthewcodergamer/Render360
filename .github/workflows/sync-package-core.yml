@@ -18,6 +18,7 @@ on:
       - 'src/xenia_web_bootstrap/xex_pe_image.h'
       - 'src/xenia_web_bootstrap/xex_pe_image_exports.cpp'
       - 'test-package-xex-foundation.mjs'
+      - 'test-render360-version-consistency.mjs'
       - 'tools/embed-render360-core.py'
       - 'VERSION'
       - '.github/workflows/sync-package-core.yml'
@@ -70,6 +71,8 @@ jobs:
           assert emb==raw, 'embedded package core differs from network WASM'
           print('PACKAGE_CORE_BYTES_SYNC PASS',hashlib.sha256(raw).hexdigest(),len(raw))
           PY
+      - name: Verify one Render360 release across package artifacts
+        run: node test-render360-version-consistency.mjs --allow-bootstrap-pending
       - name: Commit synchronized generated artifacts
         run: |
           if git diff --quiet -- render360_xenia_core.wasm render360_xenia_core_embedded.js render360_xenia_core.meta.json; then
@@ -78,7 +81,7 @@ jobs:
           fi
           R360_VERSION="$(tr -d '[:space:]' < VERSION)"
           git config user.name 'github-actions[bot]'
-          git config user.email '41898218+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add render360_xenia_core.wasm render360_xenia_core_embedded.js render360_xenia_core.meta.json
           git commit -m "build: publish synchronized package core V${R360_VERSION}"
           git push origin HEAD:main

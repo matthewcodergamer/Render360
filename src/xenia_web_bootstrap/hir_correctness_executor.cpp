@@ -680,6 +680,23 @@ bool StoreBinaryValue(Value* destination, const Value* lhs, const Value* rhs,
                       ? au << (uint32_t(bu) & shift_mask)
                       : au >> (uint32_t(bu) & shift_mask));
       break;
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT: {
+      if (destination->type != lhs->type || !GetUnsigned(a, &au) ||
+          !GetUnsigned(b, &bu)) {
+        return false;
+      }
+      const uint32_t width = IntegerBitWidth(destination->type);
+      const uint32_t shift = uint32_t(bu) & shift_mask;
+      const uint64_t width_mask =
+          width == 64u ? ~uint64_t{0} : ((uint64_t{1} << width) - 1u);
+      const uint64_t value = au & width_mask;
+      const uint64_t rotated =
+          shift == 0u
+              ? value
+              : ((value << shift) | (value >> (width - shift))) & width_mask;
+      SetUnsigned(&result, destination->type, rotated);
+      break;
+    }
     case xe::cpu::hir::OPCODE_SHA:
       if (!GetSigned(a, &as) || !GetUnsigned(b, &bu)) return false;
       SetUnsigned(&result, destination->type,
@@ -1122,6 +1139,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         case xe::cpu::hir::OPCODE_SHL:
         case xe::cpu::hir::OPCODE_SHR:
         case xe::cpu::hir::OPCODE_SHA:
+        case xe::cpu::hir::OPCODE_ROTATE_LEFT:
         case xe::cpu::hir::OPCODE_COMPARE_EQ:
         case xe::cpu::hir::OPCODE_COMPARE_NE:
         case xe::cpu::hir::OPCODE_COMPARE_SLT:

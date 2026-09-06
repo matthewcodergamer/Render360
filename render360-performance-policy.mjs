@@ -74,7 +74,9 @@ export function createAdaptivePerformancePolicy({
   function observe({fps=null,frameMs=null,memoryBytes=0,memoryBudgetBytes=0,now=globalThis.performance?.now?.()??Date.now()}={}){
     const numericFps=Number(fps);
     const numericFrame=Number(frameMs);
+    let currentFps=0;
     if(Number.isFinite(numericFps)&&numericFps>0){
+      currentFps=numericFps;
       emaFps=emaFps?emaFps*(1-emaAlpha)+numericFps*emaAlpha:numericFps;
       const derivedFrame=1000/numericFps;
       emaFrameMs=emaFrameMs?emaFrameMs*(1-emaAlpha)+derivedFrame*emaAlpha:derivedFrame;
@@ -82,6 +84,7 @@ export function createAdaptivePerformancePolicy({
     }else if(Number.isFinite(numericFrame)&&numericFrame>0){
       emaFrameMs=emaFrameMs?emaFrameMs*(1-emaAlpha)+numericFrame*emaAlpha:numericFrame;
       const derivedFps=1000/numericFrame;
+      currentFps=derivedFps;
       emaFps=emaFps?emaFps*(1-emaAlpha)+derivedFps*emaAlpha:derivedFps;
       samples++;
     }
@@ -90,8 +93,11 @@ export function createAdaptivePerformancePolicy({
     lastMemoryRatio=mem>0&&budget>0?mem/budget:0;
     const criticalMemory=lastMemoryRatio>=memoryCriticalRatio;
     const highMemory=lastMemoryRatio>=memoryHighRatio;
-    const lowFps=samples>=3&&emaFps>0&&emaFps<targetFps*downFpsRatio;
-    const recovered=samples>=3&&emaFps>=targetFps*upFpsRatio&&!highMemory;
+    // Require the current observation and the smoothed trend to be slow before
+    // dropping another tier. This prevents EMA lag from lowering resolution
+    // again after the game has already recovered to its 30 FPS target.
+    const lowFps=samples>=3&&currentFps>0&&currentFps<targetFps*downFpsRatio&&emaFps<targetFps*downFpsRatio;
+    const recovered=samples>=3&&currentFps>=targetFps*upFpsRatio&&emaFps>=targetFps*upFpsRatio&&!highMemory;
     let changed=false;
     const canChange=Number(now)-lastChangeAt>=cooldownMs;
 

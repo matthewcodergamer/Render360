@@ -1,0 +1,11 @@
+{
+  "schema": "render360-pc-content-index-v1",
+  "description": "Example path-only working set. A real Portal runtime build must generate the complete list required by its startup path/maps.",
+  "files": [
+    {"path": "portal/gameinfo.txt", "group": "base"},
+    {"path": "portal/portal_pak_dir.vpk", "group": "base"},
+    {"path": "hl2/hl2_misc_dir.vpk", "group": "base"},
+    {"path": "hl2/hl2_textures_dir.vpk", "group": "base"},
+    {"path": "platform/platform_misc_dir.vpk", "group": "base", "optional": true}
+  ]
+}

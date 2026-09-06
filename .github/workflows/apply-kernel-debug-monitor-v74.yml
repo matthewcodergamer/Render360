@@ -1,0 +1,126 @@
+name: Apply V74 KeDebugMonitorData Relocation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-kernel-debug-monitor-v74.py'
+      - 'test-kernel-debug-monitor-variable.mjs'
+      - '.github/workflows/apply-kernel-debug-monitor-v74.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-kernel-debug-monitor-v74
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate updater and Braid regression
+        run: |
+          python3 -m py_compile tools/apply-kernel-debug-monitor-v74.py
+          node --check test-kernel-debug-monitor-variable.mjs
+
+      - name: Apply Xenia-faithful variable export relocation
+        run: python3 tools/apply-kernel-debug-monitor-v74.py
+
+      - name: Verify V74 source and release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          grep -q "0x59,{name:'KeDebugMonitorData'" render360-title-controller.mjs
+          grep -q "0x266,{name:'KeCertMonitorData'" render360-title-controller.mjs
+          grep -q "'xboxkrnl.exe:89'" render360-title-controller.mjs
+          grep -q "'xboxkrnl.exe:614'" render360-title-controller.mjs
+          grep -q 'XENIA_KE_DEBUG_MONITOR_DATA' render360-title-controller.mjs
+          grep -q 'XENIA_KERNEL_VARIABLE_LAYOUT.has(item.ordinal)' render360-title-controller.mjs
+          grep -q 'bootstrapIsPreviousRelease' test-render360-version-consistency.mjs
+          grep -q 'const RENDER360_RELEASE=74;' runtime/render360-runtime.js
+          grep -q 'const REQUIRED_CORE_BUILD=74;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:74,' runtime/render360-runtime.js
+          grep -q 'const RENDER360_RELEASE=74;' render360-browser-title-runtime.mjs
+          grep -q "const VERSION='74';" render360-sw.js
+          grep -q 'Render360 74' index.html
+          grep -q '<span>UI Release</span><span class="value">74</span>' index.html
+
+      - name: Commit V74 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V74 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            render360-title-controller.mjs \
+            test-render360-version-consistency.mjs \
+            VERSION \
+            runtime/render360-runtime.js \
+            render360-browser-title-runtime.mjs \
+            render360-sw.js \
+            index.html
+          if git diff --cached --quiet; then
+            echo 'V74 source already applied.'
+          else
+            git commit -m 'V74: relocate xboxkrnl monitor variable exports'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Publish synchronized V74 package core first
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V74 package-core run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Build verify and publish V74 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V74 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Regress Braid monitor variable and existing module handle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin main
+          node ./test-kernel-debug-monitor-variable.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-kernel-variable-import-relocation.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-render360-version-consistency.mjs
+
+      - name: Verify final V74 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const version=Number(fs.readFileSync('VERSION','utf8').trim());
+          const pkg=JSON.parse(fs.readFileSync('render360_xenia_core.meta.json','utf8'));
+          const boot=JSON.parse(fs.readFileSync('xenia_ppc_bootstrap.meta.json','utf8'));
+          if(version!==74||Number(pkg.release)!==74||Number(boot.release)!==74)throw new Error(JSON.stringify({version,pkg:pkg.release,boot:boot.release}));
+          console.log('R360_V74_FINAL_RELEASE_PARITY=PASS');
+          NODE

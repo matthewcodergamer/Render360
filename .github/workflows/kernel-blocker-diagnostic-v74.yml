@@ -1,0 +1,62 @@
+name: Kernel Blocker Diagnostic V74
+
+on:
+  push:
+    branches: [fix-kernel-blocker-diagnostic-v74]
+    paths:
+      - 'developer-console.js'
+      - 'tools/apply-kernel-blocker-diagnostic-v74.py'
+      - '.github/workflows/kernel-blocker-diagnostic-v74.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'developer-console.js'
+      - 'tools/apply-kernel-blocker-diagnostic-v74.py'
+      - '.github/workflows/kernel-blocker-diagnostic-v74.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kernel-blocker-diagnostic-v74-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-kernel-blocker-diagnostic-v74.py
+          python3 tools/apply-kernel-blocker-diagnostic-v74.py
+      - name: Verify JavaScript and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check developer-console.js
+          grep -q "classification:'KERNEL_IMPORT_BLOCKER'" developer-console.js
+          grep -q "runtimeBoundary==='kernel-import-unimplemented'" developer-console.js
+          grep -q "focus.classification==='KERNEL_IMPORT_BLOCKER'" developer-console.js
+          grep -q "No sparse guest-memory fault was captured" developer-console.js
+          git diff --check
+      - name: Commit verified diagnostic source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/fix-kernel-blocker-diagnostic-v74'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Diagnostics Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add developer-console.js
+          if git diff --cached --quiet; then
+            echo 'Diagnostic patch already committed.'
+          else
+            git commit -m 'diagnostics: classify kernel import blockers correctly'
+            git push origin HEAD:fix-kernel-blocker-diagnostic-v74
+          fi

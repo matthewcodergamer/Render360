@@ -113,3 +113,5 @@ jobs:
           git show origin/main:developer-console.js | grep -q 'render360-blocker-report-v2'
           git show origin/main:src/xenia_web_bootstrap/hir_correctness_executor.cpp | grep -q 'r360_hir_opcode_name'
           git show origin/main:src/xenia_web_bootstrap/wasm_backend_probe.cpp | grep -q 'r360_wasm_backend_supports_hir_opcode'
+
+# V73 adaptive implementation dispatch marker.

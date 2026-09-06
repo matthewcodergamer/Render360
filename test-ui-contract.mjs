@@ -19,7 +19,7 @@ const failures=[];
 const must=(value,message)=>{if(!value)failures.push(message);};
 const has=(source,token)=>source.includes(token);
 
-must(version==='44','VERSION must remain release 44');
+must(version==='74','VERSION must remain release 74');
 for(const path of ['styles/base.css','styles/interactions.css','styles/xenios.css','styles/controller.css','app.js','ui-behavior.js'])must(has(html,path),`index must load canonical ${path}`);
 for(const legacy of ['app-v41.js','app-v42-patch.js','ui-v41.css','ui-v42-patch.css','ui-v44-xenios.css','ui-v44-xenios-v16.css'])must(!has(html,legacy),`index must not load legacy ${legacy}`);
 must(!has(html,'&#x1008CC;')&&!has(html,'&#x100185;'),'initial toolbar must not depend on private SF Symbol code points');
@@ -41,7 +41,7 @@ must(has(runtime,"'../wasm-core.js'")&&has(runtime,"'../runtime-host.js'"),'runt
 must(has(host,"'./runtime-worker.js'"),'runtime host must launch canonical worker');
 must(has(worker,"from './wasm-core.js'"),'runtime worker must load canonical core');
 must(has(core,'render360_xenia_core.wasm'),'canonical core loader must still load the package WASM artifact');
-for(const token of ['runtimeBlocker','fatalError','render360-blocker-report-v1','render360PpcRuntimeIdentity'])must(has(developerConsole,token),`developer console missing ${token}`);
+for(const token of ['runtimeBlocker','fatalError','render360-blocker-report-v2','render360PpcRuntimeIdentity'])must(has(developerConsole,token),`developer console missing ${token}`);
 for(const token of ['instructionKind','direct-branch','branchTarget','fault-not-derived-from-boundary-instruction','ppcDiagnosticSummary'])must(has(developerConsole,token),`developer console missing opcode-aware diagnostic ${token}`);
 for(const token of ['Braid CPU Diagnostic','problemFocus','STACK_FRAME_TEARDOWN_MISMATCH','codeWindows','PPC around last r1 write','Ruled out right now','Next diagnostic target'])must(has(developerConsole,token),`developer console missing problem-first diagnostic ${token}`);
 must(has(developerConsole,'Full event log')&&has(developerConsole,'Copy Report still includes the complete JSON'),'problem-first console must preserve complete raw diagnostics');

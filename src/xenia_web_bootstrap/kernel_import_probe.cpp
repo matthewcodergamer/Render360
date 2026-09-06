@@ -30,7 +30,16 @@ constexpr uint32_t kModuleXboxkrnl = 1;
 constexpr uint32_t kModuleXam = 2;
 constexpr uint32_t kServiceStatusSuccess = 1;
 constexpr uint32_t kServiceStatusInvalid = 3;
+constexpr uint32_t kServiceStatusTerminal = 4;
+constexpr uint32_t kMaxKernelImportHistory = 32;
+struct KernelImportHistoryEntry {
+  uint32_t thunk_address = 0;
+  uint32_t module_id = 0;
+  uint32_t ordinal = 0;
+};
 std::array<KernelImportEntry, kMaxKernelImports> g_entries{};
+std::array<KernelImportHistoryEntry, kMaxKernelImportHistory> g_history{};
+uint32_t g_history_count = 0;
 uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
          g_last_ordinal = 0, g_last_status = 0, g_last_abi_target = 0;
 
@@ -76,6 +85,7 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry,
     // state (for example TLS without a current guest thread) is distinguished
     // as an ABI/runtime failure rather than silently becoming success.
     if (service_status == kServiceStatusInvalid) g_last_status = kServiceStatusInvalid;
+    else if (service_status == kServiceStatusTerminal) g_last_status = kServiceStatusTerminal;
     return false;
   }
 
@@ -97,11 +107,23 @@ void RecordKernelImportCall(const KernelImportEntry& entry) {
   g_last_module = entry.module_id;
   g_last_ordinal = entry.ordinal;
   g_last_abi_target = entry.abi_target;
+  KernelImportHistoryEntry event{entry.thunk_address, entry.module_id, entry.ordinal};
+  if (g_history_count < kMaxKernelImportHistory) {
+    g_history[g_history_count++] = event;
+  } else {
+    for (uint32_t i = 1; i < kMaxKernelImportHistory; ++i) {
+      g_history[i - 1] = g_history[i];
+    }
+    g_history[kMaxKernelImportHistory - 1] = event;
+  }
 }
 }  // namespace
 
 void ResetKernelImportProbe() {
-  g_entries = {}; g_count = g_calls = g_last_thunk = g_last_module =
+  g_entries = {};
+  g_history = {};
+  g_history_count = 0;
+  g_count = g_calls = g_last_thunk = g_last_module =
       g_last_ordinal = g_last_status = g_last_abi_target = 0;
   ResetTitleGpuRuntime();
 }
@@ -174,6 +196,16 @@ uint32_t KernelImportProbeLastModule() { return g_last_module; }
 uint32_t KernelImportProbeLastOrdinal() { return g_last_ordinal; }
 uint32_t KernelImportProbeLastStatus() { return g_last_status; }
 uint32_t KernelImportProbeLastAbiTarget() { return g_last_abi_target; }
+uint32_t KernelImportProbeHistoryCount() { return g_history_count; }
+uint32_t KernelImportProbeHistoryThunk(uint32_t index) {
+  return index < g_history_count ? g_history[index].thunk_address : 0u;
+}
+uint32_t KernelImportProbeHistoryModule(uint32_t index) {
+  return index < g_history_count ? g_history[index].module_id : 0u;
+}
+uint32_t KernelImportProbeHistoryOrdinal(uint32_t index) {
+  return index < g_history_count ? g_history[index].ordinal : 0u;
+}
 void MarkKernelImportProbeAbiFailure() { g_last_status = 3; }
 }  // namespace render360::xenia_web
 
@@ -199,4 +231,8 @@ uint32_t r360_kernel_import_last_thunk(){return render360::xenia_web::KernelImpo
 uint32_t r360_kernel_import_last_module(){return render360::xenia_web::KernelImportProbeLastModule();}
 uint32_t r360_kernel_import_last_ordinal(){return render360::xenia_web::KernelImportProbeLastOrdinal();}
 uint32_t r360_kernel_import_last_status(){return render360::xenia_web::KernelImportProbeLastStatus();}
+uint32_t r360_kernel_import_history_count(){return render360::xenia_web::KernelImportProbeHistoryCount();}
+uint32_t r360_kernel_import_history_thunk(uint32_t i){return render360::xenia_web::KernelImportProbeHistoryThunk(i);}
+uint32_t r360_kernel_import_history_module(uint32_t i){return render360::xenia_web::KernelImportProbeHistoryModule(i);}
+uint32_t r360_kernel_import_history_ordinal(uint32_t i){return render360::xenia_web::KernelImportProbeHistoryOrdinal(i);}
 }

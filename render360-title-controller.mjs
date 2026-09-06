@@ -309,6 +309,12 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelLastModuleFn=maybe(bootstrap,'r360_kernel_import_last_module');
   const kernelLastOrdinalFn=maybe(bootstrap,'r360_kernel_import_last_ordinal');
   const kernelLastStatusFn=maybe(bootstrap,'r360_kernel_import_last_status');
+  const kernelHistoryCountFn=maybe(bootstrap,'r360_kernel_import_history_count');
+  const kernelHistoryThunkFn=maybe(bootstrap,'r360_kernel_import_history_thunk');
+  const kernelHistoryModuleFn=maybe(bootstrap,'r360_kernel_import_history_module');
+  const kernelHistoryOrdinalFn=maybe(bootstrap,'r360_kernel_import_history_ordinal');
+  const firmwareRequestedFn=maybe(bootstrap,'r360_kernel_service_firmware_requested');
+  const firmwareRoutineFn=maybe(bootstrap,'r360_kernel_service_firmware_routine');
   const executionStatus=execStatusFn?(execStatusFn()>>>0):0;
   const executionInstructions=execInstructionsFn?(execInstructionsFn()>>>0):0;
   const executionR3Hex=execR3Fn?`0x${BigInt.asUintN(64,execR3Fn()).toString(16)}`:'0x0';
@@ -359,13 +365,26 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelLastModuleId=kernelLastModuleFn?(kernelLastModuleFn()>>>0):0;
   const kernelLastOrdinal=kernelLastOrdinalFn?(kernelLastOrdinalFn()>>>0):0;
   const kernelLastStatus=kernelLastStatusFn?(kernelLastStatusFn()>>>0):0;
+  const kernelHistoryCount=Math.min(kernelHistoryCountFn?(kernelHistoryCountFn()>>>0):0,32);
+  const kernelCallHistory=Array.from({length:kernelHistoryCount},(_,index)=>{
+    const moduleId=kernelHistoryModuleFn?(kernelHistoryModuleFn(index)>>>0):0;
+    return {
+      sequence:index+1,
+      thunkAddress:kernelHistoryThunkFn?(kernelHistoryThunkFn(index)>>>0):0,
+      moduleId,
+      module:moduleId===1?'xboxkrnl.exe':moduleId===2?'xam.xex':null,
+      ordinal:kernelHistoryOrdinalFn?(kernelHistoryOrdinalFn(index)>>>0):0,
+    };
+  });
+  const firmwareRequested=firmwareRequestedFn?!!(firmwareRequestedFn()>>>0):false;
+  const firmwareRoutine=firmwareRoutineFn?(firmwareRoutineFn()>>>0):0;
   const reachedKernelModule=kernelLastModuleId===1?'xboxkrnl.exe':kernelLastModuleId===2?'xam.xex':null;
-  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
+  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===4?'firmware-reentry-request':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
-  const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
+  const reachedKernelBlocker=kernelLastStatus===4?{kind:'firmware-reentry-request',module:reachedKernelModule,ordinal:kernelLastOrdinal,name:kernelLastOrdinal===0x28?'HalReturnToFirmware':undefined,routine:firmwareRoutine,thunkAddress:kernelLastThunk,message:kernelLastOrdinal===0x28?`xboxkrnl!HalReturnToFirmware requested ${firmwareRoutine===1?'HalRebootRoutine':'firmware routine '+firmwareRoutine}`:`Kernel requested firmware re-entry (routine ${firmwareRoutine})`}:kernelLastStatus===2?{kind:'kernel-import-unimplemented',module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk,message:`Unimplemented kernel import ${reachedKernelModule||'module'} ordinal 0x${kernelLastOrdinal.toString(16).toUpperCase()}`}:null;
   const titleGpuTelemetry=nativeTitleGpu?readNativeTitleGpuTelemetry(bootstrap,entry):null;
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,kernelCallHistory,firmwareRequested,firmwareRoutine,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

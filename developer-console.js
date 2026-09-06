@@ -39,16 +39,24 @@ function readWasmCString(memory,ptr,max=128){
   if(end===(start>>>0))return '';
   try{return new TextDecoder().decode(bytes.subarray(start>>>0,end));}catch{return undefined;}
 }
+function blockerMessage(source,detail){
+  const raw=source?.message??source?.reason??detail?.message??detail?.reason;
+  if(typeof raw==='string')return raw;
+  if(raw&&typeof raw==='object')return raw.message||raw.reason||raw.kind||JSON.stringify(raw);
+  return present(raw)?String(raw):undefined;
+}
 function compactBlocker(detail){
   const source=detail?.blocker||detail?.schedulerBlocker||detail||{};
   return compact({
     kind:source.kind||detail?.stage,
-    message:source.message||source.reason||detail?.message||detail?.reason,
+    message:blockerMessage(source,detail),
     address:address(source.address??source.sourceAddress??source.entry),
     opcode:number(source.opcode??source.executionBlockerOpcode),
     status:number(source.status??source.executionStatus),
     instructions:number(source.instructions??source.executionInstructions),
     module:source.module,
+    name:source.name,
+    routine:number(source.routine),
     ordinal:present(source.ordinal)?`0x${Number(source.ordinal).toString(16).toUpperCase()}`:undefined,
   });
 }
@@ -348,6 +356,43 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset,hir){
   const tailCall=lastCall&&(((number(lastCall.flags)||0)&2)!==0)?lastCall:undefined;
   const unresolvedTail=cpu?.runtimeBoundary==='unresolved-guest-call'&&number(cpu?.executionBlockerKind)===2&&number(cpu?.executionBlockerOpcode)===0&&!!tailCall;
   const unsupportedTail=cpu?.runtimeBoundary==='unsupported-hir'&&number(cpu?.executionBlockerKind)===1&&!!tailCall;
+  const kernelOrdinal=number(kernel?.reachedBlocker?.ordinal);
+  const firmwareBoundary=number(kernel?.lastStatus)===4||kernel?.reachedBlocker?.kind==='firmware-reentry-request'||cpu?.runtimeBoundary==='firmware-reentry-request';
+  if(firmwareBoundary&&kernelOrdinal===0x28&&!memory?.faultCode){
+    const history=Array.isArray(kernel?.callHistory)?kernel.callHistory:[];
+    const historyText=history.map(event=>`#${event.sequence??'?'} ${event.module||'module'}!0x${Number(event.ordinal||0).toString(16).toUpperCase()}${event.thunkAddress?` @ ${event.thunkAddress}`:''}`);
+    const hasAllocation=writes.some(event=>number(event.newR1)!==undefined&&number(event.oldR1)!==undefined&&(number(event.newR1)-number(event.oldR1))===-160);
+    const hasRestore=writes.some(event=>number(event.newR1)!==undefined&&number(event.oldR1)!==undefined&&(number(event.newR1)-number(event.oldR1))===160);
+    return compact({
+      classification:'FIRMWARE_REENTRY_REQUEST',
+      headline:'CPU reached xboxkrnl!HalReturnToFirmware (HalRebootRoutine)',
+      primarySuspect:cpu?.executionBlockerAddress,
+      reason:'The title requested firmware reboot; this is a terminal kernel path, not a guest-memory fault.',
+      initialAbiCorrect,
+      callEdge:trace.lastCallSource&&trace.lastCallTarget?`${trace.lastCallSource} -> ${trace.lastCallTarget}`:undefined,
+      kernelCallHistory:historyText.length?historyText:undefined,
+      evidence:[
+        `Kernel status is terminal (4): xboxkrnl ordinal 0x28 = HalReturnToFirmware, routine ${kernel?.reachedBlocker?.routine??'—'}.`,
+        `No sparse guest-memory fault was captured (fault=${memory?.faultName||'none'} @ ${memory?.faultAddress||'0x00000000'}).`,
+        hasAllocation&&hasRestore?'The -0xA0 frame allocation and +0xA0 restore are both present; the earlier r1 teardown is balanced.':undefined,
+        historyText.length?`Kernel calls before reboot: ${historyText.join(' · ')}`:'Kernel call history was not available in this bootstrap.',
+        cpu?.executionBlockerAddress==='0x8237386C'?'Braid reached the reboot call at 0x8237386C after its preceding startup path returned failure.':undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        '0x00010059 / KeDebugMonitorData relocation (V74 resolved it)',
+        'A current guest-memory boundary (fault code is zero)',
+        hasAllocation&&hasRestore?'The +0xA0 r1 restore as an unmatched frame teardown':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU requests reboot first)':undefined,
+      ].filter(Boolean),
+      next:[
+        'Use the captured kernel-call history to inspect the calls immediately before HalReturnToFirmware and identify which startup dependency made Braid choose its reboot path.',
+        'Do not stub HalReturnToFirmware as a successful return; preserve it as a terminal title boundary.',
+        'Keep the V74 variable relocation and strict low-memory guard unchanged.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
   const entryAddress=number(cpu?.entry),blockerAddress=number(cpu?.executionBlockerAddress);
   const indexedEntryZero=!!memory?.faultCode&&fault===0&&memory?.instructionKind==='x-form-memory'&&
     entryAddress!==undefined&&blockerAddress===((entryAddress+4)>>>0)&&
@@ -771,7 +816,10 @@ function report(){
   });
   const kernel=compact({
     imports:number(result.kernelImportCount??result.importCount),registered:number(result.registeredKernelImports),calls:number(result.kernelCalls),
-    lastStatus:number(result.lastKernelServiceStatus),reachedBlocker:kernelBlocker?compactBlocker(kernelBlocker):undefined,
+    lastStatus:number(result.kernelLastStatus??result.lastKernelServiceStatus),
+    callHistory:Array.isArray(result.kernelCallHistory)?result.kernelCallHistory.map(event=>compact({sequence:number(event.sequence),module:event.module,moduleId:number(event.moduleId),ordinal:number(event.ordinal),thunkAddress:address(event.thunkAddress)})):undefined,
+    firmwareRequested:result.firmwareRequested,routine:number(result.firmwareRoutine),
+    reachedBlocker:kernelBlocker?compactBlocker(kernelBlocker):undefined,
   });
   const gpu=compact({
     ringInitialized:gpuSource.ringInitialized,producerObserved:gpuSource.producerObserved,packets:number(gpuSource.packets),draws:number(gpuSource.draws),

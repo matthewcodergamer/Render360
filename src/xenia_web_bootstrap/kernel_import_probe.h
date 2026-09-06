@@ -17,6 +17,10 @@ uint32_t KernelImportProbeLastModule();
 uint32_t KernelImportProbeLastOrdinal();
 uint32_t KernelImportProbeLastStatus();
 uint32_t KernelImportProbeLastAbiTarget();
+uint32_t KernelImportProbeHistoryCount();
+uint32_t KernelImportProbeHistoryThunk(uint32_t index);
+uint32_t KernelImportProbeHistoryModule(uint32_t index);
+uint32_t KernelImportProbeHistoryOrdinal(uint32_t index);
 void MarkKernelImportProbeAbiFailure();
 
 }  // namespace render360::xenia_web
@@ -34,6 +38,10 @@ uint32_t r360_kernel_import_last_thunk();
 uint32_t r360_kernel_import_last_module();
 uint32_t r360_kernel_import_last_ordinal();
 uint32_t r360_kernel_import_last_status();
+uint32_t r360_kernel_import_history_count();
+uint32_t r360_kernel_import_history_thunk(uint32_t index);
+uint32_t r360_kernel_import_history_module(uint32_t index);
+uint32_t r360_kernel_import_history_ordinal(uint32_t index);
 }
 
 #endif

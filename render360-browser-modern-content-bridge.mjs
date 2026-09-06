@@ -116,7 +116,13 @@ function updatePersistentCpu(state){
   if(state.result?.compatibilityExecution?.used){
     const status=state.result.executionStatus>>>0;
     const exact=state.result.executionBlockerOpcode?` · HIR opcode ${state.result.executionBlockerOpcode} @ 0x${(state.result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
-    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:null));
+    const reachedKernel=state.result.reachedKernelBlocker?{...state.result.reachedKernelBlocker}:null;
+    if(reachedKernel&&!reachedKernel.message){
+      reachedKernel.message=reachedKernel.kind==='firmware-reentry-request'&&reachedKernel.ordinal===0x28
+        ?`xboxkrnl!HalReturnToFirmware requested ${reachedKernel.routine===1?'HalRebootRoutine':'firmware routine '+reachedKernel.routine}`
+        :`Kernel blocker ${reachedKernel.module||'module'} ordinal 0x${Number(reachedKernel.ordinal||0).toString(16).toUpperCase()}`;
+    }
+    const compatibilityBlocker=reachedKernel??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:null));
     state.schedulerBlocker=compatibilityBlocker;
     state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
     return state.persistentCpu;
@@ -198,4 +204,4 @@ else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.me
 return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};
 }
 
-export function modernContentBridgeContract(){return {release:45,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}
+export function modernContentBridgeContract(){return {release:75,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}

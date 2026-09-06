@@ -18,6 +18,7 @@ constexpr uint32_t kStatusIdle = 0;
 constexpr uint32_t kStatusSuccess = 1;
 constexpr uint32_t kStatusUnsupported = 2;
 constexpr uint32_t kStatusInvalid = 3;
+constexpr uint32_t kStatusTerminal = 4;
 constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
 constexpr uint32_t kMaxThreads = 32;
 constexpr uint32_t kMaxTlsSlots = 64;
@@ -107,6 +108,8 @@ uint32_t g_service_status = kStatusIdle;
 uint32_t g_service_calls = 0;
 uint32_t g_last_module = 0;
 uint32_t g_last_ordinal = 0;
+uint32_t g_firmware_requested = 0;
+uint32_t g_firmware_routine = 0;
 uint32_t g_next_notify_handle = 0x37000001u;
 
 uint32_t MakeHandle(uint32_t index, uint16_t generation) {
@@ -699,6 +702,15 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
 
   if (module == kModuleXboxkrnl) {
     switch (ordinal) {
+      case 0x0028:  // HalReturnToFirmware
+        // Upstream Xenia treats routine 1 as HalRebootRoutine and terminates
+        // the emulated process. A browser runtime cannot exit the host page,
+        // so expose the request as a terminal kernel boundary instead of
+        // pretending this call returned successfully to guest code.
+        g_firmware_requested = 1u;
+        g_firmware_routine = r3;
+        g_service_status = kStatusTerminal;
+        return 0;
       case 0x0083:  // KeQueryPerformanceFrequency
         return kGuestTickFrequency;
       case 0x00CC:  // NtAllocateVirtualMemory
@@ -890,6 +902,8 @@ void r360_kernel_service_reset() {
   render360::xenia_web::g_service_calls = 0;
   render360::xenia_web::g_last_module = 0;
   render360::xenia_web::g_last_ordinal = 0;
+  render360::xenia_web::g_firmware_requested = 0;
+  render360::xenia_web::g_firmware_routine = 0;
 }
 uint32_t r360_kernel_service_call(uint32_t module, uint32_t ordinal,
                                   uint32_t r3, uint32_t r4, uint32_t r5,
@@ -909,6 +923,12 @@ uint32_t r360_kernel_service_last_module() {
 }
 uint32_t r360_kernel_service_last_ordinal() {
   return render360::xenia_web::g_last_ordinal;
+}
+uint32_t r360_kernel_service_firmware_requested() {
+  return render360::xenia_web::g_firmware_requested;
+}
+uint32_t r360_kernel_service_firmware_routine() {
+  return render360::xenia_web::g_firmware_routine;
 }
 
 }  // extern "C"

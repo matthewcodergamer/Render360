@@ -34,7 +34,11 @@ jobs:
           fetch-depth: 0
 
       - name: Apply Xenia process-type semantics
-        run: python3 tools/apply-ke-current-process-type-v74.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-ke-current-process-type-v74.py
+          python3 tools/apply-ke-current-process-type-v74.py
 
       - name: Compile focused kernel runtime
         shell: bash

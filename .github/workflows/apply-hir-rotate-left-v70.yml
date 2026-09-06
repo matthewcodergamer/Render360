@@ -1,0 +1,106 @@
+name: Apply V70 HIR Rotate Left
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-hir-rotate-left-v70.py'
+      - '.github/workflows/apply-hir-rotate-left-v70.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-hir-rotate-left-v70
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V70 updater and regression
+        run: |
+          python3 -m py_compile tools/apply-hir-rotate-left-v70.py
+          node --check test-hir-rotate-left.mjs
+
+      - name: Apply V70 HIR rotate-left semantics
+        run: python3 tools/apply-hir-rotate-left-v70.py
+
+      - name: Verify V70 source and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "70"
+          grep -q 'case xe::cpu::hir::OPCODE_ROTATE_LEFT:' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'width == 64u ? ~uint64_t{0}' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'test-hir-rotate-left.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'Verify Braid rlwinm HIR rotate-left semantics' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=70;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:70,' runtime/render360-runtime.js
+          grep -q 'Render360 70' index.html
+          grep -q '<span>UI Release</span><span class="value">70</span>' index.html
+          grep -q "const VERSION='70';" render360-sw.js
+
+      - name: Commit V70 compatibility executor and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V70 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V70 source/release already current.'
+          else
+            git commit -m 'fix: execute Xenia HIR rotate left'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, verify and publish V70 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V70 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Verify published V70 provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git show origin/main:VERSION)" = "70"
+          meta="$(git show origin/main:xenia_ppc_bootstrap.meta.json)"
+          echo "$meta"
+          echo "$meta" | grep -q 'sourceCommit'
+          echo "$meta" | grep -q 'sourceRun'
+          echo "$meta" | grep -q 'sha256'
+
+      - name: Rebuild release-70 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

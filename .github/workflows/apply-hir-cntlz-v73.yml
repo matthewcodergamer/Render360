@@ -1,12 +1,9 @@
 name: Apply V73 Adaptive HIR CNTLZ
 
+# V73 is a one-time source migration / recovery workflow. Runtime regression
+# tests are owned by xenia-browser-bootstrap-fastlane.yml, so ordinary test or
+# source commits must not re-run the patcher after its anchors have evolved.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tools/apply-hir-cntlz-v73.py'
-      - 'test-hir-cntlz.mjs'
-      - '.github/workflows/apply-hir-cntlz-v73.yml'
   workflow_dispatch:
 
 permissions:
@@ -33,8 +30,18 @@ jobs:
           python3 -m py_compile tools/apply-hir-cntlz-v73.py
           node --check test-hir-cntlz.mjs
 
-      - name: Apply V73 dual-lane HIR CNTLZ implementation
-        run: python3 tools/apply-hir-cntlz-v73.py
+      - name: Apply V73 dual-lane HIR CNTLZ implementation if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'case xe::cpu::hir::OPCODE_CNTLZ' src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+             && grep -q 'r360_hir_opcode_name' src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+             && grep -q 'body.push_back(0x67);  // i32.clz' src/xenia_web_bootstrap/wasm_backend_probe.cpp \
+             && grep -q 'body.push_back(0x79);  // i64.clz' src/xenia_web_bootstrap/wasm_backend_probe.cpp; then
+            echo 'V73 source migration is already applied; validating current adaptive implementation.'
+          else
+            python3 tools/apply-hir-cntlz-v73.py
+          fi
 
       - name: Verify V73 adaptive source contracts
         shell: bash
@@ -74,11 +81,6 @@ jobs:
             link-xenia-ppc-bootstrap.sh \
             test-deployed-browser-bootstrap-critic.mjs \
             VERSION runtime/render360-runtime.js index.html render360-sw.js
-          # The repository app can update workflow files through the connector,
-          # but the Actions GITHUB_TOKEN intentionally cannot. Keep the fastlane
-          # edit out of this bot push; ChatGPT applies that workflow change
-          # separately through the authorized GitHub connector.
-          git restore .github/workflows/xenia-browser-bootstrap-fastlane.yml
           if git diff --cached --quiet; then
             echo 'V73 source/release already current.'
           else

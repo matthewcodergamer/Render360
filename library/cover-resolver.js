@@ -32,20 +32,17 @@ export async function resolveTitleCover({titleId,signal,timeoutMs=6500}={}){
     try{info=await fetchJson(`${X360DB_RAW}/titles/${tid}/info.json`,{signal:controller.signal});}catch{}
     const name=info?.title?.full||info?.title?.reduced||null;
 
-    // x360db caches the original Xbox 360 Marketplace artwork by Title ID.
     try{
       const url=`${X360DB_RAW}/titles/${tid}/artwork/boxart.jpg`;
       const blob=await fetchBlob(url,{signal:controller.signal});
       return {blob,name,source:'x360db',url};
     }catch{}
 
-    // If the archive image is missing, try the original Marketplace URL recorded by x360db.
     try{
       const url=secureXboxUrl(info?.artwork?.boxart);
       if(url){const blob=await fetchBlob(url,{signal:controller.signal});return {blob,name,source:'xbox-marketplace',url};}
     }catch{}
 
-    // XboxUnity remains a useful secondary source for titles not yet archived by x360db.
     try{
       const response=await fetch(`https://xboxunity.net/api/Covers/${tid}`,{mode:'cors',credentials:'omit',cache:'force-cache',signal:controller.signal});
       if(!response.ok)return null;
@@ -60,4 +57,20 @@ export async function resolveTitleCover({titleId,signal,timeoutMs=6500}={}){
   }finally{clearTimeout(timer);signal?.removeEventListener?.('abort',forwardAbort);}
 }
 
-export function coverResolutionPolicy(){return ['embedded-or-zip-sidecar','cached-title-cover','x360db-title-id-boxart','original-xbox-marketplace-artwork','xboxunity-fallback','user-selected-cover','placeholder'];}
+export async function resolvePcGameCover({steamAppId,pcGameId,signal,timeoutMs=6500}={}){
+  const appId=Number(steamAppId||0);if(!appId)return null;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort('pc-cover-timeout'),Math.max(1200,Number(timeoutMs)||6500));
+  const forwardAbort=()=>controller.abort(signal?.reason||'caller-abort');
+  if(signal){if(signal.aborted)forwardAbort();else signal.addEventListener('abort',forwardAbort,{once:true});}
+  const candidates=[
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900_2x.jpg`,
+    `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`,
+  ];
+  try{
+    for(const url of candidates)try{const blob=await fetchBlob(url,{signal:controller.signal});return {blob,name:String(pcGameId||'').toLowerCase()==='portal-1-pc'?'Portal':null,source:'steam-library-art',url,steamAppId:appId};}catch{}
+    return null;
+  }finally{clearTimeout(timer);signal?.removeEventListener?.('abort',forwardAbort);}
+}
+
+export function coverResolutionPolicy(){return ['embedded-or-zip-sidecar','cached-title-cover','pc-steam-library-art','x360db-title-id-boxart','original-xbox-marketplace-artwork','xboxunity-fallback','user-selected-cover','placeholder'];}

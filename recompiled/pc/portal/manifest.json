@@ -1,0 +1,29 @@
+{
+  "schema": "render360-pc-recompiled-title-v1",
+  "gameId": "portal-1-pc",
+  "name": "Portal",
+  "platform": "pc",
+  "engine": "Source",
+  "steamAppId": 400,
+  "adapter": "./adapter.mjs",
+  "content": {
+    "mode": "player-owned-install",
+    "required": [
+      "portal/gameinfo.txt",
+      "portal/portal_pak_dir.vpk",
+      "hl2 base content"
+    ]
+  },
+  "runtime": {
+    "mode": "community-package",
+    "schema": "render360-pc-wasm-package-v1",
+    "manifest": "render360-port.json",
+    "bundled": false
+  },
+  "legal": {
+    "gameAssetsBundled": false,
+    "gameCodeBundled": false,
+    "playerMustProvideGame": true,
+    "communityRuntimeMustBeSeparatelyAuthorized": true
+  }
+}

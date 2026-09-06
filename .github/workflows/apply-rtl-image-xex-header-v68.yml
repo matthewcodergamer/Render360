@@ -1,0 +1,106 @@
+name: Apply V68 RtlImageXexHeaderField
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-rtl-image-xex-header-v68.py'
+      - '.github/workflows/apply-rtl-image-xex-header-v68.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-rtl-image-xex-header-v68
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V68 updater and regression
+        run: |
+          python3 -m py_compile tools/apply-rtl-image-xex-header-v68.py
+          node --check test-kernel-rtl-image-xex-header-field.mjs
+
+      - name: Apply V68 RtlImageXexHeaderField service
+        run: python3 tools/apply-rtl-image-xex-header-v68.py
+
+      - name: Verify V68 source and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "68"
+          grep -q 'ReadXexOptionalHeaderField' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'case 0x012B:.*RtlImageXexHeaderField' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'key & 0xFFu' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'test-kernel-rtl-image-xex-header-field.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'Verify RtlImageXexHeaderField kernel service' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=68;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:68,' runtime/render360-runtime.js
+          grep -q 'Render360 68' index.html
+          grep -q '<span>UI Release</span><span class="value">68</span>' index.html
+          grep -q "const VERSION='68';" render360-sw.js
+
+      - name: Commit V68 kernel service and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V68 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V68 source/release already current.'
+          else
+            git commit -m 'fix: implement RtlImageXexHeaderField'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, verify and publish V68 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V68 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Verify published V68 provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          meta="$(git show origin/main:xenia_ppc_bootstrap.meta.json)"
+          echo "$meta"
+          echo "$meta" | grep -q 'sourceCommit'
+          echo "$meta" | grep -q 'sourceRun'
+          echo "$meta" | grep -q 'sha256'
+
+      - name: Rebuild release-68 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

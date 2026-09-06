@@ -26,12 +26,14 @@ on:
       - 'test-hir-cache-control.mjs'
       - 'test-hir-rotate-left.mjs'
       - 'test-hir-cntlz.mjs'
+      - 'test-render360-version-consistency.mjs'
       - 'test-deployed-browser-bootstrap-critic.mjs'
       - 'test-xenia-entry-lr-abi.mjs'
       - 'test-kernel-rtl-image-xex-header-field.mjs'
       - 'test-kernel-nt-allocate-virtual-memory.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'test-braid-frame-history.mjs'
+      - 'VERSION'
       - 'build-xenia-ppc-bootstrap.sh'
       - 'link-xenia-ppc-bootstrap.sh'
       - 'src/xenia_web_bootstrap/**'
@@ -255,6 +257,7 @@ jobs:
           p=Path('xenia_ppc_bootstrap.wasm')
           data=p.read_bytes()
           meta={
+            'release': int(Path('VERSION').read_text().strip()),
             'sourceCommit': os.environ['SOURCE_COMMIT'],
             'sourceRun': os.environ['SOURCE_RUN'],
             'sha256': hashlib.sha256(data).hexdigest(),
@@ -262,6 +265,7 @@ jobs:
           }
           Path('xenia_ppc_bootstrap.meta.json').write_text(json.dumps(meta,indent=2)+'\n')
           PY
+          node ./test-render360-version-consistency.mjs
           git config user.name 'Render360 Browser Bootstrap Bot'
           git config user.email 'actions@users.noreply.github.com'
           git add xenia_ppc_bootstrap.wasm xenia_ppc_bootstrap.meta.json

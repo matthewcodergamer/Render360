@@ -35,13 +35,17 @@ constexpr uint32_t kGuestVirtual64kBase = 0x40000000u;
 constexpr uint32_t kGuestVirtual64kEnd = 0x50000000u;
 constexpr uint32_t kXMemCommit = 0x00001000u;
 constexpr uint32_t kXMemReserve = 0x00002000u;
+constexpr uint32_t kXMemDecommit = 0x00004000u;
+constexpr uint32_t kXMemRelease = 0x00008000u;
 constexpr uint32_t kXMemReset = 0x00080000u;
 constexpr uint32_t kXMemTopDown = 0x00100000u;
 constexpr uint32_t kXMemNoZero = 0x00800000u;
 constexpr uint32_t kXMemLargePages = 0x20000000u;
 constexpr uint32_t kXStatusSuccess = 0x00000000u;
+constexpr uint32_t kXStatusUnsuccessful = 0xC0000001u;
 constexpr uint32_t kXStatusInvalidParameter = 0xC000000Du;
 constexpr uint32_t kXStatusNoMemory = 0xC0000017u;
+constexpr uint32_t kXStatusMemoryNotAllocated = 0xC00000A0u;
 // Browser guest stacks live in a dedicated 512 MiB sparse virtual arena below
 // the normal 0x82000000 retail XEX image region. Each thread owns a 16 MiB
 // slot, with the first page intentionally left unmapped as a downward-growing
@@ -560,6 +564,80 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
   return kXStatusSuccess;
 }
 
+bool IsGuestVirtualHeapAddress(uint32_t address) {
+  return (address >= 0x00010000u && address < kGuestVirtual4kEnd) ||
+         (address >= kGuestVirtual64kBase && address < 0x80000000u);
+}
+
+uint32_t NtFreeVirtualMemory(uint32_t base_addr_ptr,
+                             uint32_t region_size_ptr, uint32_t free_type,
+                             uint32_t debug_memory) {
+  uint32_t base_addr_value = 0, region_size_value = 0;
+  if (!base_addr_ptr || !region_size_ptr || debug_memory != 0 ||
+      !ReadGuestBe32(base_addr_ptr, &base_addr_value) ||
+      !ReadGuestBe32(region_size_ptr, &region_size_value)) {
+    return kXStatusInvalidParameter;
+  }
+  if (!base_addr_value) return kXStatusMemoryNotAllocated;
+
+  GuestVirtualAllocation* allocation = nullptr;
+  for (auto& candidate : g_virtual_allocations) {
+    if (candidate.used && candidate.base == base_addr_value) {
+      allocation = &candidate;
+      break;
+    }
+  }
+  if (!allocation) {
+    return IsGuestVirtualHeapAddress(base_addr_value)
+               ? kXStatusUnsuccessful
+               : kXStatusInvalidParameter;
+  }
+
+  if (free_type == kXMemDecommit) {
+    // Xenia permits range decommit. The browser allocator currently tracks one
+    // commit state per reservation, so only the whole reservation can be
+    // decommitted without lying about page state. Fail closed for partial
+    // decommits until per-page reservation state is introduced.
+    uint32_t adjusted_size = 0;
+    if (!region_size_value ||
+        !RoundUpGuestSize(region_size_value, allocation->page_size,
+                          &adjusted_size) ||
+        adjusted_size != allocation->size) {
+      return kXStatusUnsuccessful;
+    }
+    if (allocation->committed) {
+      if (!UnmapSparseGuestMemory(allocation->base,
+                                  allocation->size / kGuestPageSize)) {
+        return kXStatusUnsuccessful;
+      }
+      allocation->committed = false;
+      allocation->protection = 0;
+    }
+    if (!WriteGuestBe32(base_addr_ptr, base_addr_value) ||
+        !WriteGuestBe32(region_size_ptr, adjusted_size)) {
+      return kXStatusInvalidParameter;
+    }
+    return kXStatusSuccess;
+  }
+
+  // Match Xenia BaseHeap::Release: the supplied address must be the reservation
+  // base, the whole region is released, and RegionSize receives its real size.
+  // Upstream treats every non-DECOMMIT FreeType through the release path.
+  (void)kXMemRelease;
+  const uint32_t released_size = allocation->size;
+  if (allocation->committed &&
+      !UnmapSparseGuestMemory(allocation->base,
+                              allocation->size / kGuestPageSize)) {
+    return kXStatusUnsuccessful;
+  }
+  *allocation = {};
+  if (!WriteGuestBe32(base_addr_ptr, base_addr_value) ||
+      !WriteGuestBe32(region_size_ptr, released_size)) {
+    return kXStatusInvalidParameter;
+  }
+  return kXStatusSuccess;
+}
+
 // Match UserModule::GetOptHeader used by upstream xboxkrnl!
 // RtlImageXexHeaderField. XEX optional-header keys encode how their value is
 // represented in the low byte: 0 returns the inline dword, 1 returns the guest
@@ -625,6 +703,8 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
         return kGuestTickFrequency;
       case 0x00CC:  // NtAllocateVirtualMemory
         return NtAllocateVirtualMemory(r3, r4, r5, r6, r7);
+      case 0x00DC:  // NtFreeVirtualMemory
+        return NtFreeVirtualMemory(r3, r4, r5, r6);
       case 0x012B: {  // RtlImageXexHeaderField
         uint32_t value = 0;
         if (!ReadXexOptionalHeaderField(r3, r4, &value)) {

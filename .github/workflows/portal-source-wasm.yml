@@ -1,0 +1,156 @@
+name: Portal Source WebAssembly
+
+on:
+  push:
+    branches: [main, feature/portal1-source-wasm, 'fix/portal-*']
+    paths:
+      - 'recompiled/pc/portal/**'
+      - 'runtime/pc-recompiled-ui.js'
+      - 'runtime/pc-library-integration.js'
+      - 'runtime/community-wasm-package.js'
+      - 'runtime/pc-content-source.js'
+      - 'storage/pc-persistent-storage.js'
+      - 'docs/recompile/PORTAL1_SOURCE_WASM.md'
+      - 'test-portal-source-wasm-contract.mjs'
+      - 'test-pc-persistent-storage.mjs'
+      - '.github/workflows/portal-source-wasm.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'recompiled/pc/portal/**'
+      - 'runtime/pc-library-integration.js'
+      - 'storage/pc-persistent-storage.js'
+      - 'test-portal-source-wasm-contract.mjs'
+      - 'test-pc-persistent-storage.mjs'
+      - '.github/workflows/portal-source-wasm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portal-source-wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PORTAL_SOURCE_REPO: https://github.com/weliveinhell/source-engine.git
+  PORTAL_SOURCE_REF: 63f8364fe7b22b239e72dfb5f1024665b3a91567
+  EM_VERSION: '4.0.9'
+
+jobs:
+  contract:
+    name: Verify Portal recompile contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Verify Portal-only changes and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          node --check recompiled/pc/portal/source-wasm/portal-package-adapter.mjs
+          node --check recompiled/pc/portal/source-wasm/portal-source-worker.mjs
+          node --check runtime/pc-library-integration.js
+          node --check storage/pc-persistent-storage.js
+          node ./test-portal-source-wasm-contract.mjs
+          node ./test-pc-persistent-storage.mjs
+          bash -n recompiled/pc/portal/source-wasm/build-render360.sh
+          git diff --check
+          if git show origin/main:src/xenia_web_bootstrap/probe_backend.cpp >/dev/null 2>&1; then
+            test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$(git rev-parse origin/main:src/xenia_web_bootstrap)"
+          fi
+
+  engine-build:
+    name: Build engine-only Portal Source Wasm
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+
+      - name: Setup Emscripten 4.0.9
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ env.EM_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      - name: Install host build helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git patch pkg-config python3 xz-utils >/dev/null
+          emcc -v
+
+      - name: Checkout pinned community Source engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream
+          git clone --no-tags "$PORTAL_SOURCE_REPO" upstream/portal-source
+          cd upstream/portal-source
+          git checkout --detach "$PORTAL_SOURCE_REF"
+          git submodule update --init --recursive
+          test "$(git rev-parse HEAD)" = "$PORTAL_SOURCE_REF"
+
+      - name: Apply upstream Emscripten SDK compatibility patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          embuilder --pic build sdl2 sdl2-mt
+          sdl_audio="$(find "$EMSDK/upstream/emscripten/cache/ports/sdl2" -path '*src/audio/emscripten/SDL_emscriptenaudio.c' -print -quit)"
+          test -n "$sdl_audio"
+          sed -Ei 's/freq = EM_ASM_INT/freq = MAIN_THREAD_EM_ASM_INT/' "$sdl_audio"
+          embuilder --force --pic build sdl2 sdl2-mt
+          patch "$EMSDK/upstream/emscripten/src/lib/libwebgl.js" upstream/portal-source/emscripten/libwebgl.patch
+
+      - name: Build Render360 Portal Source runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/portal-source-runtime
+          bash recompiled/pc/portal/source-wasm/build-render360.sh \
+            upstream/portal-source build/portal-source-runtime "$GITHUB_WORKSPACE"
+
+      - name: Verify engine-only package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/portal-source-runtime/render360-port.json
+          test -s build/portal-source-runtime/portal-source-engine.mjs
+          test -s build/portal-source-runtime/portal-source-engine.wasm
+          test -s build/portal-source-runtime/portal-package-adapter.mjs
+          test -s build/portal-source-runtime/portal-source-worker.mjs
+          grep -q 'Render360 Source dylib failed:' build/portal-source-runtime/portal-source-engine.mjs
+          node -e "const m=require('./build/portal-source-runtime/render360-port.json'); if(m.gameId!=='portal-1-pc'||m.content?.retailAssetsBundled!==false||m.requirements?.threads!==false||m.diagnostics?.workerLocalObjectUrls!==true||m.diagnostics?.dylibFailFast!==true) process.exit(1)"
+          if find build/portal-source-runtime -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.vtf' -o -iname '*.vmt' \) -print -quit | grep -q .; then
+            echo 'Retail game data entered the Portal engine package.' >&2
+            exit 1
+          fi
+          du -ah build/portal-source-runtime | sort -h | tail -20
+
+      - name: Package Portal community runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd build/portal-source-runtime && zip -9 -r ../Render360-Portal-Source-WASM.zip .)
+          ls -lh build/Render360-Portal-Source-WASM.zip
+
+      - name: Upload engine-only Portal runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: Render360-Portal-Source-WASM
+          path: build/Render360-Portal-Source-WASM.zip
+          if-no-files-found: error
+          retention-days: 7

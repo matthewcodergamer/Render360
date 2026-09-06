@@ -44,8 +44,6 @@ jobs:
           grep -q 'kXMemRelease = 0x00008000u' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
           grep -q 'kXStatusMemoryNotAllocated = 0xC00000A0u' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
           grep -q 'NtFreeVirtualMemory(uint32_t base_addr_ptr' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
-          grep -q 'test-kernel-nt-free-virtual-memory.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
-          grep -q 'Verify NtFreeVirtualMemory kernel service' .github/workflows/xenia-browser-bootstrap-fastlane.yml
           grep -q 'const RENDER360_RELEASE=72;' runtime/render360-runtime.js
           grep -q 'const CONTENT_BRIDGE={release:72,' runtime/render360-runtime.js
           grep -q 'Render360 72' index.html
@@ -60,7 +58,6 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add \
             src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
             VERSION runtime/render360-runtime.js index.html render360-sw.js
           if git diff --cached --quiet; then
             echo 'V72 source/release already current.'
@@ -70,7 +67,7 @@ jobs:
             git push origin HEAD:main
           fi
 
-      - name: Build, verify and publish V72 browser bootstrap
+      - name: Build, publish and verify V72 browser bootstrap
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -82,6 +79,9 @@ jobs:
           test -n "$run_id"
           echo "V72 bootstrap run: $run_id"
           gh run watch "$run_id" --exit-status
+          git fetch origin main
+          git show origin/main:xenia_ppc_bootstrap.wasm > /tmp/xenia_ppc_bootstrap-v72.wasm
+          timeout 90s node ./test-kernel-nt-free-virtual-memory.mjs /tmp/xenia_ppc_bootstrap-v72.wasm
 
       - name: Verify published V72 provenance
         shell: bash
@@ -107,5 +107,3 @@ jobs:
           test -n "$run_id"
           echo "Package-core run: $run_id"
           gh run watch "$run_id" --exit-status
-
-# retry after correcting the V72 regression fixture syntax

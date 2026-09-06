@@ -6,7 +6,7 @@ const overlay=read('prepare-xenia-ppc-hir-failclosed-overlay.py');
 const build=read('build-xenia-ppc-bootstrap.sh');
 const probe=read('src/xenia_web_bootstrap/ppc_translation_probe.cpp');
 const controller=read('render360-title-controller.mjs');
-const fastlane=read('.github/workflows/xenia-browser-bootstrap-fastlane.yml');
+const releaseWorkflow=read('.github/workflows/apply-browser-wasm-trap-failclosed-v77.yml');
 
 assert.match(overlay,/r360_ppc_probe_report_unimplemented/,'browser HIR overlay must report the exact unsupported PPC instruction');
 assert.match(overlay,/#if defined\(__EMSCRIPTEN__\) \|\| defined\(XE_ARCH_WASM32\)[\s\S]*?return false;[\s\S]*?#else[\s\S]*?DebugBreak\(\);/,'wasm32 must fail translation before the native DebugBreak path');
@@ -28,7 +28,7 @@ assert.match(controller,/r360_ppc_probe_unimplemented_address/,'title controller
 assert.match(controller,/r360_ppc_probe_unimplemented_code/,'title controller must include unsupported PPC opcode telemetry');
 assert.match(controller,/catch\(cause\)/,'title controller must catch scanned-entry wasm traps');
 
-assert.ok(fastlane.includes('test-browser-wasm-trap-failclosed-v77.mjs'),'fastlane must run the V77 trap regression contract');
-assert.ok(fastlane.includes('test-title-scanned-entry-runtime.mjs'),'fastlane must execute the scanned-entry runtime test against the freshly linked wasm');
+assert.ok(releaseWorkflow.includes('test-browser-wasm-trap-failclosed-v77.mjs'),'V77 release gate must run the trap regression contract');
+assert.ok(releaseWorkflow.includes('test-title-scanned-entry-runtime.mjs'),'V77 release gate must execute the scanned-entry runtime test against the freshly linked wasm');
 
 console.log('R360_V77_BROWSER_WASM_TRAP_FAILCLOSED=PASS');

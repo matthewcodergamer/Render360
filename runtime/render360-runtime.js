@@ -4,7 +4,7 @@ import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
 const RENDER360_RELEASE=73;
-const REQUIRED_CORE_BUILD=30;
+const REQUIRED_CORE_BUILD=73;
 const REQUIRED_ABI=0x00030002;
 const CONTENT_BRIDGE={release:73,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true,nativeHirCompatibilityFallback:true};
 const containerName=kind=>({1:'XEX1',2:'XEX2',10:'STFS LIVE',11:'STFS PIRS',12:'STFS CON',20:'PowerPC ELF'})[kind]||'Unknown';
@@ -32,7 +32,7 @@ export class Render360Runtime extends EventTarget{
     const {Render360Core}=await coreModule();
     this.core=new Render360Core();
     await this.core.init();
-    if(this.core.buildVersion<REQUIRED_CORE_BUILD)throw new Error(`Runtime contract requires Core V${REQUIRED_CORE_BUILD}+; loaded V${this.core.buildVersion}`);
+    if(this.core.buildVersion!==REQUIRED_CORE_BUILD)throw new Error(`Render360 V${RENDER360_RELEASE} requires synchronized package core V${REQUIRED_CORE_BUILD}; loaded V${this.core.buildVersion}. Refresh after the release artifacts finish publishing.`);
     if(this.core.abiVersion<REQUIRED_ABI)throw new Error(`Runtime contract requires ABI ${fmtHex(REQUIRED_ABI)}+; loaded ${fmtHex(this.core.abiVersion)}`);
     await Promise.allSettled([inputPromise]);this.ready=true;
     this.emit('log',{level:'ok',message:`Core source ${this.core.source} · STFS extraction ${this.core.stfsExtractionMode}`});

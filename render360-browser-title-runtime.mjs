@@ -6,6 +6,7 @@ installRender360Buffer();
 
 export const PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm';
 export const PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json';
+const RENDER360_RELEASE=73;
 const BOOTSTRAP_SINGLETON_KEY=Symbol.for('render360.ppc.bootstrap.singleton');
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[
@@ -62,6 +63,8 @@ export async function validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl=globa
   if(!metadata||typeof metadata!=='object')throw new Error('Render360 bootstrap provenance metadata is missing');
   if(!/^[0-9a-f]{40}$/i.test(String(metadata.sourceCommit||'')))throw new Error('Render360 bootstrap source commit is invalid');
   if(!/^\d+$/.test(String(metadata.sourceRun||'')))throw new Error('Render360 bootstrap source run is invalid');
+  const release=Number(metadata.release);
+  if(!Number.isSafeInteger(release)||release!==RENDER360_RELEASE)throw new Error(`Render360 bootstrap release mismatch: expected V${RENDER360_RELEASE}, received ${metadata.release??'missing'}`);
   if(!/^[0-9a-f]{64}$/i.test(String(metadata.sha256||'')))throw new Error('Render360 bootstrap SHA-256 is invalid');
   if(!Number.isSafeInteger(Number(metadata.bytes))||Number(metadata.bytes)!==view.byteLength){
     throw new Error(`Render360 bootstrap byte count mismatch: expected ${metadata.bytes}, received ${view.byteLength}`);
@@ -73,6 +76,7 @@ export async function validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl=globa
   }
   return {
     verified:true,
+    release,
     sourceCommit:String(metadata.sourceCommit).toLowerCase(),
     sourceRun:String(metadata.sourceRun),
     sha256:actualSha256,

@@ -232,6 +232,37 @@ bool EmitI64Value(const Value* value, const Producers& producers,
       ok = true;
       break;
     }
+    case xe::cpu::hir::OPCODE_CNTLZ: {
+      const Value* source = instr->src1.value;
+      if (!source || value->type != xe::cpu::hir::INT8_TYPE ||
+          !ScalarTypeSize(source->type) ||
+          !EmitI64Value(source, producers, visiting, body, lowered)) {
+        break;
+      }
+      // The callable backend represents integer expressions as i64. Preserve
+      // Xenia's source width, use Wasm's native clz, then return the count as
+      // the INT8 HIR destination. For 8/16-bit values i32.clz includes the
+      // unused high bits, so subtract the width bias exactly as the scalar
+      // generated-Wasm backend does.
+      EmitI64Mask(body, source->type);
+      if (source->type == xe::cpu::hir::INT64_TYPE) {
+        body.push_back(0x79);  // i64.clz
+      } else {
+        body.push_back(0xA7);  // i32.wrap_i64
+        body.push_back(0x67);  // i32.clz
+        const uint32_t bits = ScalarTypeSize(source->type) * 8u;
+        const uint32_t bias = 32u - bits;
+        if (bias) {
+          body.push_back(0x41);  // i32.const
+          EmitI32Leb(body, static_cast<int32_t>(bias));
+          body.push_back(0x6B);  // i32.sub
+        }
+        body.push_back(0xAD);  // i64.extend_i32_u
+      }
+      EmitI64Mask(body, value->type);
+      ok = true;
+      break;
+    }
     case xe::cpu::hir::OPCODE_BYTE_SWAP: {
       const uint32_t size = ScalarTypeSize(value->type);
       if (!size || !instr->src1.value) break;

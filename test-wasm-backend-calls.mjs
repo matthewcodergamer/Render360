@@ -244,6 +244,28 @@ if (braidResult.r3!==2n || braidResult.kernelDispatches!==1) throw new Error(`Br
 if ((pick('r360_kernel_import_last_module')()>>>0)!==2 || (pick('r360_kernel_import_last_ordinal')()>>>0)!==0x028B) throw new Error('Braid generated path did not reach xam.xex ordinal 0x28B');
 console.log('BRAID_LOAD_OFFSET_CALL_INDIRECT_XAM=PASS');
 
+// V73 production regression: CNTLZ must be admitted by the callable function
+// backend, not only by the scalar probe/correctness oracle. Keep r4 dynamic so
+// Xenia cannot constant-fold the count before Render360 lowers it.
+pick('r360_ppc_probe_reset')();
+if ((pick('r360_ppc_probe_set_initial_gpr')(4,1n)>>>0)!==1) throw new Error('Could not seed callable CNTLZ r4');
+const callableCntlz = wordBytes(
+  0x7C830034,  // cntlzw r3,r4
+  0x4E800020,  // blr
+);
+const cntlzInput = pick('r360_ppc_probe_input_buffer')()>>>0;
+new Uint8Array(parent.exports.memory.buffer,cntlzInput,callableCntlz.length).set(callableCntlz);
+if ((pick('r360_ppc_probe_load')(cntlzInput,callableCntlz.length)>>>0)!==callableCntlz.length) throw new Error('Could not load callable CNTLZ PPC');
+pick('r360_ppc_probe_translate')();
+const cntlzOracleStatus=pick('r360_ppc_probe_correctness_status')()>>>0;
+const cntlzOracleR3=BigInt.asUintN(64,pick('r360_ppc_probe_correctness_r3')());
+if(cntlzOracleStatus!==3||cntlzOracleR3!==31n)throw new Error(`Callable CNTLZ oracle failed status=${cntlzOracleStatus} r3=${cntlzOracleR3}`);
+if((pick('r360_wasm_backend_call_function_count')()>>>0)!==1)throw new Error(`Callable CNTLZ produced ${pick('r360_wasm_backend_call_function_count')()>>>0} functions`);
+const cntlzSession=await createPersistentPpcSession({bootstrap:parent,initialGprs:{4:1n}});
+const cntlzResult=await cntlzSession.runFunctionSlice(guestBase);
+if(cntlzResult.r3!==31n||cntlzResult.result!==31n)throw new Error(`Callable CNTLZ mismatch generated=${cntlzResult.r3} oracle=${cntlzOracleR3}`);
+console.log('WASM_BACKEND_CALL_CNTLZ=PASS');
+
 console.log('WASM_BACKEND_CALL_DIRECT=PASS');
 console.log('WASM_BACKEND_CALL_NESTED=PASS');
 console.log('WASM_BACKEND_CALL_INDIRECT=PASS');

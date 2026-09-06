@@ -1,193 +1,187 @@
 # Render360 Recompile Track — Portal 1 First
 
-Portal 1 is the first PC/WebAssembly title for Render360. This track is deliberately separate from the Xbox 360/Xenia implementation. Changes under this plan must not modify `src/xenia_web_bootstrap`, the Xenia bootstrap WASM, or Xbox title execution.
+Portal 1 is the first PC/WebAssembly title for Render360. This track stays separate from Xbox 360/Xenia. Do not modify `src/xenia_web_bootstrap`, the Xenia bootstrap WASM, or Xbox title execution while bringing Portal up.
 
-## Target user flow
+## Active repositories
 
-1. Player installs **Portal (Steam App 400)** on a PC they control.
-2. In Render360, the player taps the PC button beside `+`.
-3. Player selects the installed Portal folder. Render360 detects `portal/gameinfo.txt`, Portal VPK data and the shared HL2 content.
-4. Player selects a trusted community Portal WebAssembly runtime ZIP/folder.
-5. Render360 validates `render360-port.json` and checks WebAssembly / WebGL / threading requirements before enabling launch.
-6. The Portal adapter gives the community runtime the Render360 canvas, input host, logs and a player-owned content source.
-7. The Source/Emscripten runtime starts without bundling Portal retail assets in Render360.
+- Host/UI/runtime: `matthewcodergamer/Render360`
+- Source fork: `matthewcodergamer/source-engine`
+- Source bring-up branch: `render360-portal-mobile`
+- Source build profile: `emscripten/render360/`
+- Source CI: **Render360 Portal Runtime**
 
-The browser is **not** converting `portal.exe` at upload time. The engine is compiled ahead of time for WebAssembly; the retail Portal content is linked at runtime from the player's installation.
+The browser does not translate `portal.exe` when a user uploads Portal. Source is compiled ahead of time to an Emscripten ES-module/WebAssembly runtime, while Portal retail content stays player supplied.
 
-## Community source reference
+## Player flow
 
-Research target:
+1. Install **Portal (Steam App 400)** from Steam on a PC you control.
+2. In Render360 tap **PC** beside the `+` button.
+3. Choose the Portal installation folder containing `portal`, `hl2` and `platform`.
+4. Render360 indexes normal files and Source VPK directory trees. VPK contents can be resolved with lazy range reads instead of copying entire archives.
+5. Choose the Render360 Portal runtime ZIP/folder produced by the Source fork.
+6. Render360 validates `render360-port.json`, WebAssembly, renderer and threading requirements.
+7. Render360 mounts the requested working set and starts Source.
+8. Source initially renders through its Emscripten WebGL 2 compatibility path to an internal canvas. Render360 presents the visible frame through WebGPU.
 
-- `weliveinhell/source-engine` — describes itself as an Emscripten Source Engine port with Portal tested.
-- Its workflow runs `emmake emscripten/build.sh` and packages `build/install`.
-- Its current Emscripten linker configuration uses SDL2, FreeType, JPEG/PNG, `MAIN_MODULE`, shared memory/pthreads, `FULL_ES3`, `PROXY_TO_PTHREAD`, OffscreenCanvas, a pthread pool of 8 and roughly 2 GiB initial memory.
-- Its existing asset strategy records Source filesystem reads and creates map-specific `.data` chunks.
+## Portal data for testing
 
-That proves Portal/Source can reach an Emscripten browser runtime, but the build output is not yet a drop-in Render360 package. Render360 needs an ES-module/module-factory boundary plus a player-owned content bridge.
+The inherited Source repository describes a development workflow where Source filesystem `OpenForRead` requests are logged and map-specific data is prepared. It also mentions an alternate hosted pre-packed `.data` download. Render360 intentionally does not depend on hosted retail game-data chunks.
 
-The upstream repository carries the Source 1 SDK license. Any downstream fork/build must continue to follow that license and must not commit or redistribute Portal retail game assets.
+Use a Portal installation you own:
 
-## Render360 runtime package contract
+1. Steam → Portal → **Manage → Browse local files**.
+2. For ordinary Render360 selection, keep the VPK files intact. Render360's Source VPK layer can index the VPK directory files and lazily read archive ranges.
+3. For dependency profiling only, make a temporary unpacked working tree from your own copy with VPKEdit. The inherited tooling uses a command shaped like:
 
-A Portal runtime ZIP/folder contains:
+   ```sh
+   vpkeditcli -e / -o . ./vpk_dir.vpk
+   ```
+
+4. Build/run the Source tree natively with its `OpenForRead` logging and load the target map. Start with `testchmb_a_00`.
+5. Convert the log to a path-only Render360 working set:
+
+   ```sh
+   node emscripten/render360/make_content_index.js \
+     --game-root /path/to/unpacked/Portal \
+     --log map-testchmb_a_00.txt \
+     --map testchmb_a_00 \
+     --out build/render360/portal-working-set.json
+   ```
+
+The JSON contains file paths/metadata only; it must not contain Valve textures, maps, models, audio or other retail asset bytes.
+
+## Build the Render360 Source runtime
+
+From the Source fork:
+
+```sh
+source emscripten/get_emscripten.sh
+R360_PROFILE=mobile bash emscripten/render360/build.sh
+```
+
+The intended package is:
 
 ```text
 render360-port.json
 portal.mjs
 portal.wasm
-portal.worker.js                 # when required by the build
-portal-working-set.json          # path list only; no Valve assets
+*.worker.js / Source side modules as needed
+portal-working-set.json
 ```
 
-Example manifest: `recompiled/pc/portal/render360-port.example.json`.
+The mobile profile is deliberately separate from the inherited demo build. The inherited port starts around 2 GiB of WebAssembly memory with an eight-worker pthread pool. The Render360 mobile profile starts smaller and is tuned for phone bring-up rather than desktop-style reservation.
 
-The current supported package formats are:
+Current mobile bring-up defaults in the Source branch are approximately:
 
-- `render360-adapter`: a JavaScript adapter creates a Render360 session directly.
-- `emscripten-esm`: an Emscripten ES-module factory. It must either expose `render360MountPcContent()` or declare a `contentIndex`.
+- 512 MiB initial Wasm memory;
+- memory growth up to 1536 MiB;
+- two pthread workers;
+- Portal only;
+- HDR off;
+- color correction off;
+- WebGL 2/ES3 Source compatibility renderer;
+- host-controlled `callMain()` after player content is ready.
 
-Remote code entries are rejected. The runtime code has to be inside the package selected by the user.
+These values are test targets, not final guarantees. Actual iPhone profiling decides whether they need to move lower or higher.
 
-## New player-owned working-set mount
+## Filesystem and VPK strategy
 
-A full Portal install is too large to blindly duplicate into WebAssembly memory, particularly on mobile. The Portal runtime can now declare:
+Render360 now has two complementary content paths:
 
-```json
-{
-  "contentIndex": "portal-working-set.json"
-}
-```
+### Direct/lazy VPK path
 
-The content index uses schema `render360-pc-content-index-v1` and contains safe relative paths only. Example:
+The PC content source recognizes Source VPK directory files and can resolve requested logical paths from Portal/HL2/platform archives using lazy reads. This avoids eagerly copying whole VPK archives into JavaScript or Wasm memory.
 
-```json
-{
-  "schema": "render360-pc-content-index-v1",
-  "files": [
-    "portal/gameinfo.txt",
-    {"path":"portal/maps/testchmb_a_00.bsp","group":"testchmb_a_00"},
-    {"path":"platform/platform_misc_dir.vpk","optional":true}
-  ]
-}
-```
+### Indexed working-set path
 
-At launch Render360:
+The runtime package can declare `portal-working-set.json` using schema `render360-pc-content-index-v1`. Entries can identify direct paths or logical Source paths/path IDs. Render360 resolves them against the player-owned content source and mounts only the files required by the current bring-up set.
 
-1. validates every path;
-2. verifies required files exist in the player-selected Portal install;
-3. reads only the indexed working set;
-4. creates the matching Emscripten filesystem directories;
-5. writes the files into the Emscripten FS;
-6. reports file/byte progress to boot diagnostics;
-7. calls the Emscripten `main()` only after the working set is ready.
+The next filesystem optimization is to expose Source-compatible synchronous reads through a worker-backed or OPFS-backed bridge, reducing duplicate copies into Wasm MEMFS for large individual files.
 
-This gives the first functional bridge between a community Emscripten engine and the player's own Portal files without shipping those files in the community package.
+## WebGPU architecture
 
-For later optimization, this copy-based working set should be replaced or supplemented by a worker/OPFS-backed synchronous filesystem bridge so Source can stream large assets without keeping the complete working set in the WASM heap.
+Render360 is WebGPU-first for the visible PC game surface. Source 1 itself is still based on an OpenGL/GLES-oriented renderer, so WebGPU is being migrated in stages instead of falsely relabeling WebGL as WebGPU.
 
-## Changes required in the Source/Emscripten fork
+### Stage 1 — implemented host path
 
-The linked community port currently emits a normal Emscripten HTML/JS launcher. A Render360-focused fork should add a dedicated build profile that emits an importable module factory.
+- Source/Emscripten renders to an internal Source canvas using WebGL 2.
+- `runtime/pc-webgpu-presenter.js` owns the visible Render360 canvas with WebGPU.
+- Each Source frame becomes a WebGPU texture and is presented with a WGSL full-screen pass.
+- Source render resolution and WebGPU presentation resolution are capped separately for phone performance.
 
-Recommended bring-up flags/concepts:
+### Stage 2
 
-```text
-MODULARIZE=1
-EXPORT_ES6=1
-INVOKE_RUN=0 / noInitialRun
-FORCE_FILESYSTEM=1
-export FS + callMain
-WebGL 2 / ES3-compatible rendering
-locateFile-compatible WASM/worker loading
-```
+Move scaling, presentation and suitable post-processing work to WebGPU while profiling frame-copy cost.
 
-The exact Emscripten syntax should follow the Emscripten version pinned by the fork.
+### Stage 3
 
-For a threaded build, the package manifest must declare:
+Port Source renderer/material abstractions and shader generation toward Dawn/Emdawnwebgpu/WGSL, then remove the compatibility WebGL renderer only after map/render correctness is proven.
 
-```json
-{
-  "requirements": {
-    "sharedArrayBuffer": true,
-    "crossOriginIsolated": true,
-    "threads": true
-  }
-}
-```
+## iPhone 11-first graphics target
 
-Render360 will then fail early with a readable browser-capability message instead of hanging on startup.
+For a phone-class profile, the host starts with roughly a 960×540-class Source pixel budget and a 1280×720-class WebGPU presentation budget, targeting 30 FPS before attempting 60 FPS. It does not blindly render at the device's full native DPR.
 
-### iPhone/mobile build profile
+This reduces:
 
-Do **not** use the community port's current ~2 GiB initial memory + eight-worker profile as the first iPhone target. The mobile bring-up fork should profile a substantially smaller initial heap and use controlled memory growth where compatible with the Source dynamic-linking layout. The first goal is the menu + first test chamber, not every map and feature at once.
+- Source render-target memory;
+- shader/fragment load;
+- texture bandwidth;
+- WebGPU presentation load;
+- the chance of iOS terminating the page for memory pressure.
 
-Suggested bring-up sequence:
+Dynamic resolution should later react to measured frame time rather than device resolution alone.
 
-1. compile single Portal game target only;
-2. boot engine and render a frame with no retail assets bundled;
-3. mount base Portal/HL2 content from the Render360 index;
-4. reach Portal menu/background;
-5. load `testchmb_a_00` working set;
-6. wire keyboard/mouse/controller abstraction;
-7. wire touch controller mapping;
-8. fix audio;
-9. add save persistence (IDBFS/OPFS strategy);
-10. expand generated map working sets and optimize memory.
+## Browser requirements
 
-## Graphics
+A threaded Portal runtime currently needs:
 
-The linked port uses Emscripten's GLES/WebGL path. Render360 should keep Portal on WebGL 2 first. WebGPU is a later renderer project, not a prerequisite for Portal bring-up.
+- WebAssembly;
+- WebGPU for the Render360 visible presentation path;
+- WebGL 2 while Source uses its compatibility renderer;
+- `SharedArrayBuffer`;
+- cross-origin isolation for pthreads.
 
-Source desktop OpenGL calls that do not map cleanly to WebGL need porting/emulation. The linked project already carries an Emscripten WebGL patch and reports an occasional render/lightmap issue, so render correctness should be tracked independently from CPU/WASM execution.
+Render360 preflights these requirements and should show a readable blocker instead of entering a white-screen/reload loop.
 
-## Filesystem / VPK strategy
+## UI / installed PWA
 
-Phase 1 (implemented host support): indexed working set copied from user files into Emscripten FS.
+Current PC UI requirements are implemented in the isolated Portal PC surface:
 
-Phase 2: generate complete path lists from the community Source fork's filesystem instrumentation instead of committing packed game data.
+- PC button is grouped directly beside `+`;
+- the Portal hero uses fixed-size portal artwork rather than stretching the art to the modal height;
+- the sheet uses a fixed scrolling body and mobile-height guard;
+- standalone/PWA mode and `visualViewport` top offset are tracked;
+- installed iPhone web apps receive extra top breathing room beyond the normal safe-area value;
+- runtime controls/HUD are shifted below the status/notch area.
 
-Phase 3: add a browser worker filesystem backend capable of synchronous Source-style reads backed by File/OPFS handles.
+The OS folder/file chooser itself is native and cannot be completely restyled from the webpage. Render360 controls the polished flow around that picker.
 
-The path-list artifacts may be distributed because they contain filenames/metadata only. Retail VPK/BSP/material/model/audio data remains player supplied.
+## Definition of Portal playable
 
-## Audio and saves
+Do not call Portal playable just because `portal.wasm` instantiates. Minimum success is:
 
-The linked Portal port reports sound and browser-persistent saving as incomplete. Treat these as explicit Portal milestones rather than hiding them behind a generic “compatibility” label.
-
-- Audio target: Web Audio through the Emscripten/SDL audio path.
-- Save target: persistent browser storage (IDBFS or a later OPFS-backed layer).
-
-## UI requirements
-
-The PC importer should feel like part of Render360 rather than a raw browser input form:
-
-- PC button grouped directly beside the `+` import button;
-- Portal-specific hero treatment;
-- three-step visual progress (game files → runtime → ready);
-- friendly Portal-folder instructions;
-- ZIP/folder runtime import;
-- drag/drop on desktop;
-- browser preflight badge;
-- clear legal/runtime separation;
-- iPhone safe-area spacing;
-- Xbox runtime controls/HUD shifted below the top safe area.
-
-The operating-system file chooser itself cannot be fully restyled by a webpage; Render360 therefore keeps the native picker behind its own polished selection flow and supports drag/drop on desktop.
-
-## Definition of “Portal functional”
-
-Do not mark Portal playable merely because a `.wasm` file instantiated. The minimum playable milestone is:
-
-- Portal PC folder recognized;
-- compatible Source/Emscripten package recognized;
-- browser capability check passes;
-- Source main module instantiates;
-- indexed player-owned content mounts;
-- first visible Source frame appears;
+- Portal folder recognized;
+- Source VPKs/index available;
+- runtime package passes preflight;
+- Source module instantiates;
+- required player-owned content resolves/mounts;
+- first Source frame reaches the WebGPU presenter;
 - menu accepts input;
-- first chamber loads and player movement/camera input works;
-- fatal errors show in Render360 diagnostics instead of white-screen/reload loops.
+- `testchmb_a_00` loads;
+- movement/camera works;
+- fatal errors remain visible in Render360 diagnostics instead of causing a white-screen reload loop.
 
-## GTA IV later
+## Remaining milestones
 
-GTA IV remains a later PC-recompile target. Its executable/runtime architecture, Direct3D translation, memory requirements and game-specific dependencies are much larger. The Portal track exists to prove the general PC host contract first. Do not mix GTA IV work into the Portal bring-up branch.
+1. Make the Source fork produce a passing `Render360-Portal-Runtime` artifact in CI.
+2. Generate a complete base + `testchmb_a_00` dependency index from real player-owned content logs.
+3. Instantiate that runtime in Render360.
+4. Verify first frame through WebGPU.
+5. Verify menu and first chamber.
+6. Wire controller/touch input fully.
+7. Stabilize audio.
+8. Persist saves.
+9. Profile iPhone memory, VPK reads, frame-copy cost, lightmaps and shader state.
+10. Continue the real Source-to-WebGPU renderer migration.
+
+GTA IV stays a later PC target after this Portal path proves the general host/runtime/content contract.

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
+// This is the release-wide gate: every publish lane must agree with VERSION.
 const allowBootstrapPending = process.argv.includes('--allow-bootstrap-pending');
 const versionText = fs.readFileSync(new URL('./VERSION', import.meta.url), 'utf8').trim();
 assert.match(versionText, /^\d+$/, 'VERSION must contain one integer release number');

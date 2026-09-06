@@ -44,20 +44,6 @@ replace_once(
     "V72 xboxkrnl ordinal 0xDC dispatch",
 )
 
-fastlane = ROOT / ".github/workflows/xenia-browser-bootstrap-fastlane.yml"
-replace_once(
-    fastlane,
-    """      - 'test-kernel-nt-allocate-virtual-memory.mjs'\n      - 'test-xex-guest-mapper.mjs'\n""",
-    """      - 'test-kernel-nt-allocate-virtual-memory.mjs'\n      - 'test-kernel-nt-free-virtual-memory.mjs'\n      - 'test-xex-guest-mapper.mjs'\n""",
-    "V72 fastlane free-memory trigger",
-)
-replace_once(
-    fastlane,
-    """      - name: Verify NtAllocateVirtualMemory kernel service\n        run: timeout 90s node ./test-kernel-nt-allocate-virtual-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm\n\n      - name: Verify browser bootstrap runtime contract\n""",
-    """      - name: Verify NtAllocateVirtualMemory kernel service\n        run: timeout 90s node ./test-kernel-nt-allocate-virtual-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm\n\n      - name: Verify NtFreeVirtualMemory kernel service\n        run: timeout 90s node ./test-kernel-nt-free-virtual-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm\n\n      - name: Verify browser bootstrap runtime contract\n""",
-    "V72 fastlane free-memory regression",
-)
-
 (ROOT / "VERSION").write_text(f"{RELEASE}\n")
 
 runtime = ROOT / "runtime/render360-runtime.js"

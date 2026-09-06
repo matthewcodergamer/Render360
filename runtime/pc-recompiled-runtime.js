@@ -80,13 +80,11 @@ export async function runPcRecompiledTitle({runtime,game,source,config={},probe=
 export function installPcRecompiledRouter(Render360RuntimeClass){
   const proto=Render360RuntimeClass?.prototype;if(!proto||proto.__r360PcRecompiledRouterInstalled)return false;
   Object.defineProperty(proto,'__r360PcRecompiledRouterInstalled',{value:true});
-  const previousPlay=proto.play,previousContract=proto.contract,previousSetKey=proto.setKey,previousSetAnalog=proto.setAnalog,previousResetInput=proto.resetInput,previousPause=proto.pause,previousResume=proto.resume;
+  const previousPlay=proto.play,previousContract=proto.contract,previousSetKey=proto.setKey,previousSetAnalog=proto.setAnalog,previousResetInput=proto.resetInput;
   proto.contract=function(){const base=previousContract.call(this);return {...base,pcRecompiledWasm:{enabled:true,titleManifestSchema:PC_RECOMPILED_TITLE_SCHEMA,communityRuntimeSchema:'render360-pc-wasm-package-v1',registeredTitles:[...BUILTIN_MANIFESTS.keys()],userOwnedPcFiles:true,webgpuPresentation:true,xboxControllerOverlay:true,physicalGamepad:true,xboxRuntimeUnchanged:true}};};
-  proto.setKey=function(key,pressed){const result=previousSetKey.call(this,key,pressed);this.recompiledSession?.setKey?.(key,pressed);return result;};
-  proto.setAnalog=function(lx=0,ly=0,rx=0,ry=0){const result=previousSetAnalog.call(this,lx,ly,rx,ry);this.recompiledSession?.setAnalog?.(lx,ly,rx,ry);return result;};
-  proto.resetInput=function(){const result=previousResetInput.call(this);this.recompiledSession?.resetInput?.();return result;};
-  proto.pause=function(){const result=previousPause.call(this);this.recompiledSession?.pause?.();return result;};
-  proto.resume=function(){const result=previousResume.call(this);this.recompiledSession?.resume?.();return result;};
+  proto.setKey=function(key,pressed){const result=typeof previousSetKey==='function'?previousSetKey.call(this,key,pressed):undefined;this.recompiledSession?.setKey?.(key,pressed);return result;};
+  proto.setAnalog=function(lx=0,ly=0,rx=0,ry=0){const result=typeof previousSetAnalog==='function'?previousSetAnalog.call(this,lx,ly,rx,ry):undefined;this.recompiledSession?.setAnalog?.(lx,ly,rx,ry);return result;};
+  proto.resetInput=function(){const result=typeof previousResetInput==='function'?previousResetInput.call(this):undefined;this.recompiledSession?.resetInput?.();return result;};
   proto.play=async function(game,source=this.getSource(game?.id),config={}){
     if(!isPcGame(game))return previousPlay.call(this,game,source,config);
     if(!this.ready||!this.core)throw new Error('Render360 core is still loading');

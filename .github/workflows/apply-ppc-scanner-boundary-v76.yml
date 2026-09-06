@@ -1,0 +1,129 @@
+name: Apply V76 PPC Scanner Boundary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-ppc-scanner-boundary-v76.py'
+      - 'test-ppc-scanner-boundary-v76.mjs'
+      - '.github/workflows/apply-ppc-scanner-boundary-v76.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-ppc-scanner-boundary-v76
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V76 updater syntax
+        run: |
+          python3 -m py_compile tools/apply-ppc-scanner-boundary-v76.py
+          node --check test-ppc-scanner-boundary-v76.mjs
+
+      - name: Apply authoritative PPC scanner boundary
+        run: python3 tools/apply-ppc-scanner-boundary-v76.py
+
+      - name: Verify V76 source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '76'
+          grep -q 'PPC_SCANNER_SOURCE = XENIA / "src/xenia/cpu/ppc/ppc_scanner.cc"' prepare-xenia-web-overlay.py
+          grep -q 'if (end_address && address > end_address)' prepare-xenia-web-overlay.py
+          grep -q 'address = end_address;' prepare-xenia-web-overlay.py
+          grep -q '"src/xenia/cpu/ppc/ppc_scanner.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_scanner.cc"' build-xenia-ppc-bootstrap.sh
+          grep -q 'const uint32_t scan_end=pdata?fn_end-4:' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'const RENDER360_RELEASE=76;' runtime/render360-runtime.js
+          grep -q 'const REQUIRED_CORE_BUILD=76;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:76,' runtime/render360-runtime.js
+          grep -q 'const RENDER360_RELEASE=76;' render360-browser-title-runtime.mjs
+          grep -q "const VERSION='76';" render360-sw.js
+          grep -q 'Render360 76' index.html
+          node ./test-ppc-scanner-boundary-v76.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check runtime/render360-runtime.js
+
+      - name: Commit V76 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V76 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            prepare-xenia-web-overlay.py \
+            build-xenia-ppc-bootstrap.sh \
+            runtime/render360-runtime.js \
+            render360-browser-title-runtime.mjs \
+            render360-browser-modern-content-bridge.mjs \
+            render360-sw.js \
+            index.html \
+            VERSION
+          if git diff --cached --quiet; then
+            echo 'V76 source already applied.'
+          else
+            git commit -m 'V76: preserve authoritative PPC scanner bounds'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Publish synchronized V76 package core first
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V76 package-core run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Build verify and publish V76 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V76 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Regress scanner boundary and prior kernel fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin main
+          node ./test-ppc-scanner-boundary-v76.mjs
+          node ./test-kernel-hal-return-to-firmware-v75.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-kernel-debug-monitor-variable.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-kernel-variable-import-relocation.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-render360-version-consistency.mjs
+
+      - name: Verify final V76 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const version=Number(fs.readFileSync('VERSION','utf8').trim());
+          const pkg=JSON.parse(fs.readFileSync('render360_xenia_core.meta.json','utf8'));
+          const boot=JSON.parse(fs.readFileSync('xenia_ppc_bootstrap.meta.json','utf8'));
+          if(version!==76||Number(pkg.release)!==76||Number(boot.release)!==76)throw new Error(JSON.stringify({version,pkg:pkg.release,boot:boot.release}));
+          console.log('R360_V76_FINAL_RELEASE_PARITY=PASS');
+          NODE

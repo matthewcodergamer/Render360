@@ -107,3 +107,5 @@ jobs:
           test -n "$run_id"
           echo "Package-core run: $run_id"
           gh run watch "$run_id" --exit-status
+
+# retry after correcting the V72 regression fixture syntax

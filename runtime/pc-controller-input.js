@@ -1,3 +1,5 @@
+import './pc-library-integration.js';
+
 const PORTAL_BUTTON_MAP=Object.freeze({
   A:{kind:'key',code:'Space',key:' '},
   B:{kind:'key',code:'ControlLeft',key:'Control'},

@@ -1,0 +1,106 @@
+name: Apply V69 HIR Cache Control
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-hir-cache-control-v69.py'
+      - '.github/workflows/apply-hir-cache-control-v69.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-hir-cache-control-v69
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V69 updater and regression
+        run: |
+          python3 -m py_compile tools/apply-hir-cache-control-v69.py
+          node --check test-hir-cache-control.mjs
+
+      - name: Apply V69 HIR cache-control semantics
+        run: python3 tools/apply-hir-cache-control-v69.py
+
+      - name: Verify V69 source and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "69"
+          grep -q 'case xe::cpu::hir::OPCODE_CACHE_CONTROL:' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'CACHE_CONTROL_TYPE_DATA_TOUCH' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'CACHE_CONTROL_TYPE_DATA_STORE_AND_FLUSH' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'test-hir-cache-control.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'Verify Braid dcbt HIR cache-control semantics' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=69;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:69,' runtime/render360-runtime.js
+          grep -q 'Render360 69' index.html
+          grep -q '<span>UI Release</span><span class="value">69</span>' index.html
+          grep -q "const VERSION='69';" render360-sw.js
+
+      - name: Commit V69 compatibility executor and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V69 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V69 source/release already current.'
+          else
+            git commit -m 'fix: execute Xenia HIR cache control'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, verify and publish V69 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V69 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Verify published V69 provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git show origin/main:VERSION)" = "69"
+          meta="$(git show origin/main:xenia_ppc_bootstrap.meta.json)"
+          echo "$meta"
+          echo "$meta" | grep -q 'sourceCommit'
+          echo "$meta" | grep -q 'sourceRun'
+          echo "$meta" | grep -q 'sha256'
+
+      - name: Rebuild release-69 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

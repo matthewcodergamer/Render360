@@ -29,7 +29,7 @@ for(const bridge of ['render360-browser-modern-content-bridge.mjs','render360-br
 }
 
 const developerConsole=fs.readFileSync('developer-console.js','utf8');
-for(const marker of ['render360-blocker-report-v1','render360PpcRuntimeIdentity','document.execCommand(\'copy\')','translatedFunctions']){
+for(const marker of ['render360-blocker-report-v2','render360PpcRuntimeIdentity','document.execCommand(\'copy\')','translatedFunctions']){
   assert.ok(developerConsole.includes(marker),`missing compact console invariant: ${marker}`);
 }
 assert.equal(developerConsole.includes('runtime:globalThis.render360ModernTitle'),false,'developer report copies the entire live runtime');

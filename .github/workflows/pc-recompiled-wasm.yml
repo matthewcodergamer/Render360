@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'runtime/pc-content-source.js'
+      - 'runtime/source-vpk-source.js'
       - 'runtime/community-wasm-package.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
@@ -12,6 +13,7 @@ on:
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
       - 'test-pc-content-source.mjs'
+      - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
       - 'test-pc-recompiled-runtime.mjs'
       - 'test-ui-contract.mjs'
@@ -24,6 +26,7 @@ on:
     branches: [main]
     paths:
       - 'runtime/pc-content-source.js'
+      - 'runtime/source-vpk-source.js'
       - 'runtime/community-wasm-package.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
@@ -31,6 +34,7 @@ on:
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
       - 'test-pc-content-source.mjs'
+      - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
       - 'test-pc-recompiled-runtime.mjs'
       - 'test-ui-contract.mjs'
@@ -82,6 +86,7 @@ jobs:
           set -euo pipefail
           python3 -m py_compile tools/apply-pc-recompiled-portal-v74.py
           node --check runtime/pc-content-source.js
+          node --check runtime/source-vpk-source.js
           node --check runtime/community-wasm-package.js
           node --check runtime/pc-recompiled-runtime.js
           node --check runtime/pc-recompiled-ui.js
@@ -90,6 +95,7 @@ jobs:
           node --check ui-behavior.js
           node --check app.js
           node ./test-pc-content-source.mjs
+          node ./test-source-vpk-source.mjs
           node ./test-community-wasm-package.mjs
           node ./test-pc-recompiled-runtime.mjs
           git diff --check
@@ -99,8 +105,9 @@ jobs:
           grep -q "installPcRecompiledRouter(Render360Runtime)" settings/execution-engine.js
           grep -q "portal-1-pc" recompiled/pc/portal/manifest.json
           grep -q "r360-library-import-actions" runtime/pc-recompiled-ui.js
-          grep -q "pc-wasm-capability" styles/pc-recompiled.css
+          grep -q "pc-wasm-portal-art" styles/pc-recompiled.css
           grep -q "render360-pc-content-index-v1" runtime/community-wasm-package.js
+          grep -q "lazySourceVpkReads" runtime/community-wasm-package.js
           test "$(tr -d '[:space:]' < VERSION)" = '74'
           test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$R360_XBOX_TREE"
           if git diff --name-only | grep -Eq '^(src/xenia_web_bootstrap/|xenia_ppc_bootstrap\.wasm$|xenia_ppc_bootstrap\.meta\.json$|VERSION$)'; then

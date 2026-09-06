@@ -1,3 +1,5 @@
+import {createSourceVpkOverlay} from './source-vpk-source.js';
+
 const normalizePath=value=>String(value||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'').split('/').filter(part=>part&&part!=='.'&&part!=='..').join('/');
 const lowerPath=value=>normalizePath(value).toLowerCase();
 
@@ -33,7 +35,7 @@ export function createPcFileListSource(files,{name='PC game folder',stripCommonR
     size+=Number(file.size||0);
   }
   const paths=[...byPath.values()].map(item=>item.path).sort();
-  return {
+  const base={
     kind:'pc-file-list',name,rootName:root||null,size,files:input,
     paths(){return [...paths];},
     has(path){return byPath.has(lowerPath(path));},
@@ -46,6 +48,7 @@ export function createPcFileListSource(files,{name='PC game folder',stripCommonR
     },
     descriptor(){return {kind:'pc-file-list',name,rootName:root||null,size,fileCount:paths.length};},
   };
+  return createSourceVpkOverlay(base);
 }
 
 export function createPcMemorySource(entries,{name='PC game fixture'}={}){
@@ -56,7 +59,7 @@ export function createPcMemorySource(entries,{name='PC game fixture'}={}){
     byPath.set(lowerPath(path),{path,bytes});size+=bytes.byteLength;
   }
   const paths=[...byPath.values()].map(v=>v.path).sort();
-  return {kind:'pc-memory',name,size,paths:()=>[...paths],has:path=>byPath.has(lowerPath(path)),stat(path){const item=byPath.get(lowerPath(path));return item?{path:item.path,size:item.bytes.byteLength,file:true}:null;},async read(path,{offset=0,length=null}={}){const item=byPath.get(lowerPath(path));if(!item)throw new Error(`PC game file not found: ${normalizePath(path)}`);const start=Math.max(0,Number(offset)||0),end=length==null?item.bytes.byteLength:Math.min(item.bytes.byteLength,start+Math.max(0,Number(length)||0));return item.bytes.slice(start,end);},descriptor(){return {kind:'pc-memory',name,size,fileCount:paths.length};}};
+  return {kind:'pc-memory',name,size,paths:()=>[...paths],has:path=>byPath.has(lowerPath(path)),async hasAsync(path){return byPath.has(lowerPath(path));},stat(path){const item=byPath.get(lowerPath(path));return item?{path:item.path,size:item.bytes.byteLength,file:true}:null;},async read(path,{offset=0,length=null}={}){const item=byPath.get(lowerPath(path));if(!item)throw new Error(`PC game file not found: ${normalizePath(path)}`);const start=Math.max(0,Number(offset)||0),end=length==null?item.bytes.byteLength:Math.min(item.bytes.byteLength,start+Math.max(0,Number(length)||0));return item.bytes.slice(start,end);},descriptor(){return {kind:'pc-memory',name,size,fileCount:paths.length};}};
 }
 
 const PORTAL_STRONG_MARKERS=[
@@ -93,6 +96,6 @@ export function detectPcGame(source){
   return {matched:false,gameId:null,name:null,engine:null,confidence:portal.confidence,candidates:[portal],reason:'unsupported-pc-game'};
 }
 
-export function pcContentContract(){return {schema:'render360-pc-content-v1',streaming:true,wholeGameCopyRequired:false,folderFiles:true,portal:{gameId:'portal-1-pc',steamAppId:400,strongMarkers:[...PORTAL_STRONG_MARKERS],supportMarkers:[...PORTAL_SUPPORT_MARKERS]}};}
+export function pcContentContract(){return {schema:'render360-pc-content-v1',streaming:true,wholeGameCopyRequired:false,folderFiles:true,lazySourceVpkReads:true,portal:{gameId:'portal-1-pc',steamAppId:400,strongMarkers:[...PORTAL_STRONG_MARKERS],supportMarkers:[...PORTAL_SUPPORT_MARKERS]}};}
 
 export {normalizePath as normalizePcPath};

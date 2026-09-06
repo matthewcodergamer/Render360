@@ -24,6 +24,7 @@ on:
       - 'test-direct-call-sparse-window.mjs'
       - 'test-hir-load-offset-addressing.mjs'
       - 'test-xenia-entry-lr-abi.mjs'
+      - 'test-kernel-rtl-image-xex-header-field.mjs'
       - 'test-xex-guest-mapper.mjs'
       - 'test-braid-frame-history.mjs'
       - 'build-xenia-ppc-bootstrap.sh'
@@ -213,6 +214,9 @@ jobs:
 
       - name: Verify Xenia title-entry LR ABI
         run: timeout 90s node ./test-xenia-entry-lr-abi.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify RtlImageXexHeaderField kernel service
+        run: timeout 90s node ./test-kernel-rtl-image-xex-header-field.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

@@ -150,6 +150,19 @@ if 'case xe::cpu::hir::OPCODE_CNTLZ:' not in call_src:
     }
 '''
     call_src = call_src.replace(anchor, cntlz + anchor, 1)
+
+# BuildModule has a separate fail-closed admission list from EmitI64Value. A
+# lowering case without admission still produces zero callable functions. Keep
+# CNTLZ in both places so the production registry can actually accept it.
+cntlz_allow = '''               instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_CNTLZ ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_BYTE_SWAP ||'''
+if cntlz_allow not in call_src:
+    anchor = '''               instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_BYTE_SWAP ||'''
+    if anchor not in call_src:
+        raise SystemExit('callable CNTLZ admission anchor not found')
+    call_src = call_src.replace(anchor, cntlz_allow, 1)
 write_if_changed(call_path, call_src)
 
 # Focused production-path regression: dynamic r4 -> cntlzw r3,r4 -> blr must

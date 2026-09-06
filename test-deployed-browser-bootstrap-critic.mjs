@@ -20,7 +20,9 @@ attachRender360BrowserInstance(host,instance);
 assert.ok(instance?.exports?.memory instanceof WebAssembly.Memory,'exact deployed bootstrap did not initialize with exported browser memory');
 const exported=new Set(WebAssembly.Module.exports(module).map(e=>e.name));
 const required=[
-  'memory','r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
+  'memory','r360_hir_opcode_count','r360_hir_opcode_name','r360_hir_correctness_supports_opcode','r360_hir_correctness_supported_opcode_count',
+  'r360_wasm_backend_supports_hir_opcode','r360_wasm_backend_supported_opcode_count',
+  'r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_translate_scanned_at','r360_ppc_probe_correctness_status',
   'r360_pe_guest_load','r360_pe_guest_entry_address','r360_title_handoff_translate_entry','r360_title_handoff_translate_scanned_entry',
   'r360_kernel_import_register','r360_kernel_service_call','r360_guest_thread_create','r360_guest_tls_alloc',
   'r360_title_gpu_ring_base','r360_title_gpu_write_pointer','r360_title_gpu_ring_word',

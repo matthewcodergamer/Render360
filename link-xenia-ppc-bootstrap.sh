@@ -56,6 +56,12 @@ fi
 # images from being incorrectly constrained by the historical 64 KiB scratch
 # buffer used by early bring-up tests.
 CRITICAL_EXPORTS=(
+  r360_hir_opcode_count
+  r360_hir_opcode_name
+  r360_hir_correctness_supports_opcode
+  r360_hir_correctness_supported_opcode_count
+  r360_wasm_backend_supports_hir_opcode
+  r360_wasm_backend_supported_opcode_count
   r360_ppc_probe_set_initial_lr
   r360_ppc_probe_correctness_gpr
   r360_ppc_probe_set_execute_on_translate

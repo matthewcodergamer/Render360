@@ -1,5 +1,5 @@
 // Render360 developer tools are opt-in. Production mode keeps only the tiny UI guard.
-// V54: Braid frame-history console — prove prologue vs duplicate teardown.
+// V73: adaptive Xenia HIR diagnostics + dual-lane correctness/Wasm coverage.
 const SETTINGS_KEY='render360.settings.v44';
 const $=id=>document.getElementById(id);
 const entries=[];
@@ -32,6 +32,13 @@ function hexDelta(value){
   const sign=n<0?'-':'+';
   return `${sign}0x${Math.abs(n).toString(16).toUpperCase()}`;
 }
+function readWasmCString(memory,ptr,max=128){
+  const start=number(ptr);if(!(memory instanceof WebAssembly.Memory)||!start)return undefined;
+  const bytes=new Uint8Array(memory.buffer);let end=start>>>0;const limit=Math.min(bytes.length,end+Math.max(1,max|0));
+  while(end<limit&&bytes[end])end++;
+  if(end===(start>>>0))return '';
+  try{return new TextDecoder().decode(bytes.subarray(start>>>0,end));}catch{return undefined;}
+}
 function compactBlocker(detail){
   const source=detail?.blocker||detail?.schedulerBlocker||detail||{};
   return compact({
@@ -60,6 +67,8 @@ function decodePpcInstruction(word,sourceAddress){
   }
   if(primary===31){
     const rb=(word>>>11)&31,xo=(word>>>1)&0x3FF;
+    if(xo===26)return {kind:'cntlz',text:`cntlzw r${ra},r${rt}`,rs:rt,ra,xo,mnemonic:'cntlzw'};
+    if(xo===58)return {kind:'cntlz',text:`cntlzd r${ra},r${rt}`,rs:rt,ra,xo,mnemonic:'cntlzd'};
     const xMemoryNames={
       23:'lwzx',55:'lwzux',87:'lbzx',119:'lbzux',
       151:'stwx',183:'stwux',215:'stbx',247:'stbux',
@@ -247,7 +256,7 @@ function memoryDiagnostics(state,result){
     blockerDecoded:decoded?.text,
     instructionKind:decoded?.kind||'unknown',
     ppcPrimaryOpcode:instructionWord===undefined?undefined:instructionWord>>>26,
-    rt:decoded?.rt,ra:decoded?.ra,rb:decoded?.rb,displacement:decoded?.displacement,
+    rt:decoded?.rt,rs:decoded?.rs,ra:decoded?.ra,rb:decoded?.rb,displacement:decoded?.displacement,
     effectiveAddress:effectiveAddress===undefined?undefined:address(effectiveAddress),
     baseRegisterValue:baseRegisterValue===undefined?undefined:address(baseRegisterValue),
     indexRegisterValue:indexRegisterValue===undefined?undefined:address(indexRegisterValue),
@@ -280,6 +289,35 @@ function memoryDiagnostics(state,result){
   });
 }
 
+function hirDiagnostics(state,result){
+  const exp=state?.bootstrap?.exports||{};
+  const fn=name=>{const value=exp[name]??exp[`_${name}`];return typeof value==='function'?value:null;};
+  const opcode=number(result?.executionBlockerOpcode);
+  const countFn=fn('r360_hir_opcode_count'),nameFn=fn('r360_hir_opcode_name');
+  const executorFn=fn('r360_hir_correctness_supports_opcode'),wasmFn=fn('r360_wasm_backend_supports_hir_opcode');
+  const executorCountFn=fn('r360_hir_correctness_supported_opcode_count'),wasmCountFn=fn('r360_wasm_backend_supported_opcode_count');
+  const totalOpcodes=countFn?(countFn()>>>0):undefined;
+  const rawName=opcode!==undefined&&nameFn?readWasmCString(exp.memory,nameFn(opcode>>>0)):undefined;
+  const opcodeName=rawName&&rawName!=='unknown'?rawName.toUpperCase():rawName;
+  const executorSupportsCurrent=opcode!==undefined&&executorFn?!!(executorFn(opcode>>>0)>>>0):undefined;
+  const wasmSupportsCurrent=opcode!==undefined&&wasmFn?!!(wasmFn(opcode>>>0)>>>0):undefined;
+  const executorSupported=executorCountFn?(executorCountFn()>>>0):undefined;
+  const wasmSupported=wasmCountFn?(wasmCountFn()>>>0):undefined;
+  const percent=(part,total)=>part!==undefined&&total?Number((part*100/total).toFixed(1)):undefined;
+  let recommendedLane;
+  if(opcode!==undefined){
+    if(executorSupportsCurrent===false&&wasmSupportsCurrent===false)recommendedLane='correctness-oracle + generated-Wasm';
+    else if(executorSupportsCurrent===false)recommendedLane='correctness-oracle';
+    else if(wasmSupportsCurrent===false)recommendedLane='generated-Wasm';
+    else recommendedLane='runtime integration / callable function path';
+  }
+  return compact({
+    opcode,opcodeName,xeniaReferenceAvailable:!!(rawName&&rawName!=='unknown'),
+    executorSupportsCurrent,wasmSupportsCurrent,recommendedLane,totalOpcodes,executorSupported,wasmSupported,
+    executorCoveragePercent:percent(executorSupported,totalOpcodes),wasmCoveragePercent:percent(wasmSupported,totalOpcodes),
+  });
+}
+
 function ppcDiagnosticSummary(memory){
   if(!memory?.blockerInstruction)return undefined;
   if((memory.instructionKind==='d-form-memory'||memory.instructionKind==='ds-form-memory')&&present(memory.ra))
@@ -293,7 +331,7 @@ function stackDiagnosticSummary(memory){
   return `stack r1=${trace.blockerR1} initial=${trace.initialR1||'—'} · last write ${trace.lastWriteAddress||'—'} ${trace.lastOldR1||'—'}→${trace.lastNewR1||'—'} depth=${trace.lastWriteDepth??'—'} · last call ${trace.lastCallSource||'—'}→${trace.lastCallTarget||'—'} r1=${trace.lastCallR1||'—'} depth=${trace.lastCallDepth??'—'}`;
 }
 
-function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
+function problemFocus(memory,cpu,kernel,gpu,runtimeAsset,hir){
   const trace=memory?.stackTrace||{};
   const blockerR1=number(trace.blockerR1),initialR1=number(trace.initialR1),stackBase=number(memory?.stackBase),stackTop=number(memory?.stackTop);
   const lastOld=number(trace.lastOldR1),lastNew=number(trace.lastNewR1),fault=number(memory?.faultAddress),ea=number(memory?.effectiveAddress);
@@ -428,10 +466,10 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
       :`#${event.sequence} r1 d${event.depth} ${event.address} ${event.oldR1} → ${event.newR1} (${hexDelta((number(event.newR1)||0)-(number(event.oldR1)||0))})`);
     return compact({
       classification:'CPU_RUNTIME_BLOCKER',
-      headline:'CPU execution stopped on unsupported HIR in a tail fragment',
+      headline:`CPU execution stopped on unsupported HIR${hir?.opcodeName?`: ${hir.opcodeName}`:''} in a tail fragment`,
       tailTarget:tailCall.target,
       tailSource:tailCall.source,
-      reason:`HIR opcode ${cpu.executionBlockerOpcode??'—'} failed in the compatibility executor`,
+      reason:`${hir?.opcodeName?`${hir.opcodeName} (opcode ${cpu.executionBlockerOpcode??'—'})`:`HIR opcode ${cpu.executionBlockerOpcode??'—'}`} failed in the compatibility executor`,
       stackState:stackHealthy?`Healthy · restored to ${memory.stackTop}`:`r1=${trace.lastNewR1||trace.lastCallR1||'—'}`,
       primarySuspect:cpu.executionBlockerAddress,
       initialAbiCorrect,
@@ -440,7 +478,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
       timeline,
       evidence:[
         `Tail fragment reached ${tailCall.target} from ${tailCall.source}.`,
-        `Compatibility HIR stopped on opcode ${cpu.executionBlockerOpcode??'—'} at ${cpu.executionBlockerAddress}; this is not a sparse-memory fault.`,
+        `Compatibility HIR stopped on ${hir?.opcodeName?`${hir.opcodeName} (opcode ${cpu.executionBlockerOpcode??'—'})`:`opcode ${cpu.executionBlockerOpcode??'—'}`} at ${cpu.executionBlockerAddress}; this is not a sparse-memory fault.`,
+        hir?.recommendedLane?`Adaptive HIR lane: ${hir.recommendedLane}. Executor support=${hir.executorSupportsCurrent??'unknown'}; generated-Wasm support=${hir.wasmSupportsCurrent??'unknown'}.`:undefined,
         `No sparse-memory fault was captured (faultCode ${memory?.faultCode??'—'}).`,
         stackHealthy?`Stack is balanced at the boundary: ${trace.lastNewR1} == stackTop ${memory.stackTop}.`:undefined,
       ].filter(Boolean),
@@ -452,7 +491,8 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset){
         gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
       ].filter(Boolean),
       next:[
-        `Resolve HIR opcode ${cpu.executionBlockerOpcode??'—'} using proven live-context provenance at ${cpu.executionBlockerAddress}.`,
+        `Resolve ${hir?.opcodeName?`${hir.opcodeName} (HIR ${cpu.executionBlockerOpcode??'—'})`:`HIR opcode ${cpu.executionBlockerOpcode??'—'}`} using Xenia semantics and proven live-context provenance at ${cpu.executionBlockerAddress}.`,
+        hir?.recommendedLane?`Implement the ${hir.recommendedLane} lane indicated by the runtime support matrix instead of waiting for another one-off blocker.`:undefined,
         'Do not alter the balanced stack restore or map address 0 writable.',
       ],
       runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
@@ -646,7 +686,10 @@ function renderFocus(summary){
       focusCell('Source',focus.tailSource||'—'),
       focusCell('Reason',focus.reason||'HIR interior entry unavailable'),
       focusCell('Stack',focus.stackState||'—'),
+      focusCell('HIR opcode',summary.hir?.opcodeName?`${summary.hir.opcodeName} (${summary.hir.opcode??'—'})`:`${summary.hir?.opcode??'—'}`),
+      focusCell('HIR support',`${summary.hir?.executorSupportsCurrent===true?'executor ✓':summary.hir?.executorSupportsCurrent===false?'executor ✗':'executor —'} · ${summary.hir?.wasmSupportsCurrent===true?'Wasm ✓':summary.hir?.wasmSupportsCurrent===false?'Wasm ✗':'Wasm —'}`),
       focusCell('Target PPC',`${summary.memory?.blockerInstruction||'—'} · ${summary.memory?.blockerDecoded||ppcDiagnosticSummary(summary.memory)||'—'}`),
+      focusCell('Coverage',summary.hir?.totalOpcodes?`oracle ${summary.hir.executorSupported??'—'}/${summary.hir.totalOpcodes} · Wasm ${summary.hir.wasmSupported??'—'}/${summary.hir.totalOpcodes}`:'—'),
       focusCell('Progress',`${summary.cpu?.instructions??'—'} instructions · HIR ${summary.cpu?.hir??'—'}`)
     );
   }else{
@@ -660,6 +703,14 @@ function renderFocus(summary){
     );
   }
   card.appendChild(grid);root.appendChild(card);
+  if(summary.hir?.totalOpcodes){
+    appendTextList(root,'HIR coverage',[
+      `Current: ${summary.hir.opcodeName||'unknown'} · opcode ${summary.hir.opcode??'—'} · adaptive lane ${summary.hir.recommendedLane||'—'}.`,
+      `Compatibility oracle: ${summary.hir.executorSupported??'—'}/${summary.hir.totalOpcodes} opcodes (${summary.hir.executorCoveragePercent??'—'}%).`,
+      `Generated-Wasm scalar backend: ${summary.hir.wasmSupported??'—'}/${summary.hir.totalOpcodes} opcodes (${summary.hir.wasmCoveragePercent??'—'}%).`,
+      `Callable title functions: ${summary.cpu?.translatedFunctions??0} translated · first ${summary.cpu?.firstTranslatedFunction||'—'}.`,
+    ]);
+  }
   appendTextList(root,'Evidence',focus.evidence);
   appendTextList(root,'Stack / call timeline',focus.timeline);
   appendCodeWindow(root,'PPC around title entry',summary.memory?.codeWindows?.entry);
@@ -706,12 +757,15 @@ function report(){
     executionInstructions:result.executionInstructions,
   });
   const memory=memoryDiagnostics(state,result);
+  const hir=hirDiagnostics(state,result);
   const cpu=compact({
     entry:address(result.entry),xexEntry:address(result.xexEntry),peEntry:address(result.peEntry),entrySource:result.entrySource,
     hir:number(result.hir),runtimeBoundary:result.runtimeBoundary,
     executionStatus:number(result.executionStatus),instructions:number(result.executionInstructions??compatibility.executionInstructions),
     executionBlockerKind:result.executionBlockerKind,executionBlockerOpcode:number(result.executionBlockerOpcode),
-    executionBlockerAddress:address(result.executionBlockerAddress),translatedFunctions:number(result.translatedFunctionCount),
+    executionBlockerAddress:address(result.executionBlockerAddress),hirOpcodeName:hir?.opcodeName,
+    hirExecutorSupport:hir?.executorSupportsCurrent,hirWasmSupport:hir?.wasmSupportsCurrent,
+    translatedFunctions:number(result.translatedFunctionCount),
     firstTranslatedFunction:address(result.firstTranslatedFunction),callableFunctions:number(state.ppcSession?.functionCount??result.commercialCpu?.callableFunctionCount),
     schedulerReady:Boolean(state.threadScheduler),schedulerState:scheduler?.state||scheduler?.status,
   });
@@ -724,15 +778,16 @@ function report(){
     swaps:number(gpuSource.swaps),presents:number(gpuSource.presents),realTitleFrameReady:gpuSource.realTitleFrameReady,reason:gpuSource.reason,
   });
   const runtimeAsset=globalThis.render360PpcRuntimeIdentity||null;
-  const focus=problemFocus(memory,cpu,kernel,gpu,runtimeAsset);
+  const focus=problemFocus(memory,cpu,kernel,gpu,runtimeAsset,hir);
   return {
-    schema:'render360-blocker-report-v1',
+    schema:'render360-blocker-report-v2',
     generatedAt:new Date().toISOString(),
     page:compact({path:location.pathname,state:document.body.dataset.state||undefined}),
     runtimeAsset,
     blocker:Object.keys(blocker).length?blocker:null,
     problemFocus:Object.keys(focus).length?focus:null,
     memory:Object.keys(memory).length?memory:null,
+    hir:Object.keys(hir).length?hir:null,
     cpu,kernel,gpu,
     logs:entries.map(e=>({...e,at:new Date(e.at).toISOString()})),
   };

@@ -330,6 +330,32 @@ bool EmitIntegerValue(const Value* value, const Producers& producers,
       supported = EmitCompare(instr, producers, visiting, body, lowered);
       break;
 
+    case xe::cpu::hir::OPCODE_CNTLZ: {
+      // WebAssembly has native i32.clz / i64.clz. Xenia's CNTLZ result is INT8,
+      // so narrow 8/16-bit sources subtract the host i32 width bias while a
+      // 64-bit count is wrapped back to the backend's i32 representation.
+      const Value* source = instr->src1.value;
+      if (!source || !IsIntegerType(source->type) ||
+          value->type != xe::cpu::hir::INT8_TYPE ||
+          !EmitIntegerValue(source, producers, visiting, body, lowered)) {
+        break;
+      }
+      if (source->type == xe::cpu::hir::INT64_TYPE) {
+        body.push_back(0x79);  // i64.clz
+        body.push_back(0xA7);  // i32.wrap_i64
+      } else {
+        body.push_back(0x67);  // i32.clz
+        const uint32_t bias = 32u - TypeBits(source->type);
+        if (bias) {
+          EmitI32Const(body, static_cast<int32_t>(bias));
+          body.push_back(0x6B);  // i32.sub
+        }
+      }
+      EmitMaskForType(body, value->type);
+      supported = true;
+      break;
+    }
+
     case xe::cpu::hir::OPCODE_ADD:
     case xe::cpu::hir::OPCODE_SUB:
     case xe::cpu::hir::OPCODE_AND:
@@ -575,5 +601,51 @@ uint32_t r360_wasm_backend_lowered_instructions() {
 uint32_t r360_wasm_backend_context_ptr() {
   return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
       render360::xenia_web::GetWasmBackendProbeContextData()));
+}
+
+uint32_t r360_wasm_backend_supports_hir_opcode(uint32_t opcode) {
+  switch (opcode) {
+    case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
+    case xe::cpu::hir::OPCODE_ASSIGN:
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+    case xe::cpu::hir::OPCODE_IS_TRUE:
+    case xe::cpu::hir::OPCODE_IS_FALSE:
+    case xe::cpu::hir::OPCODE_COMPARE_EQ:
+    case xe::cpu::hir::OPCODE_COMPARE_NE:
+    case xe::cpu::hir::OPCODE_COMPARE_SLT:
+    case xe::cpu::hir::OPCODE_COMPARE_SLE:
+    case xe::cpu::hir::OPCODE_COMPARE_SGT:
+    case xe::cpu::hir::OPCODE_COMPARE_SGE:
+    case xe::cpu::hir::OPCODE_COMPARE_ULT:
+    case xe::cpu::hir::OPCODE_COMPARE_ULE:
+    case xe::cpu::hir::OPCODE_COMPARE_UGT:
+    case xe::cpu::hir::OPCODE_COMPARE_UGE:
+    case xe::cpu::hir::OPCODE_ADD:
+    case xe::cpu::hir::OPCODE_SUB:
+    case xe::cpu::hir::OPCODE_AND:
+    case xe::cpu::hir::OPCODE_OR:
+    case xe::cpu::hir::OPCODE_XOR:
+    case xe::cpu::hir::OPCODE_SHL:
+    case xe::cpu::hir::OPCODE_SHR:
+    case xe::cpu::hir::OPCODE_SHA:
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT:
+    case xe::cpu::hir::OPCODE_CNTLZ:
+    case xe::cpu::hir::OPCODE_NOT:
+    case xe::cpu::hir::OPCODE_NEG:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+uint32_t r360_wasm_backend_supported_opcode_count() {
+  uint32_t count = 0;
+  const uint32_t total = static_cast<uint32_t>(xe::cpu::hir::__OPCODE_MAX_VALUE);
+  for (uint32_t opcode = 0; opcode < total; ++opcode) {
+    count += r360_wasm_backend_supports_hir_opcode(opcode) ? 1u : 0u;
+  }
+  return count;
 }
 }

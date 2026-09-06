@@ -522,6 +522,24 @@ bool StoreUnaryValue(Value* destination, const Value* source,
       if (!GetUnsigned(src, &u)) return false;
       SetUnsigned(&result, destination->type, u == 0);
       break;
+    case xe::cpu::hir::OPCODE_CNTLZ: {
+      // Xenia's HIR CNTLZ always returns the count in an INT8 value while
+      // preserving the source width (8/16/32/64) for the leading-zero count.
+      // The all-zero input therefore returns the exact source width.
+      if (destination->type != xe::cpu::hir::INT8_TYPE ||
+          !GetUnsigned(src, &u)) {
+        return false;
+      }
+      const uint32_t width = IntegerBitWidth(source->type);
+      if (!width || width > 64u) return false;
+      uint32_t leading = 0;
+      for (uint32_t bit = width; bit > 0; --bit) {
+        if ((u >> (bit - 1u)) & uint64_t{1}) break;
+        ++leading;
+      }
+      SetUnsigned(&result, destination->type, leading);
+      break;
+    }
     default:
       return false;
   }
@@ -1115,6 +1133,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         case xe::cpu::hir::OPCODE_ABS:
         case xe::cpu::hir::OPCODE_NOT:
         case xe::cpu::hir::OPCODE_BYTE_SWAP:
+        case xe::cpu::hir::OPCODE_CNTLZ:
         case xe::cpu::hir::OPCODE_IS_TRUE:
         case xe::cpu::hir::OPCODE_IS_FALSE:
         case xe::cpu::hir::OPCODE_IS_NAN:
@@ -1381,3 +1400,97 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
 }
 
 }  // namespace render360::xenia_web
+
+// V73 adaptive HIR metadata. These exports are generated from the exact Xenia
+// opcode table compiled into this runtime, so diagnostics don't carry a second
+// hand-maintained opcode-number map that can drift when Xenia changes.
+extern "C" {
+const char* r360_hir_opcode_name(uint32_t opcode) {
+  switch (opcode) {
+#define DEFINE_OPCODE(num, name, sig, flags) \
+    case xe::cpu::hir::num: return name;
+#include "xenia/cpu/hir/opcodes.inl"
+#undef DEFINE_OPCODE
+    default:
+      return "unknown";
+  }
+}
+
+uint32_t r360_hir_opcode_count() {
+  return static_cast<uint32_t>(xe::cpu::hir::__OPCODE_MAX_VALUE);
+}
+
+uint32_t r360_hir_correctness_supports_opcode(uint32_t opcode) {
+  switch (opcode) {
+    case xe::cpu::hir::OPCODE_SOURCE_OFFSET:
+    case xe::cpu::hir::OPCODE_CONTEXT_BARRIER:
+    case xe::cpu::hir::OPCODE_MEMORY_BARRIER:
+    case xe::cpu::hir::OPCODE_CACHE_CONTROL:
+    case xe::cpu::hir::OPCODE_SET_RETURN_ADDRESS:
+    case xe::cpu::hir::OPCODE_STORE_CONTEXT:
+    case xe::cpu::hir::OPCODE_LOAD_CONTEXT:
+    case xe::cpu::hir::OPCODE_LOAD:
+    case xe::cpu::hir::OPCODE_LOAD_OFFSET:
+    case xe::cpu::hir::OPCODE_STORE:
+    case xe::cpu::hir::OPCODE_STORE_OFFSET:
+    case xe::cpu::hir::OPCODE_ASSIGN:
+    case xe::cpu::hir::OPCODE_CAST:
+    case xe::cpu::hir::OPCODE_ZERO_EXTEND:
+    case xe::cpu::hir::OPCODE_SIGN_EXTEND:
+    case xe::cpu::hir::OPCODE_TRUNCATE:
+    case xe::cpu::hir::OPCODE_CONVERT:
+    case xe::cpu::hir::OPCODE_ROUND:
+    case xe::cpu::hir::OPCODE_NEG:
+    case xe::cpu::hir::OPCODE_ABS:
+    case xe::cpu::hir::OPCODE_NOT:
+    case xe::cpu::hir::OPCODE_BYTE_SWAP:
+    case xe::cpu::hir::OPCODE_CNTLZ:
+    case xe::cpu::hir::OPCODE_IS_TRUE:
+    case xe::cpu::hir::OPCODE_IS_FALSE:
+    case xe::cpu::hir::OPCODE_IS_NAN:
+    case xe::cpu::hir::OPCODE_VECTOR_ADD:
+    case xe::cpu::hir::OPCODE_ADD:
+    case xe::cpu::hir::OPCODE_SUB:
+    case xe::cpu::hir::OPCODE_MUL:
+    case xe::cpu::hir::OPCODE_DIV:
+    case xe::cpu::hir::OPCODE_AND:
+    case xe::cpu::hir::OPCODE_AND_NOT:
+    case xe::cpu::hir::OPCODE_OR:
+    case xe::cpu::hir::OPCODE_XOR:
+    case xe::cpu::hir::OPCODE_SHL:
+    case xe::cpu::hir::OPCODE_SHR:
+    case xe::cpu::hir::OPCODE_SHA:
+    case xe::cpu::hir::OPCODE_ROTATE_LEFT:
+    case xe::cpu::hir::OPCODE_COMPARE_EQ:
+    case xe::cpu::hir::OPCODE_COMPARE_NE:
+    case xe::cpu::hir::OPCODE_COMPARE_SLT:
+    case xe::cpu::hir::OPCODE_COMPARE_SLE:
+    case xe::cpu::hir::OPCODE_COMPARE_SGT:
+    case xe::cpu::hir::OPCODE_COMPARE_SGE:
+    case xe::cpu::hir::OPCODE_COMPARE_ULT:
+    case xe::cpu::hir::OPCODE_COMPARE_ULE:
+    case xe::cpu::hir::OPCODE_COMPARE_UGT:
+    case xe::cpu::hir::OPCODE_COMPARE_UGE:
+    case xe::cpu::hir::OPCODE_BRANCH:
+    case xe::cpu::hir::OPCODE_BRANCH_TRUE:
+    case xe::cpu::hir::OPCODE_BRANCH_FALSE:
+    case xe::cpu::hir::OPCODE_CALL:
+    case xe::cpu::hir::OPCODE_CALL_TRUE:
+    case xe::cpu::hir::OPCODE_CALL_INDIRECT:
+    case xe::cpu::hir::OPCODE_CALL_INDIRECT_TRUE:
+    case xe::cpu::hir::OPCODE_RETURN:
+    case xe::cpu::hir::OPCODE_RETURN_TRUE:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+uint32_t r360_hir_correctness_supported_opcode_count() {
+  uint32_t count = 0;
+  for (uint32_t opcode = 0; opcode < r360_hir_opcode_count(); ++opcode) {
+    count += r360_hir_correctness_supports_opcode(opcode) ? 1u : 0u;
+  }
+  return count;
+}
+}

@@ -499,6 +499,42 @@ function problemFocus(memory,cpu,kernel,gpu,runtimeAsset,hir){
       cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
     });
   }
+  // A kernel import boundary is not a sparse-memory fault. Prefer the exact
+  // guest-visible HLE service over stale stack-history heuristics so the
+  // problem-first console names the service the title actually reached.
+  if(cpu?.runtimeBoundary==='kernel-import-unimplemented'&&kernel?.reachedBlocker){
+    const service=kernel.reachedBlocker;
+    const moduleName=service.module||'kernel';
+    const ordinal=service.ordinal||'unknown ordinal';
+    return compact({
+      classification:'KERNEL_IMPORT_BLOCKER',
+      headline:`Xbox kernel service ${moduleName} ${ordinal} is not implemented`,
+      primarySuspect:cpu?.executionBlockerAddress,
+      serviceModule:moduleName,
+      serviceOrdinal:ordinal,
+      serviceCalls:kernel?.calls,
+      initialAbiCorrect,
+      callEdge:trace.lastCallSource&&trace.lastCallTarget?`${trace.lastCallSource} -> ${trace.lastCallTarget}`:undefined,
+      evidence:[
+        `Runtime boundary is kernel-import-unimplemented at ${cpu?.executionBlockerAddress||'—'}.`,
+        `Guest reached ${moduleName} ordinal ${ordinal}; kernel calls=${kernel?.calls??'—'}.`,
+        memory?.faultCode===0?'No sparse guest-memory fault was captured for this boundary.':undefined,
+        memory?.faultCapturedAtExecution===false?'The displayed memory fault address is diagnostic history, not an execution-captured fault.':undefined,
+        initialAbiCorrect?`Entry r1 remains correct: ${trace.initialR1} == stackTop ${memory.stackTop}.`:undefined,
+      ].filter(Boolean),
+      ruledOut:[
+        memory?.faultCode===0?'Guest-memory boundary as the active stop reason':undefined,
+        initialAbiCorrect?'Initial stack reservation / stackTop mismatch':undefined,
+        gpu?.ringInitialized===false||gpu?.reason==='ring-not-initialized'?'GPU/ring path as the current cause (CPU stops first)':undefined,
+      ].filter(Boolean),
+      next:[
+        `Resolve ${moduleName} ${ordinal} from Xenia's kernel export table and implement its guest-visible semantics.`,
+        'Keep sparse-memory guards and the verified stack ABI unchanged unless a later captured fault proves otherwise.',
+      ],
+      runtime:runtimeAsset?.verified?compact({sourceCommit:runtimeAsset.sourceCommit,sourceRun:runtimeAsset.sourceRun,sha256:runtimeAsset.sha256}):undefined,
+      cpuCheckpoint:compact({entry:cpu?.entry,instructions:cpu?.instructions,blockerAddress:cpu?.executionBlockerAddress,blockerOpcode:cpu?.executionBlockerOpcode}),
+    });
+  }
   const suspectWrite=[...writes].reverse().find(event=>event.address===trace.lastWriteAddress&&event.newR1===trace.lastNewR1)||writes.at(-1);
   const suspectSequence=number(suspectWrite?.sequence),suspectDepth=number(suspectWrite?.depth)??number(trace.lastWriteDepth);
   const enteringCall=suspectDepth===undefined?undefined:[...calls].reverse().find(event=>number(event.depth)===suspectDepth-1&&(suspectSequence===undefined||number(event.sequence)<suspectSequence));
@@ -680,7 +716,16 @@ function renderFocus(summary){
   const title=document.createElement('h3');title.textContent=focus.headline||summary.blocker?.message||'Braid execution blocked';
   head.append(kicker,title);card.appendChild(head);
   const grid=document.createElement('div');grid.className='r360-focus-grid';
-  if(focus.tailTarget){
+  if(focus.classification==='KERNEL_IMPORT_BLOCKER'){
+    grid.append(
+      focusCell('Kernel service',`${focus.serviceModule||summary.kernel?.reachedBlocker?.module||'—'} · ${focus.serviceOrdinal||summary.kernel?.reachedBlocker?.ordinal||'—'}`),
+      focusCell('Runtime boundary',summary.cpu?.runtimeBoundary||'—'),
+      focusCell('Call site',focus.primarySuspect||summary.cpu?.executionBlockerAddress||'—'),
+      focusCell('Kernel calls',`${focus.serviceCalls??summary.kernel?.calls??'—'}`),
+      focusCell('Failing PPC',`${summary.memory?.blockerInstruction||'—'} · ${summary.memory?.blockerDecoded||ppcDiagnosticSummary(summary.memory)||'—'}`),
+      focusCell('Progress',`${summary.cpu?.instructions??'—'} instructions · HIR ${summary.cpu?.hir??'—'}`)
+    );
+  }else if(focus.tailTarget){
     grid.append(
       focusCell('Tail target',focus.tailTarget),
       focusCell('Source',focus.tailSource||'—'),

@@ -1,11 +1,11 @@
-import {createCommunityPcSession} from '../../../runtime/community-wasm-package.js';
+import {createPortalPcSession} from '../../../runtime/pc-workerfs-session.js';
 
 export async function createRender360PcTitle(host){
   if(host?.manifest?.gameId!=='portal-1-pc')throw new Error('Portal PC adapter received the wrong game profile.');
   if(!host.content?.has?.('portal/gameinfo.txt'))throw new Error('Portal gameinfo.txt is missing from the selected PC install.');
   if(!host.runtimePackage)throw new Error('Portal needs a separately supplied community WebAssembly runtime package.');
   host.emitStage?.({stage:'portal-pc-host',message:'Portal PC content linked · preparing community WebAssembly runtime'});
-  const inner=await createCommunityPcSession({package:host.runtimePackage,host});
+  const inner=await createPortalPcSession({package:host.runtimePackage,host});
   let started=false,stopped=false;
   return {
     inner,
@@ -18,9 +18,13 @@ export async function createRender360PcTitle(host){
       host.setState?.({portalPc:true,communityRuntime:true,gpuTraffic:{reason:'community-source-renderer'},persistentCpu:{kind:'pc-source-aot-wasm'}});
       return {runtimeBoundary:result?.runtimeBoundary||'portal-pc-wasm-running',communityResult:result||{}};
     },
-    pause(){return typeof inner.pause==='function'?inner.pause():true;},
-    resume(){return typeof inner.resume==='function'?inner.resume():true;},
-    stop(){stopped=true;try{return inner.stop?.();}finally{host.runtimePackage?.dispose?.();}},
+    setKey(key,pressed){return host.controllerInput?.setKey?.(key,pressed)??false;},
+    setAnalog(lx,ly,rx,ry){return host.controllerInput?.setAnalog?.(lx,ly,rx,ry);},
+    resetInput(){return host.controllerInput?.resetInput?.();},
+    pause(){host.controllerInput?.pause?.();return typeof inner.pause==='function'?inner.pause():true;},
+    resume(){host.controllerInput?.resume?.();return typeof inner.resume==='function'?inner.resume():true;},
+    stop(){stopped=true;host.controllerInput?.stop?.();try{return inner.stop?.();}finally{host.runtimePackage?.dispose?.();}},
+    inspect(){return {portalPc:true,controls:host.controllerInput?.descriptor?.()||null,content:inner.inspect?.()||inner.contentMount||null};},
   };
 }
 

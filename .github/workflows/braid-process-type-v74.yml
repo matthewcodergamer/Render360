@@ -60,7 +60,7 @@ jobs:
               -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 \
               -Wl,--no-entry -Wl,--export-memory \
               -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 \
-              -sEXPORTED_FUNCTIONS='"'"'["_r360_kernel_runtime_reset","_r360_kernel_service_reset","_r360_kernel_service_call","_r360_kernel_service_status","_r360_kernel_service_calls","_r360_kernel_service_last_module","_r360_kernel_service_last_ordinal","_r360_sparse_guest_memory_reset","_r360_sparse_guest_memory_alloc","_r360_sparse_guest_memory_map","_r360_sparse_guest_memory_read_u8","_r360_sparse_guest_memory_write_u8","_r360_sparse_guest_memory_read_u32_be","_r360_sparse_guest_memory_write_u32_be","_r360_sparse_guest_memory_mapped_pages","_r360_sparse_guest_memory_last_fault_code"]'"'"' \
+              -sEXPORTED_FUNCTIONS='"'"'["_r360_kernel_runtime_reset","_r360_kernel_service_reset","_r360_kernel_service_call","_r360_kernel_service_status","_r360_kernel_service_calls","_r360_kernel_service_last_module","_r360_kernel_service_last_ordinal","_r360_guest_thread_create","_r360_guest_thread_set_current","_r360_sparse_guest_memory_reset","_r360_sparse_guest_memory_alloc","_r360_sparse_guest_memory_map","_r360_sparse_guest_memory_read_u8","_r360_sparse_guest_memory_write_u8","_r360_sparse_guest_memory_read_u32_be","_r360_sparse_guest_memory_write_u32_be","_r360_sparse_guest_memory_mapped_pages","_r360_sparse_guest_memory_last_fault_code"]'"'"' \
               -o build/kernel-runtime/kernel_runtime.wasm'
 
       - name: Verify process type semantics

@@ -20,8 +20,8 @@ const p=name=>e[name]??e[`_${name}`];
 
 const required=[
   'r360_ppc_probe_reset','r360_ppc_probe_input_buffer','r360_ppc_probe_input_capacity',
-  'r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_correctness_status',
-  'r360_ppc_probe_correctness_r3','r360_ppc_probe_correctness_blocker_opcode',
+  'r360_ppc_probe_load_at','r360_ppc_probe_translate','r360_ppc_probe_set_initial_gpr',
+  'r360_ppc_probe_correctness_status','r360_ppc_probe_correctness_r3','r360_ppc_probe_correctness_blocker_opcode',
   'r360_ppc_context_size','r360_ppc_context_offset_gpr',
   'r360_wasm_backend_status','r360_wasm_backend_module_ptr','r360_wasm_backend_module_size',
   'r360_wasm_backend_lowered_instructions','r360_wasm_backend_context_ptr',
@@ -64,10 +64,15 @@ if(!input||!capacity||!contextSize)throw new Error('V73 HIR CNTLZ probe buffers 
 
 const wordsToBytes=words=>Uint8Array.from(words.flatMap(w=>[(w>>>24)&255,(w>>>16)&255,(w>>>8)&255,w&255]));
 
-async function runCase(name,words,expected){
+async function runCase(name,words,expected,{initialGprs={},requireLowered=false}={}){
   const code=wordsToBytes(words);
   if(code.length>capacity)throw new Error(`${name}: fixture exceeds probe capacity`);
   p('r360_ppc_probe_reset')();
+  for(const [index,value] of Object.entries(initialGprs)){
+    if((p('r360_ppc_probe_set_initial_gpr')(Number(index),BigInt(value))>>>0)!==1){
+      throw new Error(`${name}: failed to seed GPR ${index}`);
+    }
+  }
   new Uint8Array(e.memory.buffer,input,code.length).set(code);
   const loaded=p('r360_ppc_probe_load_at')(0x80000000,input,code.length)>>>0;
   if(loaded!==code.length)throw new Error(`${name}: PPC load failed ${loaded}/${code.length}`);
@@ -84,8 +89,11 @@ async function runCase(name,words,expected){
   const childPtr=p('r360_wasm_backend_module_ptr')()>>>0;
   const childSize=p('r360_wasm_backend_module_size')()>>>0;
   const lowered=p('r360_wasm_backend_lowered_instructions')()>>>0;
-  if(backendStatus!==2||!childPtr||childSize<=8||lowered<1){
-    throw new Error(`${name}: generated-Wasm lowering failed status=${backendStatus} ptr=${childPtr} size=${childSize} lowered=${lowered}`);
+  // Constant PPC inputs may be folded by Xenia before the browser backend sees
+  // CNTLZ. Those fixtures still certify end-to-end semantics, but two dynamic
+  // LOAD_CONTEXT fixtures below must lower the real i32.clz / i64.clz path.
+  if(backendStatus!==2||!childPtr||childSize<=8||(requireLowered&&lowered<1)){
+    throw new Error(`${name}: generated-Wasm lowering failed status=${backendStatus} ptr=${childPtr} size=${childSize} lowered=${lowered} requireLowered=${requireLowered}`);
   }
   const childBytes=new Uint8Array(e.memory.buffer,childPtr,childSize).slice();
   const childModule=await WebAssembly.compile(childBytes);
@@ -95,19 +103,27 @@ async function runCase(name,words,expected){
   const contextPtr=p('r360_wasm_backend_context_ptr')()>>>0;
   if(!contextPtr)throw new Error(`${name}: generated backend context pointer is zero`);
   new Uint8Array(e.memory.buffer,contextPtr,contextSize).fill(0);
+  const contextView=new DataView(e.memory.buffer);
+  for(const [index,value] of Object.entries(initialGprs)){
+    contextView.setBigUint64(contextPtr+gprOffset+Number(index)*8,BigInt.asUintN(64,BigInt(value)),true);
+  }
   const result=BigInt.asUintN(64,child.exports.run(contextPtr));
-  const stored=new DataView(e.memory.buffer).getBigUint64(contextPtr+gprOffset+3*8,true);
+  const stored=contextView.getBigUint64(contextPtr+gprOffset+3*8,true);
   if(result!==expected||stored!==expected){
     throw new Error(`${name}: generated-Wasm mismatch result=${result} stored=${stored} expected=${expected}`);
   }
-  console.log(`${name}=PASS correctness=${r3} generated=${result} lowered=${lowered}`);
+  console.log(`${name}=PASS correctness=${r3} generated=${result} lowered=${lowered} dynamic=${requireLowered?1:0}`);
 }
 
 const CNTLZW=0x7D6B0034; // cntlzw r11,r11 — exact Braid blocker instruction at 0x823737D8.
 const CNTLZD=0x7D6B0074; // cntlzd r11,r11.
+const CNTLZW_R11_R5=0x7CAB0034; // cntlzw r11,r5 — dynamic LOAD_CONTEXT source.
+const CNTLZD_R11_R5=0x7CAB0074; // cntlzd r11,r5 — dynamic LOAD_CONTEXT source.
 const COPY_R11_TO_R3=0x386B0000; // addi r3,r11,0.
 const BLR=0x4E800020;
 
+// Constant-source fixtures certify Xenia/frontend + correctness-oracle behavior.
+// Xenia is free to constant-fold these before Render360's runtime Wasm emitter.
 await runCase('cntlzw-zero',[0x39600000,CNTLZW,COPY_R11_TO_R3,BLR],32n);
 await runCase('cntlzw-one',[0x39600001,CNTLZW,COPY_R11_TO_R3,BLR],31n);
 await runCase('cntlzw-all-ones',[0x3960FFFF,CNTLZW,COPY_R11_TO_R3,BLR],0n);
@@ -115,10 +131,20 @@ await runCase('cntlzw-0x00010000',[0x3D600001,CNTLZW,COPY_R11_TO_R3,BLR],15n);
 await runCase('cntlzw-high-bit',[0x3D608000,CNTLZW,COPY_R11_TO_R3,BLR],0n);
 await runCase('cntlzd-zero',[0x39600000,CNTLZD,COPY_R11_TO_R3,BLR],64n);
 
+// Dynamic register fixtures cannot be folded to a constant. These are the
+// production-lane proof that actual CNTLZ HIR reaches the generated Wasm emitter.
+await runCase('cntlzw-dynamic-r5',[CNTLZW_R11_R5,COPY_R11_TO_R3,BLR],15n,{
+  initialGprs:{5:0x00010000n},requireLowered:true,
+});
+await runCase('cntlzd-dynamic-r5',[CNTLZD_R11_R5,COPY_R11_TO_R3,BLR],63n,{
+  initialGprs:{5:1n},requireLowered:true,
+});
+
 console.log(`xenia_hir_opcode_count=${opcodeCount}`);
 console.log(`hir_executor_supported=${executorSupported}`);
 console.log(`hir_wasm_supported=${wasmSupported}`);
 console.log('HIR_CNTLZ_METADATA=PASS');
 console.log('HIR_CNTLZ_COMPATIBILITY_EXECUTOR=PASS');
-console.log('HIR_CNTLZ_GENERATED_WASM=PASS');
+console.log('HIR_CNTLZ_GENERATED_WASM_I32_CLZ=PASS');
+console.log('HIR_CNTLZ_GENERATED_WASM_I64_CLZ=PASS');
 console.log('BRAID_CNTLZW_0x823737D8=PASS');

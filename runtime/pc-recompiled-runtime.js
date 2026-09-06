@@ -1,5 +1,6 @@
 import {detectPcGame} from './pc-content-source.js';
 import {createPcWebGpuPresenter} from './pc-webgpu-presenter.js';
+import {createPcControllerInput} from './pc-controller-input.js';
 
 export const PC_RECOMPILED_TITLE_SCHEMA='render360-pc-recompiled-title-v1';
 const BUILTIN_MANIFESTS=new Map([
@@ -34,13 +35,13 @@ function validatePcSource(source,expectedGameId){
   return {...source,detection};
 }
 
-function buildPcHost(runtime,game,source,config,probe,presenter){
-  const state={executionEngine:'pc-recompiled',kind:'pc-webassembly-port',platform:'pc',game,gameId:probe.gameId,manifest:probe.manifest,config,persistentCpu:{kind:'native-pc-to-wasm-aot'},gpuTraffic:{reason:'source-webgl2-via-webgpu-presentation',webgpu:true,profile:presenter.profile}};
+function buildPcHost(runtime,game,source,config,probe,presenter,controllerInput){
+  const state={executionEngine:'pc-recompiled',kind:'pc-webassembly-port',platform:'pc',game,gameId:probe.gameId,manifest:probe.manifest,config,persistentCpu:{kind:'native-pc-to-wasm-aot'},gpuTraffic:{reason:'source-webgl2-via-webgpu-presentation',webgpu:true,profile:presenter.profile},controller:controllerInput?.descriptor?.()||null};
   globalThis.render360ModernTitle=state;
   return {
     runtime,core:runtime.core,game,config,manifest:probe.manifest,
     source,content:source.content,runtimePackage:source.runtimePackage,
-    canvas:presenter.sourceCanvas,presentationCanvas:presenter.visibleCanvas,webgpuPresenter:presenter,inputHost:runtime.inputHost,state,
+    canvas:presenter.sourceCanvas,presentationCanvas:presenter.visibleCanvas,webgpuPresenter:presenter,inputHost:runtime.inputHost,controllerInput,state,
     emitStage(detail={}){runtime.emit('bootStage',{engine:'pc-recompiled',platform:'pc',...detail});},
     emitLog(level,message){runtime.emit('log',{level,message});},
     emitBlocker(detail={}){runtime.emit('runtimeBlocker',{engine:'pc-recompiled',platform:'pc',...detail});},
@@ -56,30 +57,34 @@ export async function runPcRecompiledTitle({runtime,game,source,config={},probe=
   const linked=validatePcSource(source,resolvedProbe.gameId),manifestUrl=new URL(resolvedProbe.url,location.href),adapterUrl=new URL(resolvedProbe.manifest.adapter,manifestUrl);
   runtime.emit('bootStage',{stage:'pc-content',engine:'pc-recompiled',message:`PC files recognized · ${linked.detection.name}`,gameId:resolvedProbe.gameId,files:linked.content.paths?.().length||0,bytes:linked.content.size||0});
   runtime.emit('bootStage',{stage:'pc-runtime-package',engine:'pc-recompiled',message:`Render360 WebAssembly runtime · ${linked.runtimePackage.manifest.name||linked.runtimePackage.manifest.gameId}`,format:linked.runtimePackage.manifest.format});
-  let presenter=null;
+  let presenter=null,controllerInput=null;
   try{
     const visibleCanvas=document.getElementById('gpuCanvas');
     presenter=await createPcWebGpuPresenter({visibleCanvas,emitStage:detail=>runtime.emit('bootStage',{engine:'pc-recompiled',platform:'pc',...detail})});
+    controllerInput=createPcControllerInput({canvas:presenter.sourceCanvas,gameId:resolvedProbe.gameId,emitLog:(level,message)=>runtime.emit('log',{level,message})});
     const adapter=await import(adapterUrl.href),create=adapter.createRender360PcTitle||adapter.default;
     if(typeof create!=='function')throw new Error(`PC adapter ${resolvedProbe.manifest.adapter} must export createRender360PcTitle().`);
-    const host=buildPcHost(runtime,game,linked,config,resolvedProbe,presenter),session=await create(host);
+    const host=buildPcHost(runtime,game,linked,config,resolvedProbe,presenter,controllerInput),session=await create(host);
     if(!session||typeof session!=='object')throw new Error('PC WebAssembly adapter did not return a session object.');
     runtime.recompiledSession=session;runtime.backend='PC WASM · WEBGPU PRESENT';
     runtime.emit('bootStage',{stage:'pc-wasm-start',engine:'pc-recompiled',message:`Starting ${game.name||linked.detection.name} WebAssembly runtime…`});
     presenter.start();
     let result={};if(typeof session.start==='function')result=await session.start();else if(typeof session.run==='function')result=await session.run();else throw new Error('PC WebAssembly session must expose start() or run().');
     let stopped=false;
-    const stop=()=>{if(stopped)return;stopped=true;try{return session.stop?.();}finally{presenter?.stop?.();if(runtime.recompiledSession===session)runtime.recompiledSession=null;runtime.resetInput?.();}};
+    const stop=()=>{if(stopped)return;stopped=true;try{return session.stop?.();}finally{controllerInput?.stop?.();presenter?.stop?.();if(runtime.recompiledSession===session)runtime.recompiledSession=null;runtime.resetInput?.();}};
     host.setState({session,result:result||{},webgpuPresenter:presenter.descriptor(),runtimeBoundary:result?.runtimeBoundary||'pc-wasm-running',stop});
-    return {kind:'pc-webassembly-port',platform:'pc',executionEngine:'pc-recompiled',gameId:resolvedProbe.gameId,manifest:resolvedProbe.manifest,session,result:result||{},webgpuPresenter:presenter.descriptor(),stop};
-  }catch(error){presenter?.stop?.();throw error;}
+    return {kind:'pc-webassembly-port',platform:'pc',executionEngine:'pc-recompiled',gameId:resolvedProbe.gameId,manifest:resolvedProbe.manifest,session,result:result||{},controller:controllerInput.descriptor(),webgpuPresenter:presenter.descriptor(),stop};
+  }catch(error){controllerInput?.stop?.();presenter?.stop?.();throw error;}
 }
 
 export function installPcRecompiledRouter(Render360RuntimeClass){
   const proto=Render360RuntimeClass?.prototype;if(!proto||proto.__r360PcRecompiledRouterInstalled)return false;
   Object.defineProperty(proto,'__r360PcRecompiledRouterInstalled',{value:true});
-  const previousPlay=proto.play,previousContract=proto.contract;
-  proto.contract=function(){const base=previousContract.call(this);return {...base,pcRecompiledWasm:{enabled:true,titleManifestSchema:PC_RECOMPILED_TITLE_SCHEMA,communityRuntimeSchema:'render360-pc-wasm-package-v1',registeredTitles:[...BUILTIN_MANIFESTS.keys()],userOwnedPcFiles:true,webgpuPresentation:true,xboxRuntimeUnchanged:true}};};
+  const previousPlay=proto.play,previousContract=proto.contract,previousSetKey=proto.setKey,previousSetAnalog=proto.setAnalog,previousResetInput=proto.resetInput;
+  proto.contract=function(){const base=previousContract.call(this);return {...base,pcRecompiledWasm:{enabled:true,titleManifestSchema:PC_RECOMPILED_TITLE_SCHEMA,communityRuntimeSchema:'render360-pc-wasm-package-v1',registeredTitles:[...BUILTIN_MANIFESTS.keys()],userOwnedPcFiles:true,webgpuPresentation:true,xboxControllerOverlay:true,physicalGamepad:true,xboxRuntimeUnchanged:true}};};
+  proto.setKey=function(key,pressed){const result=typeof previousSetKey==='function'?previousSetKey.call(this,key,pressed):undefined;this.recompiledSession?.setKey?.(key,pressed);return result;};
+  proto.setAnalog=function(lx=0,ly=0,rx=0,ry=0){const result=typeof previousSetAnalog==='function'?previousSetAnalog.call(this,lx,ly,rx,ry):undefined;this.recompiledSession?.setAnalog?.(lx,ly,rx,ry);return result;};
+  proto.resetInput=function(){const result=typeof previousResetInput==='function'?previousResetInput.call(this):undefined;this.recompiledSession?.resetInput?.();return result;};
   proto.play=async function(game,source=this.getSource(game?.id),config={}){
     if(!isPcGame(game))return previousPlay.call(this,game,source,config);
     if(!this.ready||!this.core)throw new Error('Render360 core is still loading');
@@ -96,4 +101,4 @@ export function installPcRecompiledRouter(Render360RuntimeClass){
   return true;
 }
 
-export function pcRecompiledRuntimeContract(){return {schema:PC_RECOMPILED_TITLE_SCHEMA,registeredTitles:[...BUILTIN_MANIFESTS.keys()],playerProvidesPcGame:true,communityProvidesRuntimePackage:true,automaticWindowsExeTranslation:false,webgpuPresentation:true,sourceRendererBringUp:'webgl2',xbox360PathModified:false};}
+export function pcRecompiledRuntimeContract(){return {schema:PC_RECOMPILED_TITLE_SCHEMA,registeredTitles:[...BUILTIN_MANIFESTS.keys()],playerProvidesPcGame:true,communityProvidesRuntimePackage:true,automaticWindowsExeTranslation:false,webgpuPresentation:true,sourceRendererBringUp:'webgl2',xboxControllerOverlay:true,physicalGamepad:true,xbox360PathModified:false};}

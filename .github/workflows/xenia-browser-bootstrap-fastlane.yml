@@ -25,6 +25,8 @@ on:
       - 'test-hir-load-offset-addressing.mjs'
       - 'test-hir-cache-control.mjs'
       - 'test-hir-rotate-left.mjs'
+      - 'test-hir-cntlz.mjs'
+      - 'test-deployed-browser-bootstrap-critic.mjs'
       - 'test-xenia-entry-lr-abi.mjs'
       - 'test-kernel-rtl-image-xex-header-field.mjs'
       - 'test-kernel-nt-allocate-virtual-memory.mjs'
@@ -220,6 +222,9 @@ jobs:
 
       - name: Verify Braid rlwinm HIR rotate-left semantics
         run: timeout 90s node ./test-hir-rotate-left.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify Braid cntlzw/cntlzd HIR + generated-Wasm semantics
+        run: timeout 90s node ./test-hir-cntlz.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify Xenia title-entry LR ABI
         run: timeout 90s node ./test-xenia-entry-lr-abi.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

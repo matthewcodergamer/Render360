@@ -162,6 +162,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/memory.cc") queue_cpp "$rel" "$OVERLAY/xenia/memory.cc" ;;
     "src/xenia/cpu/mmio_handler.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/mmio_handler.cc" ;;
     "src/xenia/cpu/processor.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
+    "src/xenia/cpu/ppc/ppc_scanner.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_scanner.cc" ;;
     "src/xenia/gpu/shader_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_translator.cc" ;;
     "src/xenia/gpu/shader_interpreter.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) queue_cpp "$rel" "$XENIA/$rel" ;;

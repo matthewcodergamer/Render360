@@ -23,6 +23,8 @@ MEMORY_SOURCE = XENIA / "src/xenia/memory.cc"
 MEMORY_DEST = OVERLAY / "xenia/memory.cc"
 PROCESSOR_SOURCE = XENIA / "src/xenia/cpu/processor.cc"
 PROCESSOR_DEST = OVERLAY / "xenia/cpu/processor.cc"
+PPC_SCANNER_SOURCE = XENIA / "src/xenia/cpu/ppc/ppc_scanner.cc"
+PPC_SCANNER_DEST = OVERLAY / "xenia/cpu/ppc/ppc_scanner.cc"
 
 for path, label in (
     (PPC_CONTEXT_SOURCE, "PPCContext header"),
@@ -31,6 +33,7 @@ for path, label in (
     (MEMORY_HEADER_SOURCE, "memory.h"),
     (MEMORY_SOURCE, "memory.cc"),
     (PROCESSOR_SOURCE, "processor.cc"),
+    (PPC_SCANNER_SOURCE, "ppc_scanner.cc"),
 ):
     if not path.exists():
         raise SystemExit(f"Run ./fetch-xenia.sh first; upstream {label} is missing")
@@ -276,6 +279,30 @@ memory_cc = memory_cc[:init_start] + wasm_init + memory_cc[map_info_start:]
 MEMORY_DEST.parent.mkdir(parents=True, exist_ok=True)
 MEMORY_DEST.write_text(memory_cc)
 
+
+# ppc_scanner.cc: Xenia treats GuestFunction::end_address as an inclusive last
+# instruction address. The loop advances `address` by four before checking an
+# expected bound, so a scan that consumes the final bounded instruction can
+# otherwise publish end+4. Retail XEX .pdata is authoritative and exclusive;
+# Render360 converts it to end-4 before scanning. Never let the scanner widen
+# that inclusive boundary again. Early natural returns remain untouched.
+scanner_text = PPC_SCANNER_SOURCE.read_text(errors="strict")
+scanner_anchor = "  function->set_end_address(address);\n"
+if scanner_text.count(scanner_anchor) != 1:
+    raise SystemExit("Upstream ppc_scanner.cc end-address anchor drifted")
+scanner_text = scanner_text.replace(
+    scanner_anchor,
+    "  // Render360 wasm32: preserve the caller's authoritative inclusive\n"
+    "  // function bound (for XEX .pdata this is end_exclusive - 4).\n"
+    "  if (end_address && address > end_address) {\n"
+    "    address = end_address;\n"
+    "  }\n"
+    "  function->set_end_address(address);\n",
+    1,
+)
+PPC_SCANNER_DEST.parent.mkdir(parents=True, exist_ok=True)
+PPC_SCANNER_DEST.write_text(scanner_text)
+
 # processor.cc: the debugger exception-resume path knows how to restore a
 # native AMD64 RIP or ARM64 PC. The translation-only wasm32 backend has no
 # native host instruction stream to resume, so this host-debugging branch must
@@ -320,3 +347,6 @@ print(f"Generated web memory header/source overlay: {MEMORY_HEADER_DEST}, {MEMOR
 print("Memory rule: wasm32 keeps one 64 KiB decoder window plus valid Xenia heap metadata; no fake full 4.5 GiB host mapping")
 print(f"Generated web processor source overlay: {PROCESSOR_DEST}")
 print("Processor rule: wasm32 has no native exception-resume PC; translation/runtime logic is unchanged")
+
+print(f"Generated web PPCScanner overlay: {PPC_SCANNER_DEST}")
+print("PPC scanner rule: bounded functions never widen beyond their inclusive expected end")

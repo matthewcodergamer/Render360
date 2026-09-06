@@ -43,6 +43,7 @@ python3 "$ROOT/prepare-xenia-relocatable-probe-memory-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
+python3 "$ROOT/prepare-xenia-ppc-hir-failclosed-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
 # Keep the HIR frame-history overlay last: it instruments the fully patched
@@ -163,6 +164,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/cpu/mmio_handler.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/mmio_handler.cc" ;;
     "src/xenia/cpu/processor.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
     "src/xenia/cpu/ppc/ppc_scanner.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_scanner.cc" ;;
+    "src/xenia/cpu/ppc/ppc_hir_builder.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_hir_builder.cc" ;;
     "src/xenia/gpu/shader_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_translator.cc" ;;
     "src/xenia/gpu/shader_interpreter.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) queue_cpp "$rel" "$XENIA/$rel" ;;

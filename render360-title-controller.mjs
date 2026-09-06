@@ -276,8 +276,29 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   startupGprCount+=applyInitialGprs(bootstrap,initialGprs);
   const scannedEntry=maybe(bootstrap,'r360_title_handoff_translate_scanned_entry');
   if(scanEntryFunction&&!scannedEntry)throw new Error('browser bootstrap is missing scanned title-entry execution');
-  const hir=scanEntryFunction?(scannedEntry()>>>0):(pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0);
   const entryExecutionMode=scanEntryFunction?'xenia-scanned-entry-function':'bounded-entry-byte-probe';
+  let hir=0;
+  try{
+    hir=scanEntryFunction?(scannedEntry()>>>0):(pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0);
+  }catch(cause){
+    const get32=name=>maybe(bootstrap,name)?.()>>>0||0;
+    const handoffStatus=get32('r360_title_handoff_status');
+    const probeStatus=get32('r360_ppc_probe_status');
+    const scanDiagnostic=get32('r360_ppc_probe_scan_diagnostic');
+    const scanAddress=get32('r360_ppc_probe_scan_address');
+    const scanWindowEnd=get32('r360_ppc_probe_scan_window_end');
+    const scanFunctionEnd=get32('r360_ppc_probe_scan_function_end');
+    const unsupportedPpcAddress=get32('r360_ppc_probe_unimplemented_address');
+    const unsupportedPpcCode=get32('r360_ppc_probe_unimplemented_code');
+    const hex=value=>`0x${(value>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
+    const causeMessage=cause?.message||String(cause);
+    const unsupported=unsupportedPpcAddress?` unsupportedPpc=${hex(unsupportedPpcAddress)} code=${hex(unsupportedPpcCode)}`:'';
+    const error=new Error(`title entry translation trapped inside browser Wasm: ${causeMessage} mode=${entryExecutionMode} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanFunctionEnd=${hex(scanFunctionEnd)}${unsupported}`);
+    error.code='R360_TITLE_ENTRY_WASM_TRAP';
+    error.cause=cause;
+    error.render360={kind:'ppc-entry-wasm-trap',handoffStatus,probeStatus,scanDiagnostic,scanAddress,scanWindowEnd,scanFunctionEnd,unsupportedPpcAddress,unsupportedPpcCode,entry:entry>>>0,entryExecutionMode,causeMessage};
+    throw error;
+  }
   if(!hir){
     const handoffStatus=pick(bootstrap,'r360_title_handoff_status')()>>>0;
     const probeStatus=maybe(bootstrap,'r360_ppc_probe_status')?.()>>>0||0;
@@ -286,13 +307,15 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
     const scanWindowEnd=maybe(bootstrap,'r360_ppc_probe_scan_window_end')?.()>>>0||0;
     const scanFunctionEnd=maybe(bootstrap,'r360_ppc_probe_scan_function_end')?.()>>>0||0;
     const scanHir=maybe(bootstrap,'r360_ppc_probe_scan_hir_instructions')?.()>>>0||0;
+    const unsupportedPpcAddress=maybe(bootstrap,'r360_ppc_probe_unimplemented_address')?.()>>>0||0;
+    const unsupportedPpcCode=maybe(bootstrap,'r360_ppc_probe_unimplemented_code')?.()>>>0||0;
     const assembledFunctions=maybe(bootstrap,'r360_ppc_probe_assembled_functions')?.()>>>0||0;
     const hirBlocks=maybe(bootstrap,'r360_ppc_probe_hir_block_count')?.()>>>0||0;
     const scanReason=['idle','guard-rejected','scanner-failed','define-function-failed','zero-hir','translated'][scanDiagnostic]||'unknown';
     const hex=value=>`0x${(value>>>0).toString(16).toUpperCase()}`;
-    const error=new Error(`title entry handoff failed ${hex(handoffStatus)} mode=${entryExecutionMode} scan=${scanReason}(${scanDiagnostic}) probe=${hex(probeStatus)} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanFunctionEnd=${hex(scanFunctionEnd)} assembledFunctions=${assembledFunctions} hirBlocks=${hirBlocks} scanHIR=${scanHir}`);
+    const error=new Error(`title entry handoff failed ${hex(handoffStatus)} mode=${entryExecutionMode} scan=${scanReason}(${scanDiagnostic}) probe=${hex(probeStatus)} entry=${hex(entry)} scanAddress=${hex(scanAddress)} scanWindowEnd=${hex(scanWindowEnd)} scanFunctionEnd=${hex(scanFunctionEnd)} assembledFunctions=${assembledFunctions} hirBlocks=${hirBlocks} scanHIR=${scanHir} unsupportedPpcAddress=${hex(unsupportedPpcAddress)} unsupportedPpcCode=${hex(unsupportedPpcCode)}`);
     error.code='R360_TITLE_ENTRY_HANDOFF_FAILED';
-    error.render360={kind:'ppc-entry-translation-failure',handoffStatus,probeStatus,scanDiagnostic,scanReason,scanAddress,scanWindowEnd,scanFunctionEnd,assembledFunctions,hirBlocks,scanHir,entry:entry>>>0,entryExecutionMode};
+    error.render360={kind:'ppc-entry-translation-failure',handoffStatus,probeStatus,scanDiagnostic,scanReason,scanAddress,scanWindowEnd,scanFunctionEnd,unsupportedPpcAddress,unsupportedPpcCode,assembledFunctions,hirBlocks,scanHir,entry:entry>>>0,entryExecutionMode};
     throw error;
   }
 

@@ -78,6 +78,8 @@ uint32_t g_scan_address = 0;
 uint32_t g_scan_window_end = 0;
 uint32_t g_scan_function_end = 0;
 uint32_t g_scan_hir_instructions = 0;
+uint32_t g_unimplemented_ppc_address = 0;
+uint32_t g_unimplemented_ppc_code = 0;
 
 void ResetScanDiagnostic() {
   g_scan_diagnostic = kProbeScanIdle;
@@ -85,6 +87,8 @@ void ResetScanDiagnostic() {
   g_scan_window_end = 0;
   g_scan_function_end = 0;
   g_scan_hir_instructions = 0;
+  g_unimplemented_ppc_address = 0;
+  g_unimplemented_ppc_code = 0;
 }
 
 bool EnsureRuntime() {
@@ -350,6 +354,21 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);const bool defined=g_processor->frontend()->DefineFunction(&function,0);SetHIRCorrectnessExecutionEntry(0u);if(!defined){g_scan_diagnostic=kProbeScanDefineFailed;g_status=kProbeErrorTranslate;return 0;}
   const uint32_t hir=GetProbeTelemetry().hir_instructions;g_scan_hir_instructions=hir;if(!hir){g_scan_diagnostic=kProbeScanZeroHIR;g_status=kProbeErrorTranslate;return 0;}
   std::fprintf(stderr,"R360_SCAN_RANGE entry=0x%08X function=0x%08X end=0x%08X pdata=%u prolog=%u\n",address,fn_begin,g_scan_function_end,pdata?1u:0u,prolog);g_scan_diagnostic=kProbeScanTranslated;g_status=kProbeTranslated;return hir;
+}
+
+void r360_ppc_probe_report_unimplemented(uint32_t address, uint32_t code) {
+  using namespace render360::xenia_web;
+  g_unimplemented_ppc_address = address;
+  g_unimplemented_ppc_code = code;
+  std::fprintf(stderr,
+               "R360_PPC_UNIMPLEMENTED address=0x%08X code=0x%08X fail_closed=1\n",
+               address, code);
+}
+uint32_t r360_ppc_probe_unimplemented_address() {
+  return render360::xenia_web::g_unimplemented_ppc_address;
+}
+uint32_t r360_ppc_probe_unimplemented_code() {
+  return render360::xenia_web::g_unimplemented_ppc_code;
 }
 
 uint32_t r360_ppc_probe_status() {

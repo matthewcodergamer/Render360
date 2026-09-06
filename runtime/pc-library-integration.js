@@ -1,8 +1,10 @@
 import {listGames,putGame,putCover} from '../library/game-library.js';
 import {resolvePcGameCover} from '../library/cover-resolver.js';
+import {persistPcRecompiledSource,restorePcRecompiledSource,pcPersistentSourceExists} from '../storage/pc-persistent-storage.js';
 
 const $=id=>document.getElementById(id);
-let installed=false,artworkRunning=false,decorateQueued=false;
+let installed=false,artworkRunning=false,decorateQueued=false,persistenceTimer=0,restoring=false;
+const savingIds=new Set(),restoreAttempted=new Set();
 const isPcGame=game=>String(game?.platform||'').toLowerCase()==='pc'||Boolean(game?.pcGameId);
 const bridge=()=>globalThis.render360AppBridge||null;
 const currentPcGame=()=>{const game=bridge()?.getCurrentGame?.();return isPcGame(game)?game:null;};
@@ -41,6 +43,40 @@ async function hydratePcArtwork(){
   }catch(error){console.warn(`[Render360] PC artwork hydration unavailable: ${error?.message||error}`);}finally{artworkRunning=false;queueDecorate();}
 }
 
+function emitPersistenceLog(level,message){try{bridge()?.runtime?.emit?.('log',{level,message});}catch{}console[level==='error'?'error':level==='warn'?'warn':'log'](`[Render360] ${message}`);}
+async function persistLinkedPcSources(){
+  const app=bridge(),runtime=app?.runtime;if(!runtime?.getSource)return;
+  let games;try{games=(await listGames()).filter(game=>isPcGame(game));}catch{return;}
+  for(const game of games){
+    if(game.persistentSource||game.pcPersistenceDisabled||savingIds.has(String(game.id)))continue;
+    const source=runtime.getSource(game.id);if(!source?.content||!source?.runtimePackage)continue;
+    savingIds.add(String(game.id));let lastBucket=-1;
+    try{
+      emitPersistenceLog('info',`Saving ${game.name||'Portal'} PC files and Source WebAssembly runtime for future launches…`);
+      const saved=await persistPcRecompiledSource(game.id,source,{onProgress:p=>{const bucket=Math.floor(Number(p.percent||0)/10);if(bucket!==lastBucket){lastBucket=bucket;emitPersistenceLog('info',`Portal persistent storage · ${Math.min(100,Math.round(p.percent||0))}% · ${p.filesDone||0}/${p.totalFiles||0} files`);}}});
+      Object.assign(game,{persistentSource:true,needsRelink:false,pcPersistent:true,pcStorageKey:saved.key,pcPersistenceError:null,pcSavedAt:Date.now(),sourceName:'Saved Portal PC files + Source WebAssembly'});await putGame(game);emitPersistenceLog('info','Portal PC files and Source WebAssembly runtime saved locally. Future launches no longer need the file pickers.');await app.refreshLibrary?.();
+    }catch(error){game.pcPersistenceError=error?.message||String(error);game.needsRelink=true;await putGame(game).catch(()=>{});emitPersistenceLog('warn',`Portal could not be saved persistently: ${game.pcPersistenceError}`);}
+    finally{savingIds.delete(String(game.id));}
+  }
+}
+async function restorePersistedPcSources(){
+  if(restoring)return;const app=bridge(),runtime=app?.runtime;if(!runtime?.bindSource||!runtime?.getSource)return;restoring=true;
+  try{
+    const games=(await listGames()).filter(game=>isPcGame(game)&&game.pcPersistent&&game.persistentSource);
+    let changed=false;
+    for(const game of games){
+      const id=String(game.id);if(runtime.getSource(id)||restoreAttempted.has(id))continue;restoreAttempted.add(id);
+      try{
+        emitPersistenceLog('info',`Restoring ${game.name||'Portal'} from persistent browser storage…`);const source=await restorePcRecompiledSource(id);runtime.bindSource(id,source);game.needsRelink=false;game.pcRestoreError=null;await putGame(game);changed=true;emitPersistenceLog('info',`${game.name||'Portal'} restored without reopening the game or runtime pickers.`);
+      }catch(error){
+        game.pcRestoreError=error?.message||String(error);if(!await pcPersistentSourceExists(id).catch(()=>false)){game.persistentSource=false;game.needsRelink=true;game.pcPersistent=false;}await putGame(game).catch(()=>{});changed=true;emitPersistenceLog('warn',`Could not restore ${game.name||'Portal'}: ${game.pcRestoreError}`);
+      }
+    }
+    if(changed)await app.refreshLibrary?.();
+  }catch(error){console.warn(`[Render360] Persistent PC restore unavailable: ${error?.message||error}`);}finally{restoring=false;}
+}
+function schedulePcPersistence(delay=350){clearTimeout(persistenceTimer);persistenceTimer=setTimeout(async()=>{await restorePersistedPcSources();await persistLinkedPcSources();},delay);}
+
 function ensurePcLookStick(){
   if(typeof document==='undefined')return null;let zone=$('pcRightStick');if(zone)return zone;
   const layer=$('controllerLayer');if(!layer)return null;
@@ -67,13 +103,14 @@ function installPcTouchController(){
 }
 
 function bootPcLibraryIntegration(){
-  if(installed||typeof document==='undefined')return;installed=true;installStyles();installPcTouchController();queueDecorate();setTimeout(hydratePcArtwork,700);
-  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();if(!$('pcRightStick'))installPcTouchController();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
-  globalThis.addEventListener?.('render360:titleStarted',()=>{syncControllerPlatform();installPcTouchController();});
+  if(installed||typeof document==='undefined')return;installed=true;installStyles();installPcTouchController();queueDecorate();setTimeout(hydratePcArtwork,700);schedulePcPersistence(900);
+  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();if(!$('pcRightStick'))installPcTouchController();schedulePcPersistence();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  globalThis.addEventListener?.('render360:titleStarted',()=>{syncControllerPlatform();installPcTouchController();schedulePcPersistence(50);});
   globalThis.addEventListener?.('render360:framePresented',syncControllerPlatform);
-  console.log('[Render360] Unified PC library + Portal Xbox-controller overlay integration active');
+  globalThis.addEventListener?.('pageshow',()=>schedulePcPersistence(100));
+  console.log('[Render360] Unified PC library + Portal Xbox-controller overlay + persistent PC source integration active');
 }
 
 if(typeof document!=='undefined'){if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootPcLibraryIntegration,{once:true});else bootPcLibraryIntegration();}
 
-export {decoratePcLibrary,hydratePcArtwork,installPcTouchController};
+export {decoratePcLibrary,hydratePcArtwork,installPcTouchController,restorePersistedPcSources,persistLinkedPcSources};

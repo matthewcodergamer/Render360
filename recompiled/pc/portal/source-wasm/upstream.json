@@ -1,0 +1,28 @@
+{
+  "schema": "render360-upstream-source-v1",
+  "title": "Portal",
+  "gameId": "portal-1-pc",
+  "engine": "Source 1",
+  "repository": "https://github.com/weliveinhell/source-engine",
+  "ref": "63f8364fe7b22b239e72dfb5f1024665b3a91567",
+  "branch": "master",
+  "upstreamBuild": "emscripten/build.sh",
+  "upstreamEmsdkCommit": "2d480a1b7c7a34a354188d93f3e89190a44a1d21",
+  "render360Emscripten": "4.0.9",
+  "testedByUpstream": ["portal"],
+  "steam": {
+    "appId": 400,
+    "storeUrl": "https://store.steampowered.com/app/400/Portal/"
+  },
+  "contentPolicy": {
+    "retailGameAssetsInRepository": false,
+    "retailGameAssetsInRuntimeArtifact": false,
+    "playerProvidesOwnedInstall": true,
+    "runtimeBuildIsEngineOnly": true
+  },
+  "notes": [
+    "Render360 builds from a pinned community Source Engine WebAssembly port; the upstream repository is not modified in place.",
+    "The upstream browser port says Portal is the tested game and currently lists sound, save persistence, and some rendering/lightmap issues.",
+    "Render360 does not use the upstream remote retail-content chunk downloader. Player-owned files are supplied locally."
+  ]
+}

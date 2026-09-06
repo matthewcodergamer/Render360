@@ -6,19 +6,40 @@
   "engine": "Source",
   "steamAppId": 400,
   "adapter": "./adapter.mjs",
+  "store": {
+    "provider": "Steam",
+    "url": "https://store.steampowered.com/app/400/Portal/",
+    "installFolderHint": "Steam/steamapps/common/Portal"
+  },
+  "art": {
+    "header": "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/400/header.jpg",
+    "source": "official-steam-store-art"
+  },
+  "instructions": [
+    "Own and install Portal (Steam App 400) from Steam on a PC.",
+    "Choose the Portal installation folder containing portal/, hl2/, and platform/ in Render360. On iPhone/iPad, copy that installed folder into Files/iCloud/USB storage first.",
+    "Choose a Render360 Portal Source WebAssembly runtime package built from the pinned community source. Render360 never needs a Windows portal.exe to execute in the browser.",
+    "Launch. Player-owned game files stay local and are mounted read-only; they are not bundled into the WebAssembly engine."
+  ],
   "content": {
     "mode": "player-owned-install",
     "required": [
       "portal/gameinfo.txt",
       "portal/portal_pak_dir.vpk",
       "hl2 base content"
-    ]
+    ],
+    "mount": "workerfs-readonly",
+    "wholeInstallCopiedIntoWasm": false
   },
   "runtime": {
     "mode": "community-package",
     "schema": "render360-pc-wasm-package-v1",
     "manifest": "render360-port.json",
-    "bundled": false
+    "bundled": false,
+    "sourceProfile": "./source-wasm/upstream.json",
+    "firstBuildProfile": "single-worker-workerfs",
+    "renderer": "WebGL2",
+    "webgpuPlanned": true
   },
   "legal": {
     "gameAssetsBundled": false,

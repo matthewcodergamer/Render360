@@ -103,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           zip -qr Render360-Portal-PC-WASM-V74.zip . \
-            -x '.git/*' 'Render360-Portal-PC-WASM-V74.zip' '__pycache__/* '*/__pycache__/*'
+            -x '.git/*' 'Render360-Portal-PC-WASM-V74.zip' '__pycache__/*' '*/__pycache__/*'
           ls -lh Render360-Portal-PC-WASM-V74.zip
 
       - name: Upload verified worktree

@@ -1,6 +1,7 @@
 import './developer-console.js';
 import './render360-browser-features.mjs';
 import './ui.js';
+import './settings/execution-engine.js';
 import {listGames,putGame,putCover} from './library/game-library.js';
 import {resolveTitleCover} from './library/cover-resolver.js';
 import {clearGamesDirectory,storageInfo} from './storage/game-storage.js';

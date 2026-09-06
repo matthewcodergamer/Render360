@@ -2,6 +2,8 @@ import {Render360Runtime} from '../runtime/render360-runtime.js';
 import {loadRender360Bootstrap} from '../render360-browser-title-runtime.mjs';
 import {probeRecompiledTitle,runRecompiledTitle,requestedExecutionMode,recompiledTitleIdHex} from '../runtime/recompiled-title-runtime.js';
 import {loadTitleProfile,saveTitleProfile} from '../profiles/title-profile-store.js';
+import {installPcRecompiledRouter} from '../runtime/pc-recompiled-runtime.js';
+import '../runtime/pc-recompiled-ui.js';
 
 const SETTINGS_KEY='render360.settings.v44';
 const MODES=new Set(['auto','emulator','recompiled']);
@@ -141,5 +143,6 @@ function installGameControl(){
 function installUi(){installGlobalControl();installGameControl();}
 
 installRuntimeRouter();
+installPcRecompiledRouter(Render360Runtime);
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installUi,{once:true});else installUi();
 setTimeout(installUi,0);

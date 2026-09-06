@@ -334,6 +334,66 @@ uint32_t TlsGet(uint32_t handle, uint32_t slot) {
   return thread->tls[slot];
 }
 
+bool ReadGuestBe32(uint32_t address, uint32_t* out) {
+  if (!out) return false;
+  uint8_t bytes[4] = {};
+  if (!ReadSparseGuestMemory(address, bytes, sizeof(bytes))) return false;
+  *out = (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
+         (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
+  return true;
+}
+
+// Match UserModule::GetOptHeader used by upstream xboxkrnl!
+// RtlImageXexHeaderField. XEX optional-header keys encode how their value is
+// represented in the low byte: 0 returns the inline dword, 1 returns the guest
+// address of the optional-header value cell, and every other value treats the
+// stored dword as an offset from the guest XEX header base.
+bool ReadXexOptionalHeaderField(uint32_t xex_header, uint32_t field,
+                                uint32_t* out) {
+  if (!out || !xex_header) return false;
+  *out = 0;
+
+  uint32_t magic = 0, header_size = 0, header_count = 0;
+  if (!ReadGuestBe32(xex_header + 0x00u, &magic) ||
+      !ReadGuestBe32(xex_header + 0x08u, &header_size) ||
+      !ReadGuestBe32(xex_header + 0x14u, &header_count)) {
+    return false;
+  }
+  if (magic != 0x58455832u || header_size < 0x18u ||
+      header_count > (header_size - 0x18u) / 8u || header_count > 4096u) {
+    return false;
+  }
+
+  for (uint32_t i = 0; i < header_count; ++i) {
+    const uint64_t entry64 = uint64_t(xex_header) + 0x18u + uint64_t(i) * 8u;
+    if (entry64 + 7u > UINT32_MAX) return false;
+    const uint32_t entry = static_cast<uint32_t>(entry64);
+    uint32_t key = 0, value = 0;
+    if (!ReadGuestBe32(entry, &key) || !ReadGuestBe32(entry + 4u, &value)) {
+      return false;
+    }
+    if (key != field) continue;
+
+    switch (key & 0xFFu) {
+      case 0x00u:
+        *out = value;
+        return true;
+      case 0x01u:
+        *out = entry + 4u;
+        return true;
+      default: {
+        const uint64_t result64 = uint64_t(xex_header) + value;
+        if (result64 > UINT32_MAX) return false;
+        *out = static_cast<uint32_t>(result64);
+        return true;
+      }
+    }
+  }
+
+  // Xenia returns a null guest pointer when the optional header is absent.
+  return true;
+}
+
 uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
                      uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6,
                      uint32_t, uint32_t, uint32_t, uint32_t) {
@@ -346,6 +406,14 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
     switch (ordinal) {
       case 0x0083:  // KeQueryPerformanceFrequency
         return kGuestTickFrequency;
+      case 0x012B: {  // RtlImageXexHeaderField
+        uint32_t value = 0;
+        if (!ReadXexOptionalHeaderField(r3, r4, &value)) {
+          g_service_status = kStatusInvalid;
+          return 0;
+        }
+        return value;
+      }
       case 0x0132: {  // RtlLowerChar
         const uint32_t c = r3 & 0xFFu;
         return c >= 'A' && c <= 'Z' ? (c ^ 0x20u) : c;

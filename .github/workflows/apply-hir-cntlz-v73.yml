@@ -1,0 +1,115 @@
+name: Apply V73 Adaptive HIR CNTLZ
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-hir-cntlz-v73.py'
+      - 'test-hir-cntlz.mjs'
+      - '.github/workflows/apply-hir-cntlz-v73.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-hir-cntlz-v73
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V73 updater and regression fixture
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-hir-cntlz-v73.py
+          node --check test-hir-cntlz.mjs
+
+      - name: Apply V73 dual-lane HIR CNTLZ implementation
+        run: python3 tools/apply-hir-cntlz-v73.py
+
+      - name: Verify V73 adaptive source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "73"
+          grep -q 'case xe::cpu::hir::OPCODE_CNTLZ' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'const uint32_t width = IntegerBitWidth(source->type)' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'r360_hir_opcode_name' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'r360_hir_correctness_supports_opcode' src/xenia_web_bootstrap/hir_correctness_executor.cpp
+          grep -q 'body.push_back(0x67);  // i32.clz' src/xenia_web_bootstrap/wasm_backend_probe.cpp
+          grep -q 'body.push_back(0x79);  // i64.clz' src/xenia_web_bootstrap/wasm_backend_probe.cpp
+          grep -q 'r360_wasm_backend_supports_hir_opcode' src/xenia_web_bootstrap/wasm_backend_probe.cpp
+          grep -q "kind:'cntlz'" developer-console.js
+          grep -q 'render360-blocker-report-v2' developer-console.js
+          grep -q 'Generated-Wasm scalar backend' developer-console.js
+          grep -q 'r360_hir_opcode_count' link-xenia-ppc-bootstrap.sh
+          grep -q 'test-hir-cntlz.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=73;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:73,' runtime/render360-runtime.js
+          grep -q 'Render360 73' index.html
+          grep -q '<span>UI Release</span><span class="value">73</span>' index.html
+          grep -q "const VERSION='73';" render360-sw.js
+          node --check developer-console.js
+          node --check test-deployed-browser-bootstrap-critic.mjs
+
+      - name: Commit V73 source, adaptive diagnostics and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V73 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
+            src/xenia_web_bootstrap/wasm_backend_probe.cpp \
+            developer-console.js \
+            link-xenia-ppc-bootstrap.sh \
+            test-deployed-browser-bootstrap-critic.mjs \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V73 source/release already current.'
+          else
+            git commit -m 'feat: implement adaptive HIR CNTLZ in oracle and Wasm backend'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, publish and verify V73 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 6
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V73 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+          git fetch origin main
+          git show origin/main:xenia_ppc_bootstrap.wasm > /tmp/xenia_ppc_bootstrap-v73.wasm
+          timeout 90s node ./test-hir-cntlz.mjs /tmp/xenia_ppc_bootstrap-v73.wasm
+
+      - name: Verify published V73 provenance and adaptive ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git show origin/main:VERSION)" = "73"
+          meta="$(git show origin/main:xenia_ppc_bootstrap.meta.json)"
+          echo "$meta"
+          echo "$meta" | grep -q 'sourceCommit'
+          echo "$meta" | grep -q 'sourceRun'
+          echo "$meta" | grep -q 'sha256'
+          git show origin/main:developer-console.js | grep -q 'render360-blocker-report-v2'
+          git show origin/main:src/xenia_web_bootstrap/hir_correctness_executor.cpp | grep -q 'r360_hir_opcode_name'
+          git show origin/main:src/xenia_web_bootstrap/wasm_backend_probe.cpp | grep -q 'r360_wasm_backend_supports_hir_opcode'

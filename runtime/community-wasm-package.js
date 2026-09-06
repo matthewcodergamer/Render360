@@ -32,7 +32,8 @@ export function validateCommunityWasmManifest(manifest,{expectedGameId=null}={})
     crossOriginIsolated:Boolean(manifest.requirements?.crossOriginIsolated),
     threads:Boolean(manifest.requirements?.threads),
   };
-  return {...manifest,gameId,format,entry,wasm,contentIndex,adapterExport,requirements};
+  const graphics={preferred:String(manifest.graphics?.preferred||'auto').toLowerCase(),active:String(manifest.graphics?.active||'auto').toLowerCase(),webgpuReady:Boolean(manifest.graphics?.webgpuReady)};
+  return {...manifest,gameId,format,entry,wasm,contentIndex,adapterExport,requirements,graphics};
 }
 
 export function validateCommunityContentIndex(index){
@@ -44,8 +45,12 @@ export function validateCommunityContentIndex(index){
   const normalized=files.map((item,index)=>{
     const record=typeof item==='string'?{path:item}:item;
     if(!record||typeof record!=='object')throw new Error(`Invalid PC content index entry at ${index}.`);
-    const path=assertGamePath(record.path,`content index path ${index}`),target=assertGamePath(record.target||path,`content index target ${index}`);
-    return {path,target,optional:Boolean(record.optional),group:String(record.group||'base')};
+    const logical=record.logical?assertGamePath(record.logical,`content index logical path ${index}`):null;
+    const pathId=logical?String(record.pathId||'GAME').trim().toUpperCase():null;
+    const path=record.path?assertGamePath(record.path,`content index path ${index}`):null;
+    if(!path&&!logical)throw new Error(`Content index entry ${index} needs path or logical.`);
+    const target=record.target?assertGamePath(record.target,`content index target ${index}`):(path||null);
+    return {path,logical,pathId,target,optional:Boolean(record.optional),group:String(record.group||'base')};
   });
   return {...payload,schema:PC_CONTENT_INDEX_SCHEMA,files:normalized};
 }
@@ -79,7 +84,7 @@ function packageFromMap(map,manifest,{sourceName='community runtime'}={}){
       const url=URL.createObjectURL(new Blob([item.file],{type}));urls.set(key,url);return url;
     },
     dispose(){for(const url of urls.values())URL.revokeObjectURL(url);urls.clear();},
-    descriptor(){return {kind:'community-wasm-package',gameId:manifest.gameId,name:manifest.name||sourceName,format:manifest.format,fileCount:map.size,contentIndex:manifest.contentIndex||null,requirements:{...manifest.requirements}};},
+    descriptor(){return {kind:'community-wasm-package',gameId:manifest.gameId,name:manifest.name||sourceName,format:manifest.format,fileCount:map.size,contentIndex:manifest.contentIndex||null,requirements:{...manifest.requirements},graphics:{...manifest.graphics}};},
   };
 }
 
@@ -112,6 +117,21 @@ export async function loadCommunityWasmPackageFromZip(zipFile,{expectedGameId=nu
   return packageFromMap(map,manifest,{sourceName:zipFile.name||'community runtime ZIP'});
 }
 
+export async function loadTrustedRemoteWasmPackage(manifestUrl,{expectedGameId=null,onProgress=()=>{}}={}){
+  const url=new URL(manifestUrl,location.href);if(url.protocol!=='https:')throw new Error('Trusted runtime manifest must use HTTPS.');
+  onProgress({phase:'manifest',name:'render360-port.json',percent:0});
+  const response=await fetch(url,{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error(`Portal runtime manifest download failed (${response.status}).`);
+  const raw=await response.text();if(raw.length>MAX_MANIFEST_BYTES)throw new Error('Portal runtime manifest is too large.');
+  let parsed;try{parsed=JSON.parse(raw);}catch(error){throw new Error(`Invalid remote ${MANIFEST_NAME}: ${error.message}`);}
+  const manifest=validateCommunityWasmManifest(parsed,{expectedGameId}),wanted=[MANIFEST_NAME,manifest.entry,manifest.wasm,manifest.contentIndex,...(Array.isArray(manifest.files)?manifest.files.map(v=>assertLocalPath(v,'files entry')):[])].filter(Boolean);
+  const map=new Map();map.set(MANIFEST_NAME,{path:MANIFEST_NAME,file:new File([raw],MANIFEST_NAME,{type:'application/json'})});let done=1;
+  for(const path of wanted.filter(path=>path!==MANIFEST_NAME)){
+    const fileUrl=new URL(path,url),res=await fetch(fileUrl,{cache:'force-cache',credentials:'omit'});if(!res.ok)throw new Error(`Portal runtime file ${path} failed to download (${res.status}).`);
+    const blob=await res.blob();map.set(path.toLowerCase(),{path,file:new File([blob],path,{type:blob.type||'application/octet-stream'})});done++;onProgress({phase:'runtime-package',name:path,done,total:wanted.length,percent:done*100/wanted.length});
+  }
+  return packageFromMap(map,manifest,{sourceName:url.host});
+}
+
 export function checkCommunityRuntimeRequirements(manifest,{navigatorImpl=globalThis.navigator,crossOriginIsolatedValue=globalThis.crossOriginIsolated}={}){
   const req=manifest?.requirements||{},missing=[];
   if(req.webassembly!==false&&typeof WebAssembly==='undefined')missing.push('WebAssembly');
@@ -121,7 +141,7 @@ export function checkCommunityRuntimeRequirements(manifest,{navigatorImpl=global
   if(req.webgpu&&!navigatorImpl?.gpu)missing.push('WebGPU');
   if((req.sharedArrayBuffer||req.threads)&&typeof SharedArrayBuffer==='undefined')missing.push('SharedArrayBuffer');
   if((req.crossOriginIsolated||req.threads)&&crossOriginIsolatedValue!==true)missing.push('cross-origin isolation');
-  return {ok:missing.length===0,missing,requirements:{...req}};
+  return {ok:missing.length===0,missing,requirements:{...req},webgpuAvailable:Boolean(navigatorImpl?.gpu),graphics:manifest?.graphics||{}};
 }
 
 async function importPackageModule(pkg){const url=pkg.url(pkg.manifest.entry);return import(/* @vite-ignore */url);}
@@ -139,6 +159,17 @@ async function loadContentIndex(pkg){
   return validateCommunityContentIndex(parsed);
 }
 function fmtBytes(value=0){const n=Number(value)||0;if(n<1024)return`${n} B`;if(n<1048576)return`${(n/1024).toFixed(1)} KB`;if(n<1073741824)return`${(n/1048576).toFixed(1)} MB`;return`${(n/1073741824).toFixed(2)} GB`;}
+async function contentHas(content,path){return typeof content?.hasAsync==='function'?content.hasAsync(path):Boolean(content?.has?.(path));}
+function sourceCandidates(entry){
+  if(entry.path)return [{path:entry.path,target:entry.target||entry.path}];
+  const logical=entry.logical,id=entry.pathId||'GAME';
+  if(id==='PLATFORM')return [{path:`platform/${logical}`,target:`platform/${logical}`}];
+  if(id==='MOD'||id==='MOD_WRITE')return [{path:`portal/${logical}`,target:`portal/${logical}`}];
+  if(id==='GAME'||id==='GAME_WRITE')return [{path:`portal/${logical}`,target:`portal/${logical}`},{path:`hl2/${logical}`,target:`hl2/${logical}`}];
+  if(id==='DEFAULT_WRITE_PATH')return [{path:`portal/${logical}`,target:`portal/${logical}`}];
+  return [{path:`portal/${logical}`,target:`portal/${logical}`},{path:`hl2/${logical}`,target:`hl2/${logical}`},{path:`platform/${logical}`,target:`platform/${logical}`}];
+}
+async function resolveContentEntry(content,entry){for(const candidate of sourceCandidates(entry))if(await contentHas(content,candidate.path))return candidate;return null;}
 
 export async function mountIndexedPcContent({module,host,pkg}){
   const index=await loadContentIndex(pkg);if(!index)throw new Error('No contentIndex was declared for the generic Emscripten content mount.');
@@ -146,13 +177,10 @@ export async function mountIndexedPcContent({module,host,pkg}){
   let mounted=0,missingOptional=0,bytes=0;
   host.emitStage?.({stage:'pc-content-index',message:`Mounting ${index.files.length.toLocaleString()} player-owned Portal files into the Emscripten working set…`,files:index.files.length});
   for(let i=0;i<index.files.length;i++){
-    const entry=index.files[i];
-    if(!host.content.has(entry.path)){
-      if(entry.optional){missingOptional++;continue;}
-      throw new Error(`Portal working set requires ${entry.path}, but it is missing from the selected installation.`);
-    }
-    const data=await host.content.read(entry.path),target=`/${entry.target}`;ensureFsDirectory(FS,target);FS.writeFile(target,data);mounted++;bytes+=data.byteLength;
-    if(i===0||i===index.files.length-1||i%100===0)host.emitStage?.({stage:'pc-content-index-progress',message:`Portal working set · ${mounted.toLocaleString()}/${index.files.length.toLocaleString()} files · ${fmtBytes(bytes)}`,done:mounted,total:index.files.length,bytes});
+    const entry=index.files[i],resolved=await resolveContentEntry(host.content,entry);
+    if(!resolved){if(entry.optional){missingOptional++;continue;}const name=entry.path||`${entry.pathId}:${entry.logical}`;throw new Error(`Portal working set requires ${name}, but Render360 could not resolve it from the selected installation or Source VPKs.`);}
+    const data=await host.content.read(resolved.path),target=`/${resolved.target}`;ensureFsDirectory(FS,target);FS.writeFile(target,data);mounted++;bytes+=data.byteLength;
+    if(i===0||i===index.files.length-1||i%50===0)host.emitStage?.({stage:'pc-content-index-progress',message:`Portal working set · ${mounted.toLocaleString()}/${index.files.length.toLocaleString()} files · ${fmtBytes(bytes)}`,done:mounted,total:index.files.length,bytes});
   }
   host.emitStage?.({stage:'pc-content-index-ready',message:`Portal working set mounted · ${mounted.toLocaleString()} files · ${fmtBytes(bytes)}`,files:mounted,bytes,missingOptional});
   return {schema:PC_CONTENT_INDEX_SCHEMA,mounted,bytes,missingOptional,total:index.files.length};
@@ -172,13 +200,13 @@ export async function createCommunityPcSession({package:pkg,host}){
   const factory=mod.default||mod[manifest.factoryExport||'createModule'];
   if(typeof factory!=='function')throw new Error('Emscripten ESM package does not export a module factory. Build with MODULARIZE + EXPORT_ES6 or provide a Render360 adapter package.');
   const locateFile=name=>{const clean=normalizePcPath(name);return pkg.has(clean)?pkg.url(clean):(manifest.wasm&&/\.wasm(?:\?|$)/i.test(name)?pkg.url(manifest.wasm):name);};
-  const module=await factory({canvas:host.canvas,noInitialRun:true,locateFile,print:text=>host.emitLog?.('info',String(text)),printErr:text=>host.emitLog?.('warn',String(text))});
+  const module=await factory({canvas:host.canvas,noInitialRun:true,locateFile,render360GraphicsPreference:manifest.graphics?.preferred||'webgpu',print:text=>host.emitLog?.('info',String(text)),printErr:text=>host.emitLog?.('warn',String(text))});
   let contentMount=null;
   if(typeof module.render360MountPcContent==='function')contentMount=await module.render360MountPcContent(host.content);
   else if(manifest.contentIndex)contentMount=await mountIndexedPcContent({module,host,pkg});
   else throw new Error('This Emscripten build does not expose render360MountPcContent() and does not declare contentIndex. Add a Render360 mount bridge or an indexed player-owned working set.');
   let stopped=false;
-  return {module,contentMount,async start(){if(stopped)throw new Error('PC WebAssembly session is stopped');if(typeof module.callMain==='function')module.callMain(Array.isArray(manifest.arguments)?manifest.arguments:[]);return {runtimeBoundary:'pc-wasm-running',format:'emscripten-esm',contentMount};},pause(){module.render360Pause?.();return true;},resume(){module.render360Resume?.();return true;},stop(){stopped=true;module.render360Stop?.();pkg.dispose?.();}};
+  return {module,contentMount,async start(){if(stopped)throw new Error('PC WebAssembly session is stopped');if(typeof module.callMain==='function')module.callMain(Array.isArray(manifest.arguments)?manifest.arguments:[]);return {runtimeBoundary:'pc-wasm-running',format:'emscripten-esm',contentMount,graphics:manifest.graphics||{}};},pause(){module.render360Pause?.();return true;},resume(){module.render360Resume?.();return true;},stop(){stopped=true;module.render360Stop?.();pkg.dispose?.();}};
 }
 
-export function communityWasmPackageContract(){return {schema:PC_WASM_PACKAGE_SCHEMA,contentIndexSchema:PC_CONTENT_INDEX_SCHEMA,manifest:MANIFEST_NAME,formats:[...allowedFormats],remoteEntriesAllowed:false,userSuppliedRuntime:true,userSuppliedGameData:true,indexedWorkingSet:true,wholeGameEmbeddedInWasm:false};}
+export function communityWasmPackageContract(){return {schema:PC_WASM_PACKAGE_SCHEMA,contentIndexSchema:PC_CONTENT_INDEX_SCHEMA,manifest:MANIFEST_NAME,formats:[...allowedFormats],remoteEntriesAllowed:false,trustedRemotePackage:true,userSuppliedGameData:true,indexedWorkingSet:true,sourceSearchPathResolution:true,lazySourceVpkReads:true,wholeGameEmbeddedInWasm:false};}

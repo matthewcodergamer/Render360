@@ -30,5 +30,8 @@ assert.equal(inclusiveEnd >>> 0, 0x8236F0F8);
 assert.equal(clampedEnd >>> 0, 0x8236F0F8);
 assert.ok(begin < clampedEnd);
 
-assert.equal(Number(read('VERSION').trim()), 76);
-console.log('R360_V76_PPC_SCANNER_BOUNDARY=PASS entry=0x8236EF38 end=0x8236F0F8');
+// This is a permanent regression introduced in V76, not a release-lock test.
+// Later releases must continue to satisfy it.
+const release = Number(read('VERSION').trim());
+assert.ok(Number.isInteger(release) && release >= 76, `scanner boundary regression requires release >=76, got ${release}`);
+console.log(`R360_V76_PPC_SCANNER_BOUNDARY=PASS release=${release} entry=0x8236EF38 end=0x8236F0F8`);

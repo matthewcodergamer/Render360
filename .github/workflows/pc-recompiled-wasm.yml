@@ -7,15 +7,22 @@ on:
       - 'runtime/pc-content-source.js'
       - 'runtime/source-vpk-source.js'
       - 'runtime/community-wasm-package.js'
+      - 'runtime/pc-workerfs-session.js'
+      - 'runtime/pc-controller-input.js'
+      - 'runtime/pc-library-integration.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
       - 'runtime/pc-webgpu-presenter.js'
+      - 'library/cover-resolver.js'
       - 'styles/pc-recompiled.css'
+      - 'styles/pc-library-integration.css'
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
       - 'test-pc-content-source.mjs'
       - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
+      - 'test-pc-workerfs-session.mjs'
+      - 'test-pc-controller-input.mjs'
       - 'test-pc-recompiled-runtime.mjs'
       - 'test-pc-webgpu-presenter.mjs'
       - 'test-ui-contract.mjs'
@@ -30,15 +37,22 @@ on:
       - 'runtime/pc-content-source.js'
       - 'runtime/source-vpk-source.js'
       - 'runtime/community-wasm-package.js'
+      - 'runtime/pc-workerfs-session.js'
+      - 'runtime/pc-controller-input.js'
+      - 'runtime/pc-library-integration.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
       - 'runtime/pc-webgpu-presenter.js'
+      - 'library/cover-resolver.js'
       - 'styles/pc-recompiled.css'
+      - 'styles/pc-library-integration.css'
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
       - 'test-pc-content-source.mjs'
       - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
+      - 'test-pc-workerfs-session.mjs'
+      - 'test-pc-controller-input.mjs'
       - 'test-pc-recompiled-runtime.mjs'
       - 'test-pc-webgpu-presenter.mjs'
       - 'test-ui-contract.mjs'
@@ -92,9 +106,13 @@ jobs:
           node --check runtime/pc-content-source.js
           node --check runtime/source-vpk-source.js
           node --check runtime/community-wasm-package.js
+          node --check runtime/pc-workerfs-session.js
+          node --check runtime/pc-controller-input.js
+          node --check runtime/pc-library-integration.js
           node --check runtime/pc-recompiled-runtime.js
           node --check runtime/pc-recompiled-ui.js
           node --check runtime/pc-webgpu-presenter.js
+          node --check library/cover-resolver.js
           node --check recompiled/pc/portal/adapter.mjs
           node --check settings/execution-engine.js
           node --check ui-behavior.js
@@ -102,6 +120,8 @@ jobs:
           node ./test-pc-content-source.mjs
           node ./test-source-vpk-source.mjs
           node ./test-community-wasm-package.mjs
+          node ./test-pc-workerfs-session.mjs
+          node ./test-pc-controller-input.mjs
           node ./test-pc-recompiled-runtime.mjs
           node ./test-pc-webgpu-presenter.mjs
           git diff --check
@@ -114,6 +134,9 @@ jobs:
           grep -q "pc-wasm-portal-art" styles/pc-recompiled.css
           grep -q "data-r360-standalone" styles/pc-recompiled.css
           grep -q "createPcWebGpuPresenter" runtime/pc-recompiled-runtime.js
+          grep -q "createPcControllerInput" runtime/pc-recompiled-runtime.js
+          grep -q "workerfs-player-folder" runtime/pc-workerfs-session.js
+          grep -q "r360-platform-corner" styles/pc-library-integration.css
           grep -q "render360-pc-content-index-v1" runtime/community-wasm-package.js
           grep -q "lazySourceVpkReads" runtime/community-wasm-package.js
           test "$(tr -d '[:space:]' < VERSION)" = '74'

@@ -74,7 +74,9 @@ export function createPcControllerInput({canvas,gameId='portal-1-pc',lookSpeed=1
       else if(spec.kind==='wheel'&&next)dispatchWheel(canvas,spec.deltaY);
       return true;
     },
-    setAnalog(nextLx,nextLy,nextRx,nextRy){lx=clamp(nextLx);ly=clamp(nextLy);rx=clamp(nextRx);ry=clamp(nextRy);if(!paused)updateMove();return {lx,ly,rx,ry};},
+    setMoveAnalog(nextLx,nextLy){lx=clamp(nextLx);ly=clamp(nextLy);if(!paused)updateMove();return {lx,ly};},
+    setLookAnalog(nextRx,nextRy){rx=clamp(nextRx);ry=clamp(nextRy);return {rx,ry};},
+    setAnalog(nextLx,nextLy,nextRx,nextRy){api.setMoveAnalog(nextLx,nextLy);api.setLookAnalog(nextRx,nextRy);return {lx,ly,rx,ry};},
     resetInput(){
       for(const [name,pressed] of buttonState)if(pressed){const spec=PORTAL_BUTTON_MAP[name];if(spec?.kind==='key')dispatchKey(target,spec,false);else if(spec?.kind==='mouse')dispatchMouseButton(canvas,spec.button,false);}
       for(const [name,pressed] of moveState)if(pressed)dispatchKey(target,MOVE_KEYS[name],false);

@@ -73,8 +73,12 @@ jobs:
             developer-console.js \
             link-xenia-ppc-bootstrap.sh \
             test-deployed-browser-bootstrap-critic.mjs \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
             VERSION runtime/render360-runtime.js index.html render360-sw.js
+          # The repository app can update workflow files through the connector,
+          # but the Actions GITHUB_TOKEN intentionally cannot. Keep the fastlane
+          # edit out of this bot push; ChatGPT applies that workflow change
+          # separately through the authorized GitHub connector.
+          git restore .github/workflows/xenia-browser-bootstrap-fastlane.yml
           if git diff --cached --quiet; then
             echo 'V73 source/release already current.'
           else
@@ -113,5 +117,3 @@ jobs:
           git show origin/main:developer-console.js | grep -q 'render360-blocker-report-v2'
           git show origin/main:src/xenia_web_bootstrap/hir_correctness_executor.cpp | grep -q 'r360_hir_opcode_name'
           git show origin/main:src/xenia_web_bootstrap/wasm_backend_probe.cpp | grep -q 'r360_wasm_backend_supports_hir_opcode'
-
-# V73 adaptive implementation dispatch marker.

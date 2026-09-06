@@ -21,8 +21,27 @@ constexpr uint32_t kStatusInvalid = 3;
 constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
 constexpr uint32_t kMaxThreads = 32;
 constexpr uint32_t kMaxTlsSlots = 64;
+constexpr uint32_t kMaxVirtualAllocations = 128;
 constexpr uint32_t kGuestTickFrequency = 50000000u;
 constexpr uint32_t kGuestPageSize = 4096u;
+constexpr uint32_t kGuestLargePageSize = 65536u;
+// Match Xenia's guest virtual-memory split while keeping automatic allocations
+// away from Render360's PCR/TLS and browser thread-stack arenas. The normal
+// 4 KiB virtual heap occupies the low 1 GiB. Large-page allocations start in
+// Xenia's 0x40000000 64 KiB virtual range, capped below the 0x50000000 PCR.
+constexpr uint32_t kGuestVirtual4kBase = 0x10000000u;
+constexpr uint32_t kGuestVirtual4kEnd = 0x40000000u;
+constexpr uint32_t kGuestVirtual64kBase = 0x40000000u;
+constexpr uint32_t kGuestVirtual64kEnd = 0x50000000u;
+constexpr uint32_t kXMemCommit = 0x00001000u;
+constexpr uint32_t kXMemReserve = 0x00002000u;
+constexpr uint32_t kXMemReset = 0x00080000u;
+constexpr uint32_t kXMemTopDown = 0x00100000u;
+constexpr uint32_t kXMemNoZero = 0x00800000u;
+constexpr uint32_t kXMemLargePages = 0x20000000u;
+constexpr uint32_t kXStatusSuccess = 0x00000000u;
+constexpr uint32_t kXStatusInvalidParameter = 0xC000000Du;
+constexpr uint32_t kXStatusNoMemory = 0xC0000017u;
 // Browser guest stacks live in a dedicated 512 MiB sparse virtual arena below
 // the normal 0x82000000 retail XEX image region. Each thread owns a 16 MiB
 // slot, with the first page intentionally left unmapped as a downward-growing
@@ -61,8 +80,22 @@ struct GuestThread {
   std::array<uint32_t, kMaxTlsSlots> tls{};
 };
 
+struct GuestVirtualAllocation {
+  bool used = false;
+  bool committed = false;
+  uint32_t base = 0;
+  uint32_t size = 0;
+  uint32_t page_size = kGuestPageSize;
+  uint32_t protection = 0;
+};
+
 std::array<GuestThread, kMaxThreads> g_threads{};
 std::array<bool, kMaxTlsSlots> g_tls_allocated{};
+std::array<GuestVirtualAllocation, kMaxVirtualAllocations> g_virtual_allocations{};
+uint32_t g_virtual_4k_bottom = kGuestVirtual4kBase;
+uint32_t g_virtual_4k_top = kGuestVirtual4kEnd;
+uint32_t g_virtual_64k_bottom = kGuestVirtual64kBase;
+uint32_t g_virtual_64k_top = kGuestVirtual64kEnd;
 uint32_t g_current_thread = 0;
 uint32_t g_scheduler_cursor = 0;
 uint32_t g_runtime_status = kStatusIdle;
@@ -147,7 +180,21 @@ bool AllocateThreadStack(uint32_t thread_index, uint32_t stack_size,
   return true;
 }
 
+void ReleaseVirtualAllocations() {
+  for (auto& allocation : g_virtual_allocations) {
+    if (allocation.used && allocation.committed && allocation.base && allocation.size) {
+      UnmapSparseGuestMemory(allocation.base, allocation.size / kGuestPageSize);
+    }
+    allocation = {};
+  }
+  g_virtual_4k_bottom = kGuestVirtual4kBase;
+  g_virtual_4k_top = kGuestVirtual4kEnd;
+  g_virtual_64k_bottom = kGuestVirtual64kBase;
+  g_virtual_64k_top = kGuestVirtual64kEnd;
+}
+
 void ResetRuntime() {
+  ReleaseVirtualAllocations();
   for (auto& thread : g_threads) {
     ReleaseThreadStack(thread);
     const uint16_t next_generation = uint16_t(thread.generation + 1u);
@@ -343,6 +390,176 @@ bool ReadGuestBe32(uint32_t address, uint32_t* out) {
   return true;
 }
 
+bool WriteGuestBe32(uint32_t address, uint32_t value) {
+  const uint8_t bytes[4] = {
+      static_cast<uint8_t>(value >> 24),
+      static_cast<uint8_t>(value >> 16),
+      static_cast<uint8_t>(value >> 8),
+      static_cast<uint8_t>(value),
+  };
+  return WriteSparseGuestMemory(address, bytes, sizeof(bytes));
+}
+
+bool RoundUpGuestSize(uint32_t value, uint32_t alignment, uint32_t* out) {
+  if (!out || !value || !alignment || (alignment & (alignment - 1u))) return false;
+  const uint64_t rounded =
+      (uint64_t(value) + alignment - 1u) & ~(uint64_t(alignment) - 1u);
+  if (!rounded || rounded > UINT32_MAX) return false;
+  *out = static_cast<uint32_t>(rounded);
+  return true;
+}
+
+bool VirtualRangesOverlap(uint32_t a_base, uint32_t a_size,
+                          uint32_t b_base, uint32_t b_size) {
+  const uint64_t a_end = uint64_t(a_base) + a_size;
+  const uint64_t b_end = uint64_t(b_base) + b_size;
+  return uint64_t(a_base) < b_end && uint64_t(b_base) < a_end;
+}
+
+bool VirtualRangeAvailable(uint32_t base, uint32_t size,
+                           const GuestVirtualAllocation* ignore = nullptr) {
+  if (!size || uint64_t(base) + size > (uint64_t{1} << 32)) return false;
+  for (const auto& allocation : g_virtual_allocations) {
+    if (!allocation.used || &allocation == ignore) continue;
+    if (VirtualRangesOverlap(base, size, allocation.base, allocation.size)) return false;
+  }
+  return true;
+}
+
+GuestVirtualAllocation* FindVirtualAllocation(uint32_t base, uint32_t size) {
+  for (auto& allocation : g_virtual_allocations) {
+    if (allocation.used && allocation.base == base && allocation.size == size) {
+      return &allocation;
+    }
+  }
+  return nullptr;
+}
+
+GuestVirtualAllocation* AcquireVirtualAllocationSlot() {
+  for (auto& allocation : g_virtual_allocations) {
+    if (!allocation.used) return &allocation;
+  }
+  return nullptr;
+}
+
+uint32_t SparseProtectionFromXPage(uint32_t protect) {
+  uint32_t result = 0;
+  if (protect & (0x02u | 0x04u | 0x08u | 0x20u | 0x40u | 0x80u)) {
+    result |= kGuestRead;
+  }
+  if (protect & (0x04u | 0x08u | 0x40u | 0x80u)) result |= kGuestWrite;
+  if (protect & (0x10u | 0x20u | 0x40u | 0x80u)) result |= kGuestExecute;
+  return result;
+}
+
+bool CommitVirtualAllocation(GuestVirtualAllocation* allocation,
+                             uint32_t protection) {
+  if (!allocation || !allocation->used || !allocation->size) return false;
+  if (allocation->committed) {
+    allocation->protection = protection;
+    return ProtectSparseGuestMemory(allocation->base,
+                                    allocation->size / kGuestPageSize,
+                                    protection);
+  }
+  const uint32_t pages = allocation->size / kGuestPageSize;
+  const uint32_t backing = AllocateSparseGuestBacking(pages);
+  if (!backing ||
+      !MapSparseGuestMemory(allocation->base, pages, backing, 0, protection)) {
+    return false;
+  }
+  allocation->committed = true;
+  allocation->protection = protection;
+  return true;
+}
+
+uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
+                                 uint32_t region_size_ptr,
+                                 uint32_t alloc_type, uint32_t protect_bits,
+                                 uint32_t debug_memory) {
+  uint32_t requested_base = 0, requested_size = 0;
+  if (!base_addr_ptr || !region_size_ptr || debug_memory != 0 ||
+      !ReadGuestBe32(base_addr_ptr, &requested_base) ||
+      !ReadGuestBe32(region_size_ptr, &requested_size) || !requested_size) {
+    return kXStatusInvalidParameter;
+  }
+  if (!(alloc_type & (kXMemCommit | kXMemReset | kXMemReserve)) ||
+      ((alloc_type & kXMemReset) && (alloc_type & ~kXMemReset))) {
+    return kXStatusInvalidParameter;
+  }
+  // Xenia's current MEM_RESET path is intentionally unimplemented. Keep the
+  // browser service fail-closed instead of pretending that reset semantics ran.
+  if (alloc_type & kXMemReset) return kXStatusInvalidParameter;
+
+  const uint32_t page_size =
+      (alloc_type & kXMemLargePages) ? kGuestLargePageSize : kGuestPageSize;
+  uint32_t adjusted_size = 0;
+  if (!RoundUpGuestSize(requested_size, page_size, &adjusted_size)) {
+    return kXStatusInvalidParameter;
+  }
+
+  uint32_t base = requested_base ? requested_base & ~(page_size - 1u) : 0u;
+  GuestVirtualAllocation* allocation = nullptr;
+  if (base) {
+    allocation = FindVirtualAllocation(base, adjusted_size);
+    if (!allocation) {
+      const uint32_t range_begin =
+          page_size == kGuestLargePageSize ? kGuestVirtual64kBase : 0x00010000u;
+      const uint32_t range_end =
+          page_size == kGuestLargePageSize ? 0x80000000u : kGuestVirtual4kEnd;
+      if (base < range_begin || uint64_t(base) + adjusted_size > range_end ||
+          !VirtualRangeAvailable(base, adjusted_size)) {
+        return kXStatusNoMemory;
+      }
+      allocation = AcquireVirtualAllocationSlot();
+      if (!allocation) return kXStatusNoMemory;
+      *allocation = {true, false, base, adjusted_size, page_size, 0};
+    }
+  } else {
+    uint32_t* bottom = page_size == kGuestLargePageSize
+                           ? &g_virtual_64k_bottom
+                           : &g_virtual_4k_bottom;
+    uint32_t* top = page_size == kGuestLargePageSize
+                        ? &g_virtual_64k_top
+                        : &g_virtual_4k_top;
+    if (alloc_type & kXMemTopDown) {
+      if (*top < adjusted_size || *top - adjusted_size < *bottom) {
+        return kXStatusNoMemory;
+      }
+      base = (*top - adjusted_size) & ~(page_size - 1u);
+      if (base < *bottom || !VirtualRangeAvailable(base, adjusted_size)) {
+        return kXStatusNoMemory;
+      }
+      *top = base;
+    } else {
+      base = (*bottom + page_size - 1u) & ~(page_size - 1u);
+      if (uint64_t(base) + adjusted_size > *top ||
+          !VirtualRangeAvailable(base, adjusted_size)) {
+        return kXStatusNoMemory;
+      }
+      *bottom = base + adjusted_size;
+    }
+    allocation = AcquireVirtualAllocationSlot();
+    if (!allocation) return kXStatusNoMemory;
+    *allocation = {true, false, base, adjusted_size, page_size, 0};
+  }
+
+  if ((alloc_type & kXMemCommit) &&
+      !CommitVirtualAllocation(allocation, SparseProtectionFromXPage(protect_bits))) {
+    if (!allocation->committed) *allocation = {};
+    return kXStatusNoMemory;
+  }
+
+  // Sparse backing pages are zero-created by AllocateSparseGuestBacking, which
+  // matches Xenia's default committed-memory zeroing. X_MEM_NOZERO therefore
+  // needs no extra work in this sparse implementation.
+  (void)kXMemNoZero;
+  if (!WriteGuestBe32(base_addr_ptr, base) ||
+      !WriteGuestBe32(region_size_ptr, adjusted_size)) {
+    return kXStatusInvalidParameter;
+  }
+  return kXStatusSuccess;
+}
+
 // Match UserModule::GetOptHeader used by upstream xboxkrnl!
 // RtlImageXexHeaderField. XEX optional-header keys encode how their value is
 // represented in the low byte: 0 returns the inline dword, 1 returns the guest
@@ -396,7 +613,7 @@ bool ReadXexOptionalHeaderField(uint32_t xex_header, uint32_t field,
 
 uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
                      uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6,
-                     uint32_t, uint32_t, uint32_t, uint32_t) {
+                     uint32_t r7, uint32_t, uint32_t, uint32_t) {
   ++g_service_calls;
   g_last_module = module;
   g_last_ordinal = ordinal;
@@ -406,6 +623,8 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
     switch (ordinal) {
       case 0x0083:  // KeQueryPerformanceFrequency
         return kGuestTickFrequency;
+      case 0x00CC:  // NtAllocateVirtualMemory
+        return NtAllocateVirtualMemory(r3, r4, r5, r6, r7);
       case 0x012B: {  // RtlImageXexHeaderField
         uint32_t value = 0;
         if (!ReadXexOptionalHeaderField(r3, r4, &value)) {

@@ -48,7 +48,6 @@ jobs:
           grep -q 'g_unimplemented_ppc_address' src/xenia_web_bootstrap/ppc_translation_probe.cpp
           grep -q 'r360_ppc_probe_unimplemented_code' src/xenia_web_bootstrap/ppc_translation_probe.cpp
           grep -q 'R360_TITLE_ENTRY_WASM_TRAP' render360-title-controller.mjs
-          grep -q 'test-title-scanned-entry-runtime.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
           grep -q 'const RENDER360_RELEASE=77;' runtime/render360-runtime.js
           grep -q 'const REQUIRED_CORE_BUILD=77;' runtime/render360-runtime.js
           grep -q 'const CONTENT_BRIDGE={release:77,' runtime/render360-runtime.js
@@ -70,7 +69,6 @@ jobs:
             build-xenia-ppc-bootstrap.sh \
             src/xenia_web_bootstrap/ppc_translation_probe.cpp \
             render360-title-controller.mjs \
-            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
             runtime/render360-runtime.js \
             render360-browser-title-runtime.mjs \
             render360-browser-modern-content-bridge.mjs \

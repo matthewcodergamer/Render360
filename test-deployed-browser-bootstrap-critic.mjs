@@ -3,13 +3,20 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
 
-const wasm=await readFile(new URL('./xenia_ppc_bootstrap.wasm',import.meta.url));
-const meta=JSON.parse(await readFile(new URL('./xenia_ppc_bootstrap.meta.json',import.meta.url),'utf8'));
+// With no argument this remains the deployed-artifact critic and verifies the
+// checked-in provenance metadata. Fastlane may pass an explicit freshly-built
+// Wasm path so the exact candidate artifact is validated before it is published.
+const explicitPath=process.argv[2];
+const wasm=await readFile(explicitPath||new URL('./xenia_ppc_bootstrap.wasm',import.meta.url));
 assert.ok(wasm.length>0,'deployed bootstrap is empty');
-assert.equal(wasm.length,meta.bytes,'deployed bootstrap byte count differs from publisher provenance');
-assert.equal(createHash('sha256').update(wasm).digest('hex'),meta.sha256,'deployed bootstrap hash differs from verified artifact provenance');
-assert.match(meta.sourceCommit,/^[0-9a-f]{40}$/,'publisher provenance source commit invalid');
-assert.match(String(meta.sourceRun),/^\d+$/,'publisher provenance source run invalid');
+
+if(!explicitPath){
+  const meta=JSON.parse(await readFile(new URL('./xenia_ppc_bootstrap.meta.json',import.meta.url),'utf8'));
+  assert.equal(wasm.length,meta.bytes,'deployed bootstrap byte count differs from publisher provenance');
+  assert.equal(createHash('sha256').update(wasm).digest('hex'),meta.sha256,'deployed bootstrap hash differs from verified artifact provenance');
+  assert.match(meta.sourceCommit,/^[0-9a-f]{40}$/,'publisher provenance source commit invalid');
+  assert.match(String(meta.sourceRun),/^\d+$/,'publisher provenance source run invalid');
+}
 
 const module=await WebAssembly.compile(wasm);
 const importCheck=validateRender360BrowserImports(module);
@@ -43,6 +50,11 @@ console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_TITLE_SHADER_EXPORTS=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_XENOS_SPIRV_EXPORTS=PASS');
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_REAL_VDSWAP_FRONTBUFFER_EXPORTS=PASS');
 console.log(`DEPLOYED_BROWSER_BOOTSTRAP_BYTES=${wasm.length}`);
-console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SHA256=${meta.sha256}`);
-console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SOURCE_RUN=${meta.sourceRun}`);
+if(!explicitPath){
+  const meta=JSON.parse(await readFile(new URL('./xenia_ppc_bootstrap.meta.json',import.meta.url),'utf8'));
+  console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SHA256=${meta.sha256}`);
+  console.log(`DEPLOYED_BROWSER_BOOTSTRAP_SOURCE_RUN=${meta.sourceRun}`);
+}else{
+  console.log(`CANDIDATE_BROWSER_BOOTSTRAP_SHA256=${createHash('sha256').update(wasm).digest('hex')}`);
+}
 console.log('DEPLOYED_BROWSER_BOOTSTRAP_PPC_KERNEL_XENOS_EXPORTS=PASS');

@@ -1,0 +1,98 @@
+name: PC Recompiled WebAssembly
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/pc-content-source.js'
+      - 'runtime/community-wasm-package.js'
+      - 'runtime/pc-recompiled-runtime.js'
+      - 'runtime/pc-recompiled-ui.js'
+      - 'recompiled/pc/**'
+      - 'test-pc-content-source.mjs'
+      - 'test-community-wasm-package.mjs'
+      - 'test-pc-recompiled-runtime.mjs'
+      - 'tools/apply-pc-recompiled-portal-v74.py'
+      - 'app.js'
+      - 'ui-behavior.js'
+      - 'settings/execution-engine.js'
+      - '.github/workflows/pc-recompiled-wasm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pc-recompiled-wasm-main
+  cancel-in-progress: true
+
+jobs:
+  portal-host:
+    name: Verify Portal PC Wasm host
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout Render360 V74
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Verify Xbox baseline is untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          before="$(git rev-parse HEAD:src/xenia_web_bootstrap)"
+          echo "XBOX_BOOTSTRAP_TREE=$before"
+
+      - name: Apply browser PC integration only
+        run: python3 ./tools/apply-pc-recompiled-portal-v74.py
+
+      - name: Syntax and contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-pc-recompiled-portal-v74.py
+          node --check runtime/pc-content-source.js
+          node --check runtime/community-wasm-package.js
+          node --check runtime/pc-recompiled-runtime.js
+          node --check runtime/pc-recompiled-ui.js
+          node --check recompiled/pc/portal/adapter.mjs
+          node --check settings/execution-engine.js
+          node --check ui-behavior.js
+          node --check app.js
+          node ./test-pc-content-source.mjs
+          node ./test-community-wasm-package.mjs
+          node ./test-pc-recompiled-runtime.mjs
+          git diff --check
+          grep -q "render360AppBridge" app.js
+          grep -q "render360:openPcImport" app.js
+          grep -q "settings/execution-engine.js" ui-behavior.js
+          grep -q "installPcRecompiledRouter(Render360Runtime)" settings/execution-engine.js
+          grep -q "portal-1-pc" recompiled/pc/portal/manifest.json
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$(git rev-parse HEAD:src/xenia_web_bootstrap)"
+          if git diff --name-only | grep -Eq '^(src/xenia_web_bootstrap/|xenia_ppc_bootstrap\.wasm$|xenia_ppc_bootstrap\.meta\.json$|VERSION$)'; then
+            echo 'PC Wasm patch attempted to modify the Xbox 360 runtime.' >&2
+            git diff --name-only >&2
+            exit 1
+          fi
+
+      - name: Commit PC integration patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 PC Wasm Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add app.js ui-behavior.js settings/execution-engine.js
+          if git diff --cached --quiet; then
+            echo 'PC integration was already applied.'
+            exit 0
+          fi
+          git commit -m 'feat: wire Portal PC recompiled WebAssembly runtime'
+          git push origin HEAD:main

@@ -993,6 +993,27 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         case xe::cpu::hir::OPCODE_MEMORY_BARRIER:
           break;
 
+        case xe::cpu::hir::OPCODE_CACHE_CONTROL:
+          // Xenia lowers PPC cache-management instructions (for example Braid's
+          // dcbt 0x7C00222C) to HIR CACHE_CONTROL. On x64, DATA_TOUCH is a host
+          // prefetch and DATA_STORE/FLUSH becomes a host cache-line flush. The
+          // browser runtime has one coherent sparse guest-memory backing and no
+          // emulated CPU data cache, so these operations have no architectural
+          // guest state to mutate. Treat the four Xenia-defined cache-control
+          // kinds as semantic no-ops instead of converting a cache hint into a
+          // false guest-memory dependency. Unknown flags remain fail-closed.
+          switch (static_cast<xe::cpu::hir::CacheControlType>(instr->flags)) {
+            case xe::cpu::hir::CACHE_CONTROL_TYPE_DATA_TOUCH:
+            case xe::cpu::hir::CACHE_CONTROL_TYPE_DATA_TOUCH_FOR_STORE:
+            case xe::cpu::hir::CACHE_CONTROL_TYPE_DATA_STORE:
+            case xe::cpu::hir::CACHE_CONTROL_TYPE_DATA_STORE_AND_FLUSH:
+              break;
+            default:
+              supported = false;
+              break;
+          }
+          break;
+
         case xe::cpu::hir::OPCODE_SET_RETURN_ADDRESS: {
           uint64_t return_address = 0;
           supported = ResolveUint64(instr->src1.value, values, &return_address);

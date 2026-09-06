@@ -3,10 +3,10 @@ import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
-const RENDER360_RELEASE=68;
+const RENDER360_RELEASE=69;
 const REQUIRED_CORE_BUILD=30;
 const REQUIRED_ABI=0x00030002;
-const CONTENT_BRIDGE={release:68,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true,nativeHirCompatibilityFallback:true};
+const CONTENT_BRIDGE={release:69,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,pauseResume:true,nativeHirCompatibilityFallback:true};
 const containerName=kind=>({1:'XEX1',2:'XEX2',10:'STFS LIVE',11:'STFS PIRS',12:'STFS CON',20:'PowerPC ELF'})[kind]||'Unknown';
 
 let coreModulePromise=null;

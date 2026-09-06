@@ -1,0 +1,110 @@
+name: Apply V74 Performance Architecture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render360-performance-policy.mjs'
+      - 'test-performance-policy.mjs'
+      - 'tools/apply-v74-performance-architecture.py'
+      - '.github/workflows/apply-v74-performance-architecture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-v74-performance-architecture
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout V74 main
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify V74 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          python3 -m py_compile tools/apply-v74-performance-architecture.py
+          node --check render360-performance-policy.mjs
+          node ./test-performance-policy.mjs
+
+      - name: Apply correctness and performance architecture
+        run: python3 tools/apply-v74-performance-architecture.py
+
+      - name: Verify patched source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          node --check render360-browser-ppc-session.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check render360-title-frontbuffer.mjs
+          node --check render360-webgpu-runtime.mjs
+          node ./test-performance-policy.mjs
+          grep -q 'FindContainingVirtualAllocation' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'CommitVirtualAllocationRange' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'SparseGuestMemoryPageMapped' src/xenia_web_bootstrap/sparse_guest_memory.cpp
+          grep -q 'BRAID_LARGE_PAGE_INTERIOR_COMMIT=PASS' test-kernel-nt-allocate-virtual-memory.mjs
+          grep -q 'compiledModuleReuse:true' render360-browser-ppc-session.mjs
+          grep -q 'adaptivePresentationResolution:true' render360-browser-modern-content-bridge.mjs
+
+      - name: Commit V74 architecture source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V74 Performance Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/sparse_guest_memory.h \
+            src/xenia_web_bootstrap/sparse_guest_memory.cpp \
+            src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+            test-kernel-nt-allocate-virtual-memory.mjs \
+            render360-browser-ppc-session.mjs \
+            render360-title-frontbuffer.mjs \
+            render360-webgpu-runtime.mjs \
+            render360-browser-modern-content-bridge.mjs
+          if git diff --cached --quiet; then
+            echo 'V74 performance architecture is already applied.'
+          else
+            git commit -m 'V74: fix Braid virtual commit and add adaptive performance core'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build and publish verified V74 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 6
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V74 performance bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Verify published V74 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin main
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          node ./test-performance-policy.mjs
+          timeout 90s node ./test-kernel-nt-allocate-virtual-memory.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-render360-version-consistency.mjs
+          node - <<'NODE'
+          const fs=require('fs');
+          const meta=JSON.parse(fs.readFileSync('xenia_ppc_bootstrap.meta.json','utf8'));
+          if(Number(meta.release)!==74)throw new Error(`published bootstrap release drifted to ${meta.release}`);
+          console.log('R360_V74_PERFORMANCE_RELEASE_PARITY=PASS');
+          NODE

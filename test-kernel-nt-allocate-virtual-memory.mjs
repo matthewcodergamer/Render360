@@ -21,7 +21,6 @@ const need=n=>{const fn=p(n);if(typeof fn!=='function')throw new Error(`missing 
 const resetSparse=need('r360_sparse_guest_memory_reset');
 const allocBacking=need('r360_sparse_guest_memory_alloc');
 const map=need('r360_sparse_guest_memory_map');
-const read32=need('r360_sparse_guest_memory_read_u32_be');
 const write32=need('r360_sparse_guest_memory_write_u32_be');
 const read8=need('r360_sparse_guest_memory_read_u8');
 const write8=need('r360_sparse_guest_memory_write_u8');
@@ -43,16 +42,13 @@ const basePtr=params+0x20;
 const sizePtr=params+0x24;
 if((write32(basePtr,0)>>>0)!==1||(write32(sizePtr,0x1234)>>>0)!==1)throw new Error('unable to initialize NtAllocateVirtualMemory arguments');
 
+const readBe32=address=>((read8(address)<<<24)|(read8(address+1)<<<16)|(read8(address+2)<<<8)|read8(address+3))>>>0;
+
 // X_MEM_RESERVE | X_MEM_COMMIT, X_PAGE_READWRITE, DebugMemory=FALSE.
 const status=service(1,0x00CC,basePtr,sizePtr,0x3000,0x04,0,0,0,0)>>>0;
 if(status!==0)throw new Error(`NtAllocateVirtualMemory returned NTSTATUS 0x${status.toString(16)}`);
 if((serviceStatus()>>>0)!==1)throw new Error(`NtAllocateVirtualMemory service status ${serviceStatus()>>>0}`);
 
-const tmpPtr=params+0x30;
-const readBe32=address=>{
-  if((read32(address,tmpPtr)>>>0)!==1)throw new Error(`guest dword read failed @ 0x${address.toString(16)}`);
-  return new DataView(e.memory.buffer).getUint32(tmpPtr,true)>>>0;
-};
 const base=readBe32(basePtr);
 const size=readBe32(sizePtr);
 if(base!==0x10000000)throw new Error(`unexpected first browser virtual allocation 0x${base.toString(16)}`);

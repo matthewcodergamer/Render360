@@ -38,7 +38,7 @@ const paramBacking=allocBacking(1)>>>0;
 if(!paramBacking||(map(params,1,paramBacking,0,3)>>>0)!==1)throw new Error('unable to map NtFreeVirtualMemory parameter page');
 const basePtr=params+0x20;
 const sizePtr=params+0x24;
-const readBe32=address=>((read8(address)<<<24)|(read8(address+1)<<<16)|(read8(address+2)<<<8)|read8(address+3))>>>0;
+const readBe32=address=>((read8(address)<<24)|(read8(address+1)<<16)|(read8(address+2)<<8)|read8(address+3))>>>0;
 const put32=(address,value)=>{if((write32(address,value>>>0)>>>0)!==1)throw new Error(`guest dword write failed @ 0x${address.toString(16)}`);};
 
 function allocate(base,size,allocType=0x3000,protect=0x04){

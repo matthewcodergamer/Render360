@@ -20,6 +20,10 @@ constexpr uint32_t kStatusIdle = 0;
 constexpr uint32_t kStatusSuccess = 1;
 constexpr uint32_t kStatusUnsupported = 2;
 constexpr uint32_t kStatusInvalid = 3;
+// Match Xenia KernelState process types used by KeGet/SetCurrentProcessType.
+constexpr uint32_t kXProcTypeIdle = 0;
+constexpr uint32_t kXProcTypeUser = 1;
+constexpr uint32_t kXProcTypeSystem = 2;
 constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
 constexpr uint32_t kMaxThreads = 32;
 constexpr uint32_t kMaxTlsSlots = 64;
@@ -110,6 +114,8 @@ uint32_t g_service_calls = 0;
 uint32_t g_last_module = 0;
 uint32_t g_last_ordinal = 0;
 uint32_t g_next_notify_handle = 0x37000001u;
+// A normal retail title begins in the user process, matching Xenia KernelState.
+uint32_t g_process_type = kXProcTypeUser;
 
 uint32_t MakeHandle(uint32_t index, uint16_t generation) {
   return 0x36000000u | (uint32_t(generation) << 8) | (index + 1u);
@@ -216,6 +222,7 @@ void ResetRuntime() {
   g_tls_allocated.fill(false);
   g_current_thread = 0;
   g_scheduler_cursor = 0;
+  g_process_type = kXProcTypeUser;
   g_runtime_status = kStatusIdle;
 }
 
@@ -785,8 +792,20 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
 
   if (module == kModuleXboxkrnl) {
     switch (ordinal) {
+      case 0x0066:  // KeGetCurrentProcessType
+        // Xenia returns KernelState::process_type(); normal titles start USER.
+        return g_process_type;
       case 0x0083:  // KeQueryPerformanceFrequency
         return kGuestTickFrequency;
+      case 0x009A:  // KeSetCurrentProcessType
+        // Xenia accepts X_PROCTYPE_IDLE/USER/SYSTEM (0..2). Keep malformed
+        // guest input fail-closed rather than manufacturing a valid state.
+        if (r3 > kXProcTypeSystem) {
+          g_service_status = kStatusInvalid;
+          return 0;
+        }
+        g_process_type = r3;
+        return 0;
       case 0x00CC:  // NtAllocateVirtualMemory
         return NtAllocateVirtualMemory(r3, r4, r5, r6, r7);
       case 0x00DC:  // NtFreeVirtualMemory

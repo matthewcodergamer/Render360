@@ -1,0 +1,102 @@
+name: Braid KeGetCurrentProcessType V74
+
+on:
+  push:
+    branches: [braid-ke-current-process-type-v74]
+    paths:
+      - 'tools/apply-ke-current-process-type-v74.py'
+      - 'test-kernel-process-type.mjs'
+      - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - '.github/workflows/braid-process-type-v74.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/apply-ke-current-process-type-v74.py'
+      - 'test-kernel-process-type.mjs'
+      - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - '.github/workflows/braid-process-type-v74.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: braid-process-type-v74-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  process-type:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply Xenia process-type semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-ke-current-process-type-v74.py
+          python3 tools/apply-ke-current-process-type-v74.py
+
+      - name: Compile focused kernel runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/kernel-runtime
+          cat > build/kernel-runtime/standalone_sparse_backend_stub.cpp <<'CPP'
+          #include <cstdint>
+          namespace render360::xenia_web {
+          void InvalidateWasmBackendExecutableRange(uint32_t, uint32_t) {}
+          }
+          CPP
+          docker run --rm \
+            -v "$PWD:/src" -w /src emscripten/emsdk:latest \
+            bash -lc 'em++ -std=c++20 -O2 \
+              src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+              src/xenia_web_bootstrap/sparse_guest_memory.cpp \
+              build/kernel-runtime/standalone_sparse_backend_stub.cpp \
+              -sSTANDALONE_WASM=1 -sERROR_ON_UNDEFINED_SYMBOLS=1 \
+              -Wl,--no-entry -Wl,--export-memory \
+              -sINITIAL_MEMORY=16777216 -sALLOW_MEMORY_GROWTH=1 \
+              -sEXPORTED_FUNCTIONS='"'"'["_r360_kernel_runtime_reset","_r360_kernel_service_reset","_r360_kernel_service_call","_r360_kernel_service_status","_r360_kernel_service_calls","_r360_kernel_service_last_module","_r360_kernel_service_last_ordinal","_r360_guest_thread_create","_r360_guest_thread_set_current","_r360_sparse_guest_memory_reset","_r360_sparse_guest_memory_alloc","_r360_sparse_guest_memory_map","_r360_sparse_guest_memory_read_u8","_r360_sparse_guest_memory_write_u8","_r360_sparse_guest_memory_read_u32_be","_r360_sparse_guest_memory_write_u32_be","_r360_sparse_guest_memory_mapped_pages","_r360_sparse_guest_memory_last_fault_code"]'"'"' \
+              -o build/kernel-runtime/kernel_runtime.wasm'
+
+      - name: Verify process type semantics
+        run: node ./test-kernel-process-type.mjs build/kernel-runtime/kernel_runtime.wasm
+
+      - name: Re-run kernel service critic
+        run: node ./test-kernel-services-critic.mjs build/kernel-runtime/kernel_runtime.wasm
+
+      - name: Check patch cleanliness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'case 0x0066:  // KeGetCurrentProcessType' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'case 0x009A:  // KeSetCurrentProcessType' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+
+      - name: Commit verified kernel source to feature branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/braid-ke-current-process-type-v74'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Kernel Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          if git diff --cached --quiet; then
+            echo 'Kernel process-type patch already committed.'
+          else
+            git commit -m 'kernel: implement Xbox process type services for Braid'
+            git push origin HEAD:braid-ke-current-process-type-v74
+          fi
+
+      - name: Upload focused runtime
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: braid-process-type-kernel-runtime
+          path: build/kernel-runtime/kernel_runtime.wasm
+          if-no-files-found: warn
+          retention-days: 7

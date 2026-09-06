@@ -9,6 +9,17 @@ on:
       - 'src/xenia_web_bootstrap/sparse_guest_memory.cpp'
       - 'src/xenia_web_bootstrap/sparse_guest_memory.h'
       - 'test-kernel-services-critic.mjs'
+      - 'test-kernel-process-type.mjs'
+      - 'test-guest-runtime-kernel-only-critic.mjs'
+      - '.github/workflows/kernel-runtime-critics.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - 'src/xenia_web_bootstrap/sparse_guest_memory.cpp'
+      - 'src/xenia_web_bootstrap/sparse_guest_memory.h'
+      - 'test-kernel-services-critic.mjs'
+      - 'test-kernel-process-type.mjs'
       - 'test-guest-runtime-kernel-only-critic.mjs'
       - '.github/workflows/kernel-runtime-critics.yml'
   workflow_dispatch:
@@ -54,6 +65,9 @@ jobs:
 
       - name: 'Harsh critic: verify xboxkrnl and XAM starter services'
         run: node ./test-kernel-services-critic.mjs build/kernel-runtime/kernel_runtime.wasm
+
+      - name: 'Harsh critic: verify Xenia process type semantics'
+        run: node ./test-kernel-process-type.mjs build/kernel-runtime/kernel_runtime.wasm
 
       - name: 'Harsh critic: verify kernel-only guest stacks TLS and lifecycle'
         run: node ./test-guest-runtime-kernel-only-critic.mjs build/kernel-runtime/kernel_runtime.wasm

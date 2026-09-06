@@ -23,6 +23,7 @@ on:
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
       - 'test-hir-load-offset-addressing.mjs'
+      - 'test-hir-cache-control.mjs'
       - 'test-xenia-entry-lr-abi.mjs'
       - 'test-kernel-rtl-image-xex-header-field.mjs'
       - 'test-xex-guest-mapper.mjs'
@@ -211,6 +212,9 @@ jobs:
 
       - name: Verify signed PPC LOAD_OFFSET effective addresses
         run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify Braid dcbt HIR cache-control semantics
+        run: timeout 90s node ./test-hir-cache-control.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify Xenia title-entry LR ABI
         run: timeout 90s node ./test-xenia-entry-lr-abi.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

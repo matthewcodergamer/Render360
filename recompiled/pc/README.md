@@ -32,13 +32,15 @@ Steam App ID: 400
 host profile: recompiled/pc/portal/manifest.json
 ```
 
-The browser currently recognizes a Portal installation from player-selected files such as:
+The browser recognizes a Portal installation from player-selected files such as:
 
 - `portal/gameinfo.txt`
 - Portal VPK content (`portal/portal_pak_dir.vpk` or numbered Portal VPKs)
 - Half-Life 2 base content/VPKs under `hl2/`
 
-No Valve game data is committed to this repository.
+No Valve retail game data is committed to this repository.
+
+The first community source reference is `weliveinhell/source-engine`, an Emscripten Source Engine port whose README identifies Portal as its tested title. Render360 does not vendor that engine tree; the Portal host accepts a separately built runtime package.
 
 ## Community runtime package
 
@@ -79,17 +81,41 @@ export async function createRender360PcPort(host) {
 }
 ```
 
-`format: "emscripten-esm"` is also supported, but the Emscripten module must expose `render360MountPcContent(host.content)`. Render360 intentionally does not copy an entire multi-gigabyte game installation into MEMFS just to make a generic build appear compatible.
+## Emscripten ES-module packages
+
+`format: "emscripten-esm"` is supported for a Source build that exports a module factory. The package declares its `.wasm` file and can mount player-owned data in one of two ways:
+
+1. export `render360MountPcContent(host.content)` from the module; or
+2. declare a `contentIndex` using `render360-pc-content-index-v1`.
+
+Example files are included beside the Portal adapter:
+
+- `render360-port.example.json`
+- `portal-working-set.example.json`
+
+A content index contains **paths only**, never Valve assets. Render360 validates the list, reads those paths from the player's selected Portal installation, creates the matching directories in Emscripten `FS`, writes the working set, reports progress, and only then calls the module's main function.
+
+This is intended as the first functional bridge for Source's synchronous filesystem model. It avoids copying the complete multi-gigabyte Portal install into the WASM heap, though a large map working set can still consume significant memory.
 
 ## Filesystem strategy
 
-The host keeps player-owned assets outside the WebAssembly heap and exposes bounded file reads. A production Source-engine build should bridge that source into its own virtual filesystem. For higher throughput, a later worker/OPFS bridge can use synchronous worker-side access while preserving the same host contract.
+Phase 1: player-owned indexed working sets copied into Emscripten `FS` before launch.
+
+Phase 2: generate complete path lists from Source filesystem instrumentation, replacing the linked community port's asset-containing map chunks with path metadata.
+
+Phase 3: worker/OPFS-backed synchronous file access so Source can stream large files without retaining the full working set in linear memory.
 
 ## Threads / SharedArrayBuffer
 
 Community ports can declare WebGPU, WebGL2, SharedArrayBuffer, thread and cross-origin-isolation requirements in their package manifest. Render360 checks them before executing the package and fails with a concrete requirement list instead of crashing the page.
 
-A threaded Emscripten build may require COOP/COEP/cross-origin isolation. That is intentionally an opt-in runtime requirement rather than a change to the Xbox 360 runtime or a blanket assumption for every browser build.
+A threaded Emscripten build requires browser support for SharedArrayBuffer and typically COOP/COEP cross-origin isolation. The linked Source port currently uses pthreads, a pool of workers and shared memory; that should be treated as a declared runtime requirement, not silently assumed.
+
+## iPhone target
+
+The linked Source port's current build uses a very large initial WebAssembly memory allocation and eight pthread workers. That is a useful desktop proof but not the Render360 iPhone bring-up profile. Portal-on-iPhone should start with the smallest working set and memory/thread configuration that can reach the menu and first chamber, then grow from measured telemetry.
+
+See `docs/recompile/PORTAL1_PLAN.md` for the concrete Source-fork/build changes and milestone definition.
 
 ## Security model
 
@@ -98,6 +124,7 @@ A community runtime package is executable JavaScript/WebAssembly. Render360 ther
 - accepts package entry points only from the locally selected package;
 - rejects remote manifest entry URLs;
 - verifies the package `gameId` matches the selected game profile;
+- validates content-index paths and blocks traversal/remote paths;
 - never treats a Windows executable as trusted WebAssembly;
 - keeps retail game files separate from community runtime code.
 
@@ -111,13 +138,16 @@ Implemented host foundation:
 - player-owned file source with bounded reads;
 - local community runtime ZIP/folder loader;
 - package manifest validation;
-- Emscripten/adapter launch contracts;
+- browser capability preflight;
+- adapter and Emscripten ES-module launch contracts;
+- player-owned indexed Emscripten working-set mount;
 - Portal-specific adapter;
 - PC-specific runtime router that delegates all Xbox titles to the existing path unchanged;
-- Portal import/relink UI;
-- regression tests and isolated PC-Wasm CI.
+- redesigned Portal import/relink UI with Steam install guidance and desktop drag/drop;
+- iPhone runtime safe-area spacing;
+- regression tests and isolated PC-WASM CI.
 
-Still required for actual Portal gameplay: a compatible, legally distributable community Portal/Source WebAssembly runtime package implementing the contract above. The host infrastructure cannot manufacture that binary from `portal.exe` by itself.
+Still required for actual Portal gameplay: build a compatible Source/Emscripten runtime package from an authorized community Source tree, generate a complete startup/first-map content index, and fix the remaining Source-browser graphics/audio/save issues. The host infrastructure cannot manufacture that engine binary from `portal.exe` by itself.
 
 ## Later titles
 

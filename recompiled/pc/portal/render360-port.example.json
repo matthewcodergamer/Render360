@@ -1,0 +1,29 @@
+{
+  "schema": "render360-pc-wasm-package-v1",
+  "gameId": "portal-1-pc",
+  "name": "Portal Source Emscripten Runtime",
+  "version": "0.1.0",
+  "format": "emscripten-esm",
+  "entry": "portal.mjs",
+  "wasm": "portal.wasm",
+  "factoryExport": "default",
+  "contentIndex": "portal-working-set.json",
+  "files": [
+    "portal.worker.js",
+    "portal-working-set.json"
+  ],
+  "arguments": [
+    "-game",
+    "portal",
+    "-novid"
+  ],
+  "requirements": {
+    "webassembly": true,
+    "webgl2": true,
+    "webgpu": false,
+    "sharedArrayBuffer": true,
+    "crossOriginIsolated": true,
+    "threads": true
+  },
+  "notes": "Template only. Do not place Valve game assets in the runtime package. portal-working-set.json contains paths only; Render360 reads those paths from the player's selected Portal installation."
+}

@@ -9,6 +9,7 @@ on:
       - 'runtime/community-wasm-package.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
+      - 'runtime/pc-webgpu-presenter.js'
       - 'styles/pc-recompiled.css'
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
@@ -16,6 +17,7 @@ on:
       - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
       - 'test-pc-recompiled-runtime.mjs'
+      - 'test-pc-webgpu-presenter.mjs'
       - 'test-ui-contract.mjs'
       - 'tools/apply-pc-recompiled-portal-v74.py'
       - 'app.js'
@@ -30,6 +32,7 @@ on:
       - 'runtime/community-wasm-package.js'
       - 'runtime/pc-recompiled-runtime.js'
       - 'runtime/pc-recompiled-ui.js'
+      - 'runtime/pc-webgpu-presenter.js'
       - 'styles/pc-recompiled.css'
       - 'recompiled/pc/**'
       - 'docs/recompile/**'
@@ -37,6 +40,7 @@ on:
       - 'test-source-vpk-source.mjs'
       - 'test-community-wasm-package.mjs'
       - 'test-pc-recompiled-runtime.mjs'
+      - 'test-pc-webgpu-presenter.mjs'
       - 'test-ui-contract.mjs'
       - 'tools/apply-pc-recompiled-portal-v74.py'
       - 'app.js'
@@ -90,6 +94,7 @@ jobs:
           node --check runtime/community-wasm-package.js
           node --check runtime/pc-recompiled-runtime.js
           node --check runtime/pc-recompiled-ui.js
+          node --check runtime/pc-webgpu-presenter.js
           node --check recompiled/pc/portal/adapter.mjs
           node --check settings/execution-engine.js
           node --check ui-behavior.js
@@ -98,6 +103,7 @@ jobs:
           node ./test-source-vpk-source.mjs
           node ./test-community-wasm-package.mjs
           node ./test-pc-recompiled-runtime.mjs
+          node ./test-pc-webgpu-presenter.mjs
           git diff --check
           grep -q "render360AppBridge" app.js
           grep -q "render360:openPcImport" app.js
@@ -106,6 +112,8 @@ jobs:
           grep -q "portal-1-pc" recompiled/pc/portal/manifest.json
           grep -q "r360-library-import-actions" runtime/pc-recompiled-ui.js
           grep -q "pc-wasm-portal-art" styles/pc-recompiled.css
+          grep -q "data-r360-standalone" styles/pc-recompiled.css
+          grep -q "createPcWebGpuPresenter" runtime/pc-recompiled-runtime.js
           grep -q "render360-pc-content-index-v1" runtime/community-wasm-package.js
           grep -q "lazySourceVpkReads" runtime/community-wasm-package.js
           test "$(tr -d '[:space:]' < VERSION)" = '74'

@@ -20,6 +20,8 @@ export async function createRender360PcTitle(host){
     },
     setKey(key,pressed){return host.controllerInput?.setKey?.(key,pressed)??false;},
     setAnalog(lx,ly,rx,ry){return host.controllerInput?.setAnalog?.(lx,ly,rx,ry);},
+    setMoveAnalog(lx,ly){return host.controllerInput?.setMoveAnalog?.(lx,ly);},
+    setLookAnalog(rx,ry){return host.controllerInput?.setLookAnalog?.(rx,ry);},
     resetInput(){return host.controllerInput?.resetInput?.();},
     pause(){host.controllerInput?.pause?.();return typeof inner.pause==='function'?inner.pause():true;},
     resume(){host.controllerInput?.resume?.();return typeof inner.resume==='function'?inner.resume():true;},

@@ -1,8 +1,8 @@
 {
-  "release": 75,
+  "release": 76,
   "wasm": "render360_xenia_core.wasm",
-  "sha256": "19bdcfe5f51e06b1d19ffd744059cd4e4fdaa44ccf1316b373166d08754ddff3",
+  "sha256": "3621f9d66cd0e8321bf3366d442a239fa2c749066924497c3014f2c55fc50e7a",
   "bytes": 211497,
-  "embedded_gzip_bytes": 13683,
+  "embedded_gzip_bytes": 13682,
   "source": "build-core.sh"
 }

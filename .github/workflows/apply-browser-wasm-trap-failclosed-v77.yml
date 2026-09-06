@@ -1,0 +1,138 @@
+name: Apply V77 Browser Wasm Trap Fail-Closed
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prepare-xenia-ppc-hir-failclosed-overlay.py'
+      - 'test-browser-wasm-trap-failclosed-v77.mjs'
+      - 'tools/apply-browser-wasm-trap-failclosed-v77.py'
+      - '.github/workflows/apply-browser-wasm-trap-failclosed-v77.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-browser-wasm-trap-failclosed-v77
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V77 updater and regression syntax
+        run: |
+          python3 -m py_compile tools/apply-browser-wasm-trap-failclosed-v77.py
+          python3 -m py_compile prepare-xenia-ppc-hir-failclosed-overlay.py
+          node --check test-browser-wasm-trap-failclosed-v77.mjs
+
+      - name: Apply browser scanned-entry wasm trap hardening
+        run: python3 tools/apply-browser-wasm-trap-failclosed-v77.py
+
+      - name: Verify V77 source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '77'
+          grep -q 'prepare-xenia-ppc-hir-failclosed-overlay.py' build-xenia-ppc-bootstrap.sh
+          grep -q '"src/xenia/cpu/ppc/ppc_hir_builder.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_hir_builder.cc"' build-xenia-ppc-bootstrap.sh
+          grep -q 'r360_ppc_probe_report_unimplemented' prepare-xenia-ppc-hir-failclosed-overlay.py
+          grep -q 'g_unimplemented_ppc_address' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'r360_ppc_probe_unimplemented_code' src/xenia_web_bootstrap/ppc_translation_probe.cpp
+          grep -q 'R360_TITLE_ENTRY_WASM_TRAP' render360-title-controller.mjs
+          grep -q 'test-title-scanned-entry-runtime.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=77;' runtime/render360-runtime.js
+          grep -q 'const REQUIRED_CORE_BUILD=77;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:77,' runtime/render360-runtime.js
+          grep -q 'const RENDER360_RELEASE=77;' render360-browser-title-runtime.mjs
+          grep -q "const VERSION='77';" render360-sw.js
+          grep -q 'Render360 77' index.html
+          node ./test-browser-wasm-trap-failclosed-v77.mjs
+          node --check render360-title-controller.mjs
+          node --check render360-browser-modern-content-bridge.mjs
+          node --check runtime/render360-runtime.js
+
+      - name: Commit V77 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V77 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            build-xenia-ppc-bootstrap.sh \
+            src/xenia_web_bootstrap/ppc_translation_probe.cpp \
+            render360-title-controller.mjs \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml \
+            runtime/render360-runtime.js \
+            render360-browser-title-runtime.mjs \
+            render360-browser-modern-content-bridge.mjs \
+            render360-sw.js \
+            index.html \
+            VERSION
+          if git diff --cached --quiet; then
+            echo 'V77 source already applied.'
+          else
+            git commit -m 'V77: fail closed instead of trapping on unsupported PPC'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Publish synchronized V77 package core first
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V77 package-core run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Build verify and publish V77 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V77 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Regress scanned entry and prior PPC boundary fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin main
+          node ./test-browser-wasm-trap-failclosed-v77.mjs
+          timeout 90s node ./test-title-scanned-entry-runtime.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-ppc-scanner-boundary-v76.mjs
+          node ./test-kernel-hal-return-to-firmware-v75.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-kernel-debug-monitor-variable.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-kernel-variable-import-relocation.mjs ./xenia_ppc_bootstrap.wasm
+          node ./test-render360-version-consistency.mjs
+
+      - name: Verify final V77 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const version=Number(fs.readFileSync('VERSION','utf8').trim());
+          const pkg=JSON.parse(fs.readFileSync('render360_xenia_core.meta.json','utf8'));
+          const boot=JSON.parse(fs.readFileSync('xenia_ppc_bootstrap.meta.json','utf8'));
+          if(version!==77||Number(pkg.release)!==77||Number(boot.release)!==77)throw new Error(JSON.stringify({version,pkg:pkg.release,boot:boot.release}));
+          console.log('R360_V77_FINAL_RELEASE_PARITY=PASS');
+          NODE

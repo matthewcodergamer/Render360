@@ -1,0 +1,106 @@
+name: Apply V71 NtAllocateVirtualMemory
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/apply-nt-allocate-virtual-memory-v71.py'
+      - '.github/workflows/apply-nt-allocate-virtual-memory-v71.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-nt-allocate-virtual-memory-v71
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate V71 updater and regression
+        run: |
+          python3 -m py_compile tools/apply-nt-allocate-virtual-memory-v71.py
+          node --check test-kernel-nt-allocate-virtual-memory.mjs
+
+      - name: Apply V71 NtAllocateVirtualMemory service
+        run: python3 tools/apply-nt-allocate-virtual-memory-v71.py
+
+      - name: Verify V71 source and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "71"
+          grep -q 'case 0x00CC:  // NtAllocateVirtualMemory' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'kGuestVirtual4kBase = 0x10000000u' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'CommitVirtualAllocation' src/xenia_web_bootstrap/kernel_runtime_foundation.cpp
+          grep -q 'test-kernel-nt-allocate-virtual-memory.mjs' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'Verify NtAllocateVirtualMemory kernel service' .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          grep -q 'const RENDER360_RELEASE=71;' runtime/render360-runtime.js
+          grep -q 'const CONTENT_BRIDGE={release:71,' runtime/render360-runtime.js
+          grep -q 'Render360 71' index.html
+          grep -q '<span>UI Release</span><span class="value">71</span>' index.html
+          grep -q "const VERSION='71';" render360-sw.js
+
+      - name: Commit V71 kernel memory service and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V71 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+            VERSION runtime/render360-runtime.js index.html render360-sw.js
+          if git diff --cached --quiet; then
+            echo 'V71 source/release already current.'
+          else
+            git commit -m 'fix: implement NtAllocateVirtualMemory service'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build, verify and publish V71 browser bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run xenia-browser-bootstrap-fastlane.yml --ref main
+          sleep 5
+          run_id="$(gh run list --workflow xenia-browser-bootstrap-fastlane.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "V71 bootstrap run: $run_id"
+          gh run watch "$run_id" --exit-status
+
+      - name: Verify published V71 provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git show origin/main:VERSION)" = "71"
+          meta="$(git show origin/main:xenia_ppc_bootstrap.meta.json)"
+          echo "$meta"
+          echo "$meta" | grep -q 'sourceCommit'
+          echo "$meta" | grep -q 'sourceRun'
+          echo "$meta" | grep -q 'sha256'
+
+      - name: Rebuild release-71 package core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run sync-package-core.yml --ref main
+          sleep 4
+          run_id="$(gh run list --workflow sync-package-core.yml --event workflow_dispatch --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          echo "Package-core run: $run_id"
+          gh run watch "$run_id" --exit-status

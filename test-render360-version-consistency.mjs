@@ -9,9 +9,11 @@ const version = Number(versionText);
 
 const read = (name) => fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8');
 const runtime = read('runtime/render360-runtime.js');
+const titleRuntime = read('render360-browser-title-runtime.mjs');
 const serviceWorker = read('render360-sw.js');
 
 assert.match(runtime, new RegExp(`const RENDER360_RELEASE=${version};`), 'runtime release drifted from VERSION');
+assert.match(titleRuntime, new RegExp(`const RENDER360_RELEASE=${version};`), 'title runtime release drifted from VERSION');
 assert.match(runtime, new RegExp(`const REQUIRED_CORE_BUILD=${version};`), 'runtime package-core requirement drifted from VERSION');
 assert.match(runtime, new RegExp(`const CONTENT_BRIDGE=\\{release:${version},`), 'content bridge release drifted from VERSION');
 assert.match(serviceWorker, new RegExp(`const VERSION=['\"]${version}['\"];`), 'service-worker cache release drifted from VERSION');
@@ -24,10 +26,12 @@ const packageInstance = new WebAssembly.Instance(packageModule, {});
 assert.equal(packageInstance.exports.r360_build_version() >>> 0, version, 'package-core binary build drifted from VERSION');
 
 const bootstrapMeta = JSON.parse(read('xenia_ppc_bootstrap.meta.json'));
-if (bootstrapMeta.release == null && allowBootstrapPending) {
-  console.warn(`BOOTSTRAP_RELEASE_PENDING current metadata has no release; fastlane must republish V${version}`);
+const bootstrapRelease = bootstrapMeta.release == null ? null : Number(bootstrapMeta.release);
+const bootstrapIsPreviousRelease = Number.isInteger(bootstrapRelease) && bootstrapRelease === version - 1;
+if (allowBootstrapPending && (bootstrapRelease == null || bootstrapIsPreviousRelease)) {
+  console.warn(`BOOTSTRAP_RELEASE_PENDING current=${bootstrapRelease == null ? 'unset' : `V${bootstrapRelease}`} target=V${version}; fastlane must republish target release`);
 } else {
-  assert.equal(Number(bootstrapMeta.release), version, 'browser bootstrap metadata release drifted from VERSION');
+  assert.equal(bootstrapRelease, version, 'browser bootstrap metadata release drifted from VERSION');
 }
 
 console.log(`RENDER360_VERSION_CONSISTENCY PASS V${version}`);

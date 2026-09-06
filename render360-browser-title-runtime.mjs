@@ -6,7 +6,7 @@ installRender360Buffer();
 
 export const PPC_BOOTSTRAP_URL='./xenia_ppc_bootstrap.wasm';
 export const PPC_BOOTSTRAP_META_URL='./xenia_ppc_bootstrap.meta.json';
-const RENDER360_RELEASE=73;
+const RENDER360_RELEASE=74;
 const BOOTSTRAP_SINGLETON_KEY=Symbol.for('render360.ppc.bootstrap.singleton');
 
 const REQUIRED_BOOTSTRAP_EXPORTS=[

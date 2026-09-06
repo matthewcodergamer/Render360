@@ -10,9 +10,20 @@ const moduleId=name=>name.toLowerCase()==='xboxkrnl.exe'?1:name.toLowerCase()===
 const XEX_HEADER_ENTRY_POINT=0x00010100;
 const XENIA_KERNEL_DATA_BASE=0x50010000;
 const XENIA_EXECUTABLE_MODULE_VAR=XENIA_KERNEL_DATA_BASE;
+const XENIA_KE_DEBUG_MONITOR_DATA=XENIA_KERNEL_DATA_BASE+0x004;
+const XENIA_KE_CERT_MONITOR_DATA=XENIA_KERNEL_DATA_BASE+0x008;
 const XENIA_EXECUTABLE_HMODULE=XENIA_KERNEL_DATA_BASE+0x100;
 const XENIA_XEX_HEADER_BASE=XENIA_KERNEL_DATA_BASE+0x1000;
-const XENIA_BUILTIN_VARIABLE_EXPORTS={'xboxkrnl.exe:403':{kind:'kernel-variable',name:'XexExecutableModuleHandle'}};
+const XENIA_KERNEL_VARIABLE_LAYOUT=new Map([
+  [0x59,{name:'KeDebugMonitorData',address:XENIA_KE_DEBUG_MONITOR_DATA,value:0}],
+  [0x193,{name:'XexExecutableModuleHandle',address:XENIA_EXECUTABLE_MODULE_VAR}],
+  [0x266,{name:'KeCertMonitorData',address:XENIA_KE_CERT_MONITOR_DATA,value:0}],
+]);
+const XENIA_BUILTIN_VARIABLE_EXPORTS={
+  'xboxkrnl.exe:89':{kind:'kernel-variable',name:'KeDebugMonitorData'},
+  'xboxkrnl.exe:403':{kind:'kernel-variable',name:'XexExecutableModuleHandle'},
+  'xboxkrnl.exe:614':{kind:'kernel-variable',name:'KeCertMonitorData'},
+};
 
 function readXexEntryPoint(xex,headerSize){
   const count=be32(xex,0x14);
@@ -65,7 +76,7 @@ function registerKernelImportPlan(bootstrap,kernelImports){
 }
 
 function installKernelVariableImports(bootstrap,kernelImports,xex,{entry,headerSize}){
-  const supported=kernelImports.plan.filter(item=>item.isKernelModule&&item.kind==='variable'&&item.module.toLowerCase()==='xboxkrnl.exe'&&item.ordinal===0x193);
+  const supported=kernelImports.plan.filter(item=>item.isKernelModule&&item.kind==='variable'&&item.module.toLowerCase()==='xboxkrnl.exe'&&XENIA_KERNEL_VARIABLE_LAYOUT.has(item.ordinal));
   if(!supported.length)return {available:true,patched:0,supported:0};
   const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
   const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
@@ -92,19 +103,26 @@ function installKernelVariableImports(bootstrap,kernelImports,xex,{entry,headerS
   put32(XENIA_EXECUTABLE_HMODULE+0x38,imageSize);
   put32(XENIA_EXECUTABLE_HMODULE+0x3c,entry);
   put32(XENIA_EXECUTABLE_HMODULE+0x58,XENIA_XEX_HEADER_BASE);
-  // xboxkrnl!XexExecutableModuleHandle is itself a pointer-sized exported
-  // variable whose value is the executable module's HMODULE.
+  // Xenia's xboxkrnl module exports these as actual guest variables. Keep
+  // distinct backing cells and relocate only the exact variable ordinals that
+  // have faithful state here; unknown variables remain fail-closed.
   put32(XENIA_EXECUTABLE_MODULE_VAR,XENIA_EXECUTABLE_HMODULE);
+  put32(XENIA_KE_DEBUG_MONITOR_DATA,0);
+  put32(XENIA_KE_CERT_MONITOR_DATA,0);
 
   let patched=0;
+  const relocated=[];
   for(const item of supported){
-    if((patch32(item.valueAddress>>>0,XENIA_EXECUTABLE_MODULE_VAR)>>>0)!==1){
+    const spec=XENIA_KERNEL_VARIABLE_LAYOUT.get(item.ordinal);
+    const targetAddress=spec.address>>>0;
+    if((patch32(item.valueAddress>>>0,targetAddress)>>>0)!==1){
       const status=maybe(bootstrap,'r360_xex_guest_mapper_status')?.()>>>0||0;
-      throw new Error(`failed to relocate ${item.module}!XexExecutableModuleHandle at 0x${(item.valueAddress>>>0).toString(16)} (mapper 0x${status.toString(16)})`);
+      throw new Error(`failed to relocate ${item.module}!${spec.name} at 0x${(item.valueAddress>>>0).toString(16)} (mapper 0x${status.toString(16)})`);
     }
+    relocated.push({module:item.module,ordinal:item.ordinal,name:spec.name,slotAddress:item.valueAddress>>>0,targetAddress});
     patched++;
   }
-  return {available:true,patched,supported:supported.length,variableAddress:XENIA_EXECUTABLE_MODULE_VAR,hmoduleAddress:XENIA_EXECUTABLE_HMODULE,xexHeaderAddress:XENIA_XEX_HEADER_BASE,headerBytes:headerSize,imageBase:kernelImports.imageBase>>>0,imageSize,entry:entry>>>0};
+  return {available:true,patched,supported:supported.length,variableAddress:XENIA_EXECUTABLE_MODULE_VAR,variableAddresses:{XexExecutableModuleHandle:XENIA_EXECUTABLE_MODULE_VAR,KeDebugMonitorData:XENIA_KE_DEBUG_MONITOR_DATA,KeCertMonitorData:XENIA_KE_CERT_MONITOR_DATA},relocated,hmoduleAddress:XENIA_EXECUTABLE_HMODULE,xexHeaderAddress:XENIA_XEX_HEADER_BASE,headerBytes:headerSize,imageBase:kernelImports.imageBase>>>0,imageSize,entry:entry>>>0};
 }
 
 function applyInitialGprs(bootstrap,initialGprs){

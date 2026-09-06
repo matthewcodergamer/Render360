@@ -145,32 +145,8 @@ controller = replace_once(
 )
 write(controller_path, controller)
 
-# 4) Make the newly discovered regression part of the actual browser-bootstrap
-# CI, including execution of the pre-existing scanned-entry runtime test that
-# was not in the fastlane verification job.
-fastlane_path = ".github/workflows/xenia-browser-bootstrap-fastlane.yml"
-fastlane = read(fastlane_path)
-fastlane = replace_once(
-    fastlane,
-    "      - 'prepare-wasm-backend-cfg-overlay.py'\n",
-    "      - 'prepare-wasm-backend-cfg-overlay.py'\n      - 'prepare-xenia-ppc-hir-failclosed-overlay.py'\n      - 'test-browser-wasm-trap-failclosed-v77.mjs'\n      - 'test-title-scanned-entry-runtime.mjs'\n",
-    "fastlane V77 path triggers",
-)
-fastlane_step = '''
-      - name: Verify browser unsupported-PPC translation fails closed
-        run: node ./test-browser-wasm-trap-failclosed-v77.mjs
-
-      - name: Execute scanned-entry title runtime regression
-        run: timeout 90s node ./test-title-scanned-entry-runtime.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
-'''
-if "Verify browser unsupported-PPC translation fails closed" not in fastlane:
-    anchor = "      - name: Verify Xenia title-entry LR ABI\n"
-    if anchor not in fastlane:
-        raise SystemExit("fastlane verification insertion anchor drifted")
-    fastlane = fastlane.replace(anchor, fastlane_step + "\n" + anchor, 1)
-write(fastlane_path, fastlane)
-
-# 5) Synchronized release contract.
+# 4) Synchronized release contract. Workflow verification remains in the V77
+# release workflow itself so the bot commit never needs to modify .github files.
 version = read("VERSION").strip()
 if version not in {"76", "77"}:
     raise SystemExit(f"V77 updater expected VERSION 76 or 77, found {version}")

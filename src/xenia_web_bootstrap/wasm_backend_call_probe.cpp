@@ -406,6 +406,7 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
                instr->opcode->num == xe::cpu::hir::OPCODE_TRUNCATE ||
                instr->opcode->num == xe::cpu::hir::OPCODE_LOAD ||
                instr->opcode->num == xe::cpu::hir::OPCODE_LOAD_OFFSET ||
+               instr->opcode->num == xe::cpu::hir::OPCODE_CNTLZ ||
                instr->opcode->num == xe::cpu::hir::OPCODE_BYTE_SWAP ||
                instr->opcode->num == xe::cpu::hir::OPCODE_ADD ||
                instr->opcode->num == xe::cpu::hir::OPCODE_SUB ||

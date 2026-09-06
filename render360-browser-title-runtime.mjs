@@ -77,6 +77,7 @@ export async function validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl=globa
   return {
     verified:true,
     release,
+    release,
     sourceCommit:String(metadata.sourceCommit).toLowerCase(),
     sourceRun:String(metadata.sourceRun),
     sha256:actualSha256,

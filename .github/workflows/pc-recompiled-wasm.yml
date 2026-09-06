@@ -49,6 +49,7 @@ jobs:
           test "$(tr -d '[:space:]' < VERSION)" = '74'
           before="$(git rev-parse HEAD:src/xenia_web_bootstrap)"
           echo "XBOX_BOOTSTRAP_TREE=$before"
+          echo "R360_XBOX_TREE=$before" >> "$GITHUB_ENV"
 
       - name: Apply browser PC integration only
         run: python3 ./tools/apply-pc-recompiled-portal-v74.py
@@ -76,7 +77,7 @@ jobs:
           grep -q "installPcRecompiledRouter(Render360Runtime)" settings/execution-engine.js
           grep -q "portal-1-pc" recompiled/pc/portal/manifest.json
           test "$(tr -d '[:space:]' < VERSION)" = '74'
-          test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$(git rev-parse HEAD:src/xenia_web_bootstrap)"
+          test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$R360_XBOX_TREE"
           if git diff --name-only | grep -Eq '^(src/xenia_web_bootstrap/|xenia_ppc_bootstrap\.wasm$|xenia_ppc_bootstrap\.meta\.json$|VERSION$)'; then
             echo 'PC Wasm patch attempted to modify the Xbox 360 runtime.' >&2
             git diff --name-only >&2
@@ -92,7 +93,23 @@ jobs:
           git add app.js ui-behavior.js settings/execution-engine.js
           if git diff --cached --quiet; then
             echo 'PC integration was already applied.'
-            exit 0
+          else
+            git commit -m 'feat: wire Portal PC recompiled WebAssembly runtime'
+            git push origin HEAD:main
           fi
-          git commit -m 'feat: wire Portal PC recompiled WebAssembly runtime'
-          git push origin HEAD:main
+
+      - name: Package verified worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -qr Render360-Portal-PC-WASM-V74.zip . \
+            -x '.git/*' 'Render360-Portal-PC-WASM-V74.zip' '__pycache__/* '*/__pycache__/*'
+          ls -lh Render360-Portal-PC-WASM-V74.zip
+
+      - name: Upload verified worktree
+        uses: actions/upload-artifact@v7
+        with:
+          name: Render360-Portal-PC-WASM-V74
+          path: Render360-Portal-PC-WASM-V74.zip
+          if-no-files-found: error
+          retention-days: 7

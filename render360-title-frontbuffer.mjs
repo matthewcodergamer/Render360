@@ -88,10 +88,14 @@ export function ensureTitleWebGPUCanvas(){
   return canvas;
 }
 
-export function showTitleWebGPUCanvas(frame,{canvas=ensureTitleWebGPUCanvas()}={}){
+export function showTitleWebGPUCanvas(frame,{canvas=ensureTitleWebGPUCanvas(),resolutionScale=1}={}){
   if(!canvas)throw new Error('WebGPU title framebuffer canvas unavailable');
-  if(frame?.width&&canvas.width!==frame.width)canvas.width=frame.width;
-  if(frame?.height&&canvas.height!==frame.height)canvas.height=frame.height;
+  const scale=Math.min(1,Math.max(0.5,Number(resolutionScale)||1));
+  const outputWidth=frame?.width?Math.max(1,Math.round(frame.width*scale)):0;
+  const outputHeight=frame?.height?Math.max(1,Math.round(frame.height*scale)):0;
+  if(outputWidth&&canvas.width!==outputWidth)canvas.width=outputWidth;
+  if(outputHeight&&canvas.height!==outputHeight)canvas.height=outputHeight;
+  canvas.dataset.render360ResolutionScale=String(scale);
   canvas.style.display='block';
   const fallback=typeof document!=='undefined'?document.getElementById('titleFrameCanvas'):null;
   if(fallback)fallback.style.display='none';

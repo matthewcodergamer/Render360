@@ -63,6 +63,25 @@ const status2=service(1,0x00CC,basePtr,sizePtr,0x3000,0x04,0,0,0,0)>>>0;
 const base2=readBe32(basePtr);
 if(status2!==0||base2!==0x10002000)throw new Error(`second allocation mismatch status=0x${status2.toString(16)} base=0x${base2.toString(16)}`);
 
+// Braid startup reserves a large-page virtual range and then commits a
+// subrange through a different BaseAddress/RegionSize cell. Xenia's BaseHeap
+// permits this; treating the reservation overlap as a new allocation produced
+// STATUS_NO_MEMORY (0xC0000017) and made Braid request HalReturnToFirmware.
+const beforeLarge=mappedPages()>>>0;
+if((write32(basePtr,0)>>>0)!==1||(write32(sizePtr,0x18000)>>>0)!==1)throw new Error('unable to initialize large-page reservation');
+const reserveLarge=service(1,0x00CC,basePtr,sizePtr,0x60002000,0x04,0,0,0,0)>>>0;
+const largeBase=readBe32(basePtr),largeSize=readBe32(sizePtr);
+if(reserveLarge!==0||largeBase!==0x40000000||largeSize!==0x20000)throw new Error(`large reservation mismatch status=0x${reserveLarge.toString(16)} base=0x${largeBase.toString(16)} size=0x${largeSize.toString(16)}`);
+if((mappedPages()>>>0)!==beforeLarge)throw new Error('reserve-only large-page allocation unexpectedly committed sparse backing');
+if((write32(basePtr,largeBase+0x10000)>>>0)!==1||(write32(sizePtr,0x1000)>>>0)!==1)throw new Error('unable to initialize interior large-page commit');
+const commitInterior=service(1,0x00CC,basePtr,sizePtr,0x60001000,0x04,0,0,0,0)>>>0;
+if(commitInterior!==0)throw new Error(`interior commit returned 0x${commitInterior.toString(16)} instead of success`);
+if(readBe32(basePtr)!==largeBase+0x10000||readBe32(sizePtr)!==0x10000)throw new Error('interior large-page commit output mismatch');
+if((mappedPages()>>>0)!==beforeLarge+16)throw new Error(`interior 64 KiB commit should map 16 sparse pages, got ${(mappedPages()>>>0)-beforeLarge}`);
+if((write32(basePtr,largeBase)>>>0)!==1||(write32(sizePtr,0)>>>0)!==1)throw new Error('unable to initialize large reservation release');
+const releaseLarge=service(1,0x00DC,basePtr,sizePtr,0x8000,0,0,0,0,0)>>>0;
+if(releaseLarge!==0||(mappedPages()>>>0)!==beforeLarge)throw new Error(`large reservation release mismatch status=0x${releaseLarge.toString(16)} pages=${mappedPages()>>>0}`);
+
 // Guest API failures are NTSTATUS results, not an unsupported-service blocker.
 if((write32(basePtr,0)>>>0)!==1||(write32(sizePtr,0)>>>0)!==1)throw new Error('unable to initialize invalid allocation arguments');
 const invalid=service(1,0x00CC,basePtr,sizePtr,0x3000,0x04,0,0,0,0)>>>0;
@@ -73,4 +92,5 @@ console.log('XBOXKRNL_ORDINAL_CC_NT_ALLOCATE_VIRTUAL_MEMORY=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_PAGE_ROUNDING=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_ZEROED_RW=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_NO_ALIAS=PASS');
+console.log('BRAID_LARGE_PAGE_INTERIOR_COMMIT=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_NTSTATUS_FAIL_CLOSED=PASS');

@@ -18,6 +18,9 @@ bool MapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
                           uint32_t protection);
 bool ProtectSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
                               uint32_t protection);
+// Side-effect-free page-presence query used by the virtual-memory HLE. Unlike
+// a read probe it does not mutate the sparse fault registers.
+bool SparseGuestMemoryPageMapped(uint32_t virtual_address);
 bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count);
 bool ReadSparseGuestMemory(uint32_t virtual_address, void* out, uint32_t size);
 bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,

@@ -245,6 +245,10 @@ bool ProtectSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
   return true;
 }
 
+bool SparseGuestMemoryPageMapped(uint32_t virtual_address) {
+  return g_pages.find(virtual_address >> kPageShift) != g_pages.end();
+}
+
 bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
   ClearFault();
   if (!PageRangeValid(virtual_address, page_count)) {

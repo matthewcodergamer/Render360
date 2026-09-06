@@ -7,6 +7,7 @@ import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs'
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
 import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
 import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
+import {browserPerformanceDefaults,createAdaptivePerformancePolicy} from './render360-performance-policy.mjs';
 
 installRender360Buffer();
 
@@ -145,11 +146,11 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
             if(!state.webgpuPresenter){
               const canvas=ensureTitleWebGPUCanvas();
               if(!canvas)throw new Error('WebGPU title canvas unavailable');
-              showTitleWebGPUCanvas(frontbufferFrame,{canvas});
+              showTitleWebGPUCanvas(frontbufferFrame,{canvas,resolutionScale:state.config?.resolutionScale??1});
               state.webgpuPresenter=await createRgbaFramePresenter(canvas);
               activePresenter=state.webgpuPresenter;
-            }else showTitleWebGPUCanvas(frontbufferFrame);
-            presentation=state.webgpuPresenter.present(frontbufferFrame);
+            }else showTitleWebGPUCanvas(frontbufferFrame,{resolutionScale:state.config?.resolutionScale??1});
+            presentation=state.webgpuPresenter.present(frontbufferFrame,{scale:state.config?.resolutionScale??1});
           }catch(error){webgpuError=error;try{state.webgpuPresenter?.destroy?.();}catch{}state.webgpuPresenter=null;activePresenter=null;}
         }
         if(!presentation||presentation.generation!==(frontbufferFrame.generation>>>0)){
@@ -159,11 +160,27 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
       }
     }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};}
   }
-  Object.assign(state,{gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,lastSwapCount:swaps});return state;
+  const now=globalThis.performance?.now?.()??Date.now();
+  let performanceSample=state.performancePolicy?.snapshot?.()??null;
+  if(state.performancePolicy&&swaps>0&&swaps!==state.lastPerformanceSwapCount){
+    let fps=null;
+    if(Number.isFinite(state.lastPerformanceSampleAt)&&state.lastPerformanceSwapCount>=0&&now>state.lastPerformanceSampleAt){
+      fps=(swaps-state.lastPerformanceSwapCount)*1000/(now-state.lastPerformanceSampleAt);
+      if(!Number.isFinite(fps)||fps<=0||fps>240)fps=null;
+    }
+    const budgetMb=Number(state.config?.performanceMemoryBudgetMB||0);
+    performanceSample=state.performancePolicy.observe({fps,memoryBytes:state.bootstrap?.exports?.memory?.buffer?.byteLength||0,memoryBudgetBytes:budgetMb>0?budgetMb*1048576:0,now});
+    if(performanceSample.changed){
+      state.config.resolutionScale=performanceSample.resolutionScale;
+      stage(state.onStage,'performance',`Adaptive resolution ${(performanceSample.resolutionScale*100).toFixed(0)}% · ${performanceSample.reason}`,{performance:performanceSample});
+    }
+    state.lastPerformanceSampleAt=now;state.lastPerformanceSwapCount=swaps;
+  }
+  Object.assign(state,{gpuTraffic,shaderRuntime,shaderWebGPU,frontbufferFrame,presentation,performanceSample,lastSwapCount:swaps});return state;
 }
 
 function publish(state){
-  globalThis.render360ModernTitle={fileName:state.file?.name||'',inputKind:state.inputKind,result:state.result,persistentCpu:state.persistentCpu,ppcSession:state.ppcSession,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,schedulerBlocker:state.schedulerBlocker,runtimeLoop:state.runtimeLoop,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,shaderWebGPU:state.shaderWebGPU,frontbufferFrame:state.frontbufferFrame,presentation:state.presentation,webgpuPresenter:state.webgpuPresenter,bootstrap:state.bootstrap,core:state.core,config:state.config,stop:()=>state.threadScheduler?.stop?.(),inspectScheduler:()=>state.threadScheduler?.inspect?.()??null};
+  globalThis.render360ModernTitle={fileName:state.file?.name||'',inputKind:state.inputKind,result:state.result,persistentCpu:state.persistentCpu,ppcSession:state.ppcSession,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,schedulerBlocker:state.schedulerBlocker,runtimeLoop:state.runtimeLoop,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,shaderWebGPU:state.shaderWebGPU,frontbufferFrame:state.frontbufferFrame,presentation:state.presentation,performance:state.performanceSample,performancePolicy:state.performancePolicy,webgpuPresenter:state.webgpuPresenter,bootstrap:state.bootstrap,core:state.core,config:state.config,stop:()=>state.threadScheduler?.stop?.(),inspectScheduler:()=>state.threadScheduler?.inspect?.()??null};
 }
 
 function driveScheduler(run,state,onStage){
@@ -192,10 +209,14 @@ if(Number(result.translatedFunctionCount||0)>0){
   result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
 }
 if(run!==activeRun)return null;
-const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,lastSwapCount:-1};
+const perfDefaults=browserPerformanceDefaults();
+const effectiveConfig={...config,targetFps:Number(config.targetFps||perfDefaults.targetFps),resolutionScale:Number(config.resolutionScale??perfDefaults.initialScale)};
+const performancePolicy=createAdaptivePerformancePolicy({targetFps:effectiveConfig.targetFps,initialScale:effectiveConfig.resolutionScale,minScale:Number(config.minResolutionScale??perfDefaults.minScale),maxScale:Number(config.maxResolutionScale??perfDefaults.maxScale)});
+effectiveConfig.resolutionScale=performancePolicy.resolutionScale;
+const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config:effectiveConfig,onStage,performancePolicy,performanceSample:performancePolicy.snapshot(),lastPerformanceSampleAt:NaN,lastPerformanceSwapCount:-1,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,lastSwapCount:-1};
 updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
 else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
-return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,inputKind:state.inputKind};
+return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,performance:state.performanceSample,inputKind:state.inputKind};
 }
 
-export function modernContentBridgeContract(){return {release:45,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}
+export function modernContentBridgeContract(){return {release:74,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,compiledWasmReuse:true,hotFunctionTelemetry:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,adaptivePresentationResolution:true,targetFps:30,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}

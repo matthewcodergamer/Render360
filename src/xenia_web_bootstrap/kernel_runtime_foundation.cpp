@@ -1,5 +1,7 @@
 #include <array>
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 #include "sparse_guest_memory.h"
 
@@ -187,7 +189,13 @@ bool AllocateThreadStack(uint32_t thread_index, uint32_t stack_size,
 void ReleaseVirtualAllocations() {
   for (auto& allocation : g_virtual_allocations) {
     if (allocation.used && allocation.committed && allocation.base && allocation.size) {
-      UnmapSparseGuestMemory(allocation.base, allocation.size / kGuestPageSize);
+      for (uint32_t address = allocation.base;
+           uint64_t(address) < uint64_t(allocation.base) + allocation.size;
+           address += kGuestPageSize) {
+        if (SparseGuestMemoryPageMapped(address)) {
+          UnmapSparseGuestMemory(address, 1);
+        }
+      }
     }
     allocation = {};
   }
@@ -439,6 +447,20 @@ GuestVirtualAllocation* FindVirtualAllocation(uint32_t base, uint32_t size) {
   return nullptr;
 }
 
+GuestVirtualAllocation* FindContainingVirtualAllocation(uint32_t base,
+                                                        uint32_t size,
+                                                        uint32_t page_size) {
+  const uint64_t requested_end = uint64_t(base) + size;
+  for (auto& allocation : g_virtual_allocations) {
+    if (!allocation.used || allocation.page_size != page_size) continue;
+    const uint64_t allocation_end = uint64_t(allocation.base) + allocation.size;
+    if (base >= allocation.base && requested_end <= allocation_end) {
+      return &allocation;
+    }
+  }
+  return nullptr;
+}
+
 GuestVirtualAllocation* AcquireVirtualAllocationSlot() {
   for (auto& allocation : g_virtual_allocations) {
     if (!allocation.used) return &allocation;
@@ -456,23 +478,72 @@ uint32_t SparseProtectionFromXPage(uint32_t protect) {
   return result;
 }
 
-bool CommitVirtualAllocation(GuestVirtualAllocation* allocation,
-                             uint32_t protection) {
-  if (!allocation || !allocation->used || !allocation->size) return false;
-  if (allocation->committed) {
-    allocation->protection = protection;
-    return ProtectSparseGuestMemory(allocation->base,
-                                    allocation->size / kGuestPageSize,
-                                    protection);
-  }
-  const uint32_t pages = allocation->size / kGuestPageSize;
-  const uint32_t backing = AllocateSparseGuestBacking(pages);
-  if (!backing ||
-      !MapSparseGuestMemory(allocation->base, pages, backing, 0, protection)) {
+bool CommitVirtualAllocationRange(GuestVirtualAllocation* allocation,
+                                  uint32_t base, uint32_t size,
+                                  uint32_t protection) {
+  if (!allocation || !allocation->used || !size ||
+      (base & (kGuestPageSize - 1u)) || (size & (kGuestPageSize - 1u))) {
     return false;
   }
+  const uint64_t end = uint64_t(base) + size;
+  const uint64_t allocation_end = uint64_t(allocation->base) + allocation->size;
+  if (base < allocation->base || end > allocation_end) return false;
+
+  std::vector<std::pair<uint32_t, uint32_t>> newly_mapped;
+  uint32_t address = base;
+  while (uint64_t(address) < end) {
+    if (SparseGuestMemoryPageMapped(address)) {
+      if (!ProtectSparseGuestMemory(address, 1, protection)) {
+        for (auto it = newly_mapped.rbegin(); it != newly_mapped.rend(); ++it) {
+          UnmapSparseGuestMemory(it->first, it->second);
+        }
+        return false;
+      }
+      address += kGuestPageSize;
+      continue;
+    }
+
+    const uint32_t run_base = address;
+    uint32_t run_pages = 0;
+    while (uint64_t(address) < end && !SparseGuestMemoryPageMapped(address)) {
+      ++run_pages;
+      address += kGuestPageSize;
+    }
+    const uint32_t backing = AllocateSparseGuestBacking(run_pages);
+    if (!backing || !MapSparseGuestMemory(run_base, run_pages, backing, 0,
+                                          protection)) {
+      for (auto it = newly_mapped.rbegin(); it != newly_mapped.rend(); ++it) {
+        UnmapSparseGuestMemory(it->first, it->second);
+      }
+      return false;
+    }
+    newly_mapped.emplace_back(run_base, run_pages);
+  }
+
   allocation->committed = true;
   allocation->protection = protection;
+  return true;
+}
+
+bool VirtualAllocationHasMappedPages(const GuestVirtualAllocation& allocation) {
+  for (uint32_t address = allocation.base;
+       uint64_t(address) < uint64_t(allocation.base) + allocation.size;
+       address += kGuestPageSize) {
+    if (SparseGuestMemoryPageMapped(address)) return true;
+  }
+  return false;
+}
+
+bool UnmapMappedVirtualRange(uint32_t base, uint32_t size, bool* unmapped_any = nullptr) {
+  bool any = false;
+  const uint64_t end = uint64_t(base) + size;
+  for (uint32_t address = base; uint64_t(address) < end;
+       address += kGuestPageSize) {
+    if (!SparseGuestMemoryPageMapped(address)) continue;
+    if (!UnmapSparseGuestMemory(address, 1)) return false;
+    any = true;
+  }
+  if (unmapped_any) *unmapped_any = any;
   return true;
 }
 
@@ -503,8 +574,12 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
 
   uint32_t base = requested_base ? requested_base & ~(page_size - 1u) : 0u;
   GuestVirtualAllocation* allocation = nullptr;
+  bool created_reservation = false;
   if (base) {
     allocation = FindVirtualAllocation(base, adjusted_size);
+    if (!allocation) {
+      allocation = FindContainingVirtualAllocation(base, adjusted_size, page_size);
+    }
     if (!allocation) {
       const uint32_t range_begin =
           page_size == kGuestLargePageSize ? kGuestVirtual64kBase : 0x00010000u;
@@ -517,7 +592,9 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
       allocation = AcquireVirtualAllocationSlot();
       if (!allocation) return kXStatusNoMemory;
       *allocation = {true, false, base, adjusted_size, page_size, 0};
+      created_reservation = true;
     }
+    if (allocation->page_size != page_size) return kXStatusNoMemory;
   } else {
     uint32_t* bottom = page_size == kGuestLargePageSize
                            ? &g_virtual_64k_bottom
@@ -545,11 +622,13 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
     allocation = AcquireVirtualAllocationSlot();
     if (!allocation) return kXStatusNoMemory;
     *allocation = {true, false, base, adjusted_size, page_size, 0};
+    created_reservation = true;
   }
 
   if ((alloc_type & kXMemCommit) &&
-      !CommitVirtualAllocation(allocation, SparseProtectionFromXPage(protect_bits))) {
-    if (!allocation->committed) *allocation = {};
+      !CommitVirtualAllocationRange(allocation, base, adjusted_size,
+                                    SparseProtectionFromXPage(protect_bits))) {
+    if (created_reservation && !allocation->committed) *allocation = {};
     return kXStatusNoMemory;
   }
 
@@ -588,31 +667,38 @@ uint32_t NtFreeVirtualMemory(uint32_t base_addr_ptr,
     }
   }
   if (!allocation) {
+    for (auto& candidate : g_virtual_allocations) {
+      if (!candidate.used) continue;
+      const uint64_t end = uint64_t(candidate.base) + candidate.size;
+      if (base_addr_value >= candidate.base && uint64_t(base_addr_value) < end) {
+        allocation = &candidate;
+        break;
+      }
+    }
+  }
+  if (!allocation) {
     return IsGuestVirtualHeapAddress(base_addr_value)
                ? kXStatusUnsuccessful
                : kXStatusInvalidParameter;
   }
 
   if (free_type == kXMemDecommit) {
-    // Xenia permits range decommit. The browser allocator currently tracks one
-    // commit state per reservation, so only the whole reservation can be
-    // decommitted without lying about page state. Fail closed for partial
-    // decommits until per-page reservation state is introduced.
     uint32_t adjusted_size = 0;
     if (!region_size_value ||
         !RoundUpGuestSize(region_size_value, allocation->page_size,
                           &adjusted_size) ||
-        adjusted_size != allocation->size) {
+        base_addr_value < allocation->base ||
+        uint64_t(base_addr_value) + adjusted_size >
+            uint64_t(allocation->base) + allocation->size) {
       return kXStatusUnsuccessful;
     }
-    if (allocation->committed) {
-      if (!UnmapSparseGuestMemory(allocation->base,
-                                  allocation->size / kGuestPageSize)) {
-        return kXStatusUnsuccessful;
-      }
-      allocation->committed = false;
-      allocation->protection = 0;
+    bool unmapped_any = false;
+    if (!UnmapMappedVirtualRange(base_addr_value, adjusted_size, &unmapped_any) ||
+        !unmapped_any) {
+      return kXStatusUnsuccessful;
     }
+    allocation->committed = VirtualAllocationHasMappedPages(*allocation);
+    if (!allocation->committed) allocation->protection = 0;
     if (!WriteGuestBe32(base_addr_ptr, base_addr_value) ||
         !WriteGuestBe32(region_size_ptr, adjusted_size)) {
       return kXStatusInvalidParameter;
@@ -620,14 +706,14 @@ uint32_t NtFreeVirtualMemory(uint32_t base_addr_ptr,
     return kXStatusSuccess;
   }
 
-  // Match Xenia BaseHeap::Release: the supplied address must be the reservation
-  // base, the whole region is released, and RegionSize receives its real size.
-  // Upstream treats every non-DECOMMIT FreeType through the release path.
+  // Match Xenia BaseHeap::Release: release must start at the reservation base,
+  // and committed subranges are unmapped without requiring the untouched
+  // reserved pages to have sparse backing.
   (void)kXMemRelease;
+  if (base_addr_value != allocation->base) return kXStatusUnsuccessful;
   const uint32_t released_size = allocation->size;
   if (allocation->committed &&
-      !UnmapSparseGuestMemory(allocation->base,
-                              allocation->size / kGuestPageSize)) {
+      !UnmapMappedVirtualRange(allocation->base, allocation->size)) {
     return kXStatusUnsuccessful;
   }
   *allocation = {};

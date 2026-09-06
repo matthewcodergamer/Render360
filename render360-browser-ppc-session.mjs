@@ -81,6 +81,11 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   let cfgFallbackLoads=0;
   let nextCfgSlot=0;
   const cfgContinuations=new Map();
+  const compiledModuleCache=new Map();
+  const functionExecutions=new Map();
+  const hotFunctionThreshold=256;
+  let moduleCompileHits=0;
+  let moduleCompileMisses=0;
 
   const bytes=()=>new Uint8Array(memory.buffer,contextPtr,contextSize);
   const view=()=>new DataView(memory.buffer);
@@ -180,9 +185,20 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
 
     const next=new Map();
     for(const descriptor of descriptors){
-      const moduleBytes=new Uint8Array(memory.buffer,descriptor.ptr,descriptor.size).slice();
-      const module=await WebAssembly.compile(moduleBytes);
-      next.set(descriptor.address,{...descriptor,module,instance:null});
+      const cacheKey=`${descriptor.address}:${descriptor.generation}:${descriptor.size}:${descriptor.lowered}:${descriptor.tier}`;
+      let module=compiledModuleCache.get(cacheKey);
+      if(module){
+        moduleCompileHits++;
+        // Refresh LRU order without recompiling the generated guest function.
+        compiledModuleCache.delete(cacheKey);compiledModuleCache.set(cacheKey,module);
+      }else{
+        const moduleBytes=new Uint8Array(memory.buffer,descriptor.ptr,descriptor.size).slice();
+        module=await WebAssembly.compile(moduleBytes);
+        compiledModuleCache.set(cacheKey,module);
+        moduleCompileMisses++;
+        while(compiledModuleCache.size>512)compiledModuleCache.delete(compiledModuleCache.keys().next().value);
+      }
+      next.set(descriptor.address,{...descriptor,module,instance:null,cacheKey});
       if(descriptor.tier==='cfg-fallback')cfgFallbackLoads++;
     }
     const guest_call=(target,ctx)=>{
@@ -259,6 +275,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     }
     const result=BigInt.asUintN(64,rawResult);
     sliceCount++;
+    functionExecutions.set(address,(functionExecutions.get(address)??0)+1);
     return {
       address,
       generation:generationBefore,
@@ -315,13 +332,17 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     get cfgFallbackLoads(){return cfgFallbackLoads;},
     get cfgContinuationCount(){return cfgContinuations.size;},
     get functionCount(){return records.size;},
-    get functionTiers(){return [...records.values()].map(r=>({address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered}));},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
+    get moduleCompileHits(){return moduleCompileHits;},
+    get moduleCompileMisses(){return moduleCompileMisses;},
+    get compiledModuleCacheEntries(){return compiledModuleCache.size;},
+    get hotFunctionCount(){return [...functionExecutions.values()].filter(count=>count>=hotFunctionThreshold).length;},
+    get functionTiers(){return [...records.values()].map(r=>{const executionCount=functionExecutions.get(r.address)??0;return {address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered,executionCount,hot:executionCount>=hotFunctionThreshold};});},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,hotFunctionThreshold,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;
 }
 
 export function persistentPpcSessionContract(){
-  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + resumable fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',browserYield:'between completed guest functions or yielded CFG quanta',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:4096,cfgFuelExhaustionYields:true,cfgContinuationState:'per-thread status + dispatcher PC + live integer HIR locals',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false};
+  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + resumable fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,browserYield:'between completed guest functions or yielded CFG quanta',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:4096,cfgFuelExhaustionYields:true,cfgContinuationState:'per-thread status + dispatcher PC + live integer HIR locals',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false};
 }

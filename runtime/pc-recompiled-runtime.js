@@ -62,8 +62,10 @@ export async function runPcRecompiledTitle({runtime,game,source,config={},probe=
   runtime.recompiledSession=session;runtime.backend='PC RECOMPILED WASM';
   runtime.emit('bootStage',{stage:'pc-wasm-start',engine:'pc-recompiled',message:`Starting ${game.name||linked.detection.name} WebAssembly runtime…`});
   let result={};if(typeof session.start==='function')result=await session.start();else if(typeof session.run==='function')result=await session.run();else throw new Error('PC WebAssembly session must expose start() or run().');
-  host.setState({session,result:result||{},runtimeBoundary:result?.runtimeBoundary||'pc-wasm-running'});
-  return {kind:'pc-webassembly-port',platform:'pc',executionEngine:'pc-recompiled',gameId:resolvedProbe.gameId,manifest:resolvedProbe.manifest,session,result:result||{}};
+  let stopped=false;
+  const stop=()=>{if(stopped)return;stopped=true;try{return session.stop?.();}finally{if(runtime.recompiledSession===session)runtime.recompiledSession=null;runtime.resetInput?.();}};
+  host.setState({session,result:result||{},runtimeBoundary:result?.runtimeBoundary||'pc-wasm-running',stop});
+  return {kind:'pc-webassembly-port',platform:'pc',executionEngine:'pc-recompiled',gameId:resolvedProbe.gameId,manifest:resolvedProbe.manifest,session,result:result||{},stop};
 }
 
 export function installPcRecompiledRouter(Render360RuntimeClass){
@@ -75,6 +77,8 @@ export function installPcRecompiledRouter(Render360RuntimeClass){
     if(!isPcGame(game))return previousPlay.call(this,game,source,config);
     if(!this.ready||!this.core)throw new Error('Render360 core is still loading');
     if(!source)throw new Error('PC game files are not linked. Choose the PC game folder and community WebAssembly runtime again.');
+    if(this.recompiledSession?.stop)try{this.recompiledSession.stop();}catch{}
+    this.recompiledSession=null;
     this.currentGame=game;this.bindSource(game.id,source);this.resetTelemetry();
     this.inputHost.setSession({kind:30,stage:5,titleId:0});
     const probe=await probePcRecompiledTitle(game);

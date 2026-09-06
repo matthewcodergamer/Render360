@@ -1,0 +1,72 @@
+name: Enable V74 Kernel Trace
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'v74-kernel-trace.mjs'
+      - '.github/workflows/enable-v74-kernel-trace.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: enable-v74-kernel-trace
+  cancel-in-progress: true
+
+jobs:
+  wire-trace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout V74
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Keep runtime pinned to V74
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          grep -q "const VERSION='74';" render360-sw.js
+          node --check v74-kernel-trace.mjs
+
+      - name: Load diagnostic-only kernel trace
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('index.html')
+          text = path.read_text()
+          script = '<script type="module" src="v74-kernel-trace.mjs"></script>'
+          if script not in text:
+              anchor = '<script type="module" src="ui-behavior.js"></script>'
+              if anchor not in text:
+                  raise SystemExit('index.html module-script anchor not found')
+              text = text.replace(anchor, anchor + '\n' + script, 1)
+              path.write_text(text)
+          if text.count(script) != 1:
+              raise SystemExit('V74 kernel trace must be loaded exactly once')
+
+      - name: Verify no emulator semantics changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          grep -q '<script type="module" src="v74-kernel-trace.mjs"></script>' index.html
+          git diff -- VERSION render360-sw.js src/xenia_web_bootstrap runtime xenia_ppc_bootstrap.meta.json --exit-code
+
+      - name: Commit trace wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 V74 Diagnostic Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          if git diff --cached --quiet; then
+            echo 'V74 kernel trace already wired.'
+            exit 0
+          fi
+          git commit -m 'diag: load V74 kernel call trace on iPhone'
+          git pull --rebase origin main
+          git push origin HEAD:main

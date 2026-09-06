@@ -1,0 +1,62 @@
+name: Apply Render360 V73 Finalizer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/finalize-render360-v73.py'
+      - 'test-render360-version-consistency.mjs'
+      - '.github/workflows/apply-render360-v73-finalizer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render360-v73-finalizer
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Apply idempotent V73 source finalizer
+        run: python3 tools/finalize-render360-v73.py
+
+      - name: Verify finalizer source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          grep -q "const RENDER360_RELEASE=${VERSION};" runtime/render360-runtime.js
+          grep -q "const REQUIRED_CORE_BUILD=${VERSION};" runtime/render360-runtime.js
+          grep -q "const VERSION='${VERSION}';" render360-sw.js
+          grep -q 'case xe::cpu::hir::OPCODE_CNTLZ:' src/xenia_web_bootstrap/wasm_backend_call_probe.cpp
+          grep -q 'WASM_BACKEND_CALL_CNTLZ=PASS' test-wasm-backend-calls.mjs
+          grep -q "'release': int(Path('VERSION').read_text().strip())" .github/workflows/xenia-browser-bootstrap-fastlane.yml
+
+      - name: Commit finalized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'V73 finalizer is already applied.'
+            exit 0
+          fi
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          git config user.name 'Render360 Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add runtime/render360-runtime.js render360-sw.js render360-browser-title-runtime.mjs \
+            src/xenia_web_bootstrap/wasm_backend_call_probe.cpp test-wasm-backend-calls.mjs \
+            .github/workflows/xenia-browser-bootstrap-fastlane.yml
+          git commit -m "V${VERSION}: finalize callable CNTLZ and unified release contract"
+          git pull --rebase origin main
+          git push origin HEAD:main

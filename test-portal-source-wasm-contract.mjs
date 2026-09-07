@@ -7,6 +7,9 @@ const build=fs.readFileSync('recompiled/pc/portal/source-wasm/build-render360.sh
 const pre=fs.readFileSync('recompiled/pc/portal/source-wasm/render360-pre.js','utf8');
 const adapter=fs.readFileSync('recompiled/pc/portal/source-wasm/portal-package-adapter.mjs','utf8');
 const worker=fs.readFileSync('recompiled/pc/portal/source-wasm/portal-source-worker.mjs','utf8');
+const pcRuntime=fs.readFileSync('runtime/pc-recompiled-runtime.js','utf8');
+const pcLibrary=fs.readFileSync('runtime/pc-library-integration.js','utf8');
+const pcCss=fs.readFileSync('styles/pc-library-integration.css','utf8');
 
 assert.equal(manifest.schema,'render360-pc-recompiled-title-v1');
 assert.equal(manifest.gameId,'portal-1-pc');
@@ -33,16 +36,22 @@ assert.match(build,/-sEXPORT_ES6=1/);
 assert.match(build,/-sEXPORTED_RUNTIME_METHODS=FS,WORKERFS,callMain,HEAPU8/);
 assert.match(build,/Render360 Source dylib failed:/);
 assert.match(build,/readyPromiseReject\(error\)/);
+assert.match(build,/dylibBasenameFix': True/);
+assert.match(build,/workerSafeAlertShim': True/);
+assert.match(build,/directWebglPresentation': True/);
 assert.match(build,/stackGeometryRepair': True/);
 assert.match(build,/heapU8Exported': True/);
 assert.match(build,/sharedMemoryVerifiedFalse': True/);
 assert.match(build,/upstreamPthreadsRemoved': True/);
 assert.match(build,/stackZeroEndSelfHeal': True/);
-assert.match(build,/render360-single-worker-workerfs-v5-unshared-memory-stack-self-heal/);
+assert.match(build,/render360-single-worker-workerfs-v6-dylib-basename-direct-webgl/);
 assert.match(build,/not conf\.options\.EMSCRIPTEN/);
 assert.match(build,/old_shared = "\\t\\tflags \+= \['-sSHARED_MEMORY=1'/);
 assert.match(build,/imports shared WebAssembly memory/);
 assert.match(build,/Render360 Source stack metadata remained zero after stackCheckInit/);
+assert.match(build,/Render360 LoadLibrary: pModule:/);
+assert.match(build,/pBaseName = strrchr\(pModuleName, '\/'\)/);
+assert.match(build,/test -s "\$OUTPUT_DIR\/libfilesystem_stdio\.so"/);
 assert.doesNotMatch(build,/-sSTACK_OVERFLOW_CHECK=0/);
 assert.doesNotMatch(build,/-sUSE_PTHREADS/);
 assert.doesNotMatch(build,/-sPROXY_TO_PTHREAD/);
@@ -57,6 +66,9 @@ assert.doesNotMatch(pre,/chunks\//);
 assert.match(adapter,/runtimeFiles/);
 assert.match(adapter,/engineFile:pkg\.file\(ENGINE_FILE\)/);
 assert.match(adapter,/transferControlToOffscreen/);
+assert.match(adapter,/directPresentation:true/);
+assert.match(adapter,/setLookAnalog\(rx,ry\)/);
+assert.match(adapter,/setMoveAnalog\(lx,ly\)/);
 assert.match(worker,/URL\.createObjectURL/);
 assert.match(worker,/portal-dylib-preflight/);
 assert.match(worker,/WebAssembly\.validate/);
@@ -66,8 +78,26 @@ assert.match(worker,/Promise\.race/);
 assert.match(worker,/repairStackGeometry\('runtime-init'\)/);
 assert.match(worker,/repairStackGeometry\('before-callMain'\)/);
 assert.match(worker,/runtimeMemoryBytes\(\)/);
+assert.match(worker,/typeof self\.alert!=='function'/);
+assert.match(worker,/Source alert/);
 assert.doesNotMatch(worker,/memoryBytes:engine\.HEAPU8/);
 assert.match(worker,/engine\.callMain/);
+
+assert.match(pcRuntime,/inputCanvas=session\.sourceCanvas\|\|presenter\.sourceCanvas/);
+assert.match(pcRuntime,/runtime\.recompiledControllerInput=controllerInput/);
+assert.match(pcRuntime,/directWebGlPresenter/);
+assert.match(pcRuntime,/pc-presenter-bypass/);
+assert.match(pcRuntime,/WebGPU allocation skipped/);
+assert.match(pcRuntime,/if\(directPresentation\)/);
+assert.match(pcRuntime,/Portal Source WebGL2 direct presentation active/);
+assert.doesNotMatch(pcRuntime,/presenter\.start\(\);\s*let result/);
+assert.match(pcLibrary,/runtime\?\.recompiledControllerInput\|\|runtime\?\.recompiledSession/);
+assert.match(pcLibrary,/Double Back/);
+assert.match(pcLibrary,/now-lastBackTap<=550/);
+assert.match(pcLibrary,/globalThis\.render360ModernTitle\?\.stop/);
+assert.match(pcCss,/left:57%/);
+assert.match(pcCss,/backdrop-filter:blur\(14px\) saturate\(125%\)!important/);
+assert.match(pcCss,/\.controller-layer\[data-platform="pc"\] \.face/);
 
 for(const path of [
   'recompiled/pc/portal/source-wasm/portal-package-adapter.mjs',
@@ -80,11 +110,17 @@ for(const path of [
 
 console.log('PORTAL_SOURCE_UPSTREAM_PIN=PASS');
 console.log('PORTAL_SOURCE_WORKER_LOCAL_DYLIBS=PASS');
+console.log('PORTAL_SOURCE_DYLIB_BASENAME_FIX=PASS');
 console.log('PORTAL_SOURCE_DYLIB_FAIL_FAST=PASS');
+console.log('PORTAL_SOURCE_WORKER_SAFE_ERRORS=PASS');
 console.log('PORTAL_SOURCE_STACK_GEOMETRY_REPAIR=PASS');
 console.log('PORTAL_SOURCE_ZERO_STACK_END_SELF_HEAL=PASS');
 console.log('PORTAL_SOURCE_HEAP_EXPORT_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_UNSHARED_MEMORY_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_WORKERFS_ZERO_COPY_CONTRACT=PASS');
+console.log('PORTAL_SOURCE_DIRECT_WEBGL_PRESENTATION=PASS');
+console.log('PORTAL_SOURCE_WEBGPU_BYPASS=PASS');
+console.log('PORTAL_SOURCE_CONTROLLER_BRIDGE=PASS');
+console.log('PORTAL_SOURCE_DOUBLE_BACK_EXIT=PASS');
 console.log('PORTAL_SOURCE_ENGINE_ONLY_ARTIFACT_CONTRACT=PASS');
 console.log('XBOX_RUNTIME_NOT_REFERENCED_BY_PORTAL_OVERLAY=PASS');

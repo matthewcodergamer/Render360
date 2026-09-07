@@ -9,6 +9,12 @@ const log=(level,message)=>post('log',{level,message:String(message??'')});
 const normalize=value=>String(value||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
 const basename=value=>normalize(value).split('/').pop()||'';
 
+// Emscripten's browser error path may call alert(). This module always runs in
+// a dedicated Worker where alert is intentionally unavailable. Keep the real
+// Source error visible in Render360 diagnostics instead of throwing a second,
+// misleading ReferenceError from the error reporter itself.
+if(typeof self.alert!=='function')self.alert=message=>log('warn',`Source alert · ${message??''}`);
+
 function installRuntimeFiles(items){
   for(const item of Array.isArray(items)?items:[]){
     const path=normalize(item?.path),file=item?.file;
@@ -42,11 +48,6 @@ function repairStackGeometry(phase){
 }
 
 function runtimeMemoryBytes(){
-  // Older Emscripten builds install aborting getters for runtime symbols that
-  // were not listed in EXPORTED_RUNTIME_METHODS. Reading engine.HEAPU8 can
-  // therefore terminate the entire module even though this value is only
-  // telemetry. Inspect the property descriptor first and never invoke an
-  // aborting getter. New Render360 v4 packages explicitly export HEAPU8.
   try{
     const descriptor=Object.getOwnPropertyDescriptor(engine||{},'HEAPU8');
     if(descriptor&&'value' in descriptor&&descriptor.value?.buffer)return descriptor.value.buffer.byteLength||0;
@@ -87,8 +88,6 @@ async function initialize(data){
   }finally{clearTimeout(dependencyTimeout);}
   if(!engine?.FS||!engine?.WORKERFS)throw new Error('Portal Source build is missing the Emscripten FS/WORKERFS bridge.');
 
-  // Dynamic side-module constructors have completed by this point. Confirm the
-  // relocatable main module's stack limits are valid before touching game data.
   repairStackGeometry('runtime-init');
 
   const FS=engine.FS;
@@ -111,9 +110,6 @@ function run(){
   post('stage',{stage:'portal-source-main',message:'Starting Portal 1 Source engine…'});
   setTimeout(()=>{
     try{
-      // noInitialRun keeps Source idle while player-owned files are mounted.
-      // Reapply Emscripten's own exact stack limits at the last possible point
-      // before manual callMain(), preventing the 0x00000004 cookie false crash.
       repairStackGeometry('before-callMain');
       engine.callMain(launchArguments);
       post('stage',{stage:'portal-source-exit',message:'Portal Source main returned.'});

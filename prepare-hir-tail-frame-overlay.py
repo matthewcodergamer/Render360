@@ -5,6 +5,10 @@ def one(a,b,n):
  global s
  if s.count(a)!=1: raise SystemExit(f'tail frame {n}: {s.count(a)} anchors')
  s=s.replace(a,b,1)
+# Braid's 128-entry startup initialization loop legitimately exceeds the old
+# 4,096-HIR-instruction probe ceiling. Keep a hard loop guard, but give real
+# title startup enough fuel to complete bounded initialization work.
+one('constexpr uint32_t kMaxCorrectnessInstructions = 4096;\n','constexpr uint32_t kMaxCorrectnessInstructions = 65536;\n','instruction budget')
 one('constexpr uint32_t kR360MaxGuestCallDepth = 64;\n','''constexpr uint32_t kR360MaxGuestCallDepth = 64;
 thread_local std::array<uint32_t,kR360MaxGuestCallDepth> g_logical_guest_depth{};
 thread_local uint32_t g_pending_logical_depth=0;

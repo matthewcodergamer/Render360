@@ -4,6 +4,7 @@ import {persistPcRecompiledSource,restorePcRecompiledSource,pcPersistentSourceEx
 
 const $=id=>document.getElementById(id);
 let installed=false,artworkRunning=false,decorateQueued=false,persistenceTimer=0,restoring=false;
+let lastBackTap=0;
 const savingIds=new Set(),restoreAttempted=new Set();
 const isPcGame=game=>String(game?.platform||'').toLowerCase()==='pc'||Boolean(game?.pcGameId);
 const bridge=()=>globalThis.render360AppBridge||null;
@@ -24,7 +25,7 @@ async function decoratePcLibrary(){
     const shell=tile.querySelector('.cover-shell');if(shell&&!shell.querySelector('.r360-platform-corner')){const badge=document.createElement('span');badge.className='r360-platform-corner pc';badge.textContent='PC';badge.setAttribute('aria-label','PC version');shell.append(badge);}
     const meta=tile.querySelector('.game-tile-meta');if(meta)meta.dataset.platform='pc';
   });
-  const game=currentPcGame(),detail=$('detailCover');if(game&&detail&&!detail.querySelector('.r360-platform-corner')){const badge=document.createElement('span');badge.className='r360-platform-corner pc';badge.textContent='PC';detail.append(badge);}
+  const game=currentPcGame(),detail=$('detailCover');if(game&&detail&&!detail.querySelector('.r360-platform-corner')){const badge=document.createElement('span');badge.className='r360-platform-corner pc';badge.textContent='PC';badge.setAttribute('aria-label','PC version');detail.append(badge);}
 }
 function queueDecorate(){if(decorateQueued)return;decorateQueued=true;queueMicrotask(()=>decoratePcLibrary());}
 
@@ -84,27 +85,48 @@ function ensurePcLookStick(){
 }
 function pcTouchActive(){const state=document?.body?.dataset?.state;return Boolean(currentPcGame()&&['BOOTING_GAME','RUNNING','PAUSED'].includes(state));}
 function normalizedStick(zone,event){const r=zone.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,max=Math.max(1,Math.min(r.width,r.height)*.36),dx=event.clientX-cx,dy=event.clientY-cy,d=Math.hypot(dx,dy)||1,s=Math.min(1,max/d);return {x:dx*s,y:dy*s,nx:Math.max(-1,Math.min(1,dx*s/max)),ny:Math.max(-1,Math.min(1,dy*s/max))};}
+function livePcInput(){const runtime=bridge()?.runtime;return runtime?.recompiledControllerInput||runtime?.recompiledSession||null;}
 function wirePcStick(zone,side,{knob=null}={}){
   if(!zone||zone.dataset.r360PcStickWired)return;zone.dataset.r360PcStickWired='1';let pointer=null;
   const move=event=>{
     if(pointer!==event.pointerId||!pcTouchActive())return;event.preventDefault();event.stopImmediatePropagation();const pos=normalizedStick(zone,event);if(knob)knob.style.transform=`translate(${pos.x}px,${pos.y}px)`;
-    const session=bridge()?.runtime?.recompiledSession;if(side==='move')session?.setMoveAnalog?.(pos.nx,pos.ny);else session?.setLookAnalog?.(pos.nx,pos.ny);
+    const input=livePcInput();if(side==='move')input?.setMoveAnalog?.(pos.nx,pos.ny);else input?.setLookAnalog?.(pos.nx,pos.ny);
   };
   const end=event=>{
-    if(pointer!==event.pointerId)return;if(pcTouchActive()){event.preventDefault();event.stopImmediatePropagation();}pointer=null;if(knob)knob.style.transform='';const session=bridge()?.runtime?.recompiledSession;if(side==='move')session?.setMoveAnalog?.(0,0);else session?.setLookAnalog?.(0,0);
+    if(pointer!==event.pointerId)return;if(pcTouchActive()){event.preventDefault();event.stopImmediatePropagation();}pointer=null;if(knob)knob.style.transform='';const input=livePcInput();if(side==='move')input?.setMoveAnalog?.(0,0);else input?.setLookAnalog?.(0,0);
   };
   zone.addEventListener('pointerdown',event=>{if(!pcTouchActive())return;event.preventDefault();event.stopImmediatePropagation();pointer=event.pointerId;try{zone.setPointerCapture?.(pointer);}catch{}move(event);},true);
   zone.addEventListener('pointermove',move,true);zone.addEventListener('pointerup',end,true);zone.addEventListener('pointercancel',end,true);
 }
+function exitPcGameToLibrary(){
+  const runtime=bridge()?.runtime;
+  try{runtime?.setKey?.('BACK',false);}catch{}
+  try{globalThis.render360ModernTitle?.stop?.();}catch{}
+  const leave=$('leaveGameButton'),back=$('detailBack');
+  if(leave)leave.click();
+  queueMicrotask(()=>{if(back)back.click();else location.hash='';});
+  emitPersistenceLog('info','Double Back · exited game and returned to Library.');
+}
+function installDoubleBackExit(){
+  const button=document.querySelector('[data-key="BACK"]');
+  if(!button||button.dataset.r360DoubleBackExit)return;
+  button.dataset.r360DoubleBackExit='1';
+  button.addEventListener('pointerdown',event=>{
+    if(!pcTouchActive())return;
+    const now=globalThis.performance?.now?.()||Date.now();
+    if(now-lastBackTap<=550){lastBackTap=0;event.preventDefault();event.stopImmediatePropagation();exitPcGameToLibrary();return;}
+    lastBackTap=now;
+  },true);
+}
 function syncControllerPlatform(){const layer=$('controllerLayer');if(!layer)return;layer.dataset.platform=currentPcGame()?'pc':'xbox360';}
 function installPcTouchController(){
   const right=ensurePcLookStick();wirePcStick(right,'look',{knob:$('pcRightStickKnob')});
-  wirePcStick($('leftStick'),'move',{knob:$('leftStickKnob')});syncControllerPlatform();
+  wirePcStick($('leftStick'),'move',{knob:$('leftStickKnob')});installDoubleBackExit();syncControllerPlatform();
 }
 
 function bootPcLibraryIntegration(){
   if(installed||typeof document==='undefined')return;installed=true;installStyles();installPcTouchController();queueDecorate();setTimeout(hydratePcArtwork,700);schedulePcPersistence(900);
-  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();if(!$('pcRightStick'))installPcTouchController();schedulePcPersistence();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();if(!$('pcRightStick'))installPcTouchController();else installDoubleBackExit();schedulePcPersistence();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
   globalThis.addEventListener?.('render360:titleStarted',()=>{syncControllerPlatform();installPcTouchController();schedulePcPersistence(50);});
   globalThis.addEventListener?.('render360:framePresented',syncControllerPlatform);
   globalThis.addEventListener?.('pageshow',()=>schedulePcPersistence(100));

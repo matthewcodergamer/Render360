@@ -99,11 +99,11 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
   return result;
 }
 
-async function attachScheduler({bootstrap,result,onStage,config={}}){
+async function attachScheduler({bootstrap,result,onStage,config={},preparedSession=null}){
   const reset=pick(bootstrap,'r360_kernel_runtime_reset');
   if(typeof reset!=='function')throw new Error('Published browser bootstrap is missing kernel runtime reset');
   reset();
-  const ppcSession=await createBrowserTitlePpcSession({bootstrap,clearContext:true});
+  const ppcSession=preparedSession??await createBrowserTitlePpcSession({bootstrap,clearContext:true});
   if(!ppcSession.functionCount)throw new Error(`No callable generated WASM function was registered for title entry 0x${(result.entry>>>0).toString(16)}`);
   const scheduler=await createBrowserTitleThreadScheduler({bootstrap,session:ppcSession,maxSlicesPerPump:Math.max(1,Math.min(4,Number(config.schedulerQuantum||1)))});
   const primaryThread=scheduler.createThread({entry:result.entry>>>0,context:0,stackSize:0x80000,flags:0});
@@ -202,10 +202,14 @@ export async function runModernXboxContent({core,file,type,onStage=null,config={
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
 let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
 let threaded=null;
-if(Number(result.translatedFunctionCount||0)>0){
-  threaded=await attachScheduler({bootstrap,result,onStage,config});
+const generatedSession=await createBrowserTitlePpcSession({bootstrap,clearContext:true});
+if(generatedSession.functionCount>0){
+  const tiers=generatedSession.functionTiers||[];
+  const cfgCount=tiers.filter(item=>item?.tier==='cfg-fallback').length;
+  stage(onStage,'execute',`Generated-WASM session ready · ${generatedSession.functionCount} function${generatedSession.functionCount===1?'':'s'}${cfgCount?` · ${cfgCount} resumable CFG`:''}`);
+  threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
 }else{
-  console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
+  console.warn(`[Render360] Generated-WASM callable/CFG session produced 0 runnable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
   result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
 }
 if(run!==activeRun)return null;
@@ -219,4 +223,4 @@ else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.me
 return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,performance:state.performanceSample,inputKind:state.inputKind};
 }
 
-export function modernContentBridgeContract(){return {release:74,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,compiledWasmReuse:true,hotFunctionTelemetry:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,adaptivePresentationResolution:true,targetFps:30,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}
+export function modernContentBridgeContract(){return {release:74,inputs:['xex','live','pirs','con'],stfsStreamingMount:true,wholePackageCopy:false,defaultXexBounded:true,translationSideEffects:false,generatedWasmExecution:true,generatedWasmCfgFallbackRouting:true,compiledWasmReuse:true,hotFunctionTelemetry:true,nativeGuestThreadRegistry:true,cooperativeThreadScheduler:true,xenosTrafficInspection:true,realFrontbufferCapture:true,webgpuRealFrontbufferPresentation:true,adaptivePresentationResolution:true,targetFps:30,canvas2dFallback:true,pauseResume:true,nativeHirCompatibilityFallback:true};}

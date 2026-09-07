@@ -18,10 +18,8 @@ export CXX=em++
 # every Wasm object/side module. Render360 intentionally runs Portal in one
 # dedicated browser Worker without SharedArrayBuffer/cross-origin isolation.
 # Leaving the upstream flags enabled produces SIDE_MODULEs that import shared
-# memory while our MAIN_MODULE imports ordinary memory. That is an invalid
-# mixed memory model and was the real reason the previous v4 runtime could get
-# into corrupted runtime state on Safari. Patch only the pinned checkout used
-# for this build; the upstream repository itself is not modified.
+# memory while our MAIN_MODULE imports ordinary memory. Patch only the pinned
+# checkout used for this build; the upstream repository itself is not modified.
 python3 - "$SOURCE_DIR/wscript" <<'PY'
 from pathlib import Path
 import sys
@@ -39,6 +37,38 @@ text = text.replace(old_pthread, new_pthread, 1)
 text = text.replace(old_shared, new_shared, 1)
 path.write_text(text)
 print('Render360 Portal: patched upstream Emscripten profile to non-threaded/unshared memory')
+PY
+
+# The pinned community fork contains a browser-demo-only path in FindMap(): it
+# posts a request to JavaScript to download a missing map and then blocks with
+# __builtin_wasm_memory_atomic_wait32(). Render360 never uses that network map
+# downloader: the player's complete owned Portal install is already mounted by
+# WORKERFS before Source starts. Keeping this wait forces the Wasm atomics/shared
+# memory target feature and contradicts our single-worker iPhone runtime. Remove
+# only that Emscripten download/wait block from the temporary pinned checkout.
+python3 - "$SOURCE_DIR/engine/vengineserver_impl.cpp" <<'PY'
+from pathlib import Path
+import re, sys
+path = Path(sys.argv[1])
+text = path.read_text()
+pattern = re.compile(
+    r"(\tvirtual eFindMapResult FindMap\( /\* in/out \*/ char \*pMapName, int nMapNameMax \)\n\t\{\n)"
+    r"#ifdef __EMSCRIPTEN__\n.*?#endif\n",
+    re.S,
+)
+replacement = r'''\1#ifdef __EMSCRIPTEN__
+		// Render360: all player-owned Portal files are already mounted locally.
+		// Do not invoke the community demo's remote-map downloader or block this
+		// single game worker with memory.atomic.wait32.
+#endif
+'''
+updated, count = pattern.subn(replacement, text, count=1)
+if count != 1:
+    raise SystemExit('Could not locate Source FindMap Emscripten atomic-wait block')
+if '__builtin_wasm_memory_atomic_wait32(&lock, 1, -1)' in updated:
+    raise SystemExit('Render360 Portal atomic-wait removal did not apply')
+path.write_text(updated)
+print('Render360 Portal: removed remote-map atomic wait; local WORKERFS path only')
 PY
 
 python3 waf configure -T release --notests -4 --togles --emscripten \
@@ -283,6 +313,7 @@ manifest = {
         'heapU8Exported': True,
         'sharedMemoryVerifiedFalse': True,
         'upstreamPthreadsRemoved': True,
+        'remoteMapAtomicWaitRemoved': True,
     },
     'sha256': sha,
 }

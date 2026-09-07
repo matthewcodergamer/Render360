@@ -14,16 +14,25 @@ export class RuntimeHost {
   }
   async init() {
     return new Promise((resolve, reject) => {
+      let settled=false;
+      const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timeout);fn(value);};
       try { this.worker = new Worker(new URL('./runtime-worker.js', import.meta.url), {type:'module', name:'Render360Runtime'}); }
       catch (error) { reject(error); return; }
-      const timeout = setTimeout(() => reject(new Error('Runtime worker startup timed out after 30 seconds')), 30000);
+      // Mobile Safari can leave a module worker pending for a long time after a
+      // deploy/cache transition. Input is optional during app bootstrap, so do
+      // not hold the whole Library hostage for 30 seconds.
+      const timeout = setTimeout(() => {
+        try{this.worker?.terminate?.();}catch{}
+        this.worker=null;
+        finish(reject,new Error('Runtime worker startup timed out after 4 seconds'));
+      }, 4000);
       this.worker.onmessage = (event) => {
         const msg = event.data || {};
-        if (msg.type === 'ready') {clearTimeout(timeout);this.ready=true;this.log('ok',`WASM runtime worker active · V${msg.build} · ABI 0x${(msg.abi>>>0).toString(16).padStart(8,'0')}`);resolve(msg);}
+        if (msg.type === 'ready') {this.ready=true;this.log('ok',`WASM runtime worker active · V${msg.build} · ABI 0x${(msg.abi>>>0).toString(16).padStart(8,'0')}`);finish(resolve,msg);}
         else if(msg.type==='stats')this.onStats?.(msg);
         else if(msg.type==='error')this.log('error',`Runtime worker: ${msg.message}`);
       };
-      this.worker.onerror=(event)=>{clearTimeout(timeout);const error=new Error(event.message||'Runtime worker failed');if(!this.ready)reject(error);else this.log('error',error.message)};
+      this.worker.onerror=(event)=>{const error=new Error(event.message||'Runtime worker failed');if(!this.ready)finish(reject,error);else this.log('error',error.message)};
     });
   }
   setKey(key, pressed) {

@@ -56,7 +56,9 @@ if(guardStatus!==2&&guardStatus!==0xE003)throw new Error(`guard-rejected scan re
 console.log('PPC_SCAN_DIAGNOSTIC_GUARD=PASS');
 
 const probeSource=fs.readFileSync('src/xenia_web_bootstrap/ppc_translation_probe.cpp','utf8');
-for(const token of ['kProbeScanScannerFailed','kProbeScanDefineFailed','kProbeScanZeroHIR','g_scan_function_end = function.end_address();','g_status = kProbeErrorTranslate;'])if(!probeSource.includes(token))throw new Error(`missing scan source contract ${token}`);
+const compactProbeSource=probeSource.replace(/\s+/g,'');
+for(const token of ['kProbeScanScannerFailed','kProbeScanDefineFailed','kProbeScanZeroHIR'])if(!probeSource.includes(token))throw new Error(`missing scan source contract ${token}`);
+for(const token of ['g_scan_function_end=function.end_address();','g_status=kProbeErrorTranslate;'])if(!compactProbeSource.includes(token))throw new Error(`missing scan source contract ${token}`);
 const controller=fs.readFileSync('render360-title-controller.mjs','utf8');
 for(const token of ['scanner-failed','define-function-failed','zero-hir','scanFunctionEnd','assembledFunctions','hirBlocks','R360_TITLE_ENTRY_HANDOFF_FAILED','ppc-entry-translation-failure'])if(!controller.includes(token))throw new Error(`missing title-controller diagnostic ${token}`);
 const bridge=fs.readFileSync('render360-browser-modern-content-bridge.mjs','utf8');

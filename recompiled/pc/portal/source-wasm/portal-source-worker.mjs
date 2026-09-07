@@ -41,6 +41,19 @@ function repairStackGeometry(phase){
   return state;
 }
 
+function runtimeMemoryBytes(){
+  // Older Emscripten builds install aborting getters for runtime symbols that
+  // were not listed in EXPORTED_RUNTIME_METHODS. Reading engine.HEAPU8 can
+  // therefore terminate the entire module even though this value is only
+  // telemetry. Inspect the property descriptor first and never invoke an
+  // aborting getter. New Render360 v4 packages explicitly export HEAPU8.
+  try{
+    const descriptor=Object.getOwnPropertyDescriptor(engine||{},'HEAPU8');
+    if(descriptor&&'value' in descriptor&&descriptor.value?.buffer)return descriptor.value.buffer.byteLength||0;
+  }catch{}
+  return 0;
+}
+
 async function initialize(data){
   if(initialized)return;
   if(!data?.engineFile)throw new Error('Portal Source engine module is missing from the runtime package.');
@@ -87,7 +100,7 @@ async function initialize(data){
     '-game','portal','-noip','-language','english','-windowed','+mat_hdr_level','0'
   ];
   initialized=true;
-  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:engine.HEAPU8?.buffer?.byteLength||0,stackEnd:engine.render360StackGeometry?.end||0});
+  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:runtimeMemoryBytes(),stackEnd:engine.render360StackGeometry?.end||0});
 }
 
 function run(){

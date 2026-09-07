@@ -80,21 +80,30 @@ export async function createRender360PcPort(host){
   const readyState=await ready;
   host.emitStage?.({stage:'portal-source-ready',message:`Portal Source Wasm ready · ${readyState.fileCount||files.length} local files mounted without copying the whole install into Wasm memory`});
 
+  const input=()=>host.controllerInput||host.runtime?.recompiledControllerInput||null;
   return {
     worker,
     sourceCanvas,
+    directPresentation:true,
+    renderer:'WebGL2',
     async start(){
       if(stopped)throw new Error('Portal Source session was stopped.');
-      if(started)return {runtimeBoundary:'portal-source-wasm-running',alreadyStarted:true};
+      if(started)return {runtimeBoundary:'portal-source-wasm-running',alreadyStarted:true,renderer:'WebGL2',directPresentation:true};
       started=true;
       worker.postMessage({type:'run'});
-      return {runtimeBoundary:'portal-source-wasm-running',renderer:'WebGL2',contentMount:'WORKERFS',threadProfile:'single-worker'};
+      return {runtimeBoundary:'portal-source-wasm-running',renderer:'WebGL2',contentMount:'WORKERFS',threadProfile:'single-worker',directPresentation:true};
     },
-    pause(){return false;},
-    resume(){return false;},
+    setKey(key,pressed){return input()?.setKey?.(key,pressed)??false;},
+    setAnalog(lx,ly,rx,ry){return input()?.setAnalog?.(lx,ly,rx,ry)??false;},
+    setMoveAnalog(lx,ly){return input()?.setMoveAnalog?.(lx,ly)??false;},
+    setLookAnalog(rx,ry){return input()?.setLookAnalog?.(rx,ry)??false;},
+    resetInput(){return input()?.resetInput?.()??false;},
+    pause(){input()?.pause?.();return false;},
+    resume(){input()?.resume?.();return false;},
     stop(){
       if(stopped)return true;
       stopped=true;
+      input()?.resetInput?.();
       worker.terminate();
       sourceCanvas.remove();
       return true;

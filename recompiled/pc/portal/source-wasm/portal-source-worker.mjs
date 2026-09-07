@@ -30,6 +30,17 @@ async function preflightRuntimeFiles(){
   post('stage',{stage:'portal-dylib-preflight-complete',message:`Source WebAssembly modules accessible · ${done} checked`,detail:{done,total:unique.size}});
 }
 
+function repairStackGeometry(phase){
+  const repair=engine?.render360RepairStackGeometry;
+  if(typeof repair!=='function')throw new Error('Portal Source runtime is missing the Render360 Emscripten stack-geometry repair. Build a new runtime ZIP.');
+  const state=repair();
+  const end=Number(state?.end||0)>>>0;
+  if(!end)throw new Error('Portal Source Emscripten stack end is zero after repair. Refusing to start with an invalid stack cookie address.');
+  const endHex=`0x${end.toString(16).padStart(8,'0')}`;
+  post('stage',{stage:'portal-stack-geometry',message:`Source Emscripten stack geometry ready · end ${endHex}`,detail:{phase,end,endHex}});
+  return state;
+}
+
 async function initialize(data){
   if(initialized)return;
   if(!data?.engineFile)throw new Error('Portal Source engine module is missing from the runtime package.');
@@ -63,6 +74,10 @@ async function initialize(data){
   }finally{clearTimeout(dependencyTimeout);}
   if(!engine?.FS||!engine?.WORKERFS)throw new Error('Portal Source build is missing the Emscripten FS/WORKERFS bridge.');
 
+  // Dynamic side-module constructors have completed by this point. Confirm the
+  // relocatable main module's stack limits are valid before touching game data.
+  repairStackGeometry('runtime-init');
+
   const FS=engine.FS;
   try{FS.mkdir('/render360-game');}catch{}
   FS.mount(engine.WORKERFS,{blobs:files},'/render360-game');
@@ -72,7 +87,7 @@ async function initialize(data){
     '-game','portal','-noip','-language','english','-windowed','+mat_hdr_level','0'
   ];
   initialized=true;
-  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:engine.HEAPU8?.buffer?.byteLength||0});
+  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:engine.HEAPU8?.buffer?.byteLength||0,stackEnd:engine.render360StackGeometry?.end||0});
 }
 
 function run(){
@@ -83,6 +98,10 @@ function run(){
   post('stage',{stage:'portal-source-main',message:'Starting Portal 1 Source engine…'});
   setTimeout(()=>{
     try{
+      // noInitialRun keeps Source idle while player-owned files are mounted.
+      // Reapply Emscripten's own exact stack limits at the last possible point
+      // before manual callMain(), preventing the 0x00000004 cookie false crash.
+      repairStackGeometry('before-callMain');
       engine.callMain(launchArguments);
       post('stage',{stage:'portal-source-exit',message:'Portal Source main returned.'});
     }catch(error){

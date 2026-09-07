@@ -38,7 +38,7 @@ emcc \
   -sINITIAL_MEMORY=384mb -sMAXIMUM_MEMORY=1536mb -sALLOW_MEMORY_GROWTH=1 \
   -sFULL_ES3 -sSTACK_SIZE=4mb -sENVIRONMENT=worker \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createPortalSourceModule \
-  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,WORKERFS,callMain \
+  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,WORKERFS,callMain,HEAPU8 \
   -sOFFSCREENCANVAS_SUPPORT=1 -sEXIT_RUNTIME=0 \
   -lworkerfs.js \
   --pre-js "$OVERLAY_DIR/render360-pre.js" \
@@ -132,7 +132,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v3-stack-geometry-repair',
+        'profile': 'render360-single-worker-workerfs-v4-heap-export-stack-repair',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -147,6 +147,7 @@ manifest = {
         'stackGeometryRepair': True,
         'stackRepairAfterRuntimeInit': True,
         'stackRepairBeforeCallMain': True,
+        'heapU8Exported': True,
     },
     'sha256': sha,
 }

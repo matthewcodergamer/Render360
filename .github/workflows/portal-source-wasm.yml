@@ -133,7 +133,9 @@ jobs:
           test -s build/portal-source-runtime/portal-package-adapter.mjs
           test -s build/portal-source-runtime/portal-source-worker.mjs
           grep -q 'Render360 Source dylib failed:' build/portal-source-runtime/portal-source-engine.mjs
-          node -e "const m=require('./build/portal-source-runtime/render360-port.json'); if(m.gameId!=='portal-1-pc'||m.content?.retailAssetsBundled!==false||m.requirements?.threads!==false||m.diagnostics?.workerLocalObjectUrls!==true||m.diagnostics?.dylibFailFast!==true) process.exit(1)"
+          grep -q 'render360RepairStackGeometry' build/portal-source-runtime/portal-source-engine.mjs
+          grep -q "repairStackGeometry('before-callMain')" build/portal-source-runtime/portal-source-worker.mjs
+          node -e "const m=require('./build/portal-source-runtime/render360-port.json'); if(m.gameId!=='portal-1-pc'||m.content?.retailAssetsBundled!==false||m.requirements?.threads!==false||m.diagnostics?.workerLocalObjectUrls!==true||m.diagnostics?.dylibFailFast!==true||m.diagnostics?.stackGeometryRepair!==true||m.diagnostics?.stackRepairAfterRuntimeInit!==true||m.diagnostics?.stackRepairBeforeCallMain!==true) process.exit(1)"
           if find build/portal-source-runtime -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.vtf' -o -iname '*.vmt' \) -print -quit | grep -q .; then
             echo 'Retail game data entered the Portal engine package.' >&2
             exit 1

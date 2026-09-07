@@ -12,6 +12,12 @@ const BASE_EXPORTS=['memory','r360_build_version','r360_abi_version','r360_featu
 function decodeBase64(s){const bin=globalThis.atob(s),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
 async function gunzip(bytes){if(typeof DecompressionStream!=='function')throw new Error('Browser DecompressionStream is unavailable');const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));return new Uint8Array(await new Response(stream).arrayBuffer());}
 function validateInstance(instance,label){const e=instance?.exports||{};const missing=BASE_EXPORTS.filter(name=>name==='memory'?!e.memory:typeof e[name]!=='function');if(missing.length)throw new Error(`${label} core is missing required ABI exports: ${missing.join(', ')}`);return instance;}
+async function fetchWithTimeout(url,{timeoutMs=4500,...options}={}){
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(new Error(`core fetch timed out after ${timeoutMs} ms`)),timeoutMs);
+  try{return await fetch(url,{...options,signal:controller.signal});}
+  finally{clearTimeout(timeout);}
+}
 
 export class Render360Core {
   constructor(url='./render360_xenia_core.wasm') { this.url=url; this.instance=null; this.exports=null; this.source='none'; this.networkError=null; }
@@ -19,7 +25,7 @@ export class Render360Core {
   async init() {
     let result=null,networkError=null,embeddedError=null;
     try{
-      const response=await fetch(this.url,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const response=await fetchWithTimeout(this.url,{cache:'no-store',timeoutMs:4500});if(!response.ok)throw new Error(`HTTP ${response.status}`);
       try{result=await WebAssembly.instantiateStreaming(response.clone(),{});}catch{result=await WebAssembly.instantiate(await response.arrayBuffer(),{});}
       validateInstance(result.instance,'Network');this.source='network';
     }catch(error){networkError=error;result=null;}

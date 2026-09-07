@@ -6,21 +6,29 @@ on:
     paths:
       - 'recompiled/pc/portal/**'
       - 'runtime/pc-recompiled-ui.js'
+      - 'runtime/pc-recompiled-runtime.js'
+      - 'runtime/pc-controller-input.js'
       - 'runtime/pc-library-integration.js'
       - 'runtime/community-wasm-package.js'
       - 'runtime/pc-content-source.js'
+      - 'styles/pc-library-integration.css'
       - 'storage/pc-persistent-storage.js'
       - 'docs/recompile/PORTAL1_SOURCE_WASM.md'
       - 'test-portal-source-wasm-contract.mjs'
+      - 'test-pc-recompiled-runtime.mjs'
       - 'test-pc-persistent-storage.mjs'
       - '.github/workflows/portal-source-wasm.yml'
   pull_request:
     branches: [main]
     paths:
       - 'recompiled/pc/portal/**'
+      - 'runtime/pc-recompiled-runtime.js'
+      - 'runtime/pc-controller-input.js'
       - 'runtime/pc-library-integration.js'
+      - 'styles/pc-library-integration.css'
       - 'storage/pc-persistent-storage.js'
       - 'test-portal-source-wasm-contract.mjs'
+      - 'test-pc-recompiled-runtime.mjs'
       - 'test-pc-persistent-storage.mjs'
       - '.github/workflows/portal-source-wasm.yml'
   workflow_dispatch:
@@ -60,9 +68,12 @@ jobs:
           test "$(tr -d '[:space:]' < VERSION)" = '74'
           node --check recompiled/pc/portal/source-wasm/portal-package-adapter.mjs
           node --check recompiled/pc/portal/source-wasm/portal-source-worker.mjs
+          node --check runtime/pc-recompiled-runtime.js
+          node --check runtime/pc-controller-input.js
           node --check runtime/pc-library-integration.js
           node --check storage/pc-persistent-storage.js
           node ./test-portal-source-wasm-contract.mjs
+          node ./test-pc-recompiled-runtime.mjs
           node ./test-pc-persistent-storage.mjs
           bash -n recompiled/pc/portal/source-wasm/build-render360.sh
           git diff --check
@@ -132,10 +143,13 @@ jobs:
           test -s build/portal-source-runtime/portal-source-engine.wasm
           test -s build/portal-source-runtime/portal-package-adapter.mjs
           test -s build/portal-source-runtime/portal-source-worker.mjs
+          test -s build/portal-source-runtime/libfilesystem_stdio.so
           grep -q 'Render360 Source dylib failed:' build/portal-source-runtime/portal-source-engine.mjs
           grep -q 'render360RepairStackGeometry' build/portal-source-runtime/portal-source-engine.mjs
           grep -q "repairStackGeometry('before-callMain')" build/portal-source-runtime/portal-source-worker.mjs
-          node -e "const m=require('./build/portal-source-runtime/render360-port.json'); if(m.gameId!=='portal-1-pc'||m.content?.retailAssetsBundled!==false||m.requirements?.threads!==false||m.diagnostics?.workerLocalObjectUrls!==true||m.diagnostics?.dylibFailFast!==true||m.diagnostics?.stackGeometryRepair!==true||m.diagnostics?.stackRepairAfterRuntimeInit!==true||m.diagnostics?.stackRepairBeforeCallMain!==true) process.exit(1)"
+          grep -q "typeof self.alert!=='function'" build/portal-source-runtime/portal-source-worker.mjs
+          grep -q 'directPresentation:true' build/portal-source-runtime/portal-package-adapter.mjs
+          node -e "const m=require('./build/portal-source-runtime/render360-port.json'); if(m.gameId!=='portal-1-pc'||m.content?.retailAssetsBundled!==false||m.requirements?.threads!==false||m.diagnostics?.workerLocalObjectUrls!==true||m.diagnostics?.dylibFailFast!==true||m.diagnostics?.dylibBasenameFix!==true||m.diagnostics?.workerSafeAlertShim!==true||m.diagnostics?.stackGeometryRepair!==true||m.diagnostics?.stackRepairAfterRuntimeInit!==true||m.diagnostics?.stackRepairBeforeCallMain!==true||m.diagnostics?.directWebglPresentation!==true) process.exit(1)"
           if find build/portal-source-runtime -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.vtf' -o -iname '*.vmt' \) -print -quit | grep -q .; then
             echo 'Retail game data entered the Portal engine package.' >&2
             exit 1

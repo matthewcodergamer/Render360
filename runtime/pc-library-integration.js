@@ -8,7 +8,8 @@ let lastBackTap=0;
 const savingIds=new Set(),restoreAttempted=new Set();
 const isPcGame=game=>String(game?.platform||'').toLowerCase()==='pc'||Boolean(game?.pcGameId);
 const bridge=()=>globalThis.render360AppBridge||null;
-const currentPcGame=()=>{const game=bridge()?.getCurrentGame?.();return isPcGame(game)?game:null;};
+const currentGame=()=>bridge()?.getCurrentGame?.()||null;
+const currentPcGame=()=>{const game=currentGame();return isPcGame(game)?game:null;};
 
 function installStyles(){
   if(typeof document==='undefined'||document.querySelector('link[data-r360-pc-library]'))return;
@@ -84,6 +85,7 @@ function ensurePcLookStick(){
   zone=document.createElement('div');zone.id='pcRightStick';zone.className='r360-pc-look-stick';zone.innerHTML='<div id="pcRightStickKnob" class="r360-pc-look-knob"></div><span>LOOK</span>';layer.append(zone);return zone;
 }
 function pcTouchActive(){const state=document?.body?.dataset?.state;return Boolean(currentPcGame()&&['BOOTING_GAME','RUNNING','PAUSED'].includes(state));}
+function gameSessionActive(){const state=document?.body?.dataset?.state;return Boolean(currentGame()&&['BOOTING_GAME','RUNNING','PAUSED'].includes(state));}
 function normalizedStick(zone,event){const r=zone.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,max=Math.max(1,Math.min(r.width,r.height)*.36),dx=event.clientX-cx,dy=event.clientY-cy,d=Math.hypot(dx,dy)||1,s=Math.min(1,max/d);return {x:dx*s,y:dy*s,nx:Math.max(-1,Math.min(1,dx*s/max)),ny:Math.max(-1,Math.min(1,dy*s/max))};}
 function livePcInput(){const runtime=bridge()?.runtime;return runtime?.recompiledControllerInput||runtime?.recompiledSession||null;}
 function wirePcStick(zone,side,{knob=null}={}){
@@ -98,7 +100,7 @@ function wirePcStick(zone,side,{knob=null}={}){
   zone.addEventListener('pointerdown',event=>{if(!pcTouchActive())return;event.preventDefault();event.stopImmediatePropagation();pointer=event.pointerId;try{zone.setPointerCapture?.(pointer);}catch{}move(event);},true);
   zone.addEventListener('pointermove',move,true);zone.addEventListener('pointerup',end,true);zone.addEventListener('pointercancel',end,true);
 }
-function exitPcGameToLibrary(){
+function exitGameToLibrary(){
   const runtime=bridge()?.runtime;
   try{runtime?.setKey?.('BACK',false);}catch{}
   try{globalThis.render360ModernTitle?.stop?.();}catch{}
@@ -112,9 +114,9 @@ function installDoubleBackExit(){
   if(!button||button.dataset.r360DoubleBackExit)return;
   button.dataset.r360DoubleBackExit='1';
   button.addEventListener('pointerdown',event=>{
-    if(!pcTouchActive())return;
+    if(!gameSessionActive())return;
     const now=globalThis.performance?.now?.()||Date.now();
-    if(now-lastBackTap<=550){lastBackTap=0;event.preventDefault();event.stopImmediatePropagation();exitPcGameToLibrary();return;}
+    if(now-lastBackTap<=550){lastBackTap=0;event.preventDefault();event.stopImmediatePropagation();exitGameToLibrary();return;}
     lastBackTap=now;
   },true);
 }

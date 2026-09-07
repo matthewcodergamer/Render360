@@ -71,6 +71,65 @@ path.write_text(updated)
 print('Render360 Portal: removed remote-map atomic wait; local WORKERFS path only')
 PY
 
+# Source's Emscripten Sys_LoadModule sanitizer assumes every module path starts
+# with /bin/lib. With Render360's WORKERFS cwd, Source can pass an absolute path
+# such as /render360-game/bin/filesystem_stdio.so. The old prefix-eating logic
+# stripped only the first slash and then prepended "lib" to the entire remainder,
+# yielding the impossible path librender360-game/bin/filesystem_stdio.so. Dynamic
+# SIDE_MODULEs live in the engine runtime package and are located by filename, so
+# normalize to the basename before adding the conventional lib prefix.
+python3 - "$SOURCE_DIR/tier1/interface.cpp" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '''\tchar szModuleName[1024] = { 0 };
+\tchar fmtBuf[1024] = "lib%s";
+
+#define EAT(prefix) if(strncmp(pModuleName, prefix, strlen(prefix)) == 0) pModuleName += strlen(prefix)
+\tEAT("/"); EAT("bin"); EAT("/"); EAT("lib");
+#undef EAT
+
+\tif(!string_endsWith(pModuleName, ".so")) {
+\t\tstrcat(fmtBuf, ".so");
+\t}
+
+\tQ_snprintf(szModuleName, sizeof(szModuleName), fmtBuf, pModuleName);
+\tMsg("LoadLibrary: path: %s\\n", szModuleName);
+
+\thDLL = (HMODULE)dlopen( szModuleName, RTLD_NOW );
+'''
+new = '''\tchar szModuleName[1024] = { 0 };
+\tconst char *pBaseName = strrchr(pModuleName, '/');
+\tif(!pBaseName) pBaseName = strrchr(pModuleName, '\\\\');
+\tpBaseName = pBaseName ? pBaseName + 1 : pModuleName;
+
+\tchar szBaseName[1024] = { 0 };
+\tQ_strncpy(szBaseName, pBaseName, sizeof(szBaseName));
+\tif(!string_endsWith(szBaseName, ".so")) {
+\t\tstrcat(szBaseName, ".so");
+\t}
+
+\tif(strncmp(szBaseName, "lib", 3) == 0) {
+\t\tQ_strncpy(szModuleName, szBaseName, sizeof(szModuleName));
+\t} else {
+\t\tQ_snprintf(szModuleName, sizeof(szModuleName), "lib%s", szBaseName);
+\t}
+\tMsg("Render360 LoadLibrary: pModule: %s, file: %s\\n", pModuleName, szModuleName);
+
+\thDLL = (HMODULE)dlopen( szModuleName, RTLD_NOW );
+'''
+if old not in text:
+    raise SystemExit('Could not locate Source Emscripten Sys_LoadModule path sanitizer')
+updated = text.replace(old, new, 1)
+if 'librender360-game/bin/' in updated:
+    raise SystemExit('Unexpected hard-coded bad Render360 dylib path remains')
+if 'Render360 LoadLibrary: pModule:' not in updated:
+    raise SystemExit('Render360 dylib basename patch did not apply')
+path.write_text(updated)
+print('Render360 Portal: patched Emscripten Sys_LoadModule to load SIDE_MODULEs by basename')
+PY
+
 python3 waf configure -T release --notests -4 --togles --emscripten \
   --disable-warns --build-games=portal --prefix=build/install
 python3 waf install
@@ -190,6 +249,11 @@ if find "$OUTPUT_DIR" -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.v
   exit 1
 fi
 
+# This module is the first dylib Source requests during Portal startup. Its
+# presence makes the basename-path contract concrete instead of relying on a
+# generic "some .so exists" package check.
+test -s "$OUTPUT_DIR/libfilesystem_stdio.so"
+
 # Binary contract check: every runtime module must use the same unshared memory
 # model as the single-worker main module. WebAssembly.validate() alone does not
 # catch a shared-vs-unshared import mismatch because each file is valid in
@@ -294,7 +358,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v5-unshared-memory-stack-self-heal',
+        'profile': 'render360-single-worker-workerfs-v6-dylib-basename-direct-webgl',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -306,6 +370,8 @@ manifest = {
         'workerLocalObjectUrls': True,
         'dylibPreflight': True,
         'dylibFailFast': True,
+        'dylibBasenameFix': True,
+        'workerSafeAlertShim': True,
         'stackGeometryRepair': True,
         'stackRepairAfterRuntimeInit': True,
         'stackRepairBeforeCallMain': True,
@@ -314,6 +380,7 @@ manifest = {
         'sharedMemoryVerifiedFalse': True,
         'upstreamPthreadsRemoved': True,
         'remoteMapAtomicWaitRemoved': True,
+        'directWebglPresentation': True,
     },
     'sha256': sha,
 }

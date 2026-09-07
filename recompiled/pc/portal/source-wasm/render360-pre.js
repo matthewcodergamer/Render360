@@ -10,13 +10,45 @@ Module['render360SourceRuntime'] = Object.freeze({
   contentMode: 'player-owned-local-files',
   remoteRetailChunks: false,
   stackRepairVersion: 4,
+  zeroStackCookieSelfHeal: true,
 });
 
-// Emscripten MAIN_MODULE is relocatable. Source side-module constructors can
-// run after Emscripten's first stackCheckInit() and overwrite the relocatable
-// stack-limit globals. The characteristic false-overflow symptom is a stack
-// cookie check at 0x00000004 because emscripten_stack_get_end() became zero.
+// The generated Emscripten MAIN_MODULE is relocatable. Its exact link-time
+// stack geometry for this build is installed by stackCheckInit(). Source's
+// dynamically loaded modules can later leave emscripten_stack_get_end() at
+// zero. Emscripten's own checkStackCookie() special-cases zero by checking
+// address 0x00000004, which is the exact false "Stack overflow" signature we
+// see on iOS. Repairing only before callMain() is therefore not enough: Source
+// can invalidate the limit after entering main / the SDL main loop.
 //
+// Wrap Emscripten's generated checker itself. If its stack-end metadata has
+// become zero, re-run the generated stackCheckInit() immediately before the
+// check, then run the original checker normally. This does NOT disable stack
+// checking. A real overwrite at the real stack end is still detected by the
+// original Emscripten cookie checker.
+const render360OriginalCheckStackCookie = checkStackCookie;
+checkStackCookie = () => {
+  if (!ABORT && typeof _emscripten_stack_get_end === 'function') {
+    let end = Number(_emscripten_stack_get_end()) >>> 0;
+    if (!end) {
+      if (typeof stackCheckInit !== 'function') {
+        throw new Error('Render360 cannot recover zero Emscripten stack end: stackCheckInit() is unavailable.');
+      }
+      stackCheckInit();
+      end = Number(_emscripten_stack_get_end()) >>> 0;
+      if (!end) {
+        throw new Error('Render360 recovered the Emscripten stack cookie, but stack end is still zero.');
+      }
+      Module['render360ZeroStackRepairs'] = (Number(Module['render360ZeroStackRepairs']) || 0) + 1;
+      Module['render360OnZeroStackRepair']?.({
+        count: Module['render360ZeroStackRepairs'],
+        end,
+      });
+    }
+  }
+  return render360OriginalCheckStackCookie();
+};
+
 // Re-run Emscripten's generated stack initializer after dynamic-library
 // constructors and again immediately before manual callMain(). We never guess
 // a stack address, disable the cookie, write the zero page, or enlarge the
@@ -54,6 +86,7 @@ Module['render360RepairStackGeometry'] = (phase = 'unspecified') => {
     end,
     bytes: (base - end) >>> 0,
     heapBytes,
+    zeroStackRepairs: Number(Module['render360ZeroStackRepairs']) || 0,
   });
   Module['render360StackGeometry'] = state;
   return state;

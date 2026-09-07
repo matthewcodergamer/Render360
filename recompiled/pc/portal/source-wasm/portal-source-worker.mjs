@@ -4,6 +4,7 @@ let initialized=false;
 let running=false;
 let lastRuntimeLog='';
 const runtimeObjectUrls=new Map();
+const runtimeBlobs=new Map();
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
 const log=(level,message)=>{lastRuntimeLog=String(message??'');post('log',{level,message:lastRuntimeLog});};
@@ -34,9 +35,11 @@ function installRuntimeFiles(items){
   for(const item of Array.isArray(items)?items:[]){
     const path=normalize(item?.path),file=item?.file;
     if(!path||!(file instanceof Blob))continue;
+    const base=basename(path);
     const type=/\.m?js$/i.test(path)?'text/javascript':/\.(?:wasm|so)$/i.test(path)?'application/wasm':file.type||'application/octet-stream';
     const url=URL.createObjectURL(new Blob([file],{type}));
-    runtimeObjectUrls.set(path,url);runtimeObjectUrls.set(basename(path),url);
+    runtimeObjectUrls.set(path,url);runtimeObjectUrls.set(base,url);
+    runtimeBlobs.set(path,file);runtimeBlobs.set(base,file);
   }
 }
 function runtimeLocator(name){const clean=normalize(name);return runtimeObjectUrls.get(clean)||runtimeObjectUrls.get(basename(clean))||name;}
@@ -49,6 +52,30 @@ async function preflightRuntimeFiles(){
     const bytes=await response.arrayBuffer();if(!WebAssembly.validate(bytes))throw new Error(`Portal runtime file ${path} is not valid WebAssembly.`);done++;
   }
   post('stage',{stage:'portal-dylib-preflight-complete',message:`Source WebAssembly modules accessible · ${done} checked`,detail:{done,total:unique.size}});
+}
+
+async function stageDynamicLibrariesIntoFs(FS){
+  // Emscripten's synchronous dlopen path is much more reliable on Safari when
+  // the SIDE_MODULE bytes already exist in its virtual filesystem. Object-URL
+  // locateFile() works for startup loading, but Source later calls dlopen() from
+  // C synchronously (first for filesystem_stdio.so). On iOS that boundary can
+  // otherwise stall inside the browser loader. Put each runtime .so beside the
+  // mounted game root before callMain() so dlopen can resolve it synchronously
+  // without another network/blob fetch.
+  let staged=0;
+  const seen=new Set();
+  for(const [path,file] of runtimeBlobs){
+    const base=basename(path);
+    if(!/\.so$/i.test(base)||seen.has(base)||!(file instanceof Blob))continue;
+    seen.add(base);
+    const target=`/render360-game/${base}`;
+    post('stage',{stage:'portal-dylib-stage',message:`Staging Source runtime module for Safari dlopen · ${base}`,detail:{base,staged,total:seen.size}});
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    try{FS.unlink(target);}catch{}
+    FS.writeFile(target,bytes,{canOwn:true});
+    staged++;
+  }
+  post('stage',{stage:'portal-dylib-stage-complete',message:`Source runtime modules staged for synchronous dlopen · ${staged} ready`,detail:{staged}});
 }
 
 function repairStackGeometry(phase){
@@ -108,6 +135,7 @@ async function initialize(data){
   const FS=engine.FS;
   try{FS.mkdir('/render360-game');}catch{}
   FS.mount(engine.WORKERFS,{blobs:files},'/render360-game');
+  await stageDynamicLibrariesIntoFs(FS);
   FS.chdir('/render360-game');
 
   launchArguments=Array.isArray(data.arguments)&&data.arguments.length?data.arguments:[

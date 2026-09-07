@@ -32,10 +32,17 @@ assert.match(build,/-sMODULARIZE=1/);
 assert.match(build,/-sEXPORT_ES6=1/);
 assert.match(build,/Render360 Source dylib failed:/);
 assert.match(build,/readyPromiseReject\(error\)/);
+assert.match(build,/stackGeometryRepair': True/);
+assert.match(build,/render360-single-worker-workerfs-v3-stack-geometry-repair/);
+assert.doesNotMatch(build,/-sSTACK_OVERFLOW_CHECK=0/);
 assert.doesNotMatch(build,/-sUSE_PTHREADS/);
 assert.doesNotMatch(build,/-sPROXY_TO_PTHREAD/);
 
 assert.match(pre,/remoteRetailChunks:\s*false/);
+assert.match(pre,/render360RepairStackGeometry/);
+assert.match(pre,/stackCheckInit\(\)/);
+assert.match(pre,/_emscripten_stack_get_end/);
+assert.match(pre,/onRuntimeInitialized/);
 assert.doesNotMatch(pre,/XMLHttpRequest/);
 assert.doesNotMatch(pre,/chunks\//);
 assert.match(adapter,/runtimeFiles/);
@@ -47,6 +54,8 @@ assert.match(worker,/WebAssembly\.validate/);
 assert.match(worker,/FS\.mount\(engine\.WORKERFS/);
 assert.match(worker,/FS\.chdir\('\/render360-game'\)/);
 assert.match(worker,/Promise\.race/);
+assert.match(worker,/repairStackGeometry\('runtime-init'\)/);
+assert.match(worker,/repairStackGeometry\('before-callMain'\)/);
 assert.match(worker,/engine\.callMain/);
 
 for(const path of [
@@ -61,6 +70,7 @@ for(const path of [
 console.log('PORTAL_SOURCE_UPSTREAM_PIN=PASS');
 console.log('PORTAL_SOURCE_WORKER_LOCAL_DYLIBS=PASS');
 console.log('PORTAL_SOURCE_DYLIB_FAIL_FAST=PASS');
+console.log('PORTAL_SOURCE_STACK_GEOMETRY_REPAIR=PASS');
 console.log('PORTAL_SOURCE_WORKERFS_ZERO_COPY_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_ENGINE_ONLY_ARTIFACT_CONTRACT=PASS');
 console.log('XBOX_RUNTIME_NOT_REFERENCED_BY_PORTAL_OVERLAY=PASS');

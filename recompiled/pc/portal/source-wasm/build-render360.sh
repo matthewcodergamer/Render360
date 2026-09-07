@@ -87,6 +87,8 @@ if count != 1:
     raise SystemExit('Could not locate Emscripten loadDylibs block for Render360 fail-fast patch')
 if 'Render360 Source dylib failed:' not in updated:
     raise SystemExit('Render360 dylib diagnostic patch was not applied')
+if 'render360RepairStackGeometry' not in updated:
+    raise SystemExit('Render360 Emscripten stack-geometry repair was not embedded by --pre-js')
 path.write_text(updated)
 PY
 
@@ -130,7 +132,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v2-worker-local-dylibs',
+        'profile': 'render360-single-worker-workerfs-v3-stack-geometry-repair',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -142,6 +144,9 @@ manifest = {
         'workerLocalObjectUrls': True,
         'dylibPreflight': True,
         'dylibFailFast': True,
+        'stackGeometryRepair': True,
+        'stackRepairAfterRuntimeInit': True,
+        'stackRepairBeforeCallMain': True,
     },
     'sha256': sha,
 }

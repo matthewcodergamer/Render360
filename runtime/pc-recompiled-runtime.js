@@ -9,6 +9,17 @@ const BUILTIN_MANIFESTS=new Map([
 
 function normalizeGameId(value){return String(value||'').trim().toLowerCase();}
 function isPcGame(game){return String(game?.platform||'').toLowerCase()==='pc'||String(game?.sourceType||'').toLowerCase()==='pc-wasm'||Boolean(game?.pcGameId);}
+function directWebGlPresenter(visibleCanvas){
+  if(!visibleCanvas)throw new Error('Render360 game canvas is missing.');
+  return {
+    sourceCanvas:visibleCanvas,
+    visibleCanvas,
+    profile:'source-webgl2-direct',
+    start(){return true;},
+    stop(){return true;},
+    descriptor(){return {profile:'source-webgl2-direct',webgpu:false,direct:true};},
+  };
+}
 
 export async function probePcRecompiledTitle(game,{fetchImpl=globalThis.fetch}={}){
   const gameId=normalizeGameId(game?.pcGameId||game?.recompiledGameId);
@@ -60,7 +71,16 @@ export async function runPcRecompiledTitle({runtime,game,source,config={},probe=
   let presenter=null,controllerInput=null,session=null;
   try{
     const visibleCanvas=document.getElementById('gpuCanvas');
-    presenter=await createPcWebGpuPresenter({visibleCanvas,emitStage:detail=>runtime.emit('bootStage',{engine:'pc-recompiled',platform:'pc',...detail})});
+    const directRequested=String(resolvedProbe.manifest?.runtime?.renderer||'').toLowerCase()==='webgl2';
+    if(directRequested){
+      // Portal owns its WebGL2 OffscreenCanvas. Do not allocate a WebGPU device,
+      // staging context, copy texture or frame loop that Portal will never use.
+      // This saves memory on iPhone 11 and removes WebGPU as a startup dependency.
+      presenter=directWebGlPresenter(visibleCanvas);
+      runtime.emit('bootStage',{stage:'pc-presenter-bypass',engine:'pc-recompiled',message:'Portal direct WebGL2 renderer selected · WebGPU allocation skipped'});
+    }else{
+      presenter=await createPcWebGpuPresenter({visibleCanvas,emitStage:detail=>runtime.emit('bootStage',{engine:'pc-recompiled',platform:'pc',...detail})});
+    }
     const adapter=await import(adapterUrl.href),create=adapter.createRender360PcTitle||adapter.default;
     if(typeof create!=='function')throw new Error(`PC adapter ${resolvedProbe.manifest.adapter} must export createRender360PcTitle().`);
     const host=buildPcHost(runtime,game,linked,config,resolvedProbe,presenter,null);
@@ -68,16 +88,15 @@ export async function runPcRecompiledTitle({runtime,game,source,config={},probe=
     if(!session||typeof session!=='object')throw new Error('PC WebAssembly adapter did not return a session object.');
 
     // Portal creates a real visible Source/WebGL canvas. Bind mouse-look and
-    // mouse buttons to that canvas instead of the presenter's hidden staging
-    // canvas. This also makes the same controller object available to touch,
-    // physical gamepad and adapter input routes.
+    // mouse buttons to that canvas instead of any presenter staging canvas.
+    // The same controller object then serves touch and physical gamepads.
     const inputCanvas=session.sourceCanvas||presenter.sourceCanvas;
     controllerInput=createPcControllerInput({canvas:inputCanvas,gameId:resolvedProbe.gameId,emitLog:(level,message)=>runtime.emit('log',{level,message})});
     runtime.recompiledControllerInput=controllerInput;
     host.controllerInput=controllerInput;
     host.state.controller=controllerInput.descriptor();
 
-    const directPresentation=Boolean(session.directPresentation||session.sourceCanvas);
+    const directPresentation=Boolean(directRequested||session.directPresentation||session.sourceCanvas);
     runtime.recompiledSession=session;
     runtime.backend=directPresentation?'PC WASM · WEBGL2 DIRECT':'PC WASM · WEBGPU PRESENT';
     runtime.emit('bootStage',{stage:'pc-wasm-start',engine:'pc-recompiled',message:`Starting ${game.name||linked.detection.name} WebAssembly runtime…`});

@@ -1,11 +1,10 @@
-name: Apply Braid Portal Runtime Followup
+name: Apply Fast Portal Startup
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/apply-braid-portal-runtime-followup.yml'
-      - 'tools/apply-braid-portal-runtime-followup.py'
   workflow_dispatch:
 
 permissions:
@@ -14,33 +13,77 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
-      - name: Apply source and regression patches
-        run: python3 ./tools/apply-braid-portal-runtime-followup.py
-      - name: Preflight browser tests
+      - name: Patch iPhone startup path
+        shell: bash
         run: |
-          node --check ./render360-title-controller.mjs
-          node --check ./test-ppc-scan-diagnostics.mjs
-          node --check ./test-hir-sparse-fail-closed.mjs
-          grep -q 'r360_ppc_probe_scan_function_end' ./src/xenia_web_bootstrap/ppc_translation_probe.cpp
-          grep -q 'IsSyntheticProbeWindowRange' ./src/xenia_web_bootstrap/hir_correctness_executor.cpp
-      - name: Commit verified patch
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Do not parse the huge embedded core on every page load. Load it
+          # only if the small network core actually fails.
+          p=Path('wasm-core.js')
+          s=p.read_text()
+          s=s.replace("import {CORE_WASM_GZIP_BASE64} from './render360_xenia_core_embedded.js';\n",'')
+          old="""    if(!result&&CORE_WASM_GZIP_BASE64){
+      try{result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
+      catch(error){embeddedError=error;result=null;}
+    }
+"""
+          new="""    if(!result){
+      try{
+        const {CORE_WASM_GZIP_BASE64}=await import('./render360_xenia_core_embedded.js');
+        if(CORE_WASM_GZIP_BASE64){result=await WebAssembly.instantiate(await gunzip(decodeBase64(CORE_WASM_GZIP_BASE64)),{});validateInstance(result.instance,'Embedded');this.source='embedded';}
+      }catch(error){embeddedError=error;result=null;}
+    }
+"""
+          if old not in s:
+              raise SystemExit('wasm-core fallback block not found')
+          s=s.replace(old,new)
+          s=s.replace("timeoutMs=4500","timeoutMs=2500").replace("timeoutMs:4500","timeoutMs:2500")
+          p.write_text(s)
+
+          # 2) The input/statistics worker is optional for page readiness. It
+          # may finish in the background instead of blocking the Library.
+          p=Path('runtime/render360-runtime.js')
+          s=p.read_text()
+          old="await Promise.allSettled([inputPromise]);this.ready=true;"
+          new="this.ready=true;void inputPromise;"
+          if old not in s:
+              raise SystemExit('runtime input wait block not found')
+          p.write_text(s.replace(old,new))
+
+          # 3) Portal is a native PC->WASM route and must not wait for the Xbox
+          # 360 core. Its Source runtime and controller bridge can start alone.
+          p=Path('runtime/pc-recompiled-runtime.js')
+          s=p.read_text()
+          s=s.replace("    if(!this.ready||!this.core)throw new Error('Render360 core is still loading');\n",'')
+          s=s.replace("    this.inputHost.setSession({kind:30,stage:5,titleId:0});","    this.inputHost?.setSession?.({kind:30,stage:5,titleId:0});")
+          p.write_text(s)
+          PY
+
+      - name: Validate JavaScript
+        run: |
+          node --check wasm-core.js
+          node --check runtime/render360-runtime.js
+          node --check runtime/pc-recompiled-runtime.js
+          grep -q "await import('./render360_xenia_core_embedded.js')" wasm-core.js
+          ! head -1 wasm-core.js | grep -q render360_xenia_core_embedded
+          grep -q 'this.ready=true;void inputPromise' runtime/render360-runtime.js
+          ! grep -q "if(!this.ready||!this.core)throw new Error('Render360 core is still loading')" runtime/pc-recompiled-runtime.js
+
+      - name: Commit fast startup fix
         run: |
           set -euo pipefail
           git config user.name 'render360-ci'
           git config user.email 'render360-ci@users.noreply.github.com'
-          git add \
-            src/xenia_web_bootstrap/ppc_translation_probe.cpp \
-            src/xenia_web_bootstrap/hir_correctness_executor.cpp \
-            link-xenia-ppc-bootstrap.sh \
-            render360-title-controller.mjs \
-            test-ppc-scan-diagnostics.mjs \
-            test-hir-sparse-fail-closed.mjs
+          git add wasm-core.js runtime/render360-runtime.js runtime/pc-recompiled-runtime.js
           if git diff --cached --quiet; then
-            echo 'No source changes required.'
+            echo 'Fast startup patch already present.'
             exit 0
           fi
-          git commit -m 'fix: fail closed Braid memory and expose Portal scan extent'
+          git commit -m 'fix: start Portal without waiting for Xbox core'
           git push

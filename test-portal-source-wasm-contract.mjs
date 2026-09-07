@@ -85,6 +85,9 @@ assert.match(worker,/engine\.callMain/);
 
 assert.match(pcRuntime,/inputCanvas=session\.sourceCanvas\|\|presenter\.sourceCanvas/);
 assert.match(pcRuntime,/runtime\.recompiledControllerInput=controllerInput/);
+assert.match(pcRuntime,/directWebGlPresenter/);
+assert.match(pcRuntime,/pc-presenter-bypass/);
+assert.match(pcRuntime,/WebGPU allocation skipped/);
 assert.match(pcRuntime,/if\(directPresentation\)/);
 assert.match(pcRuntime,/Portal Source WebGL2 direct presentation active/);
 assert.doesNotMatch(pcRuntime,/presenter\.start\(\);\s*let result/);
@@ -116,6 +119,7 @@ console.log('PORTAL_SOURCE_HEAP_EXPORT_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_UNSHARED_MEMORY_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_WORKERFS_ZERO_COPY_CONTRACT=PASS');
 console.log('PORTAL_SOURCE_DIRECT_WEBGL_PRESENTATION=PASS');
+console.log('PORTAL_SOURCE_WEBGPU_BYPASS=PASS');
 console.log('PORTAL_SOURCE_CONTROLLER_BRIDGE=PASS');
 console.log('PORTAL_SOURCE_DOUBLE_BACK_EXIT=PASS');
 console.log('PORTAL_SOURCE_ENGINE_ONLY_ARTIFACT_CONTRACT=PASS');

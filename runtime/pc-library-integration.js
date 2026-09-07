@@ -1,6 +1,7 @@
-import {listGames,putGame,putCover} from '../library/game-library.js';
+import {listGames,putGame,putCover,deleteGame,clearLibrary} from '../library/game-library.js';
 import {resolvePcGameCover} from '../library/cover-resolver.js';
-import {persistPcRecompiledSource,restorePcRecompiledSource,pcPersistentSourceExists} from '../storage/pc-persistent-storage.js';
+import {persistPcRecompiledSource,restorePcRecompiledSource,pcPersistentSourceExists,deletePersistentPcSource,clearPersistentPcSources} from '../storage/pc-persistent-storage.js';
+import {clearGamesDirectory} from '../storage/game-storage.js';
 
 const $=id=>document.getElementById(id);
 let installed=false,artworkRunning=false,decorateQueued=false,persistenceTimer=0,restoring=false;
@@ -45,6 +46,30 @@ async function hydratePcArtwork(){
 }
 
 function emitPersistenceLog(level,message){try{bridge()?.runtime?.emit?.('log',{level,message});}catch{}console[level==='error'?'error':level==='warn'?'warn':'log'](`[Render360] ${message}`);}
+
+// A PC title has one canonical persistent source per pcGameId. Older builds
+// created a new random library id whenever Portal was added again, which could
+// leave multiple complete OPFS copies. Keep the strongest/newest entry and
+// remove stale copies before restoring or saving anything.
+async function dedupePcLibrary(){
+  const all=(await listGames()).filter(isPcGame),groups=new Map();
+  for(const game of all){const key=String(game.pcGameId||game.name||game.id).toLowerCase();if(!groups.has(key))groups.set(key,[]);groups.get(key).push(game);}
+  let removed=0;
+  for(const group of groups.values()){
+    if(group.length<2)continue;
+    group.sort((a,b)=>Number(Boolean(b.persistentSource))-Number(Boolean(a.persistentSource))||(Number(b.pcSavedAt||b.importedAt||0)-Number(a.pcSavedAt||a.importedAt||0)));
+    const keep=group[0];
+    for(const duplicate of group.slice(1)){
+      try{await deletePersistentPcSource(duplicate.id);}catch{}
+      try{bridge()?.runtime?.unbindSource?.(duplicate.id);}catch{}
+      await deleteGame(duplicate.id).catch(()=>{});removed++;
+    }
+    emitPersistenceLog('info',`Portal storage dedupe · kept ${keep.name||keep.id} and removed ${group.length-1} stale cop${group.length===2?'y':'ies'}.`);
+  }
+  if(removed)await bridge()?.refreshLibrary?.();
+  return removed;
+}
+
 async function persistLinkedPcSources(){
   const app=bridge(),runtime=app?.runtime;if(!runtime?.getSource)return;
   let games;try{games=(await listGames()).filter(game=>isPcGame(game));}catch{return;}
@@ -76,7 +101,7 @@ async function restorePersistedPcSources(){
     if(changed)await app.refreshLibrary?.();
   }catch(error){console.warn(`[Render360] Persistent PC restore unavailable: ${error?.message||error}`);}finally{restoring=false;}
 }
-function schedulePcPersistence(delay=350){clearTimeout(persistenceTimer);persistenceTimer=setTimeout(async()=>{await restorePersistedPcSources();await persistLinkedPcSources();},delay);}
+function schedulePcPersistence(delay=350){clearTimeout(persistenceTimer);persistenceTimer=setTimeout(async()=>{await dedupePcLibrary().catch(()=>{});await restorePersistedPcSources();await persistLinkedPcSources();},delay);}
 
 function ensurePcLookStick(){
   if(typeof document==='undefined')return null;let zone=$('pcRightStick');if(zone)return zone;
@@ -124,15 +149,39 @@ function installPcTouchController(){
   wirePcStick($('leftStick'),'move',{knob:$('leftStickKnob')});installDoubleBackExit();syncControllerPlatform();
 }
 
+async function deleteAllGamesAndCopies(){
+  const app=bridge(),runtime=app?.runtime,all=await listGames().catch(()=>[]);
+  try{globalThis.render360ModernTitle?.stop?.();}catch{}
+  for(const game of all){try{runtime?.unbindSource?.(game.id);}catch{}}
+  await Promise.allSettled([clearGamesDirectory(),clearPersistentPcSources()]);
+  await clearLibrary();
+  restoreAttempted.clear();savingIds.clear();
+  await app?.refreshLibrary?.();
+  emitPersistenceLog('info',`Deleted ${all.length} library entr${all.length===1?'y':'ies'} and all Render360 Xbox/PC persistent game copies.`);
+  return all.length;
+}
+function installDeleteAllGames(){
+  const button=$('clearGameStorage');if(!button)return;
+  const label=button.querySelector('span');if(label)label.textContent='Delete All Games & Copies';
+  if(button.dataset.r360DeleteAll)return;button.dataset.r360DeleteAll='1';
+  button.addEventListener('click',async event=>{
+    event.preventDefault();event.stopImmediatePropagation();
+    const ok=globalThis.confirm?.('Delete ALL Render360 games? This removes the Library, Portal saved files, Xbox game copies, and cached cover art from this browser. This cannot be undone.');
+    if(!ok)return;
+    button.disabled=true;
+    try{const count=await deleteAllGamesAndCopies();globalThis.alert?.(`Render360 deleted ${count} game${count===1?'':'s'} and all saved game copies.`);}catch(error){globalThis.alert?.(`Could not delete all games: ${error?.message||error}`);}finally{button.disabled=false;}
+  },true);
+}
+
 function bootPcLibraryIntegration(){
-  if(installed||typeof document==='undefined')return;installed=true;installStyles();installPcTouchController();queueDecorate();setTimeout(hydratePcArtwork,700);schedulePcPersistence(900);
-  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();if(!$('pcRightStick'))installPcTouchController();else installDoubleBackExit();schedulePcPersistence();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
-  globalThis.addEventListener?.('render360:titleStarted',()=>{syncControllerPlatform();installPcTouchController();schedulePcPersistence(50);});
+  if(installed||typeof document==='undefined')return;installed=true;installStyles();installPcTouchController();installDeleteAllGames();queueDecorate();setTimeout(hydratePcArtwork,700);schedulePcPersistence(150);
+  const root=$('app')||document.body;if(root)new MutationObserver(()=>{queueDecorate();syncControllerPlatform();installDeleteAllGames();if(!$('pcRightStick'))installPcTouchController();else installDoubleBackExit();schedulePcPersistence();}).observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  globalThis.addEventListener?.('render360:titleStarted',()=>{syncControllerPlatform();installPcTouchController();schedulePcPersistence(25);});
   globalThis.addEventListener?.('render360:framePresented',syncControllerPlatform);
-  globalThis.addEventListener?.('pageshow',()=>schedulePcPersistence(100));
-  console.log('[Render360] Unified PC library + Portal Xbox-controller overlay + persistent PC source integration active');
+  globalThis.addEventListener?.('pageshow',()=>schedulePcPersistence(50));
+  console.log('[Render360] Unified PC library + Portal controller + deduplicated persistent storage integration active');
 }
 
 if(typeof document!=='undefined'){if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bootPcLibraryIntegration,{once:true});else bootPcLibraryIntegration();}
 
-export {decoratePcLibrary,hydratePcArtwork,installPcTouchController,restorePersistedPcSources,persistLinkedPcSources};
+export {decoratePcLibrary,hydratePcArtwork,installPcTouchController,restorePersistedPcSources,persistLinkedPcSources,dedupePcLibrary,deleteAllGamesAndCopies};

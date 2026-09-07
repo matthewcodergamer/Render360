@@ -5,6 +5,7 @@ const ROOT_DIR='Render360';
 const PC_DIR='PC';
 const META_FILE='render360-pc-source.json';
 const COPY_CHUNK=4*1024*1024;
+const REQUIRED_PORTAL_STACK_REPAIR_VERSION=4;
 const ignoredGameFile=/\.(?:exe|dll|pdb|sys|bat|cmd|lnk)$/i;
 const allowedGameRoot=/^(?:portal|hl2|platform)\//i;
 
@@ -12,6 +13,16 @@ function safeId(value){const id=String(value||'').trim().replace(/[^a-z0-9._-]+/
 function safePath(value){const path=normalizePcPath(value);if(!path||path.startsWith('/')||path.includes('..'))throw new Error(`Unsafe persistent PC path: ${value}`);return path;}
 function pathParts(value){return safePath(value).split('/').filter(Boolean);}
 function filePath(file){return normalizePcPath(file?.relativePath||file?.webkitRelativePath||file?.name||'');}
+function assertFreshPortalRuntime(runtimePackage){
+  const manifest=runtimePackage?.manifest||{};
+  if(String(manifest.gameId||'').toLowerCase()!=='portal-1-pc')return runtimePackage;
+  const version=Number(manifest.diagnostics?.stackRepairVersion||0);
+  if(version<REQUIRED_PORTAL_STACK_REPAIR_VERSION){
+    const profile=String(manifest.source?.profile||'unknown profile');
+    throw new Error(`Saved Portal WebAssembly runtime is outdated (${profile}; stack repair v${version}). Render360 requires stack repair v${REQUIRED_PORTAL_STACK_REPAIR_VERSION}. Relink using the newest Portal runtime ZIP.`);
+  }
+  return runtimePackage;
+}
 
 async function rootDirectory(storageManager=globalThis.navigator?.storage){
   if(!storageManager?.getDirectory)throw new Error('This browser does not expose Origin Private File System storage.');
@@ -54,6 +65,7 @@ export async function pcStorageEstimate(storageManager=globalThis.navigator?.sto
 
 export async function persistPcRecompiledSource(gameId,source,{storageManager=globalThis.navigator?.storage,onProgress=()=>{}}={}){
   if(!source?.content||!source?.runtimePackage)throw new Error('Portal PC source is missing its game files or WebAssembly runtime.');
+  assertFreshPortalRuntime(source.runtimePackage);
   const id=safeId(gameId),gameEntries=collectGameEntries(source.content),runtimeEntries=collectRuntimeEntries(source.runtimePackage);
   const totalBytes=[...gameEntries,...runtimeEntries].reduce((sum,item)=>sum+item.size,0),estimate=await pcStorageEstimate(storageManager);
   if(estimate.quota&&estimate.free&&totalBytes>estimate.free)throw new Error(`Not enough persistent browser storage for Portal. Need ${(totalBytes/1073741824).toFixed(2)} GB but only ${(estimate.free/1073741824).toFixed(2)} GB is currently available to this site.`);
@@ -64,7 +76,8 @@ export async function persistPcRecompiledSource(gameId,source,{storageManager=gl
   try{
     for(const item of gameEntries){await writeBlob(base,`game/${item.path}`,item.file,{onChunk:n=>{copied+=n;progress('game',item);}});filesDone++;progress('game',item);}
     for(const item of runtimeEntries){await writeBlob(base,`runtime/${item.path}`,item.file,{onChunk:n=>{copied+=n;progress('runtime',item);}});filesDone++;progress('runtime',item);}
-    const manifest={schema:'render360-pc-persistent-source-v1',gameId:id,pcGameId:source.detection?.gameId||'portal-1-pc',name:source.name||'Portal PC',createdAt:Number(source.createdAt||Date.now()),savedAt:Date.now(),size:Number(source.content.size||0),gameFiles:gameEntries.map(({path,size,type})=>({path,size,type})),runtimeFiles:runtimeEntries.map(({path,size,type})=>({path,size,type})),runtimeName:source.runtimePackage.manifest?.name||'Source WebAssembly runtime'};
+    const runtimeManifest=source.runtimePackage.manifest||{};
+    const manifest={schema:'render360-pc-persistent-source-v1',gameId:id,pcGameId:source.detection?.gameId||'portal-1-pc',name:source.name||'Portal PC',createdAt:Number(source.createdAt||Date.now()),savedAt:Date.now(),size:Number(source.content.size||0),gameFiles:gameEntries.map(({path,size,type})=>({path,size,type})),runtimeFiles:runtimeEntries.map(({path,size,type})=>({path,size,type})),runtimeName:runtimeManifest.name||'Source WebAssembly runtime',runtimeProfile:runtimeManifest.source?.profile||null,runtimeStackRepairVersion:Number(runtimeManifest.diagnostics?.stackRepairVersion||0)};
     await writeJson(base,META_FILE,manifest);onProgress({phase:'complete',filesDone:totalFiles,totalFiles,bytesDone:copied,totalBytes,percent:100});
     return {gameId:id,key:id,bytes:copied,files:totalFiles,manifest,persisted:true};
   }catch(error){try{await pc.removeEntry(id,{recursive:true});}catch{}throw new Error(`Could not save Portal locally: ${error?.message||error}`);}
@@ -76,11 +89,11 @@ export async function restorePcRecompiledSource(gameId,{storageManager=globalThi
   const gameFiles=[];for(const item of manifest.gameFiles||[])gameFiles.push(await readStoredFile(base,`game/${safePath(item.path)}`));
   const runtimeFiles=[];for(const item of manifest.runtimeFiles||[])runtimeFiles.push(await readStoredFile(base,`runtime/${safePath(item.path)}`));
   const content=createPcFileListSource(gameFiles,{name:'Portal PC persistent installation',stripCommonRoot:false});const detection=detectPcGame(content);if(!detection.matched)throw new Error(`Saved Portal files are incomplete: ${(detection.candidates?.[0]?.missing||[]).join(', ')}`);
-  const runtimePackage=await loadCommunityWasmPackageFromFiles(runtimeFiles,{expectedGameId:detection.gameId});
+  const runtimePackage=assertFreshPortalRuntime(await loadCommunityWasmPackageFromFiles(runtimeFiles,{expectedGameId:detection.gameId}));
   return {kind:'pc-recompiled-source',name:manifest.name||'Portal PC',size:content.size,content,detection,runtimePackage,createdAt:Number(manifest.createdAt||manifest.savedAt||Date.now()),persistent:true,pcStorageKey:id};
 }
 
 export async function pcPersistentSourceExists(gameId,{storageManager=globalThis.navigator?.storage}={}){try{const base=await gameDirectory(gameId,{storageManager});await base.getFileHandle(META_FILE);return true;}catch{return false;}}
 export async function deletePersistentPcSource(gameId,{storageManager=globalThis.navigator?.storage}={}){const pc=await rootDirectory(storageManager);try{await pc.removeEntry(safeId(gameId),{recursive:true});return true;}catch{return false;}}
 
-export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,restoreWithoutPicker:true});
+export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,requiredPortalStackRepairVersion:REQUIRED_PORTAL_STACK_REPAIR_VERSION,restoreWithoutPicker:true});

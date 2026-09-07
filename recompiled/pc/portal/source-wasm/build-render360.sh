@@ -31,7 +31,9 @@ shopt -u nullglob
 
 # iPhone-first host profile. The full Source module runs in one dedicated
 # browser Worker. WORKERFS supplies player-owned files without copying the
-# entire Portal install into Wasm memory.
+# entire Portal install into Wasm memory. Keep the initial heap bounded; growth
+# is allowed only as Source actually needs it rather than preallocating a huge
+# browser heap up front.
 emcc \
   -sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1 -sMALLOC=mimalloc \
   -sMAIN_MODULE=1 \
@@ -89,6 +91,8 @@ if 'Render360 Source dylib failed:' not in updated:
     raise SystemExit('Render360 dylib diagnostic patch was not applied')
 if 'render360RepairStackGeometry' not in updated:
     raise SystemExit('Render360 Emscripten stack-geometry repair was not embedded by --pre-js')
+if 'stackRepairVersion: 4' not in updated:
+    raise SystemExit('Render360 stack repair v4 marker was not embedded by --pre-js')
 path.write_text(updated)
 PY
 
@@ -132,7 +136,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v3-stack-geometry-repair',
+        'profile': 'render360-single-worker-workerfs-v4-stack-cookie-guard',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -140,13 +144,22 @@ manifest = {
         'mount': 'WORKERFS-readonly',
         'wholeInstallCopiedIntoWasm': False,
     },
+    'memory': {
+        'initialMiB': 384,
+        'maximumMiB': 1536,
+        'growth': True,
+        'stackMiB': 4,
+        'strategy': 'single-worker-workerfs-lazy-content',
+    },
     'diagnostics': {
         'workerLocalObjectUrls': True,
         'dylibPreflight': True,
         'dylibFailFast': True,
         'stackGeometryRepair': True,
+        'stackRepairVersion': 4,
         'stackRepairAfterRuntimeInit': True,
         'stackRepairBeforeCallMain': True,
+        'rejectZeroStackEnd': True,
     },
     'sha256': sha,
 }

@@ -83,4 +83,17 @@ export async function restorePcRecompiledSource(gameId,{storageManager=globalThi
 export async function pcPersistentSourceExists(gameId,{storageManager=globalThis.navigator?.storage}={}){try{const base=await gameDirectory(gameId,{storageManager});await base.getFileHandle(META_FILE);return true;}catch{return false;}}
 export async function deletePersistentPcSource(gameId,{storageManager=globalThis.navigator?.storage}={}){const pc=await rootDirectory(storageManager);try{await pc.removeEntry(safeId(gameId),{recursive:true});return true;}catch{return false;}}
 
-export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,restoreWithoutPicker:true});
+// Deletes every persisted PC installation, including stale Portal copies whose
+// IndexedDB library rows may already have been removed. Recreate the folder so
+// the next import starts from one clean canonical copy instead of accumulating
+// orphaned OPFS directories.
+export async function clearPersistentPcSources({storageManager=globalThis.navigator?.storage}={}){
+  if(!storageManager?.getDirectory)return false;
+  const root=await storageManager.getDirectory();
+  const render360=await root.getDirectoryHandle(ROOT_DIR,{create:true});
+  try{await render360.removeEntry(PC_DIR,{recursive:true});}catch{}
+  await render360.getDirectoryHandle(PC_DIR,{create:true});
+  return true;
+}
+
+export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,restoreWithoutPicker:true,clearAll:true});

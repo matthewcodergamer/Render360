@@ -2,18 +2,33 @@ let engine=null;
 let launchArguments=[];
 let initialized=false;
 let running=false;
+let lastRuntimeLog='';
 const runtimeObjectUrls=new Map();
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
-const log=(level,message)=>post('log',{level,message:String(message??'')});
+const log=(level,message)=>{lastRuntimeLog=String(message??'');post('log',{level,message:lastRuntimeLog});};
 const normalize=value=>String(value||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
 const basename=value=>normalize(value).split('/').pop()||'';
+const fatal=(origin,error)=>post('fatal',{origin,message:error?.message||String(error||'Portal Source worker failed'),stack:error?.stack||null,lastRuntimeLog});
 
 // Emscripten's browser error path may call alert(). This module always runs in
 // a dedicated Worker where alert is intentionally unavailable. Keep the real
 // Source error visible in Render360 diagnostics instead of throwing a second,
 // misleading ReferenceError from the error reporter itself.
 if(typeof self.alert!=='function')self.alert=message=>log('warn',`Source alert · ${message??''}`);
+
+// Safari can surface a WebAssembly trap or rejected dynamic-library promise at
+// the Worker boundary rather than through callMain(). Preserve the exact last
+// Source line so the diagnostic report no longer falls back to an unrelated
+// Xenia/PPC blocker with empty fields.
+self.addEventListener('error',event=>{
+  const error=event?.error||new Error(event?.message||'Portal Source worker error');
+  fatal('worker-error',error);
+});
+self.addEventListener('unhandledrejection',event=>{
+  const reason=event?.reason instanceof Error?event.reason:new Error(String(event?.reason||'Unhandled Portal Source promise rejection'));
+  fatal('worker-unhandledrejection',reason);
+});
 
 function installRuntimeFiles(items){
   for(const item of Array.isArray(items)?items:[]){
@@ -82,7 +97,7 @@ async function initialize(data){
       locateFile:runtimeLocator,
       print:text=>log('info',text),
       printErr:text=>log('warn',text),
-      onAbort:reason=>log('error',`Source abort: ${reason||'unknown reason'}`),
+      onAbort:reason=>{log('error',`Source abort: ${reason||'unknown reason'}`);fatal('emscripten-abort',new Error(String(reason||'Source aborted')));},
       render360OnLocalMapReady:mapName=>post('stage',{stage:'portal-local-map',message:`Local Portal map ready · ${mapName||'content'}`}),
     }),timeoutPromise]);
   }finally{clearTimeout(dependencyTimeout);}
@@ -111,18 +126,19 @@ function run(){
   setTimeout(()=>{
     try{
       repairStackGeometry('before-callMain');
+      post('stage',{stage:'portal-source-callmain',message:'Entering Portal Source callMain() · waiting for Source subsystem initialization'});
       engine.callMain(launchArguments);
       post('stage',{stage:'portal-source-exit',message:'Portal Source main returned.'});
     }catch(error){
-      post('fatal',{message:error?.message||String(error),stack:error?.stack||null});
+      fatal('callMain',error);
     }
   },0);
 }
 
 self.addEventListener('message',event=>{
   const data=event.data||{};
-  if(data.type==='init')initialize(data).catch(error=>{post('fatal',{message:error?.message||String(error),stack:error?.stack||null});setTimeout(()=>self.close(),0);});
+  if(data.type==='init')initialize(data).catch(error=>{fatal('initialize',error);setTimeout(()=>self.close(),0);});
   else if(data.type==='run'){
-    try{run();}catch(error){post('fatal',{message:error?.message||String(error),stack:error?.stack||null});}
+    try{run();}catch(error){fatal('run',error);}
   }
 });

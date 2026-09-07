@@ -55,7 +55,10 @@ async function shellAsset(request){
     if(response?.ok)cache.put(request,response.clone()).catch(()=>{});
     return response;
   }).catch(()=>null);
-  return cached||await network||Response.error();
+  // Controller/layout CSS must not stay one refresh behind after a deploy.
+  // Prefer the current network response and fall back to the cached shell only
+  // when the device is offline.
+  return await network||cached||Response.error();
 }
 async function navigation(event){
   const cache=await caches.open(SHELL_CACHE);

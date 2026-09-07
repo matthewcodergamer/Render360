@@ -3,6 +3,7 @@ let launchArguments=[];
 let initialized=false;
 let running=false;
 const runtimeObjectUrls=new Map();
+const REQUIRED_STACK_REPAIR_VERSION=4;
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
 const log=(level,message)=>post('log',{level,message:String(message??'')});
@@ -32,12 +33,16 @@ async function preflightRuntimeFiles(){
 
 function repairStackGeometry(phase){
   const repair=engine?.render360RepairStackGeometry;
-  if(typeof repair!=='function')throw new Error('Portal Source runtime is missing the Render360 Emscripten stack-geometry repair. Build a new runtime ZIP.');
-  const state=repair();
+  if(typeof repair!=='function')throw new Error('Portal Source runtime is outdated: required Render360 stack repair v4 is missing. Select the newly built runtime ZIP.');
+  const state=repair(phase);
+  const version=Number(state?.version||0);
+  const base=Number(state?.base||0)>>>0;
   const end=Number(state?.end||0)>>>0;
-  if(!end)throw new Error('Portal Source Emscripten stack end is zero after repair. Refusing to start with an invalid stack cookie address.');
+  if(version<REQUIRED_STACK_REPAIR_VERSION)throw new Error(`Portal Source runtime is outdated: stack repair v${version||0} loaded, v${REQUIRED_STACK_REPAIR_VERSION} required.`);
+  if(!base||!end||base<=end)throw new Error(`Portal Source Emscripten stack geometry is invalid after repair: base=0x${base.toString(16)} end=0x${end.toString(16)}.`);
+  const baseHex=`0x${base.toString(16).padStart(8,'0')}`;
   const endHex=`0x${end.toString(16).padStart(8,'0')}`;
-  post('stage',{stage:'portal-stack-geometry',message:`Source Emscripten stack geometry ready · end ${endHex}`,detail:{phase,end,endHex}});
+  post('stage',{stage:'portal-stack-geometry',message:`Source Emscripten stack ready · ${baseHex} → ${endHex}`,detail:{phase,version,base,end,baseHex,endHex,bytes:state?.bytes||0,heapBytes:state?.heapBytes||0}});
   return state;
 }
 
@@ -87,7 +92,7 @@ async function initialize(data){
     '-game','portal','-noip','-language','english','-windowed','+mat_hdr_level','0'
   ];
   initialized=true;
-  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:engine.HEAPU8?.buffer?.byteLength||0,stackEnd:engine.render360StackGeometry?.end||0});
+  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:engine.HEAPU8?.buffer?.byteLength||0,stackRepairVersion:engine.render360StackGeometry?.version||0,stackBase:engine.render360StackGeometry?.base||0,stackEnd:engine.render360StackGeometry?.end||0});
 }
 
 function run(){
@@ -99,8 +104,9 @@ function run(){
   setTimeout(()=>{
     try{
       // noInitialRun keeps Source idle while player-owned files are mounted.
-      // Reapply Emscripten's own exact stack limits at the last possible point
-      // before manual callMain(), preventing the 0x00000004 cookie false crash.
+      // Reapply Emscripten's exact generated stack limits at the last possible
+      // point before manual callMain(). This blocks the old 0x00000004 cookie
+      // failure rather than masking or disabling stack checking.
       repairStackGeometry('before-callMain');
       engine.callMain(launchArguments);
       post('stage',{stage:'portal-source-exit',message:'Portal Source main returned.'});

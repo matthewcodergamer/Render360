@@ -123,12 +123,11 @@ export function installPcRecompiledRouter(Render360RuntimeClass){
   proto.resetInput=function(){const result=typeof previousResetInput==='function'?previousResetInput.call(this):undefined;const controller=this.recompiledControllerInput;if(controller?.resetInput)controller.resetInput();else this.recompiledSession?.resetInput?.();return result;};
   proto.play=async function(game,source=this.getSource(game?.id),config={}){
     if(!isPcGame(game))return previousPlay.call(this,game,source,config);
-    if(!this.ready||!this.core)throw new Error('Render360 core is still loading');
     if(!source)throw new Error('PC game files are not linked. Choose the PC game folder and WebAssembly runtime again.');
     if(this.recompiledSession?.stop)try{this.recompiledSession.stop();}catch{}
     this.recompiledSession=null;this.recompiledControllerInput?.stop?.();this.recompiledControllerInput=null;
     this.currentGame=game;this.bindSource(game.id,source);this.resetTelemetry();
-    this.inputHost.setSession({kind:30,stage:5,titleId:0});
+    this.inputHost?.setSession?.({kind:30,stage:5,titleId:0});
     const probe=await probePcRecompiledTitle(game);
     this.emit('bootStage',{stage:'execution-engine',engine:'pc-recompiled',platform:'pc',message:`Execution Engine · PC Recompiled WebAssembly · ${game.pcGameId||'unknown'}`,fileName:source.name||game.sourceName||'PC game folder',fileSize:source.size||0});
     try{const result=await runPcRecompiledTitle({runtime:this,game,source,config:{...config,executionMode:'pc-recompiled',renderer:'webgpu'},probe});this.emit('titleStarted',{game,result,type:'pc-wasm',config:{...config,executionMode:'pc-recompiled',renderer:result?.directPresentation?'webgl2-direct':'webgpu'},executionEngine:'pc-recompiled'});return result;}

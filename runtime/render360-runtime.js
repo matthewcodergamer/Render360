@@ -34,7 +34,7 @@ export class Render360Runtime extends EventTarget{
     await this.core.init();
     if(this.core.buildVersion!==REQUIRED_CORE_BUILD)throw new Error(`Render360 V${RENDER360_RELEASE} requires synchronized package core V${REQUIRED_CORE_BUILD}; loaded V${this.core.buildVersion}. Refresh after the release artifacts finish publishing.`);
     if(this.core.abiVersion<REQUIRED_ABI)throw new Error(`Runtime contract requires ABI ${fmtHex(REQUIRED_ABI)}+; loaded ${fmtHex(this.core.abiVersion)}`);
-    await Promise.allSettled([inputPromise]);this.ready=true;
+    this.ready=true;void inputPromise;
     this.emit('log',{level:'ok',message:`Core source ${this.core.source} · STFS extraction ${this.core.stfsExtractionMode}`});
     if(this.core.source==='embedded'&&this.core.networkError)this.emit('log',{level:'warn',message:`Network core unavailable; using embedded fallback: ${this.core.networkError.message}`});
     this.emit('ready',{buildVersion:this.core.buildVersion,abiVersion:this.core.abiVersion,featureBits:this.core.featureBits,contract:this.contract()});

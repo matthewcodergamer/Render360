@@ -63,6 +63,15 @@ export async function deleteGame(id){
   await done;
 }
 
+export async function clearLibrary(){
+  const db=await openDatabase();
+  const tx=db.transaction([GAME_STORE,COVER_STORE],'readwrite'),done=txDone(tx);
+  tx.objectStore(GAME_STORE).clear();
+  tx.objectStore(COVER_STORE).clear();
+  await done;
+  return true;
+}
+
 export async function putCover(blob,key=`cover-${makeGameId()}`){
   if(!(blob instanceof Blob))throw new TypeError('Cover artwork must be a Blob');
   const db=await openDatabase();

@@ -1,0 +1,54 @@
+name: Apply Portal V8 Canonical dlsym
+
+on:
+  push:
+    branches:
+      - portal-v8-canonical-table
+    paths:
+      - tools/apply-portal-canonical-dlsym-v8.py
+      - .github/workflows/apply-portal-canonical-dlsym-v8.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-portal-canonical-dlsym-v8
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Render360 staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: portal-v8-canonical-table
+          fetch-depth: 0
+
+      - name: Apply Portal v8 canonical table-address fix
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/apply-portal-canonical-dlsym-v8.py
+          python3 tools/apply-portal-canonical-dlsym-v8.py
+
+      - name: Verify Portal Source contract
+        run: |
+          set -euo pipefail
+          node --check test-portal-source-wasm-contract.mjs
+          node test-portal-source-wasm-contract.mjs
+          grep -q "render360-single-worker-workerfs-v8-canonical-dlsym" recompiled/pc/portal/source-wasm/build-render360.sh
+          grep -q "addressSource = 'existing'" recompiled/pc/portal/source-wasm/build-render360.sh
+          grep -q "Render360 Source CreateInterface factory returned" recompiled/pc/portal/source-wasm/build-render360.sh
+          ! grep -q "render360CreateInterfaceAddress" recompiled/pc/portal/source-wasm/build-render360.sh
+
+      - name: Commit clean Portal v8 source patch
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Portal V8 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add recompiled/pc/portal/source-wasm/build-render360.sh test-portal-source-wasm-contract.mjs
+          git rm tools/apply-portal-canonical-dlsym-v8.py .github/workflows/apply-portal-canonical-dlsym-v8.yml
+          git commit -m 'Fix Portal CreateInterface canonical table ABI'
+          git push origin HEAD:portal-v8-canonical-table

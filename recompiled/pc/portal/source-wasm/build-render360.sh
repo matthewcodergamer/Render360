@@ -246,7 +246,7 @@ if stack_count != 1:
     raise SystemExit('Could not locate Emscripten checkStackCookie zero-stack fallback for Render360 repair')
 
 dlsym_pattern = re.compile(
-    r"  var __dlsym_js = \(handle, symbol, symbolIndex\) => \{.*?\n  \};\n  __dlsym_js\.sig = 'pppp';",
+    r"  var __dlsym_js = \(handle, symbol, symbolIndex\) => \{.*?\n[ \t]+\};\n  __dlsym_js\.sig = 'pppp';",
     re.S,
 )
 dlsym_replacement = r'''  var __dlsym_js = (handle, symbol, symbolIndex) => {

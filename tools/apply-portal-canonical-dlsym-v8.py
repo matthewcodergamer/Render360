@@ -97,7 +97,7 @@ if old_required not in build:
 build = build.replace(old_required, new_required, 1)
 
 trace_anchor = "print('Render360 Portal: patched Emscripten Sys_LoadModule to load SIDE_MODULEs by basename')\nPY\n\n"
-trace_block = r'''print('Render360 Portal: patched Emscripten Sys_LoadModule to load SIDE_MODULEs by basename')
+trace_block = r"""print('Render360 Portal: patched Emscripten Sys_LoadModule to load SIDE_MODULEs by basename')
 PY
 
 # Trace the first real call through the Source module factory. The browser-side
@@ -175,7 +175,7 @@ path.write_text(text)
 print('Render360 Portal: instrumented CreateInterface factory entry/match/return')
 PY
 
-'''
+"""
 if trace_anchor not in build:
     raise SystemExit('Portal v8: interface trace insertion anchor not found')
 build = build.replace(trace_anchor, trace_block, 1)

@@ -4,12 +4,14 @@ let initialized=false;
 let running=false;
 let lastRuntimeLog='';
 const runtimeObjectUrls=new Map();
+const blockedGameBinary=/\.(?:exe|dll|so|dylib|pdb|sys|bat|cmd|lnk)$/i;
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
 const log=(level,message)=>{lastRuntimeLog=String(message??'');post('log',{level,message:lastRuntimeLog});};
 const normalize=value=>String(value||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
 const basename=value=>normalize(value).split('/').pop()||'';
 const fatal=(origin,error)=>post('fatal',{origin,message:error?.message||String(error||'Portal Source worker failed'),stack:error?.stack||null,lastRuntimeLog});
+const gameItemPath=item=>normalize(item?.name||item?.path||item?.file?.webkitRelativePath||item?.file?.relativePath||item?.file?.name||'');
 
 // Emscripten's browser error path may call alert(). This module always runs in
 // a dedicated Worker where alert is intentionally unavailable. Keep the real
@@ -75,8 +77,15 @@ async function initialize(data){
   if(initialized)return;
   if(!data?.engineFile)throw new Error('Portal Source engine module is missing from the runtime package.');
   if(!data?.canvas)throw new Error('Portal Source OffscreenCanvas is missing.');
-  const files=Array.isArray(data.files)?data.files:[];
-  if(!files.length)throw new Error('Portal player-owned file mount is empty.');
+  const rawFiles=Array.isArray(data.files)?data.files:[];
+  if(!rawFiles.length)throw new Error('Portal player-owned file mount is empty.');
+  // Defense in depth for stale Safari/OPFS imports: even if an older adapter
+  // sends native desktop binaries, never expose them to Emscripten's dlopen().
+  // Browser-loadable .so SIDE_MODULEs are supplied exclusively as runtimeFiles.
+  const files=rawFiles.filter(item=>!blockedGameBinary.test(gameItemPath(item)));
+  const blockedCount=rawFiles.length-files.length;
+  if(blockedCount)post('stage',{stage:'portal-native-module-filter',message:`Skipped ${blockedCount} native desktop module${blockedCount===1?'':'s'} from the browser game mount`,detail:{blockedCount}});
+  if(!files.length)throw new Error('Portal player-owned mount contained no browser-safe game files after filtering native binaries.');
 
   installRuntimeFiles(data.runtimeFiles||[]);
   if(!runtimeObjectUrls.size)throw new Error('Portal runtime package did not provide worker-local runtime files.');
@@ -114,11 +123,16 @@ async function initialize(data){
   FS.mount(engine.WORKERFS,{blobs:files},'/render360-game');
   FS.chdir('/render360-game');
 
-  launchArguments=Array.isArray(data.arguments)&&data.arguments.length?data.arguments:[
+  const requested=Array.isArray(data.arguments)&&data.arguments.length?[...data.arguments]:[
     '-game','portal','-noip','-language','english','-windowed','+mat_hdr_level','0'
   ];
+  // Skip startup movies and joystick probing. Render360 owns presentation and
+  // controller input, and both subsystems otherwise trigger optional desktop
+  // video/input modules that are not valid browser WebAssembly libraries.
+  for(const flag of ['-novid','-nojoy'])if(!requested.some(value=>String(value).toLowerCase()===flag))requested.push(flag);
+  launchArguments=requested;
   initialized=true;
-  post('ready',{fileCount:files.length,cwd:FS.cwd(),memoryBytes:runtimeMemoryBytes(),stackEnd:engine.render360StackGeometry?.end||0});
+  post('ready',{fileCount:files.length,blockedNativeFiles:blockedCount,cwd:FS.cwd(),memoryBytes:runtimeMemoryBytes(),stackEnd:engine.render360StackGeometry?.end||0,arguments:[...launchArguments]});
 }
 
 function run(){

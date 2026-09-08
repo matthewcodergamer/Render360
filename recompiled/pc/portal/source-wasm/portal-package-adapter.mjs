@@ -2,6 +2,7 @@ const WORKER_FILE='portal-source-worker.mjs';
 const ENGINE_FILE='portal-source-engine.mjs';
 
 const normalize=value=>String(value||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
+const ignoredGameBinary=/\.(?:exe|dll|so|dylib|pdb|sys|bat|cmd|lnk)$/i;
 
 function createPortalCanvas(hostCanvas){
   if(!hostCanvas?.parentNode)throw new Error('Portal needs the Render360 game canvas host.');
@@ -18,10 +19,14 @@ function createPortalCanvas(hostCanvas){
 
 function collectGameFiles(content){
   const files=[];
-  const ignored=/\.(?:exe|dll|pdb|sys|bat|cmd|lnk)$/i;
   for(const raw of content.paths?.()||[]){
     const path=normalize(raw);
-    if(!/^(?:portal|hl2|platform)\//i.test(path)||ignored.test(path))continue;
+    // Browser Source must never see desktop/native loadable binaries from a
+    // selected install or an older persisted import. Emscripten SIDE_MODULEs
+    // come only from the verified runtime package; feeding native .so/.dll
+    // bytes to dlopen() produces the WebAssembly "magic number" abort seen on
+    // iPhone. Source tolerates the optional VR/video modules being absent.
+    if(!/^(?:portal|hl2|platform)\//i.test(path)||ignoredGameBinary.test(path))continue;
     const file=content.file?.(path);
     if(file instanceof Blob)files.push({name:path,data:file});
   }

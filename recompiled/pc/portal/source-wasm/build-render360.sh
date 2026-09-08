@@ -163,17 +163,18 @@ emcc \
   "${link_libs[@]}" \
   -o build/launcher_main/portal-source-engine.mjs
 
-# Emscripten's generated MAIN_MODULE loader leaves the loadDylibs run
-# dependency installed when a side module rejects. That creates an infinite
-# blank screen. Patch only that generated block so the exact dylib is reported
-# and the modularized factory rejects instead of hanging forever.
-#
-# Also repair the exact Emscripten #22195-style failure at the point where it
-# is detected. For this linked MAIN_MODULE the real stack end is a non-zero
-# link-time constant. If emscripten_stack_get_end() ever becomes zero after
-# dynamic loading, do not move the cookie to address 0x00000004. Re-run
-# Emscripten's own stackCheckInit(), then continue only if the real stack end is
-# restored. This preserves stack checking instead of disabling it.
+# Patch three Emscripten 4.0.9 browser-runtime boundaries that matter on iOS:
+# 1. rejected load-time SIDE_MODULEs must reject the modularized factory rather
+#    than leaving the loadDylibs run dependency installed forever;
+# 2. a corrupted zero stack-end must be restored using Emscripten's own stack
+#    metadata instead of writing a cookie at address 0x00000004;
+# 3. Source asks every module for CreateInterface through dlsym(). The stock
+#    dlsym path lazily searches the entire WebAssembly function table before it
+#    can give a direct SIDE_MODULE export a C function pointer. That boundary is
+#    exactly where the real Portal run stops on iPhone/WebKit. Prime the table
+#    map while SIDE_MODULEs are loaded and give each module's CreateInterface a
+#    stable, handle-local table slot directly. Other dlsym symbols retain the
+#    stock Emscripten path.
 python3 - build/launcher_main/portal-source-engine.mjs <<'PY'
 from pathlib import Path
 import re, sys
@@ -209,6 +210,21 @@ updated,count=pattern.subn(replacement,text,count=1)
 if count != 1:
     raise SystemExit('Could not locate Emscripten loadDylibs block for Render360 fail-fast patch')
 
+# Initialize Emscripten's function->table-address map before side modules load.
+# postInstantiation() already calls updateTableMap() for every SIDE_MODULE, but
+# stock Emscripten makes that call a no-op until the first later dlsym. Keeping
+# the map alive here makes later symbol lookup constant-time and deterministic.
+map_old = "    LDSO.init();\n    loadDylibs();"
+map_new = """    LDSO.init();
+    if (!functionsInTableMap) {
+      functionsInTableMap = new WeakMap();
+      updateTableMap(0, wasmTable.length);
+    }
+    loadDylibs();"""
+if map_old not in updated:
+    raise SystemExit('Could not locate LDSO.init/loadDylibs sequence for Render360 table-map prime')
+updated = updated.replace(map_old, map_new, 1)
+
 stack_pattern = re.compile(
     r"(function checkStackCookie\(\) \{\n  if \(ABORT\) return;\n  var max = _emscripten_stack_get_end\(\);\n)"
     r"  // See writeStackCookie\(\)\.\n  if \(max == 0\) \{\n    max \+= 4;\n  \}\n"
@@ -228,12 +244,70 @@ stack_replacement = r'''\1  // A zero stack end is impossible for this linked Re
 updated,stack_count=stack_pattern.subn(stack_replacement,updated,count=1)
 if stack_count != 1:
     raise SystemExit('Could not locate Emscripten checkStackCookie zero-stack fallback for Render360 repair')
-if 'Render360 Source dylib failed:' not in updated:
-    raise SystemExit('Render360 dylib diagnostic patch was not applied')
-if 'Render360 Source stack metadata remained zero after stackCheckInit()' not in updated:
-    raise SystemExit('Render360 zero-stack-end self-heal patch was not applied')
-if 'render360RepairStackGeometry' not in updated:
-    raise SystemExit('Render360 Emscripten stack-geometry repair was not embedded by --pre-js')
+
+dlsym_pattern = re.compile(
+    r"  var __dlsym_js = \(handle, symbol, symbolIndex\) => \{.*?\n  \};\n  __dlsym_js\.sig = 'pppp';",
+    re.S,
+)
+dlsym_replacement = r'''  var __dlsym_js = (handle, symbol, symbolIndex) => {
+      symbol = UTF8ToString(symbol);
+      var result;
+      var newSymIndex;
+      var lib = LDSO.loadedLibsByHandle[handle];
+      assert(lib, `Tried to dlsym() from an unopened handle: ${handle}`);
+      if (!lib.exports.hasOwnProperty(symbol) || lib.exports[symbol].stub) {
+        dlSetError(`Tried to lookup unknown symbol "${symbol}" in dynamic lib: ${lib.name}`)
+        return 0;
+      }
+      newSymIndex = Object.keys(lib.exports).indexOf(symbol);
+      result = lib.exports[symbol];
+
+      if (typeof result == 'function') {
+        // Source's module ABI always asks a CSysModule handle for its own
+        // CreateInterface export. On WebKit this was the measured startup
+        // boundary. Keep module identity exact and avoid the generic first-use
+        // function-table search: create one stable indirect-call slot per DSO.
+        if (symbol === 'CreateInterface') {
+          if (lib.render360CreateInterfaceAddress) {
+            result = lib.render360CreateInterfaceAddress;
+          } else {
+            var slot = getEmptyTableSlot();
+            setWasmTableEntry(slot, result);
+            if (!functionsInTableMap) functionsInTableMap = new WeakMap();
+            functionsInTableMap.set(result, slot);
+            lib.render360CreateInterfaceAddress = slot;
+            result = slot;
+            HEAPU32[((symbolIndex)>>2)] = newSymIndex;
+          }
+          err(`Render360 Source CreateInterface resolved · ${lib.name} · table ${result}`);
+          return result;
+        }
+
+        var addr = getFunctionAddress(result);
+        if (addr) {
+          result = addr;
+        } else {
+          result = addFunction(result, result.sig);
+          HEAPU32[((symbolIndex)>>2)] = newSymIndex;
+        }
+      }
+      return result;
+    };
+  __dlsym_js.sig = 'pppp';'''
+updated,dlsym_count=dlsym_pattern.subn(dlsym_replacement,updated,count=1)
+if dlsym_count != 1:
+    raise SystemExit('Could not locate Emscripten __dlsym_js block for Render360 CreateInterface bridge')
+
+for required in (
+    'Render360 Source dylib failed:',
+    'Render360 Source stack metadata remained zero after stackCheckInit()',
+    'render360RepairStackGeometry',
+    'Render360 Source CreateInterface resolved',
+    'render360CreateInterfaceAddress',
+    'updateTableMap(0, wasmTable.length)',
+):
+    if required not in updated:
+        raise SystemExit(f'Render360 generated-runtime patch missing required marker: {required}')
 path.write_text(updated)
 PY
 
@@ -253,6 +327,52 @@ fi
 # presence makes the basename-path contract concrete instead of relying on a
 # generic "some .so exists" package check.
 test -s "$OUTPUT_DIR/libfilesystem_stdio.so"
+
+# The measured iPhone stop occurs when Source requests this module's factory.
+# Verify the first SIDE_MODULE actually exports CreateInterface before shipping
+# a runtime package; WebAssembly.validate() alone cannot prove symbol presence.
+python3 - "$OUTPUT_DIR/libfilesystem_stdio.so" <<'PY'
+from pathlib import Path
+import sys
+path=Path(sys.argv[1])
+data=path.read_bytes()
+
+def uleb(i):
+    value=0
+    shift=0
+    while True:
+        b=data[i]
+        i+=1
+        value|=(b & 0x7f)<<shift
+        if not (b & 0x80): return value,i
+        shift+=7
+
+def name(i):
+    size,i=uleb(i)
+    return data[i:i+size].decode('utf-8','replace'),i+size
+
+if data[:4] != b'\0asm':
+    raise SystemExit('libfilesystem_stdio.so is not WebAssembly')
+i=8
+found=False
+while i < len(data):
+    section=data[i]; i+=1
+    size,i=uleb(i)
+    end=i+size
+    if section==7:
+        count,i=uleb(i)
+        for _ in range(count):
+            symbol,i=name(i)
+            kind=data[i]; i+=1
+            _,i=uleb(i)
+            if symbol=='CreateInterface' and kind==0:
+                found=True
+        break
+    i=end
+if not found:
+    raise SystemExit('libfilesystem_stdio.so does not export function CreateInterface')
+print('Render360 Portal CreateInterface export verification PASS')
+PY
 
 # Binary contract check: every runtime module must use the same unshared memory
 # model as the single-worker main module. WebAssembly.validate() alone does not
@@ -358,7 +478,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v6-dylib-basename-direct-webgl',
+        'profile': 'render360-single-worker-workerfs-v7-createinterface-webkit',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -371,6 +491,10 @@ manifest = {
         'dylibPreflight': True,
         'dylibFailFast': True,
         'dylibBasenameFix': True,
+        'createInterfaceExportVerified': True,
+        'createInterfaceHandleBridge': True,
+        'dlsymTableMapPrimed': True,
+        'workerFsKeptReadOnly': True,
         'workerSafeAlertShim': True,
         'stackGeometryRepair': True,
         'stackRepairAfterRuntimeInit': True,

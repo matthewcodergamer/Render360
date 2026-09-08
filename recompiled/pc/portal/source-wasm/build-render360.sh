@@ -329,6 +329,25 @@ dlsym_replacement = r'''  var __dlsym_js = (handle, symbol, symbolIndex) => {
       var newSymIndex;
       var lib = LDSO.loadedLibsByHandle[handle];
       assert(lib, `Tried to dlsym() from an unopened handle: ${handle}`);
+
+      // Render360 v9: Emscripten issue #22052 documents a MAIN_MODULE /
+      // SIDE_MODULE failure where allowUndefined:true can leave a required
+      // GOT entry at zero even though dlsym() successfully returns a function
+      // pointer. The first indirect call then traps. Re-run the linker
+      // catch-up immediately before returning Source's module factory.
+      if (symbol === 'CreateInterface') {
+        var unresolvedBefore = 0;
+        for (var gotEntry of Object.values(GOT)) {
+          if (gotEntry && gotEntry.value == 0 && gotEntry.required) unresolvedBefore++;
+        }
+        reportUndefinedSymbols();
+        var unresolvedAfter = 0;
+        for (var gotEntry of Object.values(GOT)) {
+          if (gotEntry && gotEntry.value == 0 && gotEntry.required) unresolvedAfter++;
+        }
+        err(`Render360 Source GOT sync · ${lib.name} · required ${unresolvedBefore}->${unresolvedAfter}`);
+      }
+
       if (!lib.exports.hasOwnProperty(symbol) || lib.exports[symbol].stub) {
         dlSetError(`Tried to lookup unknown symbol "${symbol}" in dynamic lib: ${lib.name}`)
         return 0;
@@ -366,6 +385,8 @@ for required in (
     'Render360 Source stack metadata remained zero after stackCheckInit()',
     'render360RepairStackGeometry',
     'Render360 Source CreateInterface resolved',
+    'Render360 Source GOT sync',
+    'reportUndefinedSymbols();',
     "addressSource = 'existing'",
     "addressSource = 'added'",
     'getFunctionAddress(result)',
@@ -543,7 +564,7 @@ manifest = {
         'repository': 'https://github.com/weliveinhell/source-engine',
         'commit': '63f8364fe7b22b239e72dfb5f1024665b3a91567',
         'emscripten': '4.0.9',
-        'profile': 'render360-single-worker-workerfs-v8-canonical-dlsym',
+        'profile': 'render360-single-worker-workerfs-v9-got-sync',
     },
     'content': {
         'retailAssetsBundled': False,
@@ -561,6 +582,8 @@ manifest = {
         'createInterfaceCanonicalTableAddress': True,
         'createInterfaceManualTableSlot': False,
         'createInterfaceFactoryTrace': True,
+        'dlsymRequiredGotCatchup': True,
+        'emscriptenIssue22052Mitigation': True,
         'dlsymTableMapPrimed': True,
         'workerFsKeptReadOnly': True,
         'workerSafeAlertShim': True,

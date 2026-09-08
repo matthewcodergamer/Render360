@@ -1,0 +1,175 @@
+name: Portal Upstream WebAssembly Baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/portal-upstream-baseline.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: https://github.com/weliveinhell/source-engine.git
+  SOURCE_REF: 63f8364fe7b22b239e72dfb5f1024665b3a91567
+  EMSDK_REPO: https://github.com/emscripten-core/emsdk.git
+  EMSDK_REF: 2d480a1b7c7a34a354188d93f3e89190a44a1d21
+
+jobs:
+  build-upstream:
+    name: Build upstream threaded Portal baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Render360
+        uses: actions/checkout@v7
+
+      - name: Install host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git patch pkg-config python3 xz-utils zip >/dev/null
+
+      - name: Build pinned upstream Portal exactly as designed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone --no-tags "$SOURCE_REPO" upstream-source
+          cd upstream-source
+          git checkout --detach "$SOURCE_REF"
+          git submodule update --init --recursive
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          cd ..
+
+          git clone --no-tags "$EMSDK_REPO" upstream-emsdk
+          cd upstream-emsdk
+          git checkout --detach "$EMSDK_REF"
+          test "$(git rev-parse HEAD)" = "$EMSDK_REF"
+          ./emsdk install latest
+          ./emsdk activate latest
+          source ./emsdk_env.sh
+          emcc -v
+          cd ../upstream-source
+
+          # These are the two compatibility operations from upstream's own
+          # emscripten/get_emscripten.sh. Do not change its threading model.
+          embuilder --pic build sdl2 sdl2-mt
+          sdl_audio="$(find "$EMSDK/upstream/emscripten/cache/ports/sdl2" -path '*src/audio/emscripten/SDL_emscriptenaudio.c' -print -quit)"
+          test -n "$sdl_audio"
+          sed -Ei 's/freq = EM_ASM_INT/freq = MAIN_THREAD_EM_ASM_INT/' "$sdl_audio"
+          embuilder --force --pic build sdl2 sdl2-mt
+          patch "$EMSDK/upstream/emscripten/src/lib/libwebgl.js" emscripten/libwebgl.patch
+
+          # Preserve the upstream engine/runtime. Only improve the shell's
+          # diagnostics so the generic "Exception thrown" banner exposes the
+          # actual iPhone/WebKit exception and stack.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          shell = Path('emscripten/shell.html')
+          text = shell.read_text()
+          old = """      window.onerror = (event) => {
+                // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
+                Module.setStatus('Exception thrown, see JavaScript console');
+                spinnerElement.style.display = 'none';
+                Module.setStatus = (text) => {
+                  if (text) console.error('[post-exception status] ' + text);
+                };
+              };"""
+          new = """      window.onerror = (message, source, lineno, colno, error) => {
+                const detail = 'Portal JS exception: ' + String(message) +
+                  ' @ ' + String(source || '<unknown>') + ':' + String(lineno || 0) + ':' + String(colno || 0) +
+                  (error && error.stack ? '\\n' + error.stack : '');
+                console.error(detail);
+                if (outputElement) {
+                  outputElement.value += '\\n' + detail + '\\n';
+                  outputElement.scrollTop = outputElement.scrollHeight;
+                }
+                statusElement.textContent = detail;
+                spinnerElement.style.display = 'none';
+                return false;
+              };
+              window.addEventListener('unhandledrejection', (event) => {
+                const reason = event.reason;
+                const detail = 'Portal unhandled rejection: ' +
+                  (reason && reason.stack ? reason.stack : String(reason));
+                console.error(detail);
+                if (outputElement) {
+                  outputElement.value += '\\n' + detail + '\\n';
+                  outputElement.scrollTop = outputElement.scrollHeight;
+                }
+                statusElement.textContent = detail;
+              });
+              canvasElement.addEventListener('webglcontextlost', (event) => {
+                console.error('Portal WebGL context lost', event.statusMessage || '');
+              });
+              canvasElement.addEventListener('webglcontextrestored', () => {
+                console.warn('Portal WebGL context restored');
+              });"""
+          if old not in text:
+              raise SystemExit('upstream shell window.onerror block changed')
+          shell.write_text(text.replace(old, new, 1))
+
+          post = Path('emscripten/post.js')
+          post_text = post.read_text()
+          post_text += r'''
+
+          // Render360 diagnostic-only addition. The upstream build proxies the
+          // application to a pthread, so capture worker-side failures too.
+          if (typeof globalThis !== 'undefined' && globalThis.addEventListener) {
+            globalThis.addEventListener('error', (event) => {
+              const err = event.error;
+              console.error('Portal worker/global error:', event.message || event.type,
+                err && err.stack ? err.stack : err || '');
+            });
+            globalThis.addEventListener('unhandledrejection', (event) => {
+              const reason = event.reason;
+              console.error('Portal worker/global unhandled rejection:',
+                reason && reason.stack ? reason.stack : reason);
+            });
+          }
+          '''
+          post.write_text(post_text)
+          PY
+
+          # This is upstream's own browser build. In particular, KEEP:
+          # SHARED_MEMORY, USE_PTHREADS, PROXY_TO_PTHREAD, its SIDE_MODULE link
+          # layout, ToGL and OffscreenCanvas behavior.
+          bash emscripten/build.sh release
+
+          test -s build/install/hl2_launcher.html
+          test -s build/install/hl2_launcher.js
+          test -s build/install/hl2_launcher.wasm
+          grep -q -- '-sSHARED_MEMORY=1' emscripten/build.sh
+          grep -q -- '-sUSE_PTHREADS' emscripten/build.sh
+          grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
+          grep -q 'Portal JS exception:' emscripten/shell.html
+
+          cat > build/install/render360-upstream-baseline.json <<JSON
+          {
+            "source": "$SOURCE_REPO",
+            "sourceRef": "$SOURCE_REF",
+            "emsdkRef": "$EMSDK_REF",
+            "runtimeModel": "upstream-threaded-shared-memory",
+            "engineChanges": "none",
+            "shellChanges": "diagnostics-only"
+          }
+          JSON
+
+      - name: Package upstream baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd upstream-source/build/install && zip -9 -r "$GITHUB_WORKSPACE/Render360-Portal-Upstream-Baseline.zip" .)
+          ls -lh Render360-Portal-Upstream-Baseline.zip
+
+      - name: Upload upstream baseline
+        uses: actions/upload-artifact@v7
+        with:
+          name: Render360-Portal-Upstream-Baseline
+          path: Render360-Portal-Upstream-Baseline.zip
+          if-no-files-found: error
+          retention-days: 7

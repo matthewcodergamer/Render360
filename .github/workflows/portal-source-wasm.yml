@@ -72,6 +72,7 @@ jobs:
           node --check runtime/pc-controller-input.js
           node --check runtime/pc-library-integration.js
           node --check storage/pc-persistent-storage.js
+          python3 -m py_compile recompiled/pc/portal/source-wasm/trace-source-startup.py
           node ./test-portal-source-wasm-contract.mjs
           node ./test-pc-recompiled-runtime.mjs
           node ./test-pc-persistent-storage.mjs
@@ -125,6 +126,12 @@ jobs:
           sed -Ei 's/freq = EM_ASM_INT/freq = MAIN_THREAD_EM_ASM_INT/' "$sdl_audio"
           embuilder --force --pic build sdl2 sdl2-mt
           patch "$EMSDK/upstream/emscripten/src/lib/libwebgl.js" upstream/portal-source/emscripten/libwebgl.patch
+
+      - name: Instrument Source filesystem startup boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 recompiled/pc/portal/source-wasm/trace-source-startup.py upstream/portal-source
 
       - name: Build Render360 Portal Source runtime
         shell: bash

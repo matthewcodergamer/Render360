@@ -5,7 +5,10 @@ const ROOT_DIR='Render360';
 const PC_DIR='PC';
 const META_FILE='render360-pc-source.json';
 const COPY_CHUNK=4*1024*1024;
-const ignoredGameFile=/\.(?:exe|dll|pdb|sys|bat|cmd|lnk)$/i;
+// Persist only retail data that Source can consume as game content in-browser.
+// Native executable/shared-library files must never be copied into the game
+// mount: Emscripten SIDE_MODULEs come from the verified runtime package only.
+const ignoredGameFile=/\.(?:exe|dll|so|dylib|pdb|sys|bat|cmd|lnk)$/i;
 const allowedGameRoot=/^(?:portal|hl2|platform)\//i;
 
 function safeId(value){const id=String(value||'').trim().replace(/[^a-z0-9._-]+/gi,'-').replace(/^-+|-+$/g,'');if(!id)throw new Error('Persistent PC source needs a game id.');return id.slice(0,120);}
@@ -73,7 +76,9 @@ export async function persistPcRecompiledSource(gameId,source,{storageManager=gl
 export async function restorePcRecompiledSource(gameId,{storageManager=globalThis.navigator?.storage}={}){
   const id=safeId(gameId),base=await gameDirectory(id,{storageManager});const manifest=await readJson(base,META_FILE);
   if(manifest?.schema!=='render360-pc-persistent-source-v1')throw new Error('Saved Portal source metadata is invalid.');
-  const gameFiles=[];for(const item of manifest.gameFiles||[])gameFiles.push(await readStoredFile(base,`game/${safePath(item.path)}`));
+  // Old saved installs may still list native .so/.dll files. Ignore them while
+  // restoring so a pre-fix OPFS cache cannot reintroduce those bytes.
+  const gameFiles=[];for(const item of manifest.gameFiles||[]){if(ignoredGameFile.test(safePath(item.path)))continue;gameFiles.push(await readStoredFile(base,`game/${safePath(item.path)}`));}
   const runtimeFiles=[];for(const item of manifest.runtimeFiles||[])runtimeFiles.push(await readStoredFile(base,`runtime/${safePath(item.path)}`));
   const content=createPcFileListSource(gameFiles,{name:'Portal PC persistent installation',stripCommonRoot:false});const detection=detectPcGame(content);if(!detection.matched)throw new Error(`Saved Portal files are incomplete: ${(detection.candidates?.[0]?.missing||[]).join(', ')}`);
   const runtimePackage=await loadCommunityWasmPackageFromFiles(runtimeFiles,{expectedGameId:detection.gameId});
@@ -83,4 +88,4 @@ export async function restorePcRecompiledSource(gameId,{storageManager=globalThi
 export async function pcPersistentSourceExists(gameId,{storageManager=globalThis.navigator?.storage}={}){try{const base=await gameDirectory(gameId,{storageManager});await base.getFileHandle(META_FILE);return true;}catch{return false;}}
 export async function deletePersistentPcSource(gameId,{storageManager=globalThis.navigator?.storage}={}){const pc=await rootDirectory(storageManager);try{await pc.removeEntry(safeId(gameId),{recursive:true});return true;}catch{return false;}}
 
-export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,restoreWithoutPicker:true});
+export const pcPersistentStorageContract=()=>({schema:'render360-pc-persistent-source-v1',root:`${ROOT_DIR}/${PC_DIR}`,chunkBytes:COPY_CHUNK,gameRoots:['portal','hl2','platform'],runtimeFiles:true,restoreWithoutPicker:true,nativeGameBinariesFiltered:true});

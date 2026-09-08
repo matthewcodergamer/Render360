@@ -1,0 +1,114 @@
+name: Apply Portal V9 GOT Sync
+
+on:
+  push:
+    branches: [portal-v9-got-sync]
+    paths: ['.github/workflows/apply-portal-got-v9.yml']
+
+permissions:
+  contents: write
+
+env:
+  TARGET_BASE: 4ca0811c8fecd8661b30896b248463432de27eed
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact main baseline
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply Emscripten required-GOT catch-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_BASE"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          build_path = Path('recompiled/pc/portal/source-wasm/build-render360.sh')
+          build = build_path.read_text()
+
+          old = '''      assert(lib, `Tried to dlsym() from an unopened handle: ${handle}`);
+                if (!lib.exports.hasOwnProperty(symbol) || lib.exports[symbol].stub) {'''
+          new = '''      assert(lib, `Tried to dlsym() from an unopened handle: ${handle}`);
+
+                // Render360 v9: Emscripten issue #22052 documents a MAIN_MODULE /
+                // SIDE_MODULE failure where allowUndefined:true can leave a required
+                // GOT entry at zero even though dlsym() successfully returns a function
+                // pointer. The first indirect call then traps. Re-run the linker
+                // catch-up immediately before returning Source's module factory.
+                if (symbol === 'CreateInterface') {
+                  var unresolvedBefore = 0;
+                  for (var gotEntry of Object.values(GOT)) {
+                    if (gotEntry && gotEntry.value == 0 && gotEntry.required) unresolvedBefore++;
+                  }
+                  reportUndefinedSymbols();
+                  var unresolvedAfter = 0;
+                  for (var gotEntry of Object.values(GOT)) {
+                    if (gotEntry && gotEntry.value == 0 && gotEntry.required) unresolvedAfter++;
+                  }
+                  err(`Render360 Source GOT sync · ${lib.name} · required ${unresolvedBefore}->${unresolvedAfter}`);
+                }
+
+                if (!lib.exports.hasOwnProperty(symbol) || lib.exports[symbol].stub) {'''
+          if old not in build:
+              raise SystemExit('Portal v9: dlsym insertion anchor not found')
+          build = build.replace(old, new, 1)
+
+          old_profile = "'profile': 'render360-single-worker-workerfs-v8-canonical-dlsym'"
+          new_profile = "'profile': 'render360-single-worker-workerfs-v9-got-sync'"
+          if old_profile not in build:
+              raise SystemExit('Portal v9: v8 profile marker not found')
+          build = build.replace(old_profile, new_profile, 1)
+
+          old_diag = "        'createInterfaceFactoryTrace': True,\n        'dlsymTableMapPrimed': True,"
+          new_diag = "        'createInterfaceFactoryTrace': True,\n        'dlsymRequiredGotCatchup': True,\n        'emscriptenIssue22052Mitigation': True,\n        'dlsymTableMapPrimed': True,"
+          if old_diag not in build:
+              raise SystemExit('Portal v9: diagnostics anchor not found')
+          build = build.replace(old_diag, new_diag, 1)
+
+          req_anchor = "    'Render360 Source CreateInterface resolved',\n"
+          req_insert = "    'Render360 Source CreateInterface resolved',\n    'Render360 Source GOT sync',\n    'reportUndefinedSymbols();',\n"
+          if req_anchor not in build:
+              raise SystemExit('Portal v9: generated-runtime required marker anchor not found')
+          build = build.replace(req_anchor, req_insert, 1)
+          build_path.write_text(build)
+
+          test_path = Path('test-portal-source-wasm-contract.mjs')
+          test = test_path.read_text()
+          test = test.replace(
+              "assert.match(build,/createInterfaceFactoryTrace': True/);\nassert.match(build,/dlsymTableMapPrimed': True/);",
+              "assert.match(build,/createInterfaceFactoryTrace': True/);\nassert.match(build,/dlsymRequiredGotCatchup': True/);\nassert.match(build,/emscriptenIssue22052Mitigation': True/);\nassert.match(build,/dlsymTableMapPrimed': True/);",
+              1,
+          )
+          test = test.replace(
+              "assert.match(build,/render360-single-worker-workerfs-v8-canonical-dlsym/);",
+              "assert.match(build,/render360-single-worker-workerfs-v9-got-sync/);",
+              1,
+          )
+          marker = "assert.match(build,/Render360 Source CreateInterface resolved/);\n"
+          if marker not in test:
+              raise SystemExit('Portal v9: contract marker anchor not found')
+          test = test.replace(marker, marker + "assert.match(build,/Render360 Source GOT sync/);\nassert.match(build,/reportUndefinedSymbols\\(\\);/);\n", 1)
+          pass_marker = "console.log('PORTAL_SOURCE_CREATEINTERFACE_FACTORY_TRACE=PASS');\n"
+          if pass_marker in test:
+              test = test.replace(pass_marker, pass_marker + "console.log('PORTAL_SOURCE_DLSYM_REQUIRED_GOT_CATCHUP=PASS');\n", 1)
+          test_path.write_text(test)
+          PY
+
+      - name: Verify Portal contracts
+        run: node test-portal-source-wasm-contract.mjs
+
+      - name: Commit Portal V9 to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Render360 Portal V9 Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add recompiled/pc/portal/source-wasm/build-render360.sh test-portal-source-wasm-contract.mjs
+          git commit -m 'Fix Portal side-module GOT catch-up before CreateInterface'
+          git push origin HEAD:main

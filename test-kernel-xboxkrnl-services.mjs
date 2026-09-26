@@ -235,7 +235,7 @@ expect((need('r360_kernel_debug_log_count')()>>>0)>=1,'DbgPrint was not captured
 k('HalReturnToFirmware',1);
 expect(status()===4&&(need('r360_kernel_terminal_kind')()>>>0)===1&&(need('r360_kernel_terminal_code')()>>>0)===1,'HalReturnToFirmware did not stop at a terminal boundary');
 expect((need('r360_kernel_terminal_lr')()>>>0)===0x82000100,'terminal boundary did not record caller LR');
-k('NtCreateFile',P,0,0,0,0,0,0,0);expect(status()===2,'unimplemented NtCreateFile did not fail closed');
+k('XAudioRegisterRenderDriverClient',P,P+4);expect(status()===2,'unimplemented XAudioRegisterRenderDriverClient did not fail closed');
 expect(logOut>=0x5A000000,'pool alloc export mismatch');
 console.log('KERNEL_TERMINAL_AND_FAIL_CLOSED=PASS');
 console.log('KERNEL_XBOXKRNL_SERVICES_CRITIC=PASS');

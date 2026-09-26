@@ -1,14 +1,12 @@
 # Render360 — Xenia-Web
 
-**Release 58** · Experimental browser-native Xbox 360 emulator research project built around Xenia's PPC/HIR architecture, WebAssembly, sparse Xbox guest memory and WebGPU, with a separate PC Source/Portal WebAssembly bring-up path.
+**Release 75** · Experimental browser-native Xbox 360 emulator research project built around Xenia's PPC/HIR architecture, WebAssembly, sparse Xbox guest memory and WebGPU, with a separate PC Source/Portal WebAssembly bring-up path.
 
 > Render360 is not claiming Xbox 360 commercial-game playability yet. A title is only promoted when a real user-supplied game continuously executes, produces real GPU work, presents title-produced frames, and accepts working input without synthetic frame substitution.
 
 This README is the current public project status. Historical percentages and old screenshots are not compatibility ratings.
 
-## Current status — September 7, 2026
-
-Development over September 5–7 expanded Render360 beyond the earlier Braid-only status page. The repository now contains two active execution tracks:
+## Current status — September 26, 2026
 
 ```text
 XBOX 360 / XENIA-WEB TRACK
@@ -17,119 +15,56 @@ XISO / XGD / XDVDFS ISO INPUT              WORKING FOUNDATION
 RETAIL XEX PREPARATION                     WORKING FOUNDATION
 XBOX PE SECTION MAPPING                    WORKING FOUNDATION
 XENIA PPC SCANNER / HIR FRONTEND           WORKING FOUNDATION
-WASM32 XENIA BOOTSTRAP                     WORKING FOUNDATION
-SPARSE 32-BIT XBOX GUEST MEMORY            WORKING FOUNDATION
+WASM32 XENIA BOOTSTRAP (-O2)               WORKING FOUNDATION
+SPARSE 32-BIT XBOX GUEST MEMORY            WORKING FOUNDATION (page table)
 PPC CONTEXT / NESTED GUEST CALLS           ACTIVE BRING-UP
-XBOXKRNL / XAM IMPORT PLAN                 WORKING FOUNDATION
-GUEST THREAD / TLS FOUNDATION              IMPLEMENTED; SCHEDULER INCOMPLETE
+XBOXKRNL / XAM STARTUP SERVICES            PORTED FROM XENIA; CI CRITICS
+GUEST FILE SYSTEM (game:, d:, Cdrom0)      IMPLEMENTED; CI CRITICS
+GUEST THREAD / TLS / KTHREAD / KPCR        IMPLEMENTED; SCHEDULER COOPERATIVE
 XENOS PM4 / RING FOUNDATION                IMPLEMENTED; BRAID HAS NOT REACHED IT
 VdSwap / XE_SWAP PATH                      CI-PROVEN FOUNDATION
-XENOS SHADER -> SPIR-V                     CI-PROVEN FOUNDATION
-SPIR-V -> WGSL / WEBGPU                    CI-PROVEN FOUNDATION
-10 MiB WEBGPU EDRAM MIRROR                 IMPLEMENTED FOUNDATION
+XENOS SHADER -> SPIR-V -> WGSL / WEBGPU    CI-PROVEN FOUNDATION
 REAL XBOX COMMERCIAL-TITLE FIRST FRAME     NOT YET VERIFIED
 XBOX COMMERCIAL GAMEPLAY                   NOT YET VERIFIED
 
-PC SOURCE / PORTAL TRACK
-PORTAL RETAIL FILE DISCOVERY               IMPLEMENTED
-PORTAL SOURCE WASM PACKAGE ADAPTER         IMPLEMENTED
-DEDICATED SOURCE WORKER                    IMPLEMENTED
+PC SOURCE / PORTAL TRACK                   UNCHANGED SINCE SEPTEMBER 7
 WORKERFS RETAIL CONTENT MOUNT              VERIFIED ON IPHONE
 SOURCE ENGINE CALLMAIN ENTRY               REACHED
 SOURCE FILESYSTEM MODULE LOAD              CURRENT BRING-UP BOUNDARY
 PORTAL GAMEPLAY / RENDERED FRAME           NOT YET VERIFIED
 ```
 
-The important September 7 change is that Portal is no longer being diagnosed as if it were an Xbox/PPC title. Real-device diagnostics showed the PC Source runtime entering its own engine path, mounting the supplied retail content and reaching Source subsystem initialization. The current Portal investigation is therefore a Source/Emscripten dynamic-module problem, separate from Braid's Xenia PPC/HIR bring-up.
+### Braid: where it stands
 
-### September 7 Portal real-device evidence
+The last real-device Braid measurement (iPhone, V74) got past the V58 shared-epilog blocker, executed 38 HIR instructions from entry `0x8236EF38`, made five kernel calls and then called `xboxkrnl!HalReturnToFirmware` (ordinal `0x28`). That is the title deliberately giving up, not an emulator crash: Xenia implements the same export as process exit. It almost always means an earlier kernel call returned something the game did not accept.
 
-The latest useful iPhone report reached:
+V75 therefore replaces the placeholder kernel surface with a port of Xenia's own `xboxkrnl`/`xam` behaviour (see below). Braid has **not** been re-measured on a device with V75 yet. The next real-device run is the next authoritative data point; the browser now names the stop reason and lists the kernel calls behind it, so one run tells us exactly what to fix next.
 
-```text
-page.appState:       RUNNING
-cpu.runtimeBoundary: portal-source-wasm-running
-Portal files:        1485 mounted into WORKERFS
-Source base.cpp:     SetErrorMode assertion observed
-Source filesystem:   SetErrorMode assertion observed
-Sys_LoadModule:      libfilesystem_stdio.so
-```
+### What changed in V75
 
-The old report also contained empty PPC-style fields such as `pc=0`, `lr=0` and a `native-hir-unsupported-boundary` focus. Those fields were misleading for a PC Source title; there was no measured Xbox guest-memory fault behind them.
+- **Kernel services ported from Xenia** (`src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp`): XConfig settings, module handles and sections, system time, IRQL/spinlocks, events, semaphores, mutants, timers, single/multiple waits, thread creation with Xenia-shaped KTHREAD/KPCR/TLS, pool and physical memory, virtual-memory queries, Rtl strings/critical sections/SLists, NT status mapping, video-mode and display helpers, XAM user/sign-in/locale/input, XAudio render-driver clients and XMA contexts. Export tables are generated from Xenia's `xboxkrnl_table.inc`/`xam_table.inc` (`tools/generate-kernel-export-tables.py`).
+- **Kernel variables** (`KeTimeStampBundle`, `XboxHardwareInfo`, `ExLoadedImageName`, `VdGpuClockInMHz`, ...) use Xenia's layout; anything unmapped gets Xenia's `D###BEEF` placeholder instead of zero.
+- **Guest file system**: `game:`/`d:` resolve to `\Device\Cdrom0` over the user's ISO, package or folder, with `NtCreateFile`/`NtReadFile`/`NtQueryDirectoryFile` and friends. Large files are read on demand; a read the browser cannot satisfy synchronously stops at a named host-I/O boundary and is retried.
+- **Named stop reasons**: title exit (`HalReturnToFirmware`, `XamLoaderTerminateTitle`, bug checks), blocking waits and unimplemented exports are reported by name in the "Game Stopped" sheet; **Diagnostics** shows the last stop with the recent kernel calls as `#n Name(args) -> result`.
+- **CPU runtime speed**: the bootstrap is built at `-O2`, guest memory uses a flat two-level page table with host pointers, SSA values are indexed by Xenia's value ordinals, and per-call text tracing is off unless requested. Guest loop benchmarks improved roughly 1.5–1.75×.
+- **UI**: fixed the iPhone profile sheet opening half off-screen, the laptop header margin, the truncated status line and clipped settings values.
+- **Release lanes** (runtime, title runtime, content bridge, package core, service worker) all agree on V75; the fastlane republishes the browser bootstrap as V75 on `main`.
 
-The Source worker was consequently hardened so a real worker exception, rejected dynamic-library promise, Emscripten abort or `callMain()` failure carries its origin, stack and last Source log line back into Render360 diagnostics. The worker now emits an explicit `portal-source-callmain` stage immediately before entering the Source engine.
+### Running a title on a laptop
 
-Current baseline commit after the September 7 rollback:
-
-```text
-7d463f0163de9d71bf427017cf19ad66337f4707
-Improve Portal Source worker fault diagnostics
-```
-
-This is intentionally the baseline immediately before the later storage-cleanup / delete-all sequence. Those later storage experiments and subsequent iPhone startup experiments are not part of the current `main` baseline.
-
-## Current Braid CPU bring-up — V58 hardened shared-epilog runtime
-
-The September 5 iPhone measurement that identified the Braid blocker used this generated bootstrap:
+`tools/run-title.mjs` runs the same browser runtime headlessly in Node, straight from your own files, and prints why it stopped:
 
 ```text
-sourceCommit: 525a1ac43370ca9b8d357ec3d7c8a3dfd3f7dda0
-sourceRun:    33958433624
-wasm sha256:  0bd12e1d545514ef6e258e38f0efc72bde21990772d5bebf6afab255cc9745d9
-
-entry:        0x8236EF38
-HIR:          340
-executed:     17 instructions
-blocker:      HIR guest-memory dependency (opcode 37)
-PPC:          0x8234F5AC / 0xEBA1FFE0
-operation:    ld r29,-32(r1)
-caller r1:    0x70080EF0
-call:         0x8236C7CC -> 0x8234F5AC
-call flags:   0x2 (CALL_TAIL)
-kernel calls: 0
-GPU:          ring-not-initialized
+node tools/run-title.mjs <game.iso | package (LIVE/PIRS/CON) | default.xex | extracted folder>
+     [--bootstrap build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm]
+     [--trace 64] [--json report.json] [--budget N] [--verbose] [--trace-calls]
 ```
 
-The frame evidence is strong: `0x8236C6E8` allocates `-0x70`, `0x8236C7C8` restores `+0x70`, and the next instruction is the tail branch into the shared restore sequence at `0x8234F5AC`. The zero-address diagnostic is not a real sparse-memory fault; the compatibility executor reached an unsupported HIR memory boundary before performing an authoritative sparse-memory access.
+The report names the stop (for example `title-requested-exit` via `HalReturnToFirmware`), the next kernel export that needs implementing, the recent kernel calls with arguments and results, and the title's `DbgPrint` output. Nothing is uploaded or copied. On an iPhone the same information is under **Game → Diagnostics** after a stop.
 
-### V58 fix: execute shared epilog helpers on the live PPC context
+### iPhone 11 and GTA IV / GTA V, honestly
 
-V58 keeps ordinary linked calls on their exact ABI targets and keeps `.pdata` owner/interior routing for genuine compiler-generated tail fragments. For `CALL_TAIL` targets, Render360 accepts either Xenia `Function::Behavior::kEpilogReturn` metadata or a strict canonical `__restgprlr_N` PPC signature. This matters for Braid's interior label `0x8234F5AC`, which may not be registered as a standalone function even though its instruction stream is the canonical shared restore helper.
-
-The helper bridge:
-
-```text
-CALL_TAIL -> kEpilogReturn metadata OR strict __restgprlr_N signature
-        ↓
-validate every ld rN..r31 slot and exact helper tail
-        ↓
-restore rN..r31 from authoritative sparse guest memory using live r1
-        ↓
-restore LR using canonical lwz r12,-8(r1) 32-bit spill semantics
-        ↓
-complete the existing tail-call return boundary
-```
-
-The implementation remains fail-closed. It validates the complete helper signature when metadata is unavailable, reads only through `SparseGuestMemory`, and returns a real failure if code or stack data is unmapped. It does not map the upper guard, clamp `r1`, fabricate register values, or bypass unrelated memory faults.
-
-The hardened source landed at:
-
-```text
-c0b6d9791b20fd9a404d8c6ce43d9ed4e8222d98
-fix: execute Braid shared epilog on live PPC context
-```
-
-The V58 fastlane rebuilt, verified and published a browser bootstrap with this provenance:
-
-```text
-sourceCommit: 864ececa4a55277288f0812b6f7040fab37597cb
-sourceRun:    33961264666
-wasm sha256:  a981bdecc560431ba2ef54a1f07c55c53ab9d20760e38a4750846190b3474e36
-bytes:        2545518
-publish commit: 3d2b7277b666fbdea834559ad26285acbaf5d7e9
-```
-
-The fastlane verified the hardened V58 source contract, compiled and linked the Xenia WASM32 bootstrap, and passed the existing PE staging, CFG, generated-call/LOAD_OFFSET/XAM, scheduler, sparse direct-call, signed LOAD_OFFSET, title-entry LR ABI and deployed-runtime contract gates before publishing.
+Braid (XBLA, 2D) is the right first target, followed by other XBLA and lighter retail titles. GTA IV and GTA V are not realistic in Safari on an iPhone 11: they need most of the Xbox 360's 512 MiB of RAM plus Render360's own overhead inside a Safari tab limited to roughly 1–1.5 GB, three 3.2 GHz PowerPC hardware threads with heavy VMX128 vector code (WebAssembly has no native JIT, only generated Wasm), and a GPU pipeline that even desktop Xenia struggles to run at speed. Growable WebAssembly memory keeps Render360 from reserving that memory up front, but it cannot make it appear.
 
 ## Browser execution architecture
 
@@ -207,50 +142,40 @@ An Xbox commercial title will only be marked playable after a real user-supplied
 
 For Portal/PC Source, playable means the real Source engine initializes from the user's retail content, loads the required modules and maps, continuously renders genuine game frames, accepts controls and advances through gameplay without a synthetic replacement renderer.
 
-## Near-term engineering order — September 7
+## Near-term engineering order — September 26
 
 ```text
-PORTAL
-1. test the current 7d463f0 baseline on the real iPhone
-2. capture the new Source-aware diagnostic report
-3. determine whether libfilesystem_stdio.so returns, rejects, traps or hangs
-4. if needed, instrument the C++ Sys_LoadModule/dlopen boundary with before/after + dlerror evidence
-5. keep Source failures out of Xenia/PPC blocker reporting
-6. reach Source filesystem/engine initialization
-7. reach the first genuine Portal-rendered frame
-
 XBOX / BRAID
-1. preserve the V58 PPC/HIR correctness work
-2. obtain the next authoritative Braid real-device measurement
-3. inspect only the next measured PPC/HIR blocker
-4. reach the first real xboxkrnl/XAM HLE call
-5. bring the guest scheduler online
-6. reach Xenos ring initialization and PM4 traffic
-7. reach VdSwap and the first genuine title frame
+1. run Braid on the real device with V75 and read the named stop + kernel calls
+2. implement or correct the kernel service that report points at (Xenia semantics)
+3. repeat until Braid's startup reaches Xenos ring initialization (VdInitializeRingBuffer)
+4. bring PM4 traffic, VdSwap and the first genuine title frame online
+5. move emulation into a Web Worker so long guest runs never block the page
+
+PORTAL
+1. determine whether libfilesystem_stdio.so returns, rejects, traps or hangs
+2. reach Source filesystem/engine initialization
+3. reach the first genuine Portal-rendered frame
 ```
 
 ## Important files
 
-- `recompiled/pc/portal/source-wasm/portal-source-worker.mjs` — dedicated Portal Source worker, retail mount, Source initialization and fault reporting.
-- `recompiled/pc/portal/source-wasm/portal-package-adapter.mjs` — Portal runtime-package bridge.
-- `recompiled/pc/portal/source-wasm/build-render360.sh` — Source/Emscripten build and Render360 integration patching.
-- `runtime/pc-library-integration.js` — PC-title library/controller integration at the current pre-cleanup baseline.
-- `storage/pc-persistent-storage.js` — PC persistent-source support at the current pre-delete-all baseline.
-- `render360-title-controller.mjs` — extracted XEX title handoff and main-thread context setup.
-- `src/xenia_web_bootstrap/ppc_translation_probe.cpp` — movable Xenia PPC decoder/scanner window and production probe ABI.
-- `src/xenia_web_bootstrap/hir_correctness_executor.cpp` — base correctness executor source.
-- `prepare-hir-call-return-stack-overlay.py` — nested call/return semantics, sparse-memory fail-closed behavior and stack provenance.
-- `prepare-hir-return-metadata-v3-overlay.py` — return-token lifetime rules, Xenia entry LR state and V52 depth-1 return seeding plus V55-V58 tail/epilog routing.
-- `src/xenia_web_bootstrap/probe_backend.cpp` — nested-call resolver and V58 live-context shared-epilog helper bridge.
-- `tools/apply-xenia-epilog-inline-v58.py` — idempotent V58 shared-epilog source hardening patch.
-- `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — authoritative sparse Xbox virtual memory.
-- `src/xenia_web_bootstrap/kernel_import_probe.cpp` — imported thunk / HLE boundary.
-- `src/xenia_web_bootstrap/kernel_runtime_foundation.cpp` — browser kernel service foundation.
+- `src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp` — Xenia-ported xboxkrnl/XAM services, guest file system, terminal and wait boundaries.
+- `src/xenia_web_bootstrap/kernel_runtime_foundation.cpp` — guest threads, TLS, handles and virtual memory.
+- `src/xenia_web_bootstrap/kernel_import_probe.cpp` — imported thunk / HLE boundary and named kernel call trace.
+- `src/xenia_web_bootstrap/kernel_export_ordinals.h`, `render360-kernel-export-names.mjs` — generated from Xenia's export tables.
+- `render360-guest-vfs.mjs` — registers the user's ISO/package/folder as the guest disc.
+- `tools/run-title.mjs` — headless title runner for laptop iteration.
+- `render360-title-controller.mjs` — extracted XEX title handoff, main-thread context, kernel variables and boundary telemetry.
+- `render360-browser-ppc-session.mjs`, `render360-browser-thread-scheduler.mjs` — generated-Wasm CPU session and cooperative guest scheduler.
+- `src/xenia_web_bootstrap/sparse_guest_memory.cpp` — authoritative sparse Xbox virtual memory (two-level page table).
+- `src/xenia_web_bootstrap/hir_correctness_executor.cpp` — base HIR compatibility executor.
+- `src/xenia_web_bootstrap/probe_backend.cpp` — nested-call resolver and shared-epilog helper bridge.
 - `src/xenia_web_bootstrap/title_gpu_runtime.cpp` — title ring/MMIO/VdSwap runtime.
 - `src/xenia_web_bootstrap/xenos_gpu_foundation.cpp` — Xenos PM4/resource/EDRAM state.
 - `render360-webgpu-runtime.mjs` — browser WebGPU/eDRAM foundation.
-- `WEBGPU_BROWSER_RUNTIME.md` — browser GPU/runtime architecture notes.
-- `ROADMAP.md` — broader project milestones.
+- `recompiled/pc/portal/source-wasm/` — Portal Source worker, package adapter and build.
+- `docs/PROJECT_LAYOUT.md` — repository rules; `ROADMAP.md` — broader milestones.
 
 ## Legal / project scope
 

@@ -34,6 +34,11 @@ on:
       - 'test-kernel-nt-free-virtual-memory.mjs'
       - 'test-kernel-services-critic.mjs'
       - 'test-kernel-xboxkrnl-services.mjs'
+      - 'test-kernel-vfs.mjs'
+      - 'test-title-runner.mjs'
+      - 'tools/run-title.mjs'
+      - 'render360-guest-vfs.mjs'
+      - 'render360-browser-wasi.mjs'
       - 'render360-kernel-export-names.mjs'
       - 'tools/generate-kernel-export-tables.py'
       - 'test-xex-guest-mapper.mjs'
@@ -252,6 +257,11 @@ jobs:
 
       - name: Verify Xenia-ported xboxkrnl/XAM service layer
         run: timeout 90s node ./test-kernel-xboxkrnl-services.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify guest VFS and headless title runner
+        run: |
+          timeout 90s node ./test-kernel-vfs.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          timeout 120s node ./test-title-runner.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

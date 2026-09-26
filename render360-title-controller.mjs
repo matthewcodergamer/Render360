@@ -78,7 +78,7 @@ function readXexDefaultStackSize(xex,headerSize){
 }
 
 const TERMINAL_KINDS=['none','HalReturnToFirmware','KeBugCheck','ExTerminateThread','XamLoaderTerminateTitle','XamLoaderLaunchTitle','title process exit'];
-const WAIT_REASONS=['none','infinite wait on an unsignalled object','bounded wait spinning without progress','lock held by another guest thread'];
+const WAIT_REASONS=['none','infinite wait on an unsignalled object','bounded wait spinning without progress','lock held by another guest thread','game file bytes not yet available to the synchronous kernel'];
 
 // Names the terminal (title exit) or would-block (wait) boundary reported by
 // the native kernel so diagnostics say *why* execution stopped.
@@ -90,7 +90,7 @@ export function readKernelBoundaryTelemetry(bootstrap,kernelLastStatus){
   }
   if(kernelLastStatus===5){
     const reason=get('r360_kernel_wait_reason'),module=get('r360_kernel_wait_module'),ordinal=get('r360_kernel_wait_ordinal');
-    return {kind:'guest-wait-blocked',reason:WAIT_REASONS[reason]||`wait-${reason}`,export:kernelExportName(module,ordinal),object:get('r360_kernel_wait_object'),handle:get('r360_kernel_wait_handle'),objectType:get('r360_kernel_wait_object_type')};
+    return {kind:'guest-wait-blocked',waitReason:reason,reason:WAIT_REASONS[reason]||`wait-${reason}`,export:kernelExportName(module,ordinal),object:get('r360_kernel_wait_object'),handle:get('r360_kernel_wait_handle'),objectType:get('r360_kernel_wait_object_type')};
   }
   return null;
 }
@@ -381,6 +381,11 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const prepared=await prepareRetailXexImage({core,bootstrap,header,body,encryptedSecurityKey,useDevkitKey});
 
   for(const n of ['r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_pe_guest_load','r360_pe_guest_load_at_entry','r360_pe_guest_status','r360_pe_guest_entry_address','r360_pe_guest_pe_entry_address','r360_title_handoff_reset','r360_title_handoff_translate_entry','r360_title_handoff_status','r360_title_handoff_entry_address','r360_title_handoff_bytes','r360_title_handoff_hir_instructions'])if(typeof pick(bootstrap,n)!=='function')throw new Error(`missing title-controller export ${n}`);
+  // Each handoff is a fresh title boot: clear native kernel objects, pool,
+  // thread registry and trace state (the registered guest VFS is preserved).
+  maybe(bootstrap,'r360_kernel_runtime_reset')?.();
+  maybe(bootstrap,'r360_kernel_services_reset')?.();
+  maybe(bootstrap,'r360_kernel_service_reset')?.();
   const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
   const peEntry=pick(bootstrap,'r360_pe_guest_pe_entry_address')()>>>0;

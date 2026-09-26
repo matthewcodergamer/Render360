@@ -86,6 +86,11 @@ export async function validatePpcBootstrapAsset(bytes,metadata,{cryptoImpl=globa
   };
 }
 
+// WASI host per bootstrap instance, so the guest VFS can register host files
+// (disc image readers) that the kernel reads through fd_pread.
+const wasiHostByInstance=new WeakMap();
+export function getBootstrapWasiHost(bootstrap){return wasiHostByInstance.get(bootstrap)??null;}
+
 async function instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl}){
   if(typeof WebAssembly!=='object')throw new Error('WebAssembly is unavailable');
   if(typeof fetchImpl!=='function')throw new Error('fetch is unavailable');
@@ -104,6 +109,7 @@ async function instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,
   validateRender360BrowserImports(module);
   attachRender360BrowserInstance(host,instance);
   validateBrowserBootstrap(instance);
+  wasiHostByInstance.set(instance,host);
   globalThis.render360PpcRuntimeIdentity={...identity,url,metadataUrl,loadedAt:new Date().toISOString(),loadCount:1};
   return instance;
 }

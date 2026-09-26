@@ -33,6 +33,10 @@
 #include "sparse_guest_memory.h"
 
 #if defined(__wasm__)
+#include <wasi/api.h>
+#endif
+
+#if defined(__wasm__)
 #define R360_WASM_EXPORT(name) __attribute__((used, export_name(name)))
 #else
 #define R360_WASM_EXPORT(name)
@@ -84,6 +88,17 @@ constexpr uint32_t X_STATUS_NOT_FOUND = 0xC0000225u;
 constexpr uint32_t X_STATUS_INVALID_PARAMETER_1 = 0xC00000EFu;
 constexpr uint32_t X_STATUS_INVALID_PARAMETER_2 = 0xC00000F0u;
 constexpr uint32_t X_STATUS_INVALID_PARAMETER_3 = 0xC00000F1u;
+constexpr uint32_t X_STATUS_NO_MORE_FILES = 0x80000006u;
+constexpr uint32_t X_STATUS_INVALID_INFO_CLASS = 0xC0000003u;
+constexpr uint32_t X_STATUS_INFO_LENGTH_MISMATCH = 0xC0000004u;
+constexpr uint32_t X_STATUS_ACCESS_VIOLATION = 0xC0000005u;
+constexpr uint32_t X_STATUS_NO_SUCH_FILE = 0xC000000Fu;
+constexpr uint32_t X_STATUS_END_OF_FILE = 0xC0000011u;
+constexpr uint32_t X_STATUS_ACCESS_DENIED = 0xC0000022u;
+constexpr uint32_t X_STATUS_OBJECT_NAME_INVALID = 0xC0000033u;
+constexpr uint32_t X_STATUS_OBJECT_NAME_COLLISION = 0xC0000035u;
+constexpr uint32_t X_STATUS_FILE_IS_A_DIRECTORY = 0xC00000BAu;
+constexpr uint32_t X_STATUS_NOT_A_DIRECTORY = 0xC0000103u;
 
 // Win32 / HRESULT values used by XAM.
 constexpr uint32_t X_ERROR_SUCCESS = 0x00000000u;
@@ -626,6 +641,7 @@ enum class ObjectType : uint8_t {
   kTimer,
   kThread,
   kNotifyListener,
+  kFile,
 };
 
 struct KernelObject {
@@ -641,6 +657,11 @@ struct KernelObject {
   uint64_t due_time = 0;
   uint32_t period_ms = 0;
   bool armed = false;
+  // File state (Xenia XFile).
+  uint32_t vfs_entry = 0;  // 1-based index into the VFS table.
+  uint64_t position = 0;
+  uint32_t find_index = 0;
+  std::string find_pattern;
 };
 
 constexpr uint32_t kHandleBase = 0xF8000000u;
@@ -952,6 +973,15 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
 
 bool GuestObjectForHandle(uint32_t handle, uint32_t* guest) {
   KernelObject* object = ResolveHandle(handle);
+  if (object && object->type == ObjectType::kFile && !object->guest) {
+    // Files complete I/O synchronously, so they are always signalled. Give
+    // the object a signalled notification-event header to wait on.
+    object->guest = PoolAlloc(16);
+    object->owns_guest = true;
+    if (!object->guest || !InitDispatcher(object->guest, kDispNotificationEvent, 16, 1)) {
+      return false;
+    }
+  }
   if (!object || !object->guest) return false;
   *guest = object->guest;
   return true;
@@ -1191,6 +1221,288 @@ uint32_t InputUserIndex(uint32_t user_index, uint32_t flags) {
   // XINPUT_FLAG_ANY_USER = 0x40000000. Xenia pins "any user" to user 0.
   if ((user_index & 0xFFu) == 0xFFu || (flags & 0x40000000u)) return 0;
   return user_index;
+}
+
+
+// ---------------------------------------------------------------------------
+// Virtual file system (Xenia VirtualFileSystem + DiscImageDevice).
+//
+// The browser loader registers the title's disc/package directory tree. File
+// bytes come from one of two sources:
+//   * a buffer the loader filled in wasm memory (small or prefetched files), or
+//   * WASI fd_pread on a host descriptor the loader owns (the Node title runner
+//     reads the real ISO synchronously; a worker-hosted browser runtime can
+//     use FileReaderSync on the File/Blob).
+// When neither can supply the bytes synchronously the read stops at a
+// would-block "host I/O" boundary naming the file, offset and length.
+
+constexpr uint32_t kFileAttributeReadOnly = 0x0001u;
+constexpr uint32_t kFileAttributeDirectory = 0x0010u;
+constexpr uint32_t kFileAttributeNormal = 0x0080u;
+constexpr uint32_t kWaitReasonHostIo = 4u;
+
+struct VfsEntry {
+  std::string path;  // Lowercase, '\\'-separated, relative to the device root.
+  std::string name;  // Original-case final component.
+  uint64_t size = 0;
+  uint32_t attributes = kFileAttributeNormal | kFileAttributeReadOnly;
+  uint32_t host_fd = 0;
+  uint64_t host_offset = 0;
+  std::vector<uint8_t> data;
+  bool has_data = false;
+  uint64_t timestamp = 0;
+};
+
+std::vector<VfsEntry>& VfsEntries() {
+  static std::vector<VfsEntry> entries;
+  return entries;
+}
+std::map<std::string, uint32_t>& VfsIndex() {
+  static std::map<std::string, uint32_t> index;
+  return index;
+}
+// Symbolic links (ObCreateSymbolicLink / Xenia RegisterSymbolicLink).
+std::map<std::string, std::string>& VfsSymlinks() {
+  static std::map<std::string, std::string> links;
+  return links;
+}
+const char kDiscDevice[] = "\\device\\cdrom0";
+
+struct HostIoRequest {
+  uint32_t entry = 0;
+  uint64_t offset = 0;
+  uint32_t length = 0;
+  uint32_t host_errno = 0;
+};
+HostIoRequest g_host_io;
+uint32_t g_vfs_reads = 0;
+uint64_t g_vfs_bytes_read = 0;
+char g_vfs_path_buffer[1024];
+
+std::string Lower(std::string text) {
+  for (auto& c : text) c = char(c >= 'A' && c <= 'Z' ? c + 32 : c);
+  return text;
+}
+
+// xe::utf8::canonicalize_guest_path: split on '\\' or '/', drop '.', pop '..'.
+std::string CanonicalizeGuestPath(const std::string& path) {
+  std::vector<std::string> parts;
+  std::string current;
+  const auto flush = [&]() {
+    if (current.empty() || current == ".") {
+    } else if (current == "..") {
+      if (!parts.empty()) parts.pop_back();
+    } else {
+      parts.push_back(current);
+    }
+    current.clear();
+  };
+  for (char c : path) {
+    if (c == '\\' || c == '/') {
+      flush();
+    } else {
+      current.push_back(c);
+    }
+  }
+  flush();
+  std::string out;
+  const bool rooted = !path.empty() && (path[0] == '\\' || path[0] == '/');
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i || rooted) out.push_back('\\');
+    out += parts[i];
+  }
+  return out;
+}
+
+void EnsureDefaultSymlinks() {
+  auto& links = VfsSymlinks();
+  if (!links.empty()) return;
+  links["game:"] = kDiscDevice;
+  links["d:"] = kDiscDevice;
+}
+
+// Resolves a guest path to a device-relative key ("" is the device root).
+// Returns false when no registered device owns the path.
+bool ResolveGuestPath(std::string path, std::string* relative) {
+  EnsureDefaultSymlinks();
+  if (Lower(path.substr(0, 4)) == "\\??\\") path = path.substr(4);
+  std::string normalized = Lower(CanonicalizeGuestPath(path));
+  for (int depth = 0; depth < 8; ++depth) {
+    bool resolved = false;
+    for (const auto& [key, value] : VfsSymlinks()) {
+      if (normalized.compare(0, key.size(), key) == 0) {
+        normalized = Lower(CanonicalizeGuestPath(value + "\\" + normalized.substr(key.size())));
+        resolved = true;
+        break;
+      }
+    }
+    if (!resolved) break;
+  }
+  const std::string device = kDiscDevice;
+  if (normalized.compare(0, device.size(), device) != 0) return false;
+  std::string rest = normalized.substr(device.size());
+  if (!rest.empty() && rest[0] != '\\') return false;
+  if (!rest.empty()) rest = rest.substr(1);
+  *relative = rest;
+  return true;
+}
+
+uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
+                          uint32_t attributes, uint32_t host_fd,
+                          uint64_t host_offset) {
+  std::string canonical = CanonicalizeGuestPath(raw_path);
+  if (!canonical.empty() && canonical[0] == '\\') canonical = canonical.substr(1);
+  const std::string key = Lower(canonical);
+  auto& entries = VfsEntries();
+  auto& index = VfsIndex();
+  // Register parent directories first so directory queries can enumerate.
+  const size_t slash = canonical.find_last_of('\\');
+  if (slash != std::string::npos) {
+    const std::string parent = canonical.substr(0, slash);
+    if (!index.count(Lower(parent))) {
+      RegisterVfsEntry(parent, 0, kFileAttributeDirectory | kFileAttributeReadOnly, 0, 0);
+    }
+  }
+  auto found = index.find(key);
+  if (found != index.end()) {
+    auto& entry = entries[found->second - 1];
+    entry.size = size;
+    entry.attributes = attributes;
+    entry.host_fd = host_fd;
+    entry.host_offset = host_offset;
+    return found->second;
+  }
+  VfsEntry entry;
+  entry.path = key;
+  entry.name = slash == std::string::npos ? canonical : canonical.substr(slash + 1);
+  entry.size = size;
+  entry.attributes = attributes;
+  entry.host_fd = host_fd;
+  entry.host_offset = host_offset;
+  entry.timestamp = kUnixEpochAsFileTime;
+  entries.push_back(std::move(entry));
+  index[key] = uint32_t(entries.size());
+  return uint32_t(entries.size());
+}
+
+VfsEntry* VfsEntryAt(uint32_t one_based) {
+  auto& entries = VfsEntries();
+  return one_based && one_based <= entries.size() ? &entries[one_based - 1] : nullptr;
+}
+
+uint32_t LookupVfs(const std::string& relative) {
+  if (relative.empty()) return 0;  // Device root; callers special-case it.
+  auto it = VfsIndex().find(relative);
+  return it == VfsIndex().end() ? 0u : it->second;
+}
+
+// XFile::Read semantics: returns an NTSTATUS, fills *read. Sets
+// g_status = would-block when the host cannot provide the bytes now.
+uint32_t ReadVfs(VfsEntry& entry, uint32_t entry_index, uint64_t offset,
+                 uint32_t guest_buffer, uint32_t length, uint32_t* read) {
+  *read = 0;
+  if (!length) return X_STATUS_SUCCESS;
+  if (uint64_t(guest_buffer) + length > 0x100000000ull) return X_STATUS_ACCESS_VIOLATION;
+  if (offset >= entry.size) return X_STATUS_END_OF_FILE;
+  const uint32_t count = uint32_t(std::min<uint64_t>(length, entry.size - offset));
+  if (entry.has_data) {
+    if (!Wr(guest_buffer, entry.data.data() + offset, count)) return X_STATUS_ACCESS_VIOLATION;
+    *read = count;
+    ++g_vfs_reads;
+    g_vfs_bytes_read += count;
+    return X_STATUS_SUCCESS;
+  }
+#if defined(__wasm__)
+  if (entry.host_fd) {
+    std::vector<uint8_t> chunk(std::min<uint32_t>(count, 1u << 20));
+    uint32_t done = 0;
+    while (done < count) {
+      const uint32_t want = std::min<uint32_t>(count - done, uint32_t(chunk.size()));
+      __wasi_iovec_t iov{chunk.data(), want};
+      __wasi_size_t got = 0;
+      const __wasi_errno_t err = __wasi_fd_pread(
+          entry.host_fd, &iov, 1, entry.host_offset + offset + done, &got);
+      if (err != __WASI_ERRNO_SUCCESS || got == 0) {
+        if (done) break;
+        g_host_io = {entry_index, offset, count, uint32_t(err)};
+        g_wait = {};
+        g_wait.object = entry_index;
+        g_wait.reason = kWaitReasonHostIo;
+        g_status = kKernelServiceWouldBlock;
+        return 0;
+      }
+      if (!Wr(guest_buffer + done, chunk.data(), got)) return X_STATUS_ACCESS_VIOLATION;
+      done += got;
+    }
+    *read = done;
+    ++g_vfs_reads;
+    g_vfs_bytes_read += done;
+    return X_STATUS_SUCCESS;
+  }
+#endif
+  g_host_io = {entry_index, offset, count, 0};
+  g_wait = {};
+  g_wait.object = entry_index;
+  g_wait.reason = kWaitReasonHostIo;
+  g_status = kKernelServiceWouldBlock;
+  return 0;
+}
+
+bool WriteIoStatus(uint32_t io_status_block, uint32_t status, uint32_t information) {
+  if (!io_status_block) return true;
+  return Wr32(io_status_block, status) && Wr32(io_status_block + 4u, information);
+}
+
+// Reads X_OBJECT_ATTRIBUTES and returns the full guest path, prefixing the
+// path of a root-directory file handle when one is supplied.
+bool ObjectAttributesPath(uint32_t attributes_ptr, std::string* path) {
+  uint32_t root = 0, name_ptr = 0;
+  if (!Rd32(attributes_ptr, &root) || !Rd32(attributes_ptr + 4u, &name_ptr)) return false;
+  std::string name;
+  if (name_ptr && !ReadAnsiString(name_ptr, &name)) return false;
+  for (char c : name) {
+    if (uint8_t(c) < 0x20 || uint8_t(c) >= 0x7F) return false;  // Xenia IsValidPath.
+  }
+  if (root && root != 0xFFFFFFFDu) {  // 0xFFFFFFFD = ObDosDevices.
+    KernelObject* dir = ResolveHandle(root);
+    if (!dir || dir->type != ObjectType::kFile) return false;
+    const VfsEntry* base = VfsEntryAt(dir->vfs_entry);
+    name = std::string(kDiscDevice) + (base ? "\\" + base->path : std::string()) + "\\" + name;
+  }
+  *path = name;
+  return true;
+}
+
+// Wildcard match used by NtQueryDirectoryFile (Xenia FindEngine semantics
+// for '*' and '?', case-insensitive).
+bool WildcardMatch(const std::string& pattern, const std::string& text) {
+  size_t p = 0, t = 0, star = std::string::npos, mark = 0;
+  while (t < text.size()) {
+    if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
+      ++p;
+      ++t;
+    } else if (p < pattern.size() && pattern[p] == '*') {
+      star = p++;
+      mark = t;
+    } else if (star != std::string::npos) {
+      p = star + 1;
+      t = ++mark;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.size() && pattern[p] == '*') ++p;
+  return p == pattern.size();
+}
+
+bool WriteNetworkOpenInfo(uint32_t out, const VfsEntry* entry, bool is_root) {
+  const uint64_t size = entry ? entry->size : 0;
+  const uint64_t time = entry ? entry->timestamp : kUnixEpochAsFileTime;
+  const uint32_t attributes = is_root ? (kFileAttributeDirectory | kFileAttributeReadOnly)
+                                      : entry->attributes;
+  return Wr64(out + 0, time) && Wr64(out + 8, time) && Wr64(out + 16, time) &&
+         Wr64(out + 24, time) && Wr64(out + 32, (size + 2047u) & ~uint64_t(2047u)) &&
+         Wr64(out + 40, size) && Wr32(out + 48, attributes) && Wr32(out + 52, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1881,8 +2193,317 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       }
       return 0;
     }
-    case kx::ObCreateSymbolicLink:
-    case kx::ObDeleteSymbolicLink:
+    case kx::ObCreateSymbolicLink: {
+      // (X_ANSI_STRING* link, X_ANSI_STRING* target)
+      std::string link, target;
+      if (!ReadAnsiString(r3, &link) || !ReadAnsiString(r4, &target)) return Invalid();
+      EnsureDefaultSymlinks();
+      VfsSymlinks()[Lower(CanonicalizeGuestPath(link))] = Lower(CanonicalizeGuestPath(target));
+      return X_STATUS_SUCCESS;
+    }
+    case kx::ObDeleteSymbolicLink: {
+      std::string link;
+      if (!ReadAnsiString(r3, &link)) return Invalid();
+      VfsSymlinks().erase(Lower(CanonicalizeGuestPath(link)));
+      return X_STATUS_SUCCESS;
+    }
+
+    // --- File system (Xenia xboxkrnl_io.cc / xboxkrnl_io_info.cc) ------------
+    case kx::NtCreateFile:
+    case kx::NtOpenFile: {
+      // NtCreateFile(handle_out, access, attrs, iosb, alloc_size_ptr,
+      //              file_attributes, share_access, disposition, options)
+      // NtOpenFile(handle_out, access, attrs, iosb, share_access, options)
+      const bool open = ordinal == kx::NtOpenFile;
+      const uint32_t handle_out = r3, attrs = r5, iosb = r6;
+      const uint32_t disposition = open ? 1u : a[7];
+      uint32_t options = open ? r8 : 0u;
+      if (!open && !StackArg(8, &options)) options = 0;
+      if (!attrs) return X_STATUS_INVALID_PARAMETER;
+      std::string path;
+      if (!ObjectAttributesPath(attrs, &path)) {
+        WriteIoStatus(iosb, X_STATUS_OBJECT_NAME_INVALID, 0);
+        return X_STATUS_OBJECT_NAME_INVALID;
+      }
+      std::string relative;
+      uint32_t entry_index = 0;
+      bool is_root = false;
+      if (ResolveGuestPath(path, &relative)) {
+        is_root = relative.empty();
+        entry_index = LookupVfs(relative);
+      }
+      const bool exists = is_root || entry_index;
+      // FILE_SUPERSEDE 0, OPEN 1, CREATE 2, OPEN_IF 3, OVERWRITE 4, OVERWRITE_IF 5.
+      if (!exists) {
+        const uint32_t status = (disposition == 1u || disposition == 4u)
+                                    ? X_STATUS_NO_SUCH_FILE
+                                    : X_STATUS_ACCESS_DENIED;  // Disc is read-only.
+        WriteIoStatus(iosb, status, 5u /* kDoesNotExist */);
+        if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
+        return status;
+      }
+      if (disposition == 2u) {
+        WriteIoStatus(iosb, X_STATUS_OBJECT_NAME_COLLISION, 4u /* kExists */);
+        if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
+        return X_STATUS_OBJECT_NAME_COLLISION;
+      }
+      const VfsEntry* entry = VfsEntryAt(entry_index);
+      const bool is_directory = is_root || (entry->attributes & kFileAttributeDirectory);
+      // FILE_DIRECTORY_FILE 0x1, FILE_NON_DIRECTORY_FILE 0x40.
+      if (is_directory && (options & 0x40u)) {
+        WriteIoStatus(iosb, X_STATUS_FILE_IS_A_DIRECTORY, 0);
+        return X_STATUS_FILE_IS_A_DIRECTORY;
+      }
+      if (!is_directory && (options & 0x1u)) {
+        WriteIoStatus(iosb, X_STATUS_NOT_A_DIRECTORY, 0);
+        return X_STATUS_NOT_A_DIRECTORY;
+      }
+      const uint32_t handle = CreateObject(ObjectType::kFile, 0, false);
+      if (!handle) return X_STATUS_NO_MEMORY;
+      uint32_t slot = 0;
+      SlotForHandle(handle, &slot);
+      Objects()[slot].vfs_entry = entry_index;
+      WriteIoStatus(iosb, X_STATUS_SUCCESS, 1u /* kOpened */);
+      if (handle_out && !Wr32(handle_out, handle)) return Invalid();
+      return X_STATUS_SUCCESS;
+    }
+    case kx::NtReadFile: {
+      // (file, event, apc_routine, apc_context, iosb, buffer, length, offset_ptr)
+      const uint32_t event = r4, iosb = r7, buffer = r8, length = r9;
+      const uint32_t offset_ptr = a[7];
+      KernelObject* event_object = event ? ResolveHandle(event) : nullptr;
+      KernelObject* file = ResolveHandle(r3);
+      if ((event && !event_object) || !file || file->type != ObjectType::kFile) {
+        WriteIoStatus(iosb, X_STATUS_INVALID_HANDLE, 0);
+        return X_STATUS_INVALID_HANDLE;
+      }
+      VfsEntry* entry = VfsEntryAt(file->vfs_entry);
+      if (!entry || (entry->attributes & kFileAttributeDirectory)) {
+        WriteIoStatus(iosb, X_STATUS_INVALID_PARAMETER, 0);
+        return X_STATUS_INVALID_PARAMETER;
+      }
+      uint64_t offset = file->position;
+      if (offset_ptr) {
+        uint64_t requested = 0;
+        if (!Rd64(offset_ptr, &requested)) return Invalid();
+        // FILE_USE_FILE_POINTER_POSITION is -2 (0xFFFFFFFFFFFFFFFE).
+        if (requested < 0xFFFFFFFFFFFFFFFEull) offset = requested;
+      }
+      uint32_t bytes = 0;
+      const uint32_t status = ReadVfs(*entry, file->vfs_entry, offset, buffer, length, &bytes);
+      if (g_status != kKernelServiceSuccess) return status;
+      if (status == X_STATUS_SUCCESS) file->position = offset + bytes;
+      WriteIoStatus(iosb, status, bytes);
+      if (event_object && event_object->type == ObjectType::kEvent) {
+        Wr32(event_object->guest + 4u, 1);
+      }
+      if ((r5 & ~1u) && r6) DebugLog("NtReadFile APC completion not delivered");
+      return status;
+    }
+    case kx::NtWriteFile: {
+      KernelObject* file = ResolveHandle(r3);
+      if (!file || file->type != ObjectType::kFile) return X_STATUS_INVALID_HANDLE;
+      WriteIoStatus(r7, X_STATUS_ACCESS_DENIED, 0);
+      return X_STATUS_ACCESS_DENIED;  // Game disc media is read-only.
+    }
+    case kx::NtQueryInformationFile: {
+      // (file, iosb, info, length, class)
+      uint32_t minimum = 0;
+      switch (r7) {
+        case 6: minimum = 8; break;    // Internal
+        case 14: minimum = 8; break;   // Position
+        case 34: minimum = 56; break;  // NetworkOpen
+        case 16: case 17: case 26: case 32: minimum = 4; break;
+        case 9: case 19: minimum = 8; break;
+        case 4: minimum = 40; break;   // Basic
+        case 5: minimum = 24; break;   // Standard
+        default: return X_STATUS_INVALID_INFO_CLASS;
+      }
+      if (r6 < minimum) return X_STATUS_INFO_LENGTH_MISMATCH;
+      KernelObject* file = ResolveHandle(r3);
+      if (!file || file->type != ObjectType::kFile) return X_STATUS_INVALID_HANDLE;
+      const VfsEntry* entry = VfsEntryAt(file->vfs_entry);
+      if (!ZeroGuest(r5, r6)) return Invalid();
+      uint32_t status = X_STATUS_SUCCESS, out_length = 0;
+      switch (r7) {
+        case 6: {  // FileInternalInformation: stable per-path index.
+          uint64_t hash = 1469598103934665603ull;
+          for (char c : entry ? entry->path : std::string()) hash = (hash ^ uint8_t(c)) * 1099511628211ull;
+          Wr64(r5, hash);
+          out_length = 8;
+          break;
+        }
+        case 14:
+          Wr64(r5, file->position);
+          out_length = 8;
+          break;
+        case 34:
+          WriteNetworkOpenInfo(r5, entry, !entry);
+          out_length = 56;
+          break;
+        case 17:  // Alignment
+          out_length = 4;
+          break;
+        case 4: {  // Basic: 4 times + attributes.
+          const uint64_t time = entry ? entry->timestamp : kUnixEpochAsFileTime;
+          for (uint32_t i = 0; i < 4; ++i) Wr64(r5 + i * 8u, time);
+          Wr32(r5 + 32u, entry ? entry->attributes : kFileAttributeDirectory);
+          out_length = 40;
+          break;
+        }
+        case 5: {  // Standard: allocation, end of file, links, delete, dir.
+          const uint64_t size = entry ? entry->size : 0;
+          Wr64(r5, (size + 2047u) & ~uint64_t(2047u));
+          Wr64(r5 + 8u, size);
+          Wr32(r5 + 16u, 1);
+          Wr8(r5 + 21u, (!entry || (entry->attributes & kFileAttributeDirectory)) ? 1 : 0);
+          out_length = 24;
+          break;
+        }
+        default:
+          status = X_STATUS_INVALID_PARAMETER;
+          break;
+      }
+      WriteIoStatus(r4, status, out_length);
+      return status;
+    }
+    case kx::NtSetInformationFile: {
+      // (file, iosb, info, length, class)
+      KernelObject* file = ResolveHandle(r3);
+      if (!file || file->type != ObjectType::kFile) return X_STATUS_INVALID_HANDLE;
+      uint32_t status = X_STATUS_SUCCESS, out_length = 0;
+      switch (r7) {
+        case 14: {  // Position
+          if (r6 < 8) return X_STATUS_INFO_LENGTH_MISMATCH;
+          uint64_t position = 0;
+          if (!Rd64(r5, &position)) return Invalid();
+          file->position = position;
+          out_length = 8;
+          break;
+        }
+        case 13:  // Disposition (ignored by Xenia)
+        case 16:  // Mode
+        case 19:  // Allocation (ignored by Xenia)
+        case 32:  // I/O priority
+          break;
+        case 20:  // End of file: disc media is read-only.
+          status = X_STATUS_ACCESS_DENIED;
+          break;
+        default:
+          return X_STATUS_INVALID_INFO_CLASS;
+      }
+      WriteIoStatus(r4, status, out_length);
+      return status;
+    }
+    case kx::NtQueryFullAttributesFile: {
+      // (attrs, X_FILE_NETWORK_OPEN_INFORMATION*)
+      std::string path, relative;
+      if (!ObjectAttributesPath(r3, &path)) return X_STATUS_OBJECT_NAME_INVALID;
+      if (!ResolveGuestPath(path, &relative)) return X_STATUS_NO_SUCH_FILE;
+      const uint32_t index = LookupVfs(relative);
+      if (!relative.empty() && !index) return X_STATUS_NO_SUCH_FILE;
+      if (!WriteNetworkOpenInfo(r4, VfsEntryAt(index), relative.empty())) return Invalid();
+      return X_STATUS_SUCCESS;
+    }
+    case kx::NtQueryVolumeInformationFile: {
+      // (file, iosb, info, length, class): 1 Volume, 3 Size, 5 Attribute.
+      KernelObject* file = ResolveHandle(r3);
+      uint32_t minimum = r7 == 1 ? 24u : r7 == 3 ? 24u : r7 == 5 ? 16u : r7 == 4 ? 8u : 0u;
+      if (!minimum) return X_STATUS_INVALID_INFO_CLASS;
+      if (r6 < minimum) return X_STATUS_INFO_LENGTH_MISMATCH;
+      if (!file || file->type != ObjectType::kFile) return X_STATUS_INVALID_HANDLE;
+      if (!ZeroGuest(r5, r6)) return Invalid();
+      uint32_t status = X_STATUS_SUCCESS, out_length = 0;
+      if (r7 == 1) {
+        out_length = 17;  // offsetof(X_FILE_FS_VOLUME_INFORMATION, label)
+      } else if (r7 == 3) {
+        uint64_t total = 0;
+        for (const auto& entry : VfsEntries()) total += (entry.size + 2047u) & ~uint64_t(2047u);
+        Wr64(r5, total / 0x200u);
+        Wr64(r5 + 8u, 0);
+        Wr32(r5 + 16u, 1);
+        Wr32(r5 + 20u, 0x200u);
+        out_length = 24;
+      } else if (r7 == 5) {
+        static const char kName[] = "GDFX";
+        Wr32(r5, 0);
+        Wr32(r5 + 4u, 255);
+        Wr32(r5 + 8u, 4);
+        if (r6 >= 12u + 4u) {
+          Wr(r5 + 12u, kName, 4);
+          out_length = 16;
+        } else {
+          status = X_STATUS_BUFFER_OVERFLOW;
+          out_length = 12;
+        }
+      }
+      WriteIoStatus(r4, status, out_length);
+      return status;
+    }
+    case kx::NtQueryDirectoryFile: {
+      // (file, event, apc, apc_ctx, iosb, info, length, name, restart)
+      const uint32_t iosb = r7, info = r8, length = r9, name_ptr = a[7];
+      uint32_t restart = 0;
+      StackArg(8, &restart);
+      if (length < 72u) return X_STATUS_INFO_LENGTH_MISMATCH;
+      KernelObject* dir = ResolveHandle(r3);
+      if (!dir || dir->type != ObjectType::kFile) {
+        WriteIoStatus(iosb, X_STATUS_NO_SUCH_FILE, 0);
+        return X_STATUS_NO_SUCH_FILE;
+      }
+      std::string pattern;
+      if (name_ptr && !ReadAnsiString(name_ptr, &pattern)) return Invalid();
+      pattern = Lower(pattern);
+      if (!pattern.empty()) {
+        dir->find_pattern = pattern;
+        dir->find_index = 0;
+      } else if (restart) {
+        dir->find_index = 0;
+      }
+      const VfsEntry* base = VfsEntryAt(dir->vfs_entry);
+      const std::string prefix = base ? base->path + "\\" : std::string();
+      const std::string rule = dir->find_pattern.empty() ? "*" : dir->find_pattern;
+      auto& entries = VfsEntries();
+      uint32_t found = 0;
+      for (uint32_t i = dir->find_index; i < entries.size(); ++i) {
+        const auto& entry = entries[i];
+        if (entry.path.compare(0, prefix.size(), prefix) != 0) continue;
+        if (entry.path.find('\\', prefix.size()) != std::string::npos) continue;
+        if (entry.path.size() == prefix.size()) continue;
+        if (!WildcardMatch(rule, Lower(entry.name))) continue;
+        found = i + 1;
+        break;
+      }
+      if (!found) {
+        const uint32_t status = pattern.empty() ? X_STATUS_NO_MORE_FILES : X_STATUS_NO_SUCH_FILE;
+        WriteIoStatus(iosb, status, 0);
+        return status;
+      }
+      dir->find_index = found;
+      const auto& entry = entries[found - 1];
+      if (64u + entry.name.size() > length) {
+        WriteIoStatus(iosb, X_STATUS_NO_SUCH_FILE, 0);
+        return X_STATUS_NO_SUCH_FILE;
+      }
+      if (!Wr32(info + 0, 0) || !Wr32(info + 4, found) ||
+          !Wr64(info + 8, entry.timestamp) || !Wr64(info + 16, entry.timestamp) ||
+          !Wr64(info + 24, entry.timestamp) || !Wr64(info + 32, entry.timestamp) ||
+          !Wr64(info + 40, entry.size) ||
+          !Wr64(info + 48, (entry.size + 2047u) & ~uint64_t(2047u)) ||
+          !Wr32(info + 56, entry.attributes) ||
+          !Wr32(info + 60, uint32_t(entry.name.size())) ||
+          !Wr(info + 64, entry.name.data(), uint32_t(entry.name.size()))) {
+        return Invalid();
+      }
+      WriteIoStatus(iosb, X_STATUS_SUCCESS, length);
+      return X_STATUS_SUCCESS;
+    }
+    case kx::NtFlushBuffersFile:
+      WriteIoStatus(r4, X_STATUS_SUCCESS, 0);
+      return X_STATUS_SUCCESS;
+    case kx::FscGetCacheElementCount:
+      return 0;
+    case kx::FscSetCacheElementCount:
       return X_STATUS_SUCCESS;
 
     // --- Memory ------------------------------------------------------------
@@ -2586,6 +3207,12 @@ void ResetExtendedKernelServices() {
   ThreadPriority().clear();
   ThreadAffinity().clear();
   g_kernel_module_handles = {};
+  // Title-created symbolic links belong to the run; the registered VFS
+  // content (r360_vfs_*) survives so a title can be re-run deterministically.
+  VfsSymlinks().clear();
+  g_host_io = {};
+  g_vfs_reads = 0;
+  g_vfs_bytes_read = 0;
 }
 
 }  // namespace render360::xenia_web
@@ -2716,6 +3343,73 @@ uint32_t r360_input_set_gamepad(uint32_t user_index, uint32_t connected,
   pad.thumb_ry = ry;
   if (changed) ++pad.packet;
   return 1;
+}
+
+// --- Virtual file system registration (browser loader / title runner) ------
+
+R360_WASM_EXPORT("r360_vfs_reset")
+void r360_vfs_reset() {
+  r360k::VfsEntries().clear();
+  r360k::VfsIndex().clear();
+  r360k::VfsSymlinks().clear();
+  r360k::g_host_io = {};
+  r360k::g_vfs_reads = 0;
+  r360k::g_vfs_bytes_read = 0;
+}
+// 1 KiB scratch buffer in wasm memory for passing a UTF-8 guest path.
+R360_WASM_EXPORT("r360_vfs_path_buffer")
+uint32_t r360_vfs_path_buffer() {
+  return uint32_t(uintptr_t(r360k::g_vfs_path_buffer));
+}
+// Registers a file or directory relative to \Device\Cdrom0 (the game disc).
+// Returns the 1-based entry id. host_fd/host_offset let WASI fd_pread supply
+// the bytes; 0 means data must be attached with r360_vfs_data_buffer.
+R360_WASM_EXPORT("r360_vfs_register")
+uint32_t r360_vfs_register(uint32_t path_length, uint32_t size_lo,
+                           uint32_t size_hi, uint32_t attributes,
+                           uint32_t host_fd, uint32_t host_offset_lo,
+                           uint32_t host_offset_hi) {
+  if (!path_length || path_length >= sizeof(r360k::g_vfs_path_buffer)) return 0;
+  const std::string path(r360k::g_vfs_path_buffer, path_length);
+  const uint64_t size = (uint64_t(size_hi) << 32) | size_lo;
+  const uint64_t host_offset = (uint64_t(host_offset_hi) << 32) | host_offset_lo;
+  return r360k::RegisterVfsEntry(path, size, attributes ? attributes
+                                                        : (r360k::kFileAttributeNormal |
+                                                           r360k::kFileAttributeReadOnly),
+                                 host_fd, host_offset);
+}
+// Allocates an in-memory buffer holding the whole file for entry |id| and
+// returns its wasm address for the loader to fill (0 on failure).
+R360_WASM_EXPORT("r360_vfs_data_buffer")
+uint32_t r360_vfs_data_buffer(uint32_t id) {
+  auto* entry = r360k::VfsEntryAt(id);
+  if (!entry || entry->size > 0x7FFFFFFFull) return 0;
+  entry->data.assign(size_t(entry->size), 0);
+  entry->has_data = true;
+  return entry->size ? uint32_t(uintptr_t(entry->data.data())) : 1u;
+}
+R360_WASM_EXPORT("r360_vfs_entry_count")
+uint32_t r360_vfs_entry_count() { return uint32_t(r360k::VfsEntries().size()); }
+R360_WASM_EXPORT("r360_vfs_host_io_entry")
+uint32_t r360_vfs_host_io_entry() { return r360k::g_host_io.entry; }
+R360_WASM_EXPORT("r360_vfs_host_io_offset")
+uint32_t r360_vfs_host_io_offset() { return uint32_t(r360k::g_host_io.offset); }
+R360_WASM_EXPORT("r360_vfs_host_io_length")
+uint32_t r360_vfs_host_io_length() { return r360k::g_host_io.length; }
+R360_WASM_EXPORT("r360_vfs_host_io_errno")
+uint32_t r360_vfs_host_io_errno() { return r360k::g_host_io.host_errno; }
+R360_WASM_EXPORT("r360_vfs_reads")
+uint32_t r360_vfs_reads() { return r360k::g_vfs_reads; }
+// Copies the device-relative path of entry |id| into the path buffer and
+// returns its length, so diagnostics can name a pending host read.
+R360_WASM_EXPORT("r360_vfs_entry_path")
+uint32_t r360_vfs_entry_path(uint32_t id) {
+  const auto* entry = r360k::VfsEntryAt(id);
+  if (!entry) return 0;
+  const size_t n = std::min(entry->path.size(), sizeof(r360k::g_vfs_path_buffer) - 1);
+  std::memcpy(r360k::g_vfs_path_buffer, entry->path.data(), n);
+  r360k::g_vfs_path_buffer[n] = 0;
+  return uint32_t(n);
 }
 
 R360_WASM_EXPORT("r360_kernel_graphics_interrupt_callback")

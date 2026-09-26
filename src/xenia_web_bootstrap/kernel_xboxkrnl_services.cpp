@@ -101,6 +101,7 @@ constexpr uint32_t X_STATUS_OBJECT_NAME_INVALID = 0xC0000033u;
 constexpr uint32_t X_STATUS_OBJECT_NAME_COLLISION = 0xC0000035u;
 constexpr uint32_t X_STATUS_FILE_IS_A_DIRECTORY = 0xC00000BAu;
 constexpr uint32_t X_STATUS_NOT_A_DIRECTORY = 0xC0000103u;
+constexpr uint32_t X_STATUS_OBJECT_PATH_NOT_FOUND = 0xC000003Au;
 
 // Win32 / HRESULT values used by XAM.
 constexpr uint32_t X_ERROR_SUCCESS = 0x00000000u;
@@ -115,6 +116,13 @@ constexpr uint32_t X_E_NO_SUCH_USER = 0x80070525u;
 constexpr uint32_t X_ERROR_INSUFFICIENT_BUFFER = 0x0000007Au;
 constexpr uint32_t X_ERROR_IO_INCOMPLETE = 0x000003E4u;
 constexpr uint32_t X_ERROR_IO_PENDING = 0x000003E5u;
+constexpr uint32_t X_ERROR_FILE_NOT_FOUND = 0x00000002u;
+constexpr uint32_t X_ERROR_PATH_NOT_FOUND = 0x00000003u;
+constexpr uint32_t X_ERROR_ACCESS_DENIED = 0x00000005u;
+constexpr uint32_t X_ERROR_INVALID_HANDLE = 0x00000006u;
+constexpr uint32_t X_ERROR_NO_MORE_FILES = 0x00000012u;
+constexpr uint32_t X_ERROR_ALREADY_EXISTS = 0x000000B7u;
+constexpr uint32_t X_ERROR_FUNCTION_FAILED = 0x0000065Bu;
 
 constexpr uint32_t kPageSize = 4096u;
 constexpr uint32_t kCurrentThreadPseudoHandle = 0xFFFFFFFEu;
@@ -647,6 +655,7 @@ enum class ObjectType : uint8_t {
   kThread,
   kNotifyListener,
   kFile,
+  kEnumerator,
 };
 
 struct KernelObject {
@@ -664,6 +673,7 @@ struct KernelObject {
   bool armed = false;
   // File state (Xenia XFile).
   uint32_t vfs_entry = 0;  // 1-based index into the VFS table.
+  std::string vfs_device;  // "" = game disc, else a content device path.
   uint64_t position = 0;
   uint32_t find_index = 0;
   std::string find_pattern;
@@ -1265,6 +1275,7 @@ constexpr uint32_t kFileAttributeNormal = 0x0080u;
 constexpr uint32_t kWaitReasonHostIo = 4u;
 
 struct VfsEntry {
+  std::string device;  // "" = game disc (\\device\\cdrom0), else a content device.
   std::string path;  // Lowercase, '\\'-separated, relative to the device root.
   std::string name;  // Original-case final component.
   uint64_t size = 0;
@@ -1290,6 +1301,22 @@ std::map<std::string, std::string>& VfsSymlinks() {
   return links;
 }
 const char kDiscDevice[] = "\\device\\cdrom0";
+
+// Writable content devices (save data packages), keyed by lowercase device
+// path such as "\\device\\content\\1". The game disc is device "".
+struct VfsDevice {
+  bool writable = true;
+};
+std::map<std::string, VfsDevice>& VfsDevices() {
+  static std::map<std::string, VfsDevice> devices;
+  return devices;
+}
+std::string VfsKey(const std::string& device, const std::string& relative) {
+  return device.empty() ? relative : device + "|" + relative;
+}
+std::string DevicePath(const std::string& device) {
+  return device.empty() ? std::string(kDiscDevice) : device;
+}
 
 struct HostIoRequest {
   uint32_t entry = 0;
@@ -1344,9 +1371,10 @@ void EnsureDefaultSymlinks() {
   links["d:"] = kDiscDevice;
 }
 
-// Resolves a guest path to a device-relative key ("" is the device root).
-// Returns false when no registered device owns the path.
-bool ResolveGuestPath(std::string path, std::string* relative) {
+// Resolves a guest path to a device ("" = disc) and a device-relative key
+// ("" is the device root). Returns false when no device owns the path.
+bool ResolveGuestPath(std::string path, std::string* device_out,
+                      std::string* relative) {
   EnsureDefaultSymlinks();
   if (Lower(path.substr(0, 4)) == "\\??\\") path = path.substr(4);
   std::string normalized = Lower(CanonicalizeGuestPath(path));
@@ -1361,18 +1389,32 @@ bool ResolveGuestPath(std::string path, std::string* relative) {
     }
     if (!resolved) break;
   }
-  const std::string device = kDiscDevice;
-  if (normalized.compare(0, device.size(), device) != 0) return false;
-  std::string rest = normalized.substr(device.size());
-  if (!rest.empty() && rest[0] != '\\') return false;
-  if (!rest.empty()) rest = rest.substr(1);
-  *relative = rest;
-  return true;
+  const auto owns = [&](const std::string& device_path, std::string* rest) {
+    if (normalized.compare(0, device_path.size(), device_path) != 0) return false;
+    *rest = normalized.substr(device_path.size());
+    if (!rest->empty() && (*rest)[0] != '\\') return false;
+    if (!rest->empty()) *rest = rest->substr(1);
+    return true;
+  };
+  std::string rest;
+  if (owns(kDiscDevice, &rest)) {
+    *device_out = "";
+    *relative = rest;
+    return true;
+  }
+  for (const auto& [device_path, info] : VfsDevices()) {
+    if (owns(device_path, &rest)) {
+      *device_out = device_path;
+      *relative = rest;
+      return true;
+    }
+  }
+  return false;
 }
 
-uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
-                          uint32_t attributes, uint32_t host_fd,
-                          uint64_t host_offset) {
+uint32_t RegisterVfsEntryOn(const std::string& device, const std::string& raw_path,
+                            uint64_t size, uint32_t attributes, uint32_t host_fd,
+                            uint64_t host_offset) {
   std::string canonical = CanonicalizeGuestPath(raw_path);
   if (!canonical.empty() && canonical[0] == '\\') canonical = canonical.substr(1);
   const std::string key = Lower(canonical);
@@ -1382,11 +1424,14 @@ uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
   const size_t slash = canonical.find_last_of('\\');
   if (slash != std::string::npos) {
     const std::string parent = canonical.substr(0, slash);
-    if (!index.count(Lower(parent))) {
-      RegisterVfsEntry(parent, 0, kFileAttributeDirectory | kFileAttributeReadOnly, 0, 0);
+    if (!index.count(VfsKey(device, Lower(parent)))) {
+      RegisterVfsEntryOn(device, parent, 0,
+                         kFileAttributeDirectory |
+                             (device.empty() ? kFileAttributeReadOnly : 0u),
+                         0, 0);
     }
   }
-  auto found = index.find(key);
+  auto found = index.find(VfsKey(device, key));
   if (found != index.end()) {
     auto& entry = entries[found->second - 1];
     entry.size = size;
@@ -1396,6 +1441,7 @@ uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
     return found->second;
   }
   VfsEntry entry;
+  entry.device = device;
   entry.path = key;
   entry.name = slash == std::string::npos ? canonical : canonical.substr(slash + 1);
   entry.size = size;
@@ -1404,8 +1450,14 @@ uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
   entry.host_offset = host_offset;
   entry.timestamp = kUnixEpochAsFileTime;
   entries.push_back(std::move(entry));
-  index[key] = uint32_t(entries.size());
+  index[VfsKey(device, key)] = uint32_t(entries.size());
   return uint32_t(entries.size());
+}
+
+uint32_t RegisterVfsEntry(const std::string& raw_path, uint64_t size,
+                          uint32_t attributes, uint32_t host_fd,
+                          uint64_t host_offset) {
+  return RegisterVfsEntryOn("", raw_path, size, attributes, host_fd, host_offset);
 }
 
 VfsEntry* VfsEntryAt(uint32_t one_based) {
@@ -1413,9 +1465,9 @@ VfsEntry* VfsEntryAt(uint32_t one_based) {
   return one_based && one_based <= entries.size() ? &entries[one_based - 1] : nullptr;
 }
 
-uint32_t LookupVfs(const std::string& relative) {
+uint32_t LookupVfs(const std::string& device, const std::string& relative) {
   if (relative.empty()) return 0;  // Device root; callers special-case it.
-  auto it = VfsIndex().find(relative);
+  auto it = VfsIndex().find(VfsKey(device, relative));
   return it == VfsIndex().end() ? 0u : it->second;
 }
 
@@ -1490,7 +1542,8 @@ bool ObjectAttributesPath(uint32_t attributes_ptr, std::string* path) {
     KernelObject* dir = ResolveHandle(root);
     if (!dir || dir->type != ObjectType::kFile) return false;
     const VfsEntry* base = VfsEntryAt(dir->vfs_entry);
-    name = std::string(kDiscDevice) + (base ? "\\" + base->path : std::string()) + "\\" + name;
+    name = DevicePath(dir->vfs_device) + (base ? "\\" + base->path : std::string()) +
+           "\\" + name;
   }
   *path = name;
   return true;
@@ -1779,15 +1832,15 @@ bool g_launch_data_present = false;
 // {result, length, context, event, completion_routine, completion_context,
 // extended_error}. A completion routine would need a guest APC, which the
 // browser kernel does not deliver yet, so that case fails closed.
-bool CompleteOverlappedImmediate(uint32_t overlapped, uint32_t result) {
+bool CompleteOverlappedEx(uint32_t overlapped, uint32_t result,
+                          uint32_t extended_error, uint32_t length) {
   uint32_t event = 0, routine = 0;
   if (!Rd32(overlapped + 12u, &event) || !Rd32(overlapped + 16u, &routine)) {
     return false;
   }
   if (routine) return false;
-  if (!Wr32(overlapped + 0u, result) || !Wr32(overlapped + 24u, result) ||
-      !Wr32(overlapped + 4u, result ? 0xFFFFFFFFu : 0u) ||
-      !Wr32(overlapped + 8u, CurrentKThread())) {
+  if (!Wr32(overlapped + 0u, result) || !Wr32(overlapped + 24u, extended_error) ||
+      !Wr32(overlapped + 4u, length) || !Wr32(overlapped + 8u, CurrentKThread())) {
     return false;
   }
   if (event) {
@@ -1798,6 +1851,22 @@ bool CompleteOverlappedImmediate(uint32_t overlapped, uint32_t result) {
     }
   }
   return true;
+}
+bool CompleteOverlappedImmediate(uint32_t overlapped, uint32_t result) {
+  // Xenia: some games treat length as success, so failures report -1.
+  return CompleteOverlappedEx(overlapped, result, result, result ? 0xFFFFFFFFu : 0u);
+}
+uint32_t HresultFromWin32(uint32_t code) {
+  return code ? (code & 0xFFFFu) | 0x80070000u : 0u;
+}
+// Xenia CompleteOverlappedDeferredEx, run synchronously: result, the
+// HRESULT form as extended error, and an operation-specific length.
+uint32_t FinishXamOverlapped(uint32_t overlapped, uint32_t result, uint32_t length) {
+  if (!overlapped) return result;
+  if (!CompleteOverlappedEx(overlapped, result, HresultFromWin32(result), length)) {
+    return Invalid();
+  }
+  return X_ERROR_IO_PENDING;
 }
 
 // Xenia's XamUserReadProfileSettingsEx for the signed-in local profile.
@@ -2026,6 +2095,186 @@ uint32_t CreateNotifyListener(uint32_t mask, uint32_t max_version) {
     }
   }
   return handle;
+}
+
+// ---------------------------------------------------------------------------
+// Content packages (Xenia ContentManager): save data and other title content
+// on the dummy HDD (device 1). Each package is a writable in-memory VFS
+// device, mounted at "<root>:" while a title has it open. Packages last for
+// this kernel session.
+
+struct ContentPackage {
+  uint32_t content_type = 0;
+  std::string file_name;
+  std::array<uint8_t, 0x134> data{};  // XCONTENT_DATA as the title passed it
+  std::string device;                 // "\\device\\content\\N"
+  std::vector<uint8_t> thumbnail;
+};
+std::vector<ContentPackage>& ContentPackages() {
+  static std::vector<ContentPackage> packages;
+  return packages;
+}
+std::map<std::string, std::string>& OpenContentRoots() {  // "save" -> device
+  static std::map<std::string, std::string> roots;
+  return roots;
+}
+uint32_t g_next_content_device = 1;
+uint32_t g_license_mask = 0;  // Xenia cvars::license_mask default (trial).
+
+// XCONTENT_DATA {device_id, content_type, display_name[128] u16,
+// file_name[42], pad[2]} (0x134).
+bool ReadContentData(uint32_t address, uint32_t* content_type, std::string* file_name,
+                     std::array<uint8_t, 0x134>* raw) {
+  if (!Rd(address, raw->data(), 0x134) || !Rd32(address + 4u, content_type)) return false;
+  file_name->clear();
+  for (uint32_t i = 0; i < 42; ++i) {
+    const char c = char((*raw)[0x108 + i]);
+    if (!c) break;
+    file_name->push_back(c);
+  }
+  return true;
+}
+ContentPackage* FindContent(uint32_t content_type, const std::string& file_name) {
+  for (auto& package : ContentPackages()) {
+    if (package.content_type == content_type && Lower(package.file_name) == Lower(file_name)) {
+      return &package;
+    }
+  }
+  return nullptr;
+}
+bool ContentIsOpen(const ContentPackage& package) {
+  for (const auto& [root, device] : OpenContentRoots()) {
+    if (device == package.device) return true;
+  }
+  return false;
+}
+void MountContent(const std::string& root, const ContentPackage& package) {
+  OpenContentRoots()[root] = package.device;
+  VfsSymlinks()[root + ":"] = package.device;
+}
+void DeleteContentFiles(const std::string& device) {
+  auto& entries = VfsEntries();
+  std::vector<VfsEntry> kept;
+  kept.reserve(entries.size());
+  for (auto& entry : entries) {
+    if (entry.device != device) kept.push_back(std::move(entry));
+  }
+  entries = std::move(kept);
+  auto& index = VfsIndex();
+  index.clear();
+  for (uint32_t i = 0; i < entries.size(); ++i) {
+    index[VfsKey(entries[i].device, entries[i].path)] = i + 1u;
+  }
+}
+// Xenia ContentManager::CreateContent / OpenContent / CloseContent /
+// DeleteContent return codes.
+uint32_t CreateContent(const std::string& root, uint32_t content_type,
+                       const std::string& file_name,
+                       const std::array<uint8_t, 0x134>& raw) {
+  if (OpenContentRoots().count(root) || FindContent(content_type, file_name)) {
+    return X_ERROR_ALREADY_EXISTS;
+  }
+  ContentPackage package;
+  package.content_type = content_type;
+  package.file_name = file_name;
+  package.data = raw;
+  package.device = "\\device\\content\\" + std::to_string(g_next_content_device++);
+  VfsDevices()[package.device] = {};
+  ContentPackages().push_back(package);
+  MountContent(root, ContentPackages().back());
+  return X_ERROR_SUCCESS;
+}
+uint32_t OpenContent(const std::string& root, uint32_t content_type,
+                     const std::string& file_name) {
+  if (OpenContentRoots().count(root)) return X_ERROR_ALREADY_EXISTS;
+  ContentPackage* package = FindContent(content_type, file_name);
+  if (!package) return X_ERROR_FILE_NOT_FOUND;
+  MountContent(root, *package);
+  return X_ERROR_SUCCESS;
+}
+uint32_t CloseContent(const std::string& root) {
+  auto it = OpenContentRoots().find(root);
+  if (it == OpenContentRoots().end()) return X_ERROR_FILE_NOT_FOUND;
+  VfsSymlinks().erase(root + ":");
+  OpenContentRoots().erase(it);
+  return X_ERROR_SUCCESS;
+}
+uint32_t DeleteContent(uint32_t content_type, const std::string& file_name) {
+  auto& packages = ContentPackages();
+  for (auto it = packages.begin(); it != packages.end(); ++it) {
+    if (it->content_type != content_type || Lower(it->file_name) != Lower(file_name)) continue;
+    if (ContentIsOpen(*it)) return X_ERROR_ACCESS_DENIED;
+    DeleteContentFiles(it->device);
+    VfsDevices().erase(it->device);
+    packages.erase(it);
+    return X_ERROR_SUCCESS;
+  }
+  return X_ERROR_FILE_NOT_FOUND;
+}
+
+// XAM enumerators (Xenia XStaticEnumerator): fixed-size items handed out
+// items_per_enumerate at a time by XamEnumerate.
+struct XamEnumerator {
+  uint32_t item_size = 0;
+  uint32_t per_enumerate = 1;
+  uint32_t current = 0;
+  std::vector<uint8_t> items;
+  uint32_t count() const { return item_size ? uint32_t(items.size() / item_size) : 0; }
+};
+std::map<uint32_t, XamEnumerator>& XamEnumerators() {
+  static std::map<uint32_t, XamEnumerator> enumerators;
+  return enumerators;
+}
+uint32_t CreateXamEnumerator(uint32_t item_size, uint32_t per_enumerate,
+                             std::vector<uint8_t> items) {
+  const uint32_t handle = CreateObject(ObjectType::kEnumerator, 0, false);
+  if (!handle) return 0;
+  XamEnumerator e;
+  e.item_size = item_size;
+  e.per_enumerate = per_enumerate ? per_enumerate : 1u;
+  e.items = std::move(items);
+  XamEnumerators()[handle] = std::move(e);
+  return handle;
+}
+
+// Xenia's dummy devices: HDD (id 1, type 1, 20 GB / 3 GB free) and ODD
+// (id 2, type 4, 7 GB / 0 free).
+struct DummyDevice {
+  uint32_t id, type;
+  uint64_t total, free;
+  const char16_t* name;
+};
+constexpr DummyDevice kDummyDevices[] = {
+    {1, 1, 20ull << 30, 3ull << 30, u"Dummy HDD"},
+    {2, 4, 7ull << 30, 0, u"Dummy ODD"},
+};
+const DummyDevice* FindDummyDevice(uint32_t id) {
+  for (const auto& device : kDummyDevices) {
+    if (device.id == id) return &device;
+  }
+  return nullptr;
+}
+bool WriteDeviceData(uint32_t out, const DummyDevice& device) {
+  // X_CONTENT_DEVICE_DATA {id, type, total u64, free u64, name[28] u16} (0x50)
+  if (!ZeroGuest(out, 0x50) || !Wr32(out, device.id) || !Wr32(out + 4u, device.type) ||
+      !Wr64(out + 8u, device.total) || !Wr64(out + 16u, device.free)) {
+    return false;
+  }
+  const std::u16string name(device.name);
+  for (size_t i = 0; i < name.size() && i < 27; ++i) {
+    if (!Wr16(out + 24u + uint32_t(i) * 2u, name[i])) return false;
+  }
+  return true;
+}
+
+// Xenia KernelState::BroadcastNotification: every listener gets it.
+void BroadcastNotification(uint32_t id, uint32_t data) {
+  for (auto& [handle, listener] : NotifyListeners()) {
+    if (KernelObject* object = ResolveHandle(handle);
+        object && object->type == ObjectType::kNotifyListener) {
+      EnqueueNotification(handle, listener, id, data);
+    }
+  }
 }
 
 uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
@@ -2739,27 +2988,70 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
         WriteIoStatus(iosb, X_STATUS_OBJECT_NAME_INVALID, 0);
         return X_STATUS_OBJECT_NAME_INVALID;
       }
-      std::string relative;
+      std::string device, relative;
       uint32_t entry_index = 0;
-      bool is_root = false;
-      if (ResolveGuestPath(path, &relative)) {
+      bool is_root = false, resolved = false;
+      if (ResolveGuestPath(path, &device, &relative)) {
+        resolved = true;
         is_root = relative.empty();
-        entry_index = LookupVfs(relative);
+        entry_index = LookupVfs(device, relative);
       }
+      const bool writable = resolved && !device.empty();
       const bool exists = is_root || entry_index;
       // FILE_SUPERSEDE 0, OPEN 1, CREATE 2, OPEN_IF 3, OVERWRITE 4, OVERWRITE_IF 5.
+      // IO_STATUS information: superseded 0, opened 1, created 2,
+      // overwritten 3, exists 4, does-not-exist 5 (Xenia X_FILE_*).
+      uint32_t information = 1u;
       if (!exists) {
-        const uint32_t status = (disposition == 1u || disposition == 4u)
-                                    ? X_STATUS_NO_SUCH_FILE
-                                    : X_STATUS_ACCESS_DENIED;  // Disc is read-only.
-        WriteIoStatus(iosb, status, 5u /* kDoesNotExist */);
-        if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
-        return status;
-      }
-      if (disposition == 2u) {
-        WriteIoStatus(iosb, X_STATUS_OBJECT_NAME_COLLISION, 4u /* kExists */);
+        if (disposition == 1u || disposition == 4u || !writable) {
+          const uint32_t status = (disposition == 1u || disposition == 4u || !resolved)
+                                      ? X_STATUS_NO_SUCH_FILE
+                                      : X_STATUS_ACCESS_DENIED;  // Disc is read-only.
+          WriteIoStatus(iosb, status, 5u);
+          if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
+          return status;
+        }
+        const size_t slash = relative.find_last_of('\\');
+        if (slash != std::string::npos && !LookupVfs(device, relative.substr(0, slash))) {
+          WriteIoStatus(iosb, X_STATUS_OBJECT_PATH_NOT_FOUND, 5u);
+          if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
+          return X_STATUS_OBJECT_PATH_NOT_FOUND;
+        }
+        // Keep the title's spelling for the new name (paths index lowercase).
+        std::string display = CanonicalizeGuestPath(path);
+        const size_t name_at = display.find_last_of('\\');
+        const std::string leaf =
+            name_at == std::string::npos ? display : display.substr(name_at + 1);
+        const std::string create_path =
+            (slash == std::string::npos ? std::string() : relative.substr(0, slash) + "\\") + leaf;
+        const bool directory = (options & 0x1u) || (a[5] & kFileAttributeDirectory);
+        entry_index = RegisterVfsEntryOn(device, create_path, 0,
+                                         directory ? kFileAttributeDirectory
+                                                   : kFileAttributeNormal,
+                                         0, 0);
+        if (VfsEntry* created = VfsEntryAt(entry_index)) {
+          created->has_data = !directory;
+          created->timestamp = QueryGuestSystemTime();
+        }
+        information = 2u;
+      } else if (disposition == 2u) {
+        WriteIoStatus(iosb, X_STATUS_OBJECT_NAME_COLLISION, 4u);
         if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
         return X_STATUS_OBJECT_NAME_COLLISION;
+      } else if (!is_root && (disposition == 0u || disposition == 4u || disposition == 5u)) {
+        VfsEntry* existing = VfsEntryAt(entry_index);
+        if (!(existing->attributes & kFileAttributeDirectory)) {
+          if (!writable) {
+            WriteIoStatus(iosb, X_STATUS_ACCESS_DENIED, 0);
+            if (handle_out) Wr32(handle_out, 0xFFFFFFFFu);
+            return X_STATUS_ACCESS_DENIED;
+          }
+          existing->data.clear();
+          existing->size = 0;
+          existing->has_data = true;
+          existing->timestamp = QueryGuestSystemTime();
+          information = disposition == 0u ? 0u : 3u;
+        }
       }
       const VfsEntry* entry = VfsEntryAt(entry_index);
       const bool is_directory = is_root || (entry->attributes & kFileAttributeDirectory);
@@ -2777,7 +3069,8 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       uint32_t slot = 0;
       SlotForHandle(handle, &slot);
       Objects()[slot].vfs_entry = entry_index;
-      WriteIoStatus(iosb, X_STATUS_SUCCESS, 1u /* kOpened */);
+      Objects()[slot].vfs_device = device;
+      WriteIoStatus(iosb, X_STATUS_SUCCESS, information);
       if (handle_out && !Wr32(handle_out, handle)) return Invalid();
       return X_STATUS_SUCCESS;
     }
@@ -2815,10 +3108,46 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       return status;
     }
     case kx::NtWriteFile: {
+      // (file, event, apc_routine, apc_context, iosb, buffer, length, offset_ptr)
+      const uint32_t event = r4, iosb = r7, buffer = r8, length = r9;
+      KernelObject* event_object = event ? ResolveHandle(event) : nullptr;
       KernelObject* file = ResolveHandle(r3);
-      if (!file || file->type != ObjectType::kFile) return X_STATUS_INVALID_HANDLE;
-      WriteIoStatus(r7, X_STATUS_ACCESS_DENIED, 0);
-      return X_STATUS_ACCESS_DENIED;  // Game disc media is read-only.
+      if ((event && !event_object) || !file || file->type != ObjectType::kFile) {
+        WriteIoStatus(iosb, X_STATUS_INVALID_HANDLE, 0);
+        return X_STATUS_INVALID_HANDLE;
+      }
+      VfsEntry* entry = VfsEntryAt(file->vfs_entry);
+      if (!entry || (entry->attributes & kFileAttributeDirectory)) {
+        WriteIoStatus(iosb, X_STATUS_INVALID_PARAMETER, 0);
+        return X_STATUS_INVALID_PARAMETER;
+      }
+      if (entry->device.empty() || !entry->has_data) {
+        WriteIoStatus(iosb, X_STATUS_ACCESS_DENIED, 0);
+        return X_STATUS_ACCESS_DENIED;  // Game disc media is read-only.
+      }
+      uint64_t offset = file->position;
+      if (a[7]) {
+        uint64_t requested = 0;
+        if (!Rd64(a[7], &requested)) return Invalid();
+        if (requested < 0xFFFFFFFFFFFFFFFEull) offset = requested;
+      }
+      if (offset + length > (64ull << 20)) {  // Bounded in-memory save device.
+        WriteIoStatus(iosb, X_STATUS_NO_MEMORY, 0);
+        return X_STATUS_NO_MEMORY;
+      }
+      if (offset + length > entry->data.size()) entry->data.resize(size_t(offset + length));
+      if (length && !Rd(buffer, entry->data.data() + offset, length)) {
+        WriteIoStatus(iosb, X_STATUS_ACCESS_VIOLATION, 0);
+        return X_STATUS_ACCESS_VIOLATION;
+      }
+      entry->size = entry->data.size();
+      entry->timestamp = QueryGuestSystemTime();
+      file->position = offset + length;
+      WriteIoStatus(iosb, X_STATUS_SUCCESS, length);
+      if (event_object && event_object->type == ObjectType::kEvent) {
+        Wr32(event_object->guest + 4u, 1);
+      }
+      return X_STATUS_SUCCESS;
     }
     case kx::NtQueryInformationFile: {
       // (file, iosb, info, length, class)
@@ -2900,9 +3229,24 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
         case 19:  // Allocation (ignored by Xenia)
         case 32:  // I/O priority
           break;
-        case 20:  // End of file: disc media is read-only.
-          status = X_STATUS_ACCESS_DENIED;
+        case 20: {  // End of file: writable content devices only.
+          VfsEntry* entry = VfsEntryAt(file->vfs_entry);
+          if (!entry || entry->device.empty() || !entry->has_data) {
+            status = X_STATUS_ACCESS_DENIED;
+            break;
+          }
+          if (r6 < 8) return X_STATUS_INFO_LENGTH_MISMATCH;
+          uint64_t end = 0;
+          if (!Rd64(r5, &end)) return Invalid();
+          if (end > (64ull << 20)) {
+            status = X_STATUS_NO_MEMORY;
+            break;
+          }
+          entry->data.resize(size_t(end));
+          entry->size = end;
+          out_length = 8;
           break;
+        }
         default:
           return X_STATUS_INVALID_INFO_CLASS;
       }
@@ -2911,10 +3255,10 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
     }
     case kx::NtQueryFullAttributesFile: {
       // (attrs, X_FILE_NETWORK_OPEN_INFORMATION*)
-      std::string path, relative;
+      std::string path, device, relative;
       if (!ObjectAttributesPath(r3, &path)) return X_STATUS_OBJECT_NAME_INVALID;
-      if (!ResolveGuestPath(path, &relative)) return X_STATUS_NO_SUCH_FILE;
-      const uint32_t index = LookupVfs(relative);
+      if (!ResolveGuestPath(path, &device, &relative)) return X_STATUS_NO_SUCH_FILE;
+      const uint32_t index = LookupVfs(device, relative);
       if (!relative.empty() && !index) return X_STATUS_NO_SUCH_FILE;
       if (!WriteNetworkOpenInfo(r4, VfsEntryAt(index), relative.empty())) return Invalid();
       return X_STATUS_SUCCESS;
@@ -2932,14 +3276,16 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
         out_length = 17;  // offsetof(X_FILE_FS_VOLUME_INFORMATION, label)
       } else if (r7 == 3) {
         uint64_t total = 0;
-        for (const auto& entry : VfsEntries()) total += (entry.size + 2047u) & ~uint64_t(2047u);
+        for (const auto& entry : VfsEntries()) {
+          if (entry.device == file->vfs_device) total += (entry.size + 2047u) & ~uint64_t(2047u);
+        }
         Wr64(r5, total / 0x200u);
         Wr64(r5 + 8u, 0);
         Wr32(r5 + 16u, 1);
         Wr32(r5 + 20u, 0x200u);
         out_length = 24;
       } else if (r7 == 5) {
-        static const char kName[] = "GDFX";
+        const char* kName = file->vfs_device.empty() ? "GDFX" : "FATX";
         Wr32(r5, 0);
         Wr32(r5 + 4u, 255);
         Wr32(r5 + 8u, 4);
@@ -2981,6 +3327,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       uint32_t found = 0;
       for (uint32_t i = dir->find_index; i < entries.size(); ++i) {
         const auto& entry = entries[i];
+        if (entry.device != dir->vfs_device) continue;
         if (entry.path.compare(0, prefix.size(), prefix) != 0) continue;
         if (entry.path.find('\\', prefix.size()) != std::string::npos) continue;
         if (entry.path.size() == prefix.size()) continue;
@@ -4022,6 +4369,283 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return X_ERROR_SUCCESS;
     }
 
+    // --- Content / save data (Xenia xam_content.cc, xam_content_device.cc) ---
+    case xam::XamContentCreate:
+    case xam::XamContentCreateEx:
+    case xam::XamContentCreateInternal: {
+      // Create(user, root, data, flags, disposition*, license*, overlapped)
+      // CreateEx(user, root, data, flags, disposition*, license*, cache,
+      //          content_size(qword), overlapped)
+      // CreateInternal(root, data, flags, disposition*, license*, cache,
+      //                content_size(qword), overlapped)
+      const bool internal = ordinal == xam::XamContentCreateInternal;
+      const uint32_t base = internal ? 0u : 1u;
+      const uint32_t root_ptr = a[base], data_ptr = a[base + 1], flags = a[base + 2];
+      const uint32_t disposition_ptr = a[base + 3], license_ptr = a[base + 4];
+      uint32_t overlapped = 0;
+      if (ordinal == xam::XamContentCreate) overlapped = a[6];
+      else if (internal) overlapped = a[7];
+      else StackArg(8, &overlapped);
+      std::string root;
+      if (!ReadCString(root_ptr, &root, 64)) return Invalid();
+      root = Lower(root);
+      uint32_t content_type = 0;
+      std::string file_name;
+      std::array<uint8_t, 0x134> raw{};
+      if (!ReadContentData(data_ptr, &content_type, &file_name, &raw)) return Invalid();
+      if (overlapped && disposition_ptr && !Wr32(disposition_ptr, 0)) return Invalid();
+      uint32_t result = X_ERROR_INVALID_PARAMETER, disposition = 0;  // 1 create, 2 open
+      const bool exists = FindContent(content_type, file_name) != nullptr;
+      switch (flags & 0xFu) {
+        case 1:  // CREATE_NEW
+          if (exists) result = X_ERROR_ALREADY_EXISTS;
+          else disposition = 1;
+          break;
+        case 2:  // CREATE_ALWAYS
+          if (exists) DeleteContent(content_type, file_name);
+          disposition = 1;
+          break;
+        case 3:  // OPEN_EXISTING
+          if (!exists) result = X_ERROR_PATH_NOT_FOUND;
+          else disposition = 2;
+          break;
+        case 4:  // OPEN_ALWAYS
+          disposition = exists ? 2u : 1u;
+          break;
+        case 5:  // TRUNCATE_EXISTING
+          if (!exists) {
+            result = X_ERROR_PATH_NOT_FOUND;
+          } else {
+            DeleteContent(content_type, file_name);
+            disposition = 1;
+          }
+          break;
+        default:
+          break;
+      }
+      if (disposition == 1) result = CreateContent(root, content_type, file_name, raw);
+      else if (disposition == 2) result = OpenContent(root, content_type, file_name);
+      if (disposition_ptr && !Wr32(disposition_ptr, disposition)) return Invalid();
+      if (license_ptr && !result && !Wr32(license_ptr, 0)) return Invalid();
+      return FinishXamOverlapped(overlapped, result, disposition);
+    }
+    case xam::XamContentClose:
+      // (root, overlapped)
+      {
+        std::string root;
+        if (!ReadCString(r3, &root, 64)) return Invalid();
+        const uint32_t result = CloseContent(Lower(root));
+        if (!r4) return result;
+        if (!CompleteOverlappedImmediate(r4, result)) return Invalid();
+        return X_ERROR_IO_PENDING;
+      }
+    case xam::XamContentFlush:
+      if (!r4) return X_ERROR_SUCCESS;
+      if (!CompleteOverlappedImmediate(r4, X_ERROR_SUCCESS)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    case xam::XamContentDelete:
+    case xam::XamContentDeleteInternal: {
+      // Delete(user, data, overlapped) / DeleteInternal(data, overlapped)
+      const bool internal = ordinal == xam::XamContentDeleteInternal;
+      const uint32_t data_ptr = internal ? r3 : r4, overlapped = internal ? r4 : r5;
+      uint32_t content_type = 0;
+      std::string file_name;
+      std::array<uint8_t, 0x134> raw{};
+      if (!ReadContentData(data_ptr, &content_type, &file_name, &raw)) return Invalid();
+      const uint32_t result = DeleteContent(content_type, file_name);
+      if (!overlapped) return result;
+      if (!CompleteOverlappedImmediate(overlapped, result)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamContentGetCreator: {
+      // (user, data, is_creator*, creator_xuid*, overlapped)
+      uint32_t content_type = 0;
+      std::string file_name;
+      std::array<uint8_t, 0x134> raw{};
+      if (!ReadContentData(r4, &content_type, &file_name, &raw)) return Invalid();
+      uint32_t result = X_ERROR_SUCCESS;
+      if (FindContent(content_type, file_name)) {
+        const bool save = content_type == 1u;  // kSavedGame: the user created it
+        if (!Wr32(r5, save ? 1u : 0u) ||
+            (a[3] && !Wr64(a[3], save ? 0xB13EBABEBABEBABEull : 0ull))) {
+          return Invalid();
+        }
+      } else {
+        result = X_ERROR_PATH_NOT_FOUND;
+      }
+      if (!a[4]) return result;
+      if (!CompleteOverlappedImmediate(a[4], result)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamContentGetThumbnail: {
+      // (user, data, buffer, buffer_size*, overlapped)
+      uint32_t content_type = 0, capacity = 0;
+      std::string file_name;
+      std::array<uint8_t, 0x134> raw{};
+      if (!ReadContentData(r4, &content_type, &file_name, &raw) || !Rd32(a[3], &capacity)) {
+        return Invalid();
+      }
+      const ContentPackage* package = FindContent(content_type, file_name);
+      uint32_t result = X_ERROR_FILE_NOT_FOUND;
+      uint32_t size = 0;
+      if (package && !package->thumbnail.empty()) {
+        size = uint32_t(package->thumbnail.size());
+        result = X_ERROR_SUCCESS;
+        if (r5) {
+          if (capacity < size) result = X_ERROR_INSUFFICIENT_BUFFER;
+          else if (!Wr(r5, package->thumbnail.data(), size)) return Invalid();
+        }
+      }
+      if (!Wr32(a[3], size)) return Invalid();
+      if (!a[4]) return result;
+      if (!CompleteOverlappedImmediate(a[4], result)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamContentSetThumbnail: {
+      // (user, data, buffer, size, overlapped)
+      uint32_t content_type = 0;
+      std::string file_name;
+      std::array<uint8_t, 0x134> raw{};
+      if (!ReadContentData(r4, &content_type, &file_name, &raw)) return Invalid();
+      ContentPackage* package = FindContent(content_type, file_name);
+      uint32_t result = X_ERROR_FILE_NOT_FOUND;
+      if (package) {
+        package->thumbnail.assign(a[3], 0);
+        if (a[3] && !Rd(r5, package->thumbnail.data(), a[3])) return Invalid();
+        result = X_ERROR_SUCCESS;
+      }
+      if (!a[4]) return result;
+      if (!CompleteOverlappedImmediate(a[4], result)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamContentGetLicenseMask:
+      // (mask*, overlapped)
+      if (!Wr32(r3, g_license_mask)) return Invalid();
+      if (!r4) return X_ERROR_SUCCESS;
+      if (!CompleteOverlappedImmediate(r4, X_ERROR_SUCCESS)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    case xam::XamContentGetDeviceName: {
+      // (device_id, name_buffer (u16), capacity)
+      const DummyDevice* device = FindDummyDevice(r3);
+      if (!device) return X_ERROR_DEVICE_NOT_CONNECTED;
+      const std::u16string name(device->name);
+      if (r5 < name.size() + 1) return X_ERROR_INSUFFICIENT_BUFFER;
+      for (size_t i = 0; i <= name.size(); ++i) {
+        if (!Wr16(r4 + uint32_t(i) * 2u, i < name.size() ? name[i] : 0)) return Invalid();
+      }
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamContentGetDeviceState: {
+      // (device_id, overlapped)
+      const bool present = FindDummyDevice(r3) != nullptr;
+      if (!r4) return present ? X_ERROR_SUCCESS : X_ERROR_DEVICE_NOT_CONNECTED;
+      const bool ok = present ? CompleteOverlappedImmediate(r4, X_ERROR_SUCCESS)
+                              : CompleteOverlappedEx(r4, X_ERROR_FUNCTION_FAILED,
+                                                     X_ERROR_DEVICE_NOT_CONNECTED, 0);
+      if (!ok) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamContentGetDeviceData: {
+      const DummyDevice* device = FindDummyDevice(r3);
+      if (!device) return X_ERROR_DEVICE_NOT_CONNECTED;
+      if (!WriteDeviceData(r4, *device)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamContentCreateDeviceEnumerator: {
+      // (content_type, content_flags, max_count, buffer_size*, handle*)
+      if (a[3] && !Wr32(a[3], 0x50u * r5)) return Invalid();
+      std::vector<uint8_t> items;
+      for (const auto& device : kDummyDevices) {
+        uint8_t item[0x50] = {};
+        auto put32 = [&](uint32_t at, uint32_t v) {
+          item[at] = uint8_t(v >> 24); item[at + 1] = uint8_t(v >> 16);
+          item[at + 2] = uint8_t(v >> 8); item[at + 3] = uint8_t(v);
+        };
+        put32(0, device.id);
+        put32(4, device.type);
+        put32(8, uint32_t(device.total >> 32)); put32(12, uint32_t(device.total));
+        put32(16, uint32_t(device.free >> 32)); put32(20, uint32_t(device.free));
+        const std::u16string name(device.name);
+        for (size_t i = 0; i < name.size() && i < 27; ++i) {
+          item[24 + i * 2] = uint8_t(name[i] >> 8);
+          item[25 + i * 2] = uint8_t(name[i]);
+        }
+        items.insert(items.end(), item, item + 0x50);
+      }
+      const uint32_t handle = CreateXamEnumerator(0x50u, r5, std::move(items));
+      if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(a[4], handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamContentCreateEnumerator: {
+      // (user, device_id, content_type, content_flags, items_per_enumerate,
+      //  buffer_size*, handle*)
+      const uint32_t device_id = r4, content_type = r5, per = a[4];
+      const uint32_t size_ptr = a[5], handle_out = a[6];
+      if ((device_id && !FindDummyDevice(device_id)) || !handle_out) {
+        if (size_ptr) Wr32(size_ptr, 0);
+        return X_E_INVALIDARG;
+      }
+      if (size_ptr && !Wr32(size_ptr, 0x134u * per)) return Invalid();
+      std::vector<uint8_t> items;
+      if (!device_id || device_id == 1u) {
+        for (const auto& package : ContentPackages()) {
+          if (package.content_type != content_type) continue;
+          auto item = package.data;
+          item[0] = 0; item[1] = 0; item[2] = 0; item[3] = 1;  // device_id = HDD
+          items.insert(items.end(), item.begin(), item.end());
+        }
+      }
+      const uint32_t handle = CreateXamEnumerator(0x134u, per, std::move(items));
+      if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(handle_out, handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamEnumerate: {
+      // (handle, flags, buffer, buffer_length, items_returned*, overlapped)
+      const uint32_t items_returned = a[4], overlapped = a[5];
+      KernelObject* object = ResolveHandle(r3);
+      auto it = XamEnumerators().find(r3);
+      if (!object || object->type != ObjectType::kEnumerator || it == XamEnumerators().end()) {
+        return X_ERROR_INVALID_HANDLE;
+      }
+      auto& e = it->second;
+      uint32_t result = X_ERROR_SUCCESS, count = 0;
+      if (!r5) {
+        result = X_ERROR_INVALID_PARAMETER;
+      } else {
+        count = std::min(e.count() - e.current, e.per_enumerate);
+        if (!count) {
+          result = X_ERROR_NO_MORE_FILES;
+        } else {
+          if (!Wr(r5, e.items.data() + size_t(e.current) * e.item_size, count * e.item_size)) {
+            return Invalid();
+          }
+          e.current += count;
+        }
+      }
+      if (!overlapped) {
+        if (items_returned && !Wr32(items_returned, result ? 0u : count)) return Invalid();
+        return result;
+      }
+      return FinishXamOverlapped(overlapped, result, count);
+    }
+
+    // --- Headless UI (Xenia xam_ui.cc / xam_user.cc) ------------------------------
+    case xam::XamShowSigninUI:
+      // Xenia: XN_SYS_SIGNINCHANGED, then XN_SYS_UI off, to every listener.
+      BroadcastNotification(0x0Au, 1);
+      BroadcastNotification(0x09u, 0);
+      return X_ERROR_SUCCESS;
+    case xam::XamShowDeviceSelectorUI: {
+      // (user, content_type, content_flags, total_requested(qword),
+      //  device_id*, overlapped): the dummy HDD, bracketed by XN_SYS_UI.
+      BroadcastNotification(0x09u, 1);
+      if (!Wr32(a[4], 1u)) return Invalid();
+      BroadcastNotification(0x09u, 0);
+      return FinishXamOverlapped(a[5], X_ERROR_SUCCESS, 0);
+    }
+
     // --- Notifications (Xenia xam_notify.cc) -----------------------------------
     case xam::XamNotifyCreateListener:
       return CreateNotifyListener(r3, r4);
@@ -4263,6 +4887,15 @@ void ResetExtendedKernelServices() {
   XmaEnabledContexts().clear();
   NotifyListeners().clear();
   g_notified_startup = false;
+  for (const auto& package : ContentPackages()) {
+    DeleteContentFiles(package.device);
+    VfsDevices().erase(package.device);
+  }
+  ContentPackages().clear();
+  for (const auto& [root, device] : OpenContentRoots()) VfsSymlinks().erase(root + ":");
+  OpenContentRoots().clear();
+  g_next_content_device = 1;
+  XamEnumerators().clear();
   // Title-created symbolic links belong to the run; the registered VFS
   // content (r360_vfs_*) survives so a title can be re-run deterministically.
   VfsSymlinks().clear();
@@ -4473,6 +5106,21 @@ uint32_t r360_vfs_entry_path(uint32_t id) {
   std::memcpy(r360k::g_vfs_path_buffer, entry->path.data(), n);
   r360k::g_vfs_path_buffer[n] = 0;
   return uint32_t(n);
+}
+
+// XBLA license mask reported by XamContentGetLicenseMask (Xenia
+// cvars::license_mask): 0 = trial (Xenia default), 1 = full version bit,
+// 0xFFFFFFFF = every license. Survives kernel resets like a console setting.
+R360_WASM_EXPORT("r360_xam_set_license_mask")
+uint32_t r360_xam_set_license_mask(uint32_t mask) {
+  r360k::g_license_mask = mask;
+  return mask;
+}
+R360_WASM_EXPORT("r360_xam_license_mask")
+uint32_t r360_xam_license_mask() { return r360k::g_license_mask; }
+R360_WASM_EXPORT("r360_content_package_count")
+uint32_t r360_content_package_count() {
+  return uint32_t(r360k::ContentPackages().size());
 }
 
 R360_WASM_EXPORT("r360_audio_client_callback")

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import {createRender360BrowserImports,attachRender360BrowserInstance,validateRender360BrowserImports} from './render360-browser-wasi.mjs';
-import {XBOXKRNL_EXPORTS} from './render360-kernel-export-names.mjs';
+import {XBOXKRNL_EXPORTS,XAM_EXPORTS} from './render360-kernel-export-names.mjs';
 
 // Critic for the Xenia-style virtual file system: game:/d: symlinks to
 // \Device\Cdrom0, NtCreateFile/NtOpenFile/NtReadFile/NtQuery*File and
@@ -30,6 +30,7 @@ const r32=a=>((r8(a)<<24)|(r8(a+1)<<16)|(r8(a+2)<<8)|r8(a+3))>>>0;
 const r64=a=>(BigInt(r32(a))<<32n)|BigInt(r32(a+4));
 const ascii=(a,t)=>{for(let i=0;i<t.length;i++)w8(a+i,t.charCodeAt(i));w8(a+t.length,0);};
 const readAscii=(a,n)=>Array.from({length:n},(_,i)=>String.fromCharCode(r8(a+i))).join('');
+const readU16=(a,n)=>Array.from({length:n},(_,i)=>String.fromCharCode((r8(a+i*2)<<8)|r8(a+i*2+1))).join('');
 const P=0x51000000;{const b=alloc(32)>>>0;expect(b&&(map(P,32,b,0,3)>>>0)===1,'map params');}
 
 // Registration helpers (what the browser loader / title runner call).
@@ -101,4 +102,58 @@ expect(status()===5&&(need('r360_kernel_wait_reason')()>>>0)===4,'unavailable ho
 const pending=need('r360_vfs_host_io_entry')()>>>0;const len=need('r360_vfs_entry_path')(pending)>>>0;
 expect(Buffer.from(e.memory.buffer,pathBuffer,len).toString()==='data\\music.xma'&&(need('r360_vfs_host_io_length')()>>>0)===0x800,'host-I/O boundary did not name the file and length');
 console.log('VFS_HOST_IO_BOUNDARY=PASS');
+
+// --- Save data: XamContent packages as writable devices (Xenia ContentManager) ------
+const xord=name=>{for(const [o,info] of XAM_EXPORTS)if(info.name===name)return o;throw new Error(name);};
+const x=(name,...args)=>{const a=[...args,0,0,0,0,0,0,0,0].slice(0,8);return service(2,xord(name),...a)>>>0;};
+const S=P+0x2000;
+need('r360_kernel_service_set_caller')(0,0x82000100,P+0xF000);  // stack args live at r1+0x54
+expect(x('XamContentGetDeviceData',1,S)===0&&r32(S)===1&&r32(S+4)===1&&readU16(S+24,9)==='Dummy HDD','XamContentGetDeviceData mismatch');
+const listener=x('XamNotifyCreateListener',1,10);while(x('XNotifyGetNext',listener,0,S+0x60,S+0x64)===1){}
+expect(x('XamShowDeviceSelectorUI',0,1,0,0,S+0x50,0)===0&&r32(S+0x50)===1,'device selector did not pick the HDD');
+expect(x('XNotifyGetNext',listener,0,S+0x60,S+0x64)===1&&r32(S+0x60)===9&&r32(S+0x64)===1&&x('XNotifyGetNext',listener,0,S+0x60,S+0x64)===1&&r32(S+0x64)===0,'device selector did not bracket XN_SYS_UI on/off');
+// XCONTENT_DATA {device 1, type 1 saved game, display "Braid Save", file "braidsave"}
+const CD=S+0x100;for(let i=0;i<0x134;i++)w8(CD+i,0);w32(CD,1);w32(CD+4,1);
+'Braid Save'.split('').forEach((c,i)=>w16(CD+8+i*2,c.charCodeAt(0)));ascii(CD+0x108,'braidsave');
+ascii(S+0x240,'save');
+expect(x('XamContentCreate',0,S+0x240,CD,3,S+0x250,S+0x254,0)===3,'OPEN_EXISTING on a missing package should be PATH_NOT_FOUND');
+expect(x('XamContentCreate',0,S+0x240,CD,4,S+0x250,S+0x254,0)===0&&r32(S+0x250)===1,'OPEN_ALWAYS did not create the package');
+const OVERWRITE_IF=5,CREATE=2;
+const create=(path,disposition,options=0)=>k('NtCreateFile',P+0x800,0xC0100000,attrs(P,path),P+0x810,0,0x80,0,disposition)||0;
+w32(P+0xF054,0x40);  // CreateOptions stack arg: FILE_NON_DIRECTORY_FILE
+expect(create('save:\\Progress.dat',OVERWRITE_IF)===0&&r32(P+0x814)===2,'save file was not created');
+const saveFile=r32(P+0x800);const payload=Buffer.from(Array.from({length:100},(_,i)=>(i*13+5)&255));
+payload.forEach((b,i)=>w8(P+0x1000+i,b));
+expect(k('NtWriteFile',saveFile,0,0,0,P+0x820,P+0x1000,100,0)===0&&r32(P+0x824)===100,'NtWriteFile to save failed');
+expect(k('NtClose',saveFile)===0,'close save file');
+expect(k('NtQueryFullAttributesFile',attrs(P,'save:\\progress.dat'),P+0x900)===0&&r64(P+0x900+40)===100n,'saved file size mismatch');
+w32(P+0xF054,1);  // FILE_DIRECTORY_FILE
+expect(create('save:\\slot1',CREATE)===0&&r32(P+0x814)===2,'save directory not created');k('NtClose',r32(P+0x800));
+expect(k('NtQueryFullAttributesFile',attrs(P,'save:\\slot1'),P+0x900)===0&&(r32(P+0x900+48)&0x10)===0x10,'FILE_DIRECTORY_FILE did not create a directory');
+w32(P+0xF054,0x40);expect(create('save:\\slot1\\inner.bin',CREATE)===0&&r32(P+0x814)===2,'file inside new directory not created');k('NtClose',r32(P+0x800));
+w32(P+0xF054,0x40);
+expect(create('save:\\missing\\x.dat',CREATE)===0xC000003A,'missing parent should be OBJECT_PATH_NOT_FOUND');
+expect(k('NtOpenFile',P+0x800,0x80100000,attrs(P,'save:\\'),P+0x810,1,1)===0,'open save root');
+w32(P+0xF054,0);  // 9th argument is RestartScan for NtQueryDirectoryFile
+const root=r32(P+0x800);const saveNames=[];
+for(let i=0;i<8;i++){const st=k('NtQueryDirectoryFile',root,0,0,0,P+0x840,P+0xA00,0x100,0);if(st)break;saveNames.push(readAscii(P+0xA00+64,r32(P+0xA00+60)));}
+expect(JSON.stringify(saveNames.sort())===JSON.stringify(['Progress.dat','slot1']),`save root listing ${saveNames}`);
+expect(!saveNames.includes('Level1.dat'),'save device leaked disc entries');
+k('NtClose',root);
+expect(x('XamContentDelete',0,CD,0)===5,'deleting an open package should be ACCESS_DENIED');
+expect(x('XamContentClose',S+0x240,0)===0,'XamContentClose failed');
+expect(k('NtOpenFile',P+0x800,0x80100000,attrs(P,'save:\\progress.dat'),P+0x810,1,0)===0xC000000F,'closed root still resolves');
+expect(x('XamContentCreate',0,S+0x240,CD,1,S+0x250,S+0x254,0)===0xB7,'CREATE_NEW on an existing package should be ALREADY_EXISTS');
+expect(x('XamContentCreate',0,S+0x240,CD,3,S+0x250,S+0x254,0)===0&&r32(S+0x250)===2,'OPEN_EXISTING did not reopen');
+expect(k('NtOpenFile',P+0x800,0x80100000,attrs(P,'save:\\progress.dat'),P+0x810,1,0)===0,'reopened save file missing');
+expect(k('NtReadFile',r32(P+0x800),0,0,0,P+0x820,P+0x1100,100,0)===0&&payload.every((b,i)=>r8(P+0x1100+i)===b),'save data did not persist across close/open');
+k('NtClose',r32(P+0x800));
+expect(x('XamContentCreateEnumerator',0,1,1,0,4,S+0x300,S+0x304)===0&&r32(S+0x300)===4*0x134,'content enumerator creation failed');
+expect(x('XamEnumerate',r32(S+0x304),0,S+0x400,4*0x134,S+0x308,0)===0&&r32(S+0x308)===1&&readAscii(S+0x400+0x108,9)==='braidsave'&&r32(S+0x400)===1,'content enumeration mismatch');
+expect(x('XamEnumerate',r32(S+0x304),0,S+0x400,4*0x134,S+0x308,0)===0x12,'exhausted enumerator should report NO_MORE_FILES');
+expect(x('XamContentClose',S+0x240,0)===0&&x('XamContentDelete',0,CD,0)===0,'delete after close failed');
+x('XamContentCreateEnumerator',0,1,1,0,4,S+0x300,S+0x304);expect(x('XamEnumerate',r32(S+0x304),0,S+0x400,4*0x134,S+0x308,0)===0x12,'deleted package still enumerated');
+expect(x('XamContentGetLicenseMask',S+0x310,0)===0&&r32(S+0x310)===0,'default license mask should match Xenia (0)');
+need('r360_xam_set_license_mask')(1);expect(x('XamContentGetLicenseMask',S+0x310,0)===0&&r32(S+0x310)===1,'license mask setter ignored');need('r360_xam_set_license_mask')(0);
+console.log('XAM_CONTENT_SAVE_DATA=PASS');
 console.log('KERNEL_VFS_CRITIC=PASS');

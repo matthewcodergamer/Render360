@@ -144,7 +144,7 @@ export async function createGuestThreadScheduler({
         dispatchCounts.set(handle,(dispatchCounts.get(handle)??0)+1);
         return {handle,thread,terminated:true,yielded:false,guestReturned:false,exitCode:typeof kernelTerminalCode==='function'?kernelTerminalCode()>>>0:0,exitKind:'ExTerminateThread'};
       }
-      lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};throw error;
+      lastBlocker={handle,entry:thread.entry,error:String(error?.message??error),kernelBoundary:error?.kernelBoundary??null};throw error;
     }
     saveThreadContext(handle);
     sliceCount++;

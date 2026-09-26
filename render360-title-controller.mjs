@@ -95,6 +95,22 @@ export function readKernelBoundaryTelemetry(bootstrap,kernelLastStatus){
   return null;
 }
 
+// One readable sentence for a named kernel boundary, for the "Game Stopped"
+// sheet and logs. The structured boundary object stays attached for
+// diagnostics.
+export function describeKernelBoundary(boundary){
+  if(!boundary)return '';
+  const via=boundary.export&&boundary.export!==boundary.reason?` via ${boundary.export}`:'';
+  if(boundary.kind==='title-requested-exit'){
+    const code=boundary.code?` (code 0x${(boundary.code>>>0).toString(16).toUpperCase()})`:'';
+    if(boundary.reason==='XamLoaderLaunchTitle')return `The game asked to launch another title${via}${code}; title switching is not emulated yet.`;
+    if(boundary.reason==='KeBugCheck')return `The game stopped with a kernel bug check${via}${code}.`;
+    return `The game asked to exit (${boundary.reason})${via}${code}. Usually an earlier kernel or GPU call returned something it did not accept; Diagnostics lists the kernel call trace.`;
+  }
+  if(boundary.kind==='guest-wait-blocked')return `The game is waiting in ${boundary.export||'a kernel wait'}: ${boundary.reason}.`;
+  return '';
+}
+
 // Most recent kernel calls with Xenia export names, arguments and results.
 export function readKernelServiceTrace(bootstrap,limit=64){
   const count=maybe(bootstrap,'r360_kernel_import_trace_count');

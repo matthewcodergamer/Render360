@@ -1,6 +1,6 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
 import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
-import {handoffDefaultXex} from './render360-title-controller.mjs';
+import {describeKernelBoundary,handoffDefaultXex} from './render360-title-controller.mjs';
 import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
@@ -138,7 +138,7 @@ function updatePersistentCpu(state){
   if(state.result?.compatibilityExecution?.used){
     const status=state.result.executionStatus>>>0;
     const exact=state.result.executionBlockerOpcode?` · HIR opcode ${state.result.executionBlockerOpcode} @ 0x${(state.result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
-    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`}:null));
+    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`,kernelBoundary:state.result.kernelBoundary??null}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`,kernelBoundary:state.result.kernelBoundary??null}:null));
     state.schedulerBlocker=compatibilityBlocker;
     state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
     return state.persistentCpu;
@@ -208,7 +208,7 @@ function driveScheduler(run,state,onStage){
   activeScheduler=state.threadScheduler;
   const loop=state.threadScheduler.runLoop({
     onPump:async report=>{if(run!==activeRun){state.threadScheduler.stop();return;}state.schedulerReport=report;await inspectRuntime(state);updatePersistentCpu(state);publish(state);if(state.frontbufferFrame?.realTitleFrameReady)stage(onStage,'frame',`Real title frame ${state.frontbufferFrame.width}×${state.frontbufferFrame.height}`);},
-    onError:async(error,blocker)=>{state.schedulerBlocker={kind:'commercial-cpu-scheduler-blocker',entry:blocker?.entry??state.result.entry??0,message:error?.message||String(error),...blocker};updatePersistentCpu(state);publish(state);stage(onStage,'blocked',state.schedulerBlocker.message,{blocker:state.schedulerBlocker});},
+    onError:async(error,blocker)=>{state.schedulerBlocker={kind:error?.kernelBoundary?.kind??'commercial-cpu-scheduler-blocker',entry:blocker?.entry??state.result.entry??0,message:error?.message||String(error),kernelBoundary:error?.kernelBoundary??null,...blocker};updatePersistentCpu(state);publish(state);stage(onStage,'blocked',state.schedulerBlocker.message,{blocker:state.schedulerBlocker});},
   });
   state.runtimeLoop=loop;publish(state);loop.then(()=>{if(run===activeRun){updatePersistentCpu(state);publish(state);}}).catch(error=>{if(run===activeRun)stage(onStage,'blocked',error?.message||String(error));});return loop;
 }

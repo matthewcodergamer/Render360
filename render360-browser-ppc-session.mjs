@@ -1,3 +1,6 @@
+import { kernelExportName } from './render360-kernel-export-names.mjs';
+import { readKernelBoundaryTelemetry, readKernelServiceTrace, describeKernelBoundary } from './render360-title-controller.mjs';
+
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
 const requiredFunction=(bootstrap,name)=>{
   const fn=pick(bootstrap,name);
@@ -113,6 +116,24 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     return `_KERNEL_STATUS_${status}_MODULE_${module}_ORDINAL_0x${ordinal.toString(16).toUpperCase()}_TARGET_0x${target.toString(16).toUpperCase()}`;
   }
 
+  // A guest call that neither generated code nor the kernel could complete.
+  // Named kernel boundaries (title exit, blocking wait, unimplemented export)
+  // get a readable message; the bracketed token keeps the exact fail-closed
+  // identity for diagnostics.
+  function kernelTargetError(target){
+    const token=`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${target.toString(16)}${kernelFailureDetail(target)}`;
+    const status=typeof kernelLastStatus==='function'?kernelLastStatus()>>>0:0;
+    if(status===4||status===5){
+      const boundary=readKernelBoundaryTelemetry(bootstrap,status);
+      if(boundary){boundary.kernelTrace=readKernelServiceTrace(bootstrap,32);const error=new Error(`${describeKernelBoundary(boundary)} [${token}]`);error.kernelBoundary=boundary;return error;}
+    }
+    if(status===2&&typeof kernelLastModule==='function'&&typeof kernelLastOrdinal==='function'){
+      const name=kernelExportName(kernelLastModule()>>>0,kernelLastOrdinal()>>>0);
+      const error=new Error(`Kernel export ${name} is not implemented yet [${token}]`);error.kernelUnimplemented=name;return error;
+    }
+    return new Error(token);
+  }
+
   function continuationOwner(address,key){
     const normalized=key===undefined||key===null?'default':String(key);
     return `${address>>>0}:${normalized}`;
@@ -221,7 +242,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
         kernelDispatches++;
         return 1;
       }
-      throw new Error(`FAIL_CLOSED_UNKNOWN_GUEST_TARGET_0x${target.toString(16)}${kernelFailureDetail(target)}`);
+      throw kernelTargetError(target);
     };
     const guest_load=(address,size,flags)=>{
       address>>>=0;size>>>=0;flags>>>=0;

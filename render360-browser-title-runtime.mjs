@@ -259,14 +259,16 @@ export async function handoffXboxIsoBrowser({
     result.runtimeBoundary=schedulerReport.slices[0]?.terminated?'primary-thread-return':'cooperative-thread-boundary';
   }catch(error){
     schedulerBlocker={
-      kind:'commercial-cpu-scheduler-blocker',
+      kind:error?.kernelBoundary?.kind??'commercial-cpu-scheduler-blocker',
       entry:result.entry>>>0,
       message:error?.message||String(error),
+      kernelBoundary:error?.kernelBoundary??null,
       translatedFunctionCount:result.translatedFunctionCount>>>0,
       callableFunctionCount:ppcSession?.functionCount??0,
       scheduler:threadScheduler?.inspect?.()??null,
     };
-    result.runtimeBoundary='commercial-cpu-scheduler-blocked';
+    result.runtimeBoundary=error?.kernelBoundary?.kind??'commercial-cpu-scheduler-blocked';
+    if(error?.kernelBoundary)result.kernelBoundary=error.kernelBoundary;
   }
   result.commercialCpu={
     mode:'translation-only-then-native-thread-scheduler',

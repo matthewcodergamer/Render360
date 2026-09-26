@@ -90,7 +90,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          # The PC patch must leave the Xbox release and runtime tree exactly as
+          # checked in; record both instead of pinning a release number.
+          release="$(tr -d '[:space:]' < VERSION)"
+          echo "R360_RELEASE_BEFORE=$release" >> "$GITHUB_ENV"
           before="$(git rev-parse HEAD:src/xenia_web_bootstrap)"
           echo "XBOX_BOOTSTRAP_TREE=$before"
           echo "R360_XBOX_TREE=$before" >> "$GITHUB_ENV"
@@ -139,7 +142,7 @@ jobs:
           grep -q "r360-platform-corner" styles/pc-library-integration.css
           grep -q "render360-pc-content-index-v1" runtime/community-wasm-package.js
           grep -q "lazySourceVpkReads" runtime/community-wasm-package.js
-          test "$(tr -d '[:space:]' < VERSION)" = '74'
+          test "$(tr -d '[:space:]' < VERSION)" = "$R360_RELEASE_BEFORE"
           test "$(git rev-parse HEAD:src/xenia_web_bootstrap)" = "$R360_XBOX_TREE"
           if git diff --name-only | grep -Eq '^(src/xenia_web_bootstrap/|xenia_ppc_bootstrap\.wasm$|xenia_ppc_bootstrap\.meta\.json$|VERSION$)'; then
             echo 'PC Wasm patch attempted to modify the Xbox 360 runtime.' >&2

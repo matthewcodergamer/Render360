@@ -1,13 +1,8 @@
 name: Apply V65 Entry Indexed Provenance
 
+# One-shot V65 updater, kept for history. Its contract checks pin release 65,
+# so it must not run on later pushes that edit the shared overlay files.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tools/apply-entry-indexed-provenance-v65.py'
-      - 'tools/fix-v65-hir-return-overlay.py'
-      - 'prepare-hir-tail-frame-overlay.py'
-      - '.github/workflows/apply-entry-indexed-provenance-v65.yml'
   workflow_dispatch:
 
 permissions:

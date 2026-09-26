@@ -148,8 +148,9 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 # Xenos ExecuteBuffer has bounded nested command/constant scratch frames. Give
 # wasm32 an explicit 2 MiB stack so those frames cannot overwrite the sparse
 # guest-memory allocator while the source is being moved to static scratch.
+R360_OPT="${R360_OPT:--O2}"
 LINK_ARGS=(
-  -O0
+  "$R360_OPT"
   -sSTANDALONE_WASM=1
   -sERROR_ON_UNDEFINED_SYMBOLS=1
   -Wl,--no-entry

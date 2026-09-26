@@ -11,7 +11,7 @@
 // Usage:
 //   node tools/run-title.mjs <game.iso | package (LIVE/PIRS/CON) | default.xex | extracted folder>
 //        [--bootstrap build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm]
-//        [--trace 64] [--json report.json] [--verbose]
+//        [--trace 64] [--json report.json] [--budget N] [--verbose]
 //
 // Nothing here uploads or copies game data anywhere; files are read in place.
 
@@ -30,11 +30,12 @@ const {kernelExportName}=await import(rel('render360-kernel-export-names.mjs'));
 const {Render360Core}=await import(rel('wasm-core.js'));
 
 function parseArgs(argv){
-  const args={input:null,bootstrap:null,trace:48,json:null,verbose:false};
+  const args={input:null,bootstrap:null,trace:48,json:null,verbose:false,budget:1<<30};
   for(let i=0;i<argv.length;i++){
     const a=argv[i];
     if(a==='--bootstrap')args.bootstrap=argv[++i];
     else if(a==='--trace')args.trace=Number(argv[++i]);
+    else if(a==='--budget')args.budget=Number(argv[++i]);
     else if(a==='--json')args.json=argv[++i];
     else if(a==='--verbose'||a==='-v')args.verbose=true;
     else if(a==='--help'||a==='-h')args.help=true;
@@ -144,6 +145,8 @@ async function main(){
   const title=await openTitle(args.input,{core,host});
   const vfs=registerGuestVfs(bootstrap,title.files);
   const encryptedSecurityKey=extractXex2EncryptedImageKey(title.defaultXex);
+  // Per-function HIR fuel: generous on a laptop so CRT startup can finish.
+  const budget=bootstrap.exports.r360_hir_set_instruction_budget?.(args.budget>>>0)>>>0;
   const setExecute=bootstrap.exports.r360_ppc_probe_set_execute_on_translate;
   if(typeof setExecute==='function')setExecute(1);
   let error=null,result=null;
@@ -156,7 +159,7 @@ async function main(){
   const elapsedMs=Date.now()-started;
 
   const report={
-    input:path.resolve(args.input),kind:title.kind,bootstrap:bootstrapFile,elapsedMs,
+    input:path.resolve(args.input),kind:title.kind,bootstrap:bootstrapFile,elapsedMs,instructionBudget:budget||null,
     vfs:{files:title.files.filter(f=>!f.directory).length,directories:title.files.filter(f=>f.directory).length,registered:vfs.registered,reads:bootstrap.exports.r360_vfs_reads?.()>>>0,pending:pendingGuestVfsRead(bootstrap)},
     error:error?{message:error.message,details:error.render360??null}:null,
   };

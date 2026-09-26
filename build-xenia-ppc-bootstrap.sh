@@ -57,8 +57,13 @@ python3 "$ROOT/prepare-xenia-spirv-browser-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
 python3 "$ROOT/prepare-wasm-backend-cfg-overlay.py"
 
-COMMON=(-std=c++20 -O0 -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include" -I"$XENIA/third_party/glslang")
-COMMON_C=(-O0 -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
+# Optimization level for the browser CPU runtime. -O0 made the HIR executor,
+# sparse memory and kernel services several times slower on phones.
+# Override with R360_OPT=-O0 when bisecting a suspected miscompile.
+R360_OPT="${R360_OPT:--O2}"
+case "$R360_OPT" in -O0|-O1|-O2|-O3|-Os|-Oz) ;; *) echo "ERROR: invalid R360_OPT=$R360_OPT" >&2; exit 2 ;; esac
+COMMON=(-std=c++20 "$R360_OPT" -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include" -I"$XENIA/third_party/glslang")
+COMMON_C=("$R360_OPT" -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   COMMON+=("-I$LLVM_INCLUDE")

@@ -8,7 +8,12 @@ def one(a,b,n):
 # Braid's 128-entry startup initialization loop legitimately exceeds the old
 # 4,096-HIR-instruction probe ceiling. Keep a hard loop guard, but give real
 # title startup enough fuel to complete bounded initialization work.
-one('constexpr uint32_t kMaxCorrectnessInstructions = 4096;\n','constexpr uint32_t kMaxCorrectnessInstructions = 65536;\n','instruction budget')
+# The guard is a runtime setting (r360_hir_set_instruction_budget): pages keep
+# it bounded so a runaway loop cannot freeze the UI thread, while the headless
+# title runner raises it so XDK CRT startup (BSS clears, static constructors,
+# heap setup) can run to its next real boundary.
+one('constexpr uint32_t kMaxCorrectnessInstructions = 4096;\n','uint32_t g_max_correctness_instructions = 4u * 1024u * 1024u;\n','instruction budget')
+one('if (++result.instructions_executed > kMaxCorrectnessInstructions) {','if (++result.instructions_executed > g_max_correctness_instructions) {','instruction budget guard')
 one('constexpr uint32_t kR360MaxGuestCallDepth = 64;\n','''constexpr uint32_t kR360MaxGuestCallDepth = 64;
 thread_local std::array<uint32_t,kR360MaxGuestCallDepth> g_logical_guest_depth{};
 thread_local uint32_t g_pending_logical_depth=0;
@@ -83,3 +88,17 @@ one('''  ++g_execution_depth;
 ''','execute')
 p.write_text(s);print('HIR_TAIL_FRAME_BOUNDARY_OVERLAY=PASS')
 # V56 linked-call exact-entry dispatch landed; this direct commit triggers Fastlane.
+s=s.rstrip('\n')+'''
+
+extern "C" __attribute__((used, export_name("r360_hir_set_instruction_budget")))
+uint32_t r360_hir_set_instruction_budget(uint32_t budget) {
+  if (budget < 4096u) budget = 4096u;
+  render360::xenia_web::g_max_correctness_instructions = budget;
+  return budget;
+}
+extern "C" __attribute__((used, export_name("r360_hir_instruction_budget")))
+uint32_t r360_hir_instruction_budget() {
+  return render360::xenia_web::g_max_correctness_instructions;
+}
+'''
+p.write_text(s)

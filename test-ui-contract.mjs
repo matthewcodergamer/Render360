@@ -19,7 +19,7 @@ const failures=[];
 const must=(value,message)=>{if(!value)failures.push(message);};
 const has=(source,token)=>source.includes(token);
 
-must(version==='74','VERSION must remain release 74');
+must(version==='75','VERSION must remain release 75');
 for(const path of ['styles/base.css','styles/interactions.css','styles/xenios.css','styles/controller.css','app.js','ui-behavior.js'])must(has(html,path),`index must load canonical ${path}`);
 for(const legacy of ['app-v41.js','app-v42-patch.js','ui-v41.css','ui-v42-patch.css','ui-v44-xenios.css','ui-v44-xenios-v16.css'])must(!has(html,legacy),`index must not load legacy ${legacy}`);
 must(!has(html,'&#x1008CC;')&&!has(html,'&#x100185;'),'initial toolbar must not depend on private SF Symbol code points');

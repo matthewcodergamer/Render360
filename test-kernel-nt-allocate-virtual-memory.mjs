@@ -78,6 +78,21 @@ const commitInterior=service(1,0x00CC,basePtr,sizePtr,0x60001000,0x04,0,0,0,0)>>
 if(commitInterior!==0)throw new Error(`interior commit returned 0x${commitInterior.toString(16)} instead of success`);
 if(readBe32(basePtr)!==largeBase+0x10000||readBe32(sizePtr)!==0x10000)throw new Error('interior large-page commit output mismatch');
 if((mappedPages()>>>0)!==beforeLarge+16)throw new Error(`interior 64 KiB commit should map 16 sparse pages, got ${(mappedPages()>>>0)-beforeLarge}`);
+// Xenia picks the page size from the heap that owns an explicit base, so a
+// commit without X_MEM_LARGE_PAGES inside the 0x40000000 64 KiB heap still
+// rounds to 64 KiB pages instead of failing with STATUS_NO_MEMORY.
+if((write32(basePtr,largeBase+0x8000)>>>0)!==1||(write32(sizePtr,0x1000)>>>0)!==1)throw new Error('unable to initialize 4 KiB-flagged interior commit');
+const commitSmallFlag=service(1,0x00CC,basePtr,sizePtr,0x1000,0x04,0,0,0,0)>>>0;
+if(commitSmallFlag!==0)throw new Error(`4 KiB-flagged commit inside 64 KiB heap returned 0x${commitSmallFlag.toString(16)}`);
+if(readBe32(basePtr)!==largeBase||readBe32(sizePtr)!==0x10000)throw new Error(`4 KiB-flagged commit did not use heap page size base=0x${readBe32(basePtr).toString(16)} size=0x${readBe32(sizePtr).toString(16)}`);
+if((mappedPages()>>>0)!==beforeLarge+32)throw new Error(`heap-page-size commit should map 32 sparse pages total, got ${(mappedPages()>>>0)-beforeLarge}`);
+// Negative RegionSize values are accepted and negated as in Xenia.
+if((write32(basePtr,0)>>>0)!==1||(write32(sizePtr,(-0x1800)>>>0)>>>0)!==1)throw new Error('unable to initialize negative-size allocation');
+const negativeSize=service(1,0x00CC,basePtr,sizePtr,0x3000,0x04,0,0,0,0)>>>0;
+if(negativeSize!==0||readBe32(sizePtr)!==0x2000)throw new Error(`negative RegionSize mismatch status=0x${negativeSize.toString(16)} size=0x${readBe32(sizePtr).toString(16)}`);
+const negativeBase=readBe32(basePtr);
+if((write32(sizePtr,0)>>>0)!==1||(service(1,0x00DC,basePtr,sizePtr,0x8000,0,0,0,0,0)>>>0)!==0)throw new Error('unable to release negative-size allocation');
+if(readBe32(basePtr)!==negativeBase)throw new Error('negative-size release changed base');
 if((write32(basePtr,largeBase)>>>0)!==1||(write32(sizePtr,0)>>>0)!==1)throw new Error('unable to initialize large reservation release');
 const releaseLarge=service(1,0x00DC,basePtr,sizePtr,0x8000,0,0,0,0,0)>>>0;
 if(releaseLarge!==0||(mappedPages()>>>0)!==beforeLarge)throw new Error(`large reservation release mismatch status=0x${releaseLarge.toString(16)} pages=${mappedPages()>>>0}`);
@@ -93,4 +108,6 @@ console.log('NT_ALLOCATE_VIRTUAL_MEMORY_PAGE_ROUNDING=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_ZEROED_RW=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_NO_ALIAS=PASS');
 console.log('BRAID_LARGE_PAGE_INTERIOR_COMMIT=PASS');
+console.log('NT_ALLOCATE_VIRTUAL_MEMORY_HEAP_PAGE_SIZE=PASS');
+console.log('NT_ALLOCATE_VIRTUAL_MEMORY_NEGATIVE_SIZE=PASS');
 console.log('NT_ALLOCATE_VIRTUAL_MEMORY_NTSTATUS_FAIL_CLOSED=PASS');

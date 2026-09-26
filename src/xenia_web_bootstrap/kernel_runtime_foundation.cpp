@@ -572,8 +572,28 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
   // browser service fail-closed instead of pretending that reset semantics ran.
   if (alloc_type & kXMemReset) return kXStatusInvalidParameter;
 
-  const uint32_t page_size =
-      (alloc_type & kXMemLargePages) ? kGuestLargePageSize : kGuestPageSize;
+  // Match Xenia NtAllocateVirtualMemory: an explicit base address selects the
+  // page size of the guest-virtual heap that owns it (v00000000 = 4 KiB,
+  // v40000000 = 64 KiB) and ignores X_MEM_LARGE_PAGES. Only automatic
+  // placement uses the flag. Committing a 4 KiB-flagged subrange of a
+  // 64 KiB-page reservation is therefore valid, as on real hardware.
+  uint32_t page_size = kGuestPageSize;
+  if (requested_base) {
+    if (requested_base < kGuestVirtual4kEnd) {
+      page_size = kGuestPageSize;
+    } else if (requested_base < 0x7F000000u) {
+      page_size = kGuestLargePageSize;
+    } else {
+      // XEX, physical and unmapped heaps are not kGuestVirtual in Xenia.
+      return kXStatusInvalidParameter;
+    }
+  } else if (alloc_type & kXMemLargePages) {
+    page_size = kGuestLargePageSize;
+  }
+  // Xenia accepts the negated size some titles pass for RegionSize.
+  if (int32_t(requested_size) < 0) {
+    requested_size = uint32_t(-int32_t(requested_size));
+  }
   uint32_t adjusted_size = 0;
   if (!RoundUpGuestSize(requested_size, page_size, &adjusted_size)) {
     return kXStatusInvalidParameter;
@@ -591,7 +611,7 @@ uint32_t NtAllocateVirtualMemory(uint32_t base_addr_ptr,
       const uint32_t range_begin =
           page_size == kGuestLargePageSize ? kGuestVirtual64kBase : 0x00010000u;
       const uint32_t range_end =
-          page_size == kGuestLargePageSize ? 0x80000000u : kGuestVirtual4kEnd;
+          page_size == kGuestLargePageSize ? 0x7F000000u : kGuestVirtual4kEnd;
       if (base < range_begin || uint64_t(base) + adjusted_size > range_end ||
           !VirtualRangeAvailable(base, adjusted_size)) {
         return kXStatusNoMemory;

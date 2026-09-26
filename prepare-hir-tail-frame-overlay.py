@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 from pathlib import Path
 p=Path(__file__).resolve().parent/'build/xenia-web-overlay/render360/hir_correctness_executor_vmx.cpp';s=p.read_text()
 def one(a,b,n):
@@ -101,4 +102,16 @@ uint32_t r360_hir_instruction_budget() {
   return render360::xenia_web::g_max_correctness_instructions;
 }
 '''
+# Per-call diagnostics from the executor overlays are stderr text. In the
+# browser each line is a synchronous WASI fd_write into console.error and real
+# titles make millions of guest calls, so route the hot ones through the
+# runtime verbose-trace switch (hir_correctness_executor.h). The stack/call
+# history rings still record every event; blocker and fault lines stay on.
+for message in ('R360_STACK_CALL ', 'R360_STACK_WRITE ', 'R360_GUEST_RETURN_SET ',
+                'R360_GUEST_RETURN_DISCARD ', 'R360_HIR_INTERIOR_ENTRY ',
+                'R360_DIRECT_CALL_FALLBACK ', 'R360_DIRECT_CALL_TRUE_FALLBACK '):
+    s, count = re.subn(r'std::fprintf\(stderr,(\s*)"' + re.escape(message),
+                       lambda m: 'R360_VERBOSE_TRACE(' + m.group(1) + '"' + message, s)
+    if count < 1:
+        raise SystemExit(f'verbose trace gate: {message.strip()} not found')
 p.write_text(s)

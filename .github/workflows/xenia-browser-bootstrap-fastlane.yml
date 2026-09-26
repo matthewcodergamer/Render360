@@ -42,6 +42,7 @@ on:
       - 'render360-kernel-export-names.mjs'
       - 'tools/generate-kernel-export-tables.py'
       - 'test-xex-guest-mapper.mjs'
+      - 'test-sparse-guest-memory.mjs'
       - 'test-braid-frame-history.mjs'
       - 'VERSION'
       - 'build-xenia-ppc-bootstrap.sh'
@@ -210,6 +211,9 @@ jobs:
         with:
           name: xenia-browser-bootstrap-fastlane
           path: build/xenia-ppc-bootstrap
+
+      - name: Verify sparse guest page table
+        run: timeout 90s node ./test-sparse-guest-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify commercial-title PE staging growth
         run: timeout 90s node ./test-xex-guest-mapper.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

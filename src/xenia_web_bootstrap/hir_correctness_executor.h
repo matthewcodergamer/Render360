@@ -2,6 +2,25 @@
 #define RENDER360_XENIA_WEB_BOOTSTRAP_HIR_CORRECTNESS_EXECUTOR_H_
 
 #include <cstdint>
+#include <cstdio>
+
+namespace render360::xenia_web {
+// Verbose per-function / per-call text tracing, off by default. In the browser
+// every stderr line is a synchronous WASI fd_write that lands in
+// console.error, and real titles make millions of guest calls, so hot-path
+// diagnostics only print when a developer turns this on
+// (r360_trace_set_verbose). The structured stack/call history rings and the
+// kernel trace ring record the same events regardless. One-shot blocker and
+// fault lines are never gated.
+extern bool g_r360_verbose_trace;
+}  // namespace render360::xenia_web
+
+#define R360_VERBOSE_TRACE(...)                                  \
+  do {                                                           \
+    if (::render360::xenia_web::g_r360_verbose_trace) {          \
+      std::fprintf(stderr, __VA_ARGS__);                         \
+    }                                                            \
+  } while (0)
 
 namespace xe {
 class Memory;

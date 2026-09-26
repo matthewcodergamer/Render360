@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "wasm_backend_call_probe.h"
@@ -27,21 +28,39 @@ enum FaultCode : uint32_t {
 
 struct Backing {
   std::vector<std::array<uint8_t, kPageSize>> pages;
+  // Number of executable virtual aliases of each backing page. Sized once at
+  // allocation so page-table entries can hold stable pointers into it.
+  std::vector<uint32_t> executable_aliases;
 };
 
-struct Mapping {
+// One guest virtual page. `host` is null for unmapped pages. Every emulated
+// load/store resolves through this entry, so it holds the host byte pointer
+// directly (as Xenia's host-mapped membase does) instead of re-deriving it.
+struct PageEntry {
+  uint8_t* host = nullptr;
+  uint32_t* executable_aliases = nullptr;
   uint32_t backing_id = 0;
   uint32_t backing_page = 0;
   uint32_t protection = 0;
 };
 
+// Two-level page table over the 32-bit guest address space: 1024 directory
+// slots, each covering 4 MiB with a lazily allocated 1024-entry table. Lookup
+// is two indexed loads, replacing an ordered-map search per guest byte. The
+// directory is constant-initialized (the standalone module never runs global
+// constructors).
+constexpr uint32_t kTableBits = 10;
+constexpr uint32_t kTableEntries = 1u << kTableBits;
+constexpr uint32_t kDirectoryShift = kPageShift + kTableBits;
+constexpr uint32_t kDirectoryEntries = 1u << (32u - kDirectoryShift);
+
 std::vector<Backing> g_backings;
-std::map<uint32_t, Mapping> g_pages;
-// Number of executable virtual aliases for each physical sparse backing page.
-// Guest RAM writes are extremely hot; they must not scan the entire virtual
-// mapping tree just to discover that an ordinary RW data/stack page has no
-// executable alias.
-std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_executable_alias_counts;
+std::array<PageEntry*, kDirectoryEntries> g_page_directory{};
+uint32_t g_mapped_pages = 0;
+// Executable virtual pages aliasing each physical sparse backing page. Guest
+// RAM writes are extremely hot; they check the per-page alias count and only
+// consult this index when a written page is also mapped executable.
+std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>> g_executable_aliases;
 // This is the authoritative executable-byte content generation. It is sparse
 // across the full 32-bit Xbox virtual address space and is intentionally
 // independent of permission/mapping invalidation and the legacy backend epoch.
@@ -85,40 +104,49 @@ Backing* GetBacking(uint32_t backing_id) {
   return &g_backings[backing_id - 1u];
 }
 
-const Mapping* Resolve(uint32_t address, uint32_t required_protection,
-                       uint32_t protection_fault) {
-  auto it = g_pages.find(address >> kPageShift);
-  if (it == g_pages.end()) {
-    Fault(address, kFaultUnmapped);
-    return nullptr;
-  }
-  if ((it->second.protection & required_protection) != required_protection) {
-    Fault(address, protection_fault);
-    return nullptr;
-  }
-  return &it->second;
+inline PageEntry* LookupPage(uint32_t page) {
+  PageEntry* table = g_page_directory[page >> kTableBits];
+  if (!table) return nullptr;
+  PageEntry* entry = &table[page & (kTableEntries - 1u)];
+  return entry->host ? entry : nullptr;
 }
 
-uint8_t* ResolveBackingByte(const Mapping& mapping, uint32_t address) {
-  Backing* backing = GetBacking(mapping.backing_id);
-  if (!backing || mapping.backing_page >= backing->pages.size()) return nullptr;
-  return &backing->pages[mapping.backing_page][address & kPageMask];
+PageEntry* EnsurePageSlot(uint32_t page) {
+  PageEntry*& table = g_page_directory[page >> kTableBits];
+  if (!table) table = new PageEntry[kTableEntries]();
+  return &table[page & (kTableEntries - 1u)];
+}
+
+void AddExecutableAlias(const PageEntry& entry, uint32_t virtual_page) {
+  ++*entry.executable_aliases;
+  g_executable_aliases[std::make_pair(entry.backing_id, entry.backing_page)]
+      .insert(virtual_page);
+}
+
+void RemoveExecutableAlias(const PageEntry& entry, uint32_t virtual_page) {
+  if (*entry.executable_aliases) --*entry.executable_aliases;
+  auto it = g_executable_aliases.find(
+      std::make_pair(entry.backing_id, entry.backing_page));
+  if (it == g_executable_aliases.end()) return;
+  it->second.erase(virtual_page);
+  if (it->second.empty()) g_executable_aliases.erase(it);
 }
 
 void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {
-  const auto alias_key = std::make_pair(backing_id, backing_page);
-  const auto count_it = g_executable_alias_counts.find(alias_key);
-  if (count_it == g_executable_alias_counts.end() || !count_it->second) return;
-  for (const auto& [virtual_page, mapping] : g_pages) {
-    if (mapping.backing_id == backing_id &&
-        mapping.backing_page == backing_page &&
-        (mapping.protection & kGuestExecute)) {
-      MarkWasmBackendExecutableContentChangedRange(
-          virtual_page << kPageShift, kPageSize);
-    }
+  const auto it =
+      g_executable_aliases.find(std::make_pair(backing_id, backing_page));
+  if (it == g_executable_aliases.end()) return;
+  // Copy: invalidation callbacks must not observe a set being iterated.
+  const std::vector<uint32_t> pages(it->second.begin(), it->second.end());
+  for (const uint32_t virtual_page : pages) {
+    MarkWasmBackendExecutableContentChangedRange(virtual_page << kPageShift,
+                                                 kPageSize);
   }
 }
 
+// Validates [address, address + size) page by page, faulting at the first
+// unmapped/protected page (at `address` for the first page, otherwise at the
+// page base), exactly as the byte-granular implementation reported.
 bool ValidateSpan(uint32_t address, uint32_t size, uint32_t protection,
                   uint32_t protection_fault) {
   if (!size) return true;
@@ -126,7 +154,11 @@ bool ValidateSpan(uint32_t address, uint32_t size, uint32_t protection,
   if (end > UINT32_MAX) return Fault(address, kFaultInvalidArgument);
   uint32_t current = address;
   for (;;) {
-    if (!Resolve(current, protection, protection_fault)) return false;
+    const PageEntry* entry = LookupPage(current >> kPageShift);
+    if (!entry) return Fault(current, kFaultUnmapped);
+    if ((entry->protection & protection) != protection) {
+      return Fault(current, protection_fault);
+    }
     const uint32_t page_end = (current | kPageMask);
     if (uint64_t(page_end) >= end) break;
     current = page_end + 1u;
@@ -156,9 +188,13 @@ uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address) {
 }
 
 void ResetSparseGuestMemory() {
+  for (PageEntry*& table : g_page_directory) {
+    delete[] table;
+    table = nullptr;
+  }
+  g_mapped_pages = 0;
   g_backings.clear();
-  g_pages.clear();
-  g_executable_alias_counts.clear();
+  g_executable_aliases.clear();
   g_executable_content_generations.clear();
   ClearFault();
 }
@@ -170,8 +206,9 @@ uint32_t AllocateSparseGuestBacking(uint32_t page_count) {
     return 0;
   }
   Backing backing;
+  // resize() value-initializes: every page starts zero-filled.
   backing.pages.resize(page_count);
-  for (auto& page : backing.pages) page.fill(0);
+  backing.executable_aliases.resize(page_count);
   g_backings.push_back(std::move(backing));
   return static_cast<uint32_t>(g_backings.size());
 }
@@ -191,17 +228,20 @@ bool MapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
   }
   const uint32_t first_page = virtual_address >> kPageShift;
   for (uint32_t i = 0; i < page_count; ++i) {
-    if (g_pages.find(first_page + i) != g_pages.end()) {
+    if (LookupPage(first_page + i)) {
       return Fault((first_page + i) << kPageShift, kFaultAlreadyMapped);
     }
   }
   for (uint32_t i = 0; i < page_count; ++i) {
-    const Mapping mapping{backing_id, backing_page_offset + i, protection};
-    g_pages.emplace(first_page + i, mapping);
-    if (protection & kGuestExecute) {
-      ++g_executable_alias_counts[
-          std::make_pair(mapping.backing_id, mapping.backing_page)];
-    }
+    const uint32_t backing_page = backing_page_offset + i;
+    PageEntry* entry = EnsurePageSlot(first_page + i);
+    entry->host = backing->pages[backing_page].data();
+    entry->executable_aliases = &backing->executable_aliases[backing_page];
+    entry->backing_id = backing_id;
+    entry->backing_page = backing_page;
+    entry->protection = protection;
+    ++g_mapped_pages;
+    if (protection & kGuestExecute) AddExecutableAlias(*entry, first_page + i);
   }
   return true;
 }
@@ -215,28 +255,19 @@ bool ProtectSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
   }
   const uint32_t first_page = virtual_address >> kPageShift;
   for (uint32_t i = 0; i < page_count; ++i) {
-    if (g_pages.find(first_page + i) == g_pages.end()) {
+    if (!LookupPage(first_page + i)) {
       return Fault((first_page + i) << kPageShift, kFaultUnmapped);
     }
   }
   for (uint32_t i = 0; i < page_count; ++i) {
-    Mapping& mapping = g_pages[first_page + i];
-    const bool was_executable = (mapping.protection & kGuestExecute) != 0;
+    PageEntry& entry = *LookupPage(first_page + i);
+    const bool was_executable = (entry.protection & kGuestExecute) != 0;
     const bool now_executable = (protection & kGuestExecute) != 0;
     if (was_executable != now_executable) {
-      const auto alias_key =
-          std::make_pair(mapping.backing_id, mapping.backing_page);
-      if (now_executable) {
-        ++g_executable_alias_counts[alias_key];
-      } else {
-        auto alias_it = g_executable_alias_counts.find(alias_key);
-        if (alias_it != g_executable_alias_counts.end()) {
-          if (alias_it->second > 1) --alias_it->second;
-          else g_executable_alias_counts.erase(alias_it);
-        }
-      }
+      if (now_executable) AddExecutableAlias(entry, first_page + i);
+      else RemoveExecutableAlias(entry, first_page + i);
     }
-    mapping.protection = protection;
+    entry.protection = protection;
     if (was_executable != now_executable) {
       InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,
                                            kPageSize);
@@ -246,7 +277,7 @@ bool ProtectSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
 }
 
 bool SparseGuestMemoryPageMapped(uint32_t virtual_address) {
-  return g_pages.find(virtual_address >> kPageShift) != g_pages.end();
+  return LookupPage(virtual_address >> kPageShift) != nullptr;
 }
 
 bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
@@ -256,42 +287,54 @@ bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
   }
   const uint32_t first_page = virtual_address >> kPageShift;
   for (uint32_t i = 0; i < page_count; ++i) {
-    if (g_pages.find(first_page + i) == g_pages.end()) {
+    if (!LookupPage(first_page + i)) {
       return Fault((first_page + i) << kPageShift, kFaultUnmapped);
     }
   }
   for (uint32_t i = 0; i < page_count; ++i) {
-    auto it = g_pages.find(first_page + i);
-    if (it->second.protection & kGuestExecute) {
-      const auto alias_key =
-          std::make_pair(it->second.backing_id, it->second.backing_page);
-      auto alias_it = g_executable_alias_counts.find(alias_key);
-      if (alias_it != g_executable_alias_counts.end()) {
-        if (alias_it->second > 1) --alias_it->second;
-        else g_executable_alias_counts.erase(alias_it);
-      }
+    PageEntry& entry = *LookupPage(first_page + i);
+    if (entry.protection & kGuestExecute) {
+      RemoveExecutableAlias(entry, first_page + i);
       InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,
                                            kPageSize);
     }
-    g_pages.erase(it);
+    entry = PageEntry{};
+    --g_mapped_pages;
   }
   return true;
 }
 
 bool ReadSparseGuestMemory(uint32_t virtual_address, void* out, uint32_t size) {
   ClearFault();
-  if (size && !out) return Fault(virtual_address, kFaultInvalidArgument);
+  if (!size) return true;
+  if (!out) return Fault(virtual_address, kFaultInvalidArgument);
+  const uint32_t offset = virtual_address & kPageMask;
+  if (size <= kPageSize - offset) {
+    // Single-page access: the common case for every emulated load.
+    const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+    if (!entry) return Fault(virtual_address, kFaultUnmapped);
+    if (!(entry->protection & kGuestRead)) {
+      return Fault(virtual_address, kFaultReadProtection);
+    }
+    std::memcpy(out, entry->host + offset, size);
+    return true;
+  }
   if (!ValidateSpan(virtual_address, size, kGuestRead, kFaultReadProtection)) {
     return false;
   }
   uint8_t* dst = static_cast<uint8_t*>(out);
-  for (uint32_t i = 0; i < size; ++i) {
-    const Mapping* mapping = Resolve(virtual_address + i, kGuestRead,
-                                     kFaultReadProtection);
-    uint8_t* byte = mapping ? ResolveBackingByte(*mapping, virtual_address + i)
-                            : nullptr;
-    if (!byte) return Fault(virtual_address + i, kFaultInvalidArgument);
-    dst[i] = *byte;
+  uint32_t address = virtual_address;
+  uint32_t remaining = size;
+  while (remaining) {
+    const uint32_t page_offset = address & kPageMask;
+    const uint32_t chunk = remaining < kPageSize - page_offset
+                               ? remaining
+                               : kPageSize - page_offset;
+    std::memcpy(dst, LookupPage(address >> kPageShift)->host + page_offset,
+                chunk);
+    dst += chunk;
+    address += chunk;
+    remaining -= chunk;
   }
   return true;
 }
@@ -299,30 +342,53 @@ bool ReadSparseGuestMemory(uint32_t virtual_address, void* out, uint32_t size) {
 bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
                             uint32_t size) {
   ClearFault();
-  if (size && !data) return Fault(virtual_address, kFaultInvalidArgument);
+  if (!size) return true;
+  if (!data) return Fault(virtual_address, kFaultInvalidArgument);
+  const uint32_t offset = virtual_address & kPageMask;
+  if (size <= kPageSize - offset) {
+    // Single-page access: the common case for every emulated store.
+    const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+    if (!entry) return Fault(virtual_address, kFaultUnmapped);
+    if (!(entry->protection & kGuestWrite)) {
+      return Fault(virtual_address, kFaultWriteProtection);
+    }
+    std::memcpy(entry->host + offset, data, size);
+    if (*entry->executable_aliases) {
+      InvalidateExecutableAliases(entry->backing_id, entry->backing_page);
+    }
+    return true;
+  }
   if (!ValidateSpan(virtual_address, size, kGuestWrite, kFaultWriteProtection)) {
     return false;
   }
   const uint8_t* src = static_cast<const uint8_t*>(data);
-  std::vector<std::pair<uint32_t, uint32_t>> touched_backing_pages;
-  for (uint32_t i = 0; i < size; ++i) {
-    const uint32_t address = virtual_address + i;
-    const Mapping* mapping = Resolve(address, kGuestWrite, kFaultWriteProtection);
-    uint8_t* byte = mapping ? ResolveBackingByte(*mapping, address) : nullptr;
-    if (!byte) return Fault(address, kFaultInvalidArgument);
-    *byte = src[i];
-    const std::pair<uint32_t, uint32_t> key{mapping->backing_id,
-                                            mapping->backing_page};
-    bool seen = false;
-    for (const auto& existing : touched_backing_pages) {
-      if (existing == key) {
-        seen = true;
-        break;
+  std::vector<std::pair<uint32_t, uint32_t>> touched_executable;
+  uint32_t address = virtual_address;
+  uint32_t remaining = size;
+  while (remaining) {
+    const uint32_t page_offset = address & kPageMask;
+    const uint32_t chunk = remaining < kPageSize - page_offset
+                               ? remaining
+                               : kPageSize - page_offset;
+    const PageEntry* entry = LookupPage(address >> kPageShift);
+    std::memcpy(entry->host + page_offset, src, chunk);
+    if (*entry->executable_aliases) {
+      const std::pair<uint32_t, uint32_t> key{entry->backing_id,
+                                              entry->backing_page};
+      bool seen = false;
+      for (const auto& existing : touched_executable) {
+        if (existing == key) {
+          seen = true;
+          break;
+        }
       }
+      if (!seen) touched_executable.push_back(key);
     }
-    if (!seen) touched_backing_pages.push_back(key);
+    src += chunk;
+    address += chunk;
+    remaining -= chunk;
   }
-  for (const auto& [backing_id, backing_page] : touched_backing_pages) {
+  for (const auto& [backing_id, backing_page] : touched_executable) {
     InvalidateExecutableAliases(backing_id, backing_page);
   }
   return true;
@@ -337,10 +403,10 @@ uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
                            : end64;
   uint64_t current = virtual_address;
   while (current < end) {
-    const auto it = g_pages.find(static_cast<uint32_t>(current) >> kPageShift);
-    if (it == g_pages.end() ||
-        (it->second.protection & (kGuestRead | kGuestExecute)) !=
-            (kGuestRead | kGuestExecute)) {
+    const PageEntry* entry =
+        LookupPage(static_cast<uint32_t>(current) >> kPageShift);
+    if (!entry || (entry->protection & (kGuestRead | kGuestExecute)) !=
+                      (kGuestRead | kGuestExecute)) {
       break;
     }
     const uint64_t page_end = (current | uint64_t(kPageMask)) + 1u;
@@ -349,9 +415,7 @@ uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
   return static_cast<uint32_t>(current - uint64_t(virtual_address));
 }
 
-uint32_t SparseGuestMappedPageCount() {
-  return static_cast<uint32_t>(g_pages.size());
-}
+uint32_t SparseGuestMappedPageCount() { return g_mapped_pages; }
 
 uint32_t SparseGuestBackingPageCount() {
   uint64_t total = 0;

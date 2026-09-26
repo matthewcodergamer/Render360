@@ -11,7 +11,7 @@
 // Usage:
 //   node tools/run-title.mjs <game.iso | package (LIVE/PIRS/CON) | default.xex | extracted folder>
 //        [--bootstrap build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm]
-//        [--trace 64] [--json report.json] [--budget N] [--verbose]
+//        [--trace 64] [--json report.json] [--budget N] [--verbose] [--trace-calls]
 //
 // Nothing here uploads or copies game data anywhere; files are read in place.
 
@@ -30,7 +30,7 @@ const {kernelExportName}=await import(rel('render360-kernel-export-names.mjs'));
 const {Render360Core}=await import(rel('wasm-core.js'));
 
 function parseArgs(argv){
-  const args={input:null,bootstrap:null,trace:48,json:null,verbose:false,budget:1<<30};
+  const args={input:null,bootstrap:null,trace:48,json:null,verbose:false,traceCalls:false,budget:1<<30};
   for(let i=0;i<argv.length;i++){
     const a=argv[i];
     if(a==='--bootstrap')args.bootstrap=argv[++i];
@@ -38,6 +38,7 @@ function parseArgs(argv){
     else if(a==='--budget')args.budget=Number(argv[++i]);
     else if(a==='--json')args.json=argv[++i];
     else if(a==='--verbose'||a==='-v')args.verbose=true;
+    else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--help'||a==='-h')args.help=true;
     else if(!args.input)args.input=a;
     else throw new Error(`unexpected argument ${a}`);
@@ -135,7 +136,7 @@ function readDebugLog(bootstrap){
 async function main(){
   const args=parseArgs(process.argv.slice(2));
   if(args.help||!args.input){
-    console.log('usage: node tools/run-title.mjs <game.iso|package|default.xex|folder> [--bootstrap file.wasm] [--trace N] [--json out.json] [--verbose]');
+    console.log('usage: node tools/run-title.mjs <game.iso|package|default.xex|folder> [--bootstrap file.wasm] [--trace N] [--json out.json] [--budget N] [--verbose] [--trace-calls]');
     process.exit(args.help?0:2);
   }
   const bootstrapFile=args.bootstrap||(fs.existsSync(rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'))?rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'):rel('xenia_ppc_bootstrap.wasm'));
@@ -147,6 +148,8 @@ async function main(){
   const encryptedSecurityKey=extractXex2EncryptedImageKey(title.defaultXex);
   // Per-function HIR fuel: generous on a laptop so CRT startup can finish.
   const budget=bootstrap.exports.r360_hir_set_instruction_budget?.(args.budget>>>0)>>>0;
+  // Per-call/per-function stderr tracing is off by default for speed.
+  bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
   const setExecute=bootstrap.exports.r360_ppc_probe_set_execute_on_translate;
   if(typeof setExecute==='function')setExecute(1);
   let error=null,result=null;

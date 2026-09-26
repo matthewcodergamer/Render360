@@ -103,6 +103,40 @@ const generationAfterUnmap = contentGen(executableAddress);
 if (invalidationsAfterUnmap === invalidationsBeforeUnmap) throw new Error('Executable unmap did not invalidate cached code');
 eq(generationAfterUnmap,generationBeforeUnmap,'unmap must not mutate content generation');
 
+// Two-level page-table edge cases. Multi-page accesses validate every page
+// before touching bytes and fault at the first failing page base.
+const wide=pick('r360_sparse_guest_memory_alloc')(8)>>>0;
+if(!wide)throw new Error('second backing allocation failed');
+ok(pick('r360_sparse_guest_memory_map')(0x20000000,1,wide,0,R|W),'map RW page before RO page');
+ok(pick('r360_sparse_guest_memory_map')(0x20001000,1,wide,1,R),'map RO page after RW page');
+ok(pick('r360_sparse_guest_memory_write_u8')(0x20000FFE,0x3c),'seed RW page');
+eq(pick('r360_sparse_guest_memory_write_u32_be')(0x20000FFE,0xdeadbeef),0,'write spanning into RO page must fail');
+fault(3,0x20001000,'write spanning into RO page');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x20000FFE),0x3c,'failed spanning write must not mutate the first page');
+ok(pick('r360_sparse_guest_memory_map')(0x21000000,1,wide,2,R|W),'map page before hole');
+eq(pick('r360_sparse_guest_memory_write_u32_be')(0x21000FFE,1),0,'write spanning into unmapped page must fail');
+fault(1,0x21001000,'write spanning into unmapped page');
+// Accesses crossing a 4 MiB page-table boundary resolve through two tables.
+ok(pick('r360_sparse_guest_memory_map')(0x203FF000,2,wide,3,R|W),'map across page-table boundary');
+ok(pick('r360_sparse_guest_memory_write_u32_be')(0x203FFFFE,0xa1b2c3d4),'write across page-table boundary');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x20400000),0xc3,'read back across page-table boundary');
+// The top page cannot be accessed past the end of the 32-bit address space.
+ok(pick('r360_sparse_guest_memory_map')(0xFFFFF000,1,wide,5,R|W),'map top page');
+ok(pick('r360_sparse_guest_memory_write_u8')(0xFFFFFFFF,0x7e),'write last guest byte');
+eq(pick('r360_sparse_guest_memory_write_u32_be')(0xFFFFFFFE,0),0,'write wrapping the address space must fail');
+fault(4,0xFFFFFFFE,'write wrapping the address space');
+// Double map faults at the first already-mapped page; unmap frees the slot.
+eq(pick('r360_sparse_guest_memory_map')(0x21000000,1,wide,6,R|W),0,'double map must fail');
+fault(5,0x21000000,'double map');
+const mappedBeforeUnmap=pick('r360_sparse_guest_memory_mapped_pages')()>>>0;
+ok(pick('r360_sparse_guest_memory_unmap')(0x21000000,1),'unmap page');
+eq(pick('r360_sparse_guest_memory_mapped_pages')(),mappedBeforeUnmap-1,'unmap decrements mapped page count');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x21000000),0,'unmapped page read value');
+fault(1,0x21000000,'read after unmap');
+ok(pick('r360_sparse_guest_memory_map')(0x21000000,1,wide,6,R|W),'remap freed slot to another backing page');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x21000FFE),0,'remapped slot sees its new zero-filled backing page');
+console.log('SPARSE_PAGE_TABLE_EDGES=PASS');
+
 console.log(`sparse_backing_pages=${pick('r360_sparse_guest_memory_backing_pages')()>>>0}`);
 console.log(`sparse_mapped_pages=${pick('r360_sparse_guest_memory_mapped_pages')()>>>0}`);
 console.log(`executable_content_generation_before=${generationBefore}`);
@@ -119,3 +153,8 @@ console.log('WASM_BACKEND_CONTENT_GENERATION=PASS');
 console.log('WASM_BACKEND_MAPPING_INVALIDATION=PASS');
 console.log('SPARSE_EXECUTABLE_ALIAS_INVALIDATION=PASS');
 console.log('SPARSE_GUEST_MEMORY_FOUNDATION=PASS');
+pick('r360_sparse_guest_memory_reset')();
+eq(pick('r360_sparse_guest_memory_mapped_pages')(),0,'reset clears mapped pages');
+eq(pick('r360_sparse_guest_memory_read_u8')(0x20400000),0,'read after reset');
+fault(1,0x20400000,'read after reset');
+console.log('SPARSE_RESET=PASS');

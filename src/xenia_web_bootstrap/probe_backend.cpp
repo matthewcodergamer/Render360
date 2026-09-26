@@ -167,7 +167,7 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
     return false;
   }
   context->lr = ReadBigEndian32(lr_raw);
-  std::fprintf(stderr,
+  R360_VERBOSE_TRACE(
                "R360_EPILOG_HELPER executed target=0x%08X first_gpr=%u r1=0x%08X lr=0x%08X\n",
                address, first_gpr, r1, static_cast<uint32_t>(context->lr));
   return true;
@@ -180,7 +180,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   // that should be scanned from the probe window.
   if (ResolveKernelImportThunk(address)) {
     const uint32_t abi_target = KernelImportProbeLastAbiTarget();
-    std::fprintf(stderr, "R360_KERNEL_IMPORT resolved target=0x%08X module=%u ordinal=0x%X abi_target=0x%08X\n",
+    R360_VERBOSE_TRACE( "R360_KERNEL_IMPORT resolved target=0x%08X module=%u ordinal=0x%X abi_target=0x%08X\n",
                  address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal(), abi_target);
     if (abi_target) {
       if (abi_target == address) {
@@ -233,7 +233,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
 
   if (is_tail && is_epilog_return) {
     const bool helper_ok = ExecuteSharedEpilogReturn(address);
-    std::fprintf(stderr,
+    R360_VERBOSE_TRACE(
                  "R360_CALL_RESOLVE epilog-inline target=0x%08X flags=0x%X meta=%u signature=%u first_gpr=%u result=%u\n",
                  address, call_flags, epilog_by_metadata ? 1u : 0u,
                  epilog_by_signature ? 1u : 0u, signature_first_gpr,
@@ -268,7 +268,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
            (!use_owner ||
             (fn_end >= fn_begin + 4 && IsInLoadedProbeWindow(fn_end - 4)));
   };
-  std::fprintf(stderr,
+  R360_VERBOSE_TRACE(
                "R360_CALL_RESOLVE target=0x%08X function=0x%08X flags=0x%X "
                "tail=%u epilog=%u pdata=%u owner=%u prolog=%u\n",
                address, fn_begin, call_flags, is_tail ? 1u : 0u,
@@ -317,7 +317,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   SetHIRCorrectnessExecutionEntry(0u);
   const uint32_t missing_entry =
       interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
-  std::fprintf(stderr,
+  R360_VERBOSE_TRACE(
                "R360_CALL_RESOLVE translated target=0x%08X function=0x%08X "
                "end=0x%08X flags=0x%X owner=%u interior=0x%08X result=%u\n",
                address, fn_begin, nested_function.end_address(), call_flags,
@@ -334,7 +334,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
       missing_entry == interior_entry;
   if (!exact_interior_marker_missing) return translated;
 
-  std::fprintf(stderr,
+  R360_VERBOSE_TRACE(
                "R360_TAIL_INTERIOR target=0x%08X owner=0x%08X end=0x%08X marker=0\n",
                address, fn_begin, fn_end);
 
@@ -343,7 +343,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   xe::cpu::ppc::PPCScanner fragment_scanner(frontend);
   const bool fragment_scanned = fragment_scanner.Scan(&fragment, nullptr);
   if (!fragment_scanned) {
-    std::fprintf(stderr,
+    R360_VERBOSE_TRACE(
                  "R360_TAIL_FRAGMENT_FALLBACK target=0x%08X owner=0x%08X "
                  "end=0x%08X scan=0 define=0\n",
                  address, fn_begin, fn_end);
@@ -357,13 +357,13 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   const bool fragment_translated = frontend->DefineFunction(&fragment, 0);
   SetHIRCorrectnessContextProvenanceRecovery(false);
   SetHIRCorrectnessExecutionEntry(0u);
-  std::fprintf(stderr,
+  R360_VERBOSE_TRACE(
                "R360_TAIL_FRAGMENT_FALLBACK target=0x%08X owner=0x%08X "
                "end=0x%08X scan=1 define=%u\n",
                address, fn_begin, fn_end, fragment_translated ? 1u : 0u);
   if (fragment_translated) {
     auto* context = GetHIRCorrectnessActiveContext();
-    std::fprintf(stderr,
+    R360_VERBOSE_TRACE(
                  "R360_TAIL_FRAGMENT_EXECUTED target=0x%08X r1=0x%08X\n",
                  address,
                  context ? static_cast<uint32_t>(context->r[1]) : 0u);
@@ -398,7 +398,7 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
     const uint32_t block_index = block_count++;
     for (auto* instr = block->instr_head; instr; instr = instr->next) {
       ++instruction_count;
-      std::fprintf(stderr, "R360_HIR%s block=%u ordinal=%u opcode=%s(%u)\n",
+      R360_VERBOSE_TRACE( "R360_HIR%s block=%u ordinal=%u opcode=%s(%u)\n",
                    nested_execution ? "_NESTED" : "", block_index, instr->ordinal,
                    instr->opcode && instr->opcode->name ? instr->opcode->name : "<null>",
                    instr->opcode ? static_cast<unsigned>(instr->opcode->num) : 0u);
@@ -408,7 +408,7 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
   ++g_probe_telemetry.assembled_functions;
   auto* memory = backend_ && backend_->processor() ? backend_->processor()->memory() : nullptr;
   const bool call_registered = RegisterWasmBackendCallFunction(function, builder);
-  std::fprintf(stderr, "R360_WASM_BACKEND_CALL%s address=0x%08X registered=%u status=%u functions=%u\n",
+  R360_VERBOSE_TRACE( "R360_WASM_BACKEND_CALL%s address=0x%08X registered=%u status=%u functions=%u\n",
                nested_execution ? "_NESTED" : "", function ? function->address() : 0u,
                call_registered ? 1u : 0u, GetWasmBackendCallStatus(), GetWasmBackendCallFunctionCount());
 
@@ -424,11 +424,11 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
     BuildWasmBackendFpuProbe(builder, guest_host_base, active_base, kProbeGuestSize);
     BuildWasmBackendVmxProbe(builder, guest_host_base, active_base, kProbeGuestSize);
 
-    std::fprintf(stderr, "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n", GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(), GetWasmBackendProbeLoweredInstructions());
-    std::fprintf(stderr, "R360_WASM_BACKEND_CFG status=%u module_bytes=%u lowered=%u\n", GetWasmBackendCfgProbeStatus(), GetWasmBackendCfgProbeModuleSize(), GetWasmBackendCfgProbeLoweredInstructions());
-    std::fprintf(stderr, "R360_WASM_BACKEND_MEMORY status=%u module_bytes=%u lowered=%u guest_host=0x%08X\n", GetWasmBackendMemoryProbeStatus(), GetWasmBackendMemoryProbeModuleSize(), GetWasmBackendMemoryProbeLoweredInstructions(), static_cast<uint32_t>(reinterpret_cast<uintptr_t>(guest_host_base)));
-    std::fprintf(stderr, "R360_WASM_BACKEND_FPU status=%u module_bytes=%u lowered=%u\n", GetWasmBackendFpuProbeStatus(), GetWasmBackendFpuProbeModuleSize(), GetWasmBackendFpuProbeLoweredInstructions());
-    std::fprintf(stderr, "R360_WASM_BACKEND_VMX status=%u module_bytes=%u lowered=%u vector_ops=%u native_simd=%u scalarized_lanes=%u\n",
+    R360_VERBOSE_TRACE( "R360_WASM_BACKEND status=%u module_bytes=%u lowered=%u\n", GetWasmBackendProbeStatus(), GetWasmBackendProbeModuleSize(), GetWasmBackendProbeLoweredInstructions());
+    R360_VERBOSE_TRACE( "R360_WASM_BACKEND_CFG status=%u module_bytes=%u lowered=%u\n", GetWasmBackendCfgProbeStatus(), GetWasmBackendCfgProbeModuleSize(), GetWasmBackendCfgProbeLoweredInstructions());
+    R360_VERBOSE_TRACE( "R360_WASM_BACKEND_MEMORY status=%u module_bytes=%u lowered=%u guest_host=0x%08X\n", GetWasmBackendMemoryProbeStatus(), GetWasmBackendMemoryProbeModuleSize(), GetWasmBackendMemoryProbeLoweredInstructions(), static_cast<uint32_t>(reinterpret_cast<uintptr_t>(guest_host_base)));
+    R360_VERBOSE_TRACE( "R360_WASM_BACKEND_FPU status=%u module_bytes=%u lowered=%u\n", GetWasmBackendFpuProbeStatus(), GetWasmBackendFpuProbeModuleSize(), GetWasmBackendFpuProbeLoweredInstructions());
+    R360_VERBOSE_TRACE( "R360_WASM_BACKEND_VMX status=%u module_bytes=%u lowered=%u vector_ops=%u native_simd=%u scalarized_lanes=%u\n",
                  GetWasmBackendVmxProbeStatus(), GetWasmBackendVmxProbeModuleSize(),
                  GetWasmBackendVmxProbeLoweredInstructions(), GetWasmBackendVmxProbeVectorOps(),
                  GetWasmBackendVmxProbeNativeSimdOps(), GetWasmBackendVmxProbeScalarizedLaneOps());
@@ -455,7 +455,7 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
     g_probe_telemetry.correctness_blocker_opcode = correctness.blocker_opcode;
     g_probe_telemetry.correctness_blocker_address = correctness.blocker_address;
   }
-  std::fprintf(stderr, "R360_EXEC%s mode=%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
+  R360_VERBOSE_TRACE( "R360_EXEC%s mode=%s status=%u instructions=%u r3=%llu return_boundary=%u\n",
                nested_execution ? "_NESTED" : "",
                execute_correctness ? "execute" : "translate-only",
                !execute_correctness ? 4u : (correctness.supported ? (correctness.reached_return_boundary ? 3u : 2u) : 1u),

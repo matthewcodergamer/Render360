@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <unordered_map>
+#include <vector>
 
 #include "xenia/cpu/function.h"
 #include "xenia/cpu/hir/block.h"
@@ -27,6 +28,9 @@ uint32_t r360_ppc_probe_loaded_size();
 }
 
 namespace render360::xenia_web {
+
+bool g_r360_verbose_trace = false;
+
 namespace {
 
 using xe::cpu::hir::TypeName;
@@ -37,7 +41,45 @@ struct RuntimeValue {
   TypeName type = xe::cpu::hir::INT64_TYPE;
   Value::ConstantValue value{};
 };
-using RuntimeValues = std::unordered_map<const Value*, RuntimeValue>;
+// SSA value storage indexed by Xenia's per-builder Value::ordinal. Ordinals
+// are unique within a builder (HIRBuilder::AllocValue/CloneValue hand out
+// next_value_ordinal_++, and ValueReductionPass, the only pass that reuses
+// them, is disabled in Xenia's PPCTranslator). Each slot also records its
+// owning Value, so a lookup can only ever miss, never alias another value.
+// This replaces a pointer-hash map on the interpreter's hottest path while
+// keeping the find()/end()/operator[] shape the executor overlays rely on.
+class RuntimeValues {
+ public:
+  struct Slot {
+    const Value* first = nullptr;
+    RuntimeValue second{};
+  };
+  const Slot* find(const Value* value) const {
+    const uint32_t ordinal = value->ordinal;
+    if (ordinal >= slots_.size() || slots_[ordinal].first != value) {
+      return nullptr;
+    }
+    return &slots_[ordinal];
+  }
+  const Slot* end() const { return nullptr; }
+  RuntimeValue& operator[](const Value* value) {
+    const uint32_t ordinal = value->ordinal;
+    if (ordinal >= slots_.size()) {
+      size_t grown = slots_.size() * 2 + 64;
+      if (grown <= ordinal) grown = size_t(ordinal) + 64;
+      slots_.resize(grown);
+    }
+    Slot& slot = slots_[ordinal];
+    if (slot.first != value) {
+      slot.first = value;
+      slot.second = RuntimeValue{};
+    }
+    return slot.second;
+  }
+
+ private:
+  std::vector<Slot> slots_;
+};
 
 std::array<uint64_t, 32> g_initial_gprs{};
 std::array<uint64_t, 32> g_last_gprs{};
@@ -1492,5 +1534,15 @@ uint32_t r360_hir_correctness_supported_opcode_count() {
     count += r360_hir_correctness_supports_opcode(opcode) ? 1u : 0u;
   }
   return count;
+}
+}
+
+extern "C" {
+uint32_t r360_trace_set_verbose(uint32_t enabled) {
+  render360::xenia_web::g_r360_verbose_trace = enabled != 0;
+  return enabled != 0 ? 1u : 0u;
+}
+uint32_t r360_trace_verbose() {
+  return render360::xenia_web::g_r360_verbose_trace ? 1u : 0u;
 }
 }

@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - 'src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp'
+      - 'src/xenia_web_bootstrap/kernel_xboxkrnl_services.h'
       - 'src/xenia_web_bootstrap/sparse_guest_memory.cpp'
       - 'src/xenia_web_bootstrap/sparse_guest_memory.h'
       - 'test-kernel-services-critic.mjs'
@@ -16,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'src/xenia_web_bootstrap/kernel_runtime_foundation.cpp'
+      - 'src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp'
+      - 'src/xenia_web_bootstrap/kernel_xboxkrnl_services.h'
       - 'src/xenia_web_bootstrap/sparse_guest_memory.cpp'
       - 'src/xenia_web_bootstrap/sparse_guest_memory.h'
       - 'test-kernel-services-critic.mjs'
@@ -54,6 +58,7 @@ jobs:
             emscripten/emsdk:latest \
             bash -lc 'em++ -std=c++20 -O2 \
               src/xenia_web_bootstrap/kernel_runtime_foundation.cpp \
+              src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp \
               src/xenia_web_bootstrap/sparse_guest_memory.cpp \
               build/kernel-runtime/standalone_sparse_backend_stub.cpp \
               -sSTANDALONE_WASM=1 \

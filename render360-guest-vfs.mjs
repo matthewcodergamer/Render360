@@ -147,3 +147,79 @@ export async function runWithGuestVfsRetries(runOnce,{bootstrap,fetchPending,max
   if(result&&typeof result==='object')result.guestVfsFetched=fetched;
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Launch-flow helpers used by the browser bridges.
+
+const EAGER_FILE_LIMIT=512*1024;
+const EAGER_TOTAL_LIMIT=24*1024*1024;
+const MAX_ON_DEMAND_FILE=256*1024*1024;
+
+/** A bare default.xex launch: the executable is the only disc file. */
+export function prepareXexGuestVfs({bootstrap,defaultXex}){
+  const registration=registerGuestVfs(bootstrap,[{path:'default.xex',size:defaultXex.byteLength,data:defaultXex}]);
+  return {...registration,source:'xex',fetchPending:async()=>false};
+}
+
+/**
+ * STFS/LIVE/PIRS/CON package: small files are extracted up front, everything
+ * else is extracted the first time the title reads it (followed by a
+ * deterministic re-run of the boot).
+ */
+export async function prepareStfsGuestVfs({core,bootstrap,file,mount,defaultXex=null,onProgress=null,eagerFileLimit=EAGER_FILE_LIMIT,eagerTotalLimit=EAGER_TOTAL_LIMIT}){
+  const files=listStfsVfsFiles(mount);
+  const byPath=new Map(files.map(f=>[f.path.toLowerCase(),f]));
+  let eagerBytes=0;
+  for(const f of files){
+    if(f.directory)continue;
+    if(defaultXex&&f.path.toLowerCase()==='default.xex'){f.data=defaultXex;continue;}
+    if(f.size>eagerFileLimit||eagerBytes+f.size>eagerTotalLimit)continue;
+    const extracted=await core.extractStfsEntry(file,f.stfsIndex,{captureLimit:Math.max(1,f.size)});
+    if(extracted.complete&&extracted.fullyCaptured){f.data=extracted.captured;eagerBytes+=f.size;onProgress?.({path:f.path,bytes:eagerBytes});}
+  }
+  const registration=registerGuestVfs(bootstrap,files);
+  const fetchPending=async pending=>{
+    const f=byPath.get(pending.path);
+    if(!f||f.directory||f.size>MAX_ON_DEMAND_FILE)return false;
+    const extracted=await core.extractStfsEntry(file,f.stfsIndex,{captureLimit:Math.max(1,f.size),maxRequests:1<<20});
+    if(!extracted.complete||!extracted.fullyCaptured)return false;
+    attachGuestVfsData(bootstrap,pending.entry,extracted.captured);
+    return true;
+  };
+  return {...registration,source:'stfs',eagerBytes,fetchPending};
+}
+
+/**
+ * XDVDFS disc image: every file is a contiguous extent of the image, served
+ * through one host descriptor. Small files are warmed into the reader cache.
+ */
+export async function prepareIsoGuestVfs({bootstrap,host,volume,file,eagerFileLimit=EAGER_FILE_LIMIT,eagerTotalLimit=EAGER_TOTAL_LIMIT}){
+  const listed=await listXdvdfsVfsFiles(volume);
+  const reader=createBlobHostReader(file);
+  const hostFd=host?.registerHostFile?host.registerHostFile(reader):0;
+  const byPath=new Map();
+  let eagerBytes=0;
+  const files=listed.map(f=>{
+    if(f.directory)return f;
+    byPath.set(f.path.toLowerCase(),f);
+    return {...f,hostFd,hostOffset:f.imageOffset};
+  });
+  if(hostFd&&!reader.synchronous){
+    for(const f of byPath.values()){
+      if(f.size>eagerFileLimit||eagerBytes+f.size>eagerTotalLimit)continue;
+      await reader.ensure(f.imageOffset,f.size);eagerBytes+=f.size;
+    }
+  }
+  const registration=registerGuestVfs(bootstrap,files);
+  const fetchPending=async pending=>{
+    const f=byPath.get(pending.path);
+    if(!f||!hostFd)return false;
+    // Fetch the requested range plus read-ahead, never the whole large file.
+    const start=Math.min(pending.offset,f.size);
+    const length=Math.min(f.size-start,Math.max(pending.length,8*1024*1024));
+    if(length<=0)return false;
+    await reader.ensure(f.imageOffset+start,length);
+    return true;
+  };
+  return {...registration,source:'xdvdfs',hostFd,eagerBytes,synchronousReads:reader.synchronous,fetchPending};
+}

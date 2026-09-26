@@ -179,7 +179,8 @@ export async function handoffXboxIsoBrowser({
   const runtime=bootstrap??await loadRender360Bootstrap({url:bootstrapUrl});
   const {handoffXboxIso}=await import('./render360-iso-title-controller.mjs');
   const executeDuringTranslation=productionThreadedExecution?false:(options.executeDuringTranslation??true);
-  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,...options});
+  const vfsHost=getBootstrapWasiHost(runtime);
+  const result=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation,vfsHost,...options});
   if(!productionThreadedExecution)return {bootstrap:runtime,result};
 
   if(result.compatibilityExecution?.used){
@@ -209,7 +210,7 @@ export async function handoffXboxIsoBrowser({
   const generatedFunctionCount=(pick(runtime.exports,'r360_wasm_backend_call_function_count')?.()??0)>>>0;
   if(!generatedFunctionCount){
     console.warn(`[Render360] Generated-WASM emitter produced 0 callable functions for 0x${(result.entry>>>0).toString(16)}; forcing native HIR compatibility execution`);
-    const fallbackResult=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation:true,executeHirCompatibilityFallback:false,...options});
+    const fallbackResult=await handoffXboxIso({core,bootstrap:runtime,isoSource:file,scanEntryFunction,executeDuringTranslation:true,executeHirCompatibilityFallback:false,vfsHost,...options});
     const completed=(fallbackResult.executionStatus>>>0)===3;
     const schedulerBlocker=completed?null:{
       kind:'native-hir-compatibility-boundary',

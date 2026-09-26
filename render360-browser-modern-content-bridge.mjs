@@ -8,6 +8,7 @@ import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shade
 import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
 import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
 import {browserPerformanceDefaults,createAdaptivePerformancePolicy} from './render360-performance-policy.mjs';
+import {prepareStfsGuestVfs,prepareXexGuestVfs,runWithGuestVfsRetries} from './render360-guest-vfs.mjs';
 
 installRender360Buffer();
 
@@ -75,7 +76,24 @@ async function translateOnlyXex({core,bootstrap,bytes,onStage}){
   return {...result,runtimeBoundary:'translation-only',entryExecutedDuringTranslation:false};
 }
 
-async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
+// Registers the title's files with the native kernel VFS (game:, d:,
+// \Device\Cdrom0) so NtCreateFile/NtReadFile see the real package contents.
+async function prepareGuestVfs({core,bootstrap,file,prepared,onStage}){
+  try{
+    if(prepared.inputKind==='stfs'&&prepared.package?.mount){
+      stage(onStage,'extract','Indexing package files for the Xbox file system…');
+      const vfs=await prepareStfsGuestVfs({core,bootstrap,file,mount:prepared.package.mount,defaultXex:prepared.bytes});
+      stage(onStage,'extract',`Package file system ready · ${vfs.registered} entries · ${(vfs.eagerBytes/1048576).toFixed(1)} MB preloaded`);
+      return vfs;
+    }
+    return prepareXexGuestVfs({bootstrap,defaultXex:prepared.bytes});
+  }catch(error){
+    console.warn('[Render360] Guest file system unavailable:',error);
+    return {available:false,error:error?.message||String(error),fetchPending:async()=>false};
+  }
+}
+
+async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=null}){
   stage(onStage,'execute','Generated-WASM entry is not callable; entering native HIR compatibility executor…');
   let securityKey=null;
   try{securityKey=extractXex2EncryptedImageKey(bytes);}catch(error){throw new Error(`XEX security metadata could not be read: ${error.message}`);}
@@ -88,7 +106,10 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage}){
   if((setExecute(1)>>>0)!==1)throw new Error('Unable to enable native HIR compatibility execution');
   let result;
   try{
-    result=await handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true});
+    result=await runWithGuestVfsRetries(
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true}),
+      {bootstrap,fetchPending:vfs?.fetchPending??(async()=>false),onRetry:(pending,attempt)=>stage(onStage,'extract',`Loading ${pending.path} for the title (${attempt})…`)},
+    );
   }finally{
     setExecute(previous?1:0);
   }
@@ -200,6 +221,7 @@ export async function runModernXboxContent({core,file,type,onStage=null,config={
   const run=++activeRun;stopActive();stage(onStage,'launch',`Starting ${file.name||'Xbox 360 title'}…`);
   const bootstrap=await getBootstrap(onStage);if(run!==activeRun)return null;
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
+  const guestVfs=await prepareGuestVfs({core,bootstrap,file,prepared,onStage});if(run!==activeRun)return null;
 let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
 let threaded=null;
 const generatedSession=await createBrowserTitlePpcSession({bootstrap,clearContext:true});
@@ -210,7 +232,7 @@ if(generatedSession.functionCount>0){
   threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
 }else{
   console.warn(`[Render360] Generated-WASM callable/CFG session produced 0 runnable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
-  result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage});
+  result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage,vfs:guestVfs});
 }
 if(run!==activeRun)return null;
 const perfDefaults=browserPerformanceDefaults();

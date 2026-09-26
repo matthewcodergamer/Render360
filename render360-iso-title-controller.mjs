@@ -1,5 +1,6 @@
 import {mountXdvdfs} from './render360-xdvdfs.mjs';
 import {handoffDefaultXex} from './render360-title-controller.mjs';
+import {prepareIsoGuestVfs,runWithGuestVfsRetries} from './render360-guest-vfs.mjs';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
@@ -11,7 +12,7 @@ export function extractXex2EncryptedImageKey(xex){
   return xex.slice(securityOffset+0x150,securityOffset+0x160);
 }
 
-export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},maxDefaultXexBytes=256*1024*1024,executeDuringTranslation=true,executeHirCompatibilityFallback=true}){
+export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},maxDefaultXexBytes=256*1024*1024,vfsHost=null,executeDuringTranslation=true,executeHirCompatibilityFallback=true}){
   const volume=await mountXdvdfs(isoSource);
   const defaultNode=await volume.stat('/default.xex');
   if(defaultNode.isDirectory)throw new Error('XDVDFS default.xex is a directory');
@@ -19,6 +20,10 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
   if(defaultNode.size>maxDefaultXexBytes)throw new Error(`default.xex exceeds bounded title staging limit ${defaultNode.size}/${maxDefaultXexBytes}`);
   const defaultXex=await volume.readDefaultXex({maxBytes:maxDefaultXexBytes});
   const securityKey=encryptedSecurityKey??extractXex2EncryptedImageKey(defaultXex);
+  // Expose the disc to the native kernel file system (game:/d:/\Device\Cdrom0).
+  let guestVfs=null;
+  try{guestVfs=await prepareIsoGuestVfs({bootstrap,host:vfsHost,volume,file:isoSource});}
+  catch(error){guestVfs={available:false,error:error?.message||String(error),fetchPending:async()=>false};}
 
   const setExecute=pick(bootstrap,'r360_ppc_probe_set_execute_on_translate');
   const getExecute=pick(bootstrap,'r360_ppc_probe_execute_on_translate');
@@ -59,7 +64,10 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
       };
       console.info(`[Render360] Generated WASM entry unavailable; executing native HIR compatibility path for 0x${(handoff.entry>>>0).toString(16)}`);
       try{
-        handoff=await handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true});
+        handoff=await runWithGuestVfsRetries(
+          ()=>handoffDefaultXex({...handoffArgs,prepareMainThreadContext:true}),
+          {bootstrap,fetchPending:guestVfs?.fetchPending??(async()=>false)},
+        );
       }finally{
         setExecute(beforeFallback?1:0);
       }
@@ -81,5 +89,6 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
   }else{
     handoff={...handoff,entryExecutedDuringTranslation:true,compatibilityExecution:null};
   }
-  return {...handoff,inputKind:'xdvdfs',discLayout:volume.layout,discPartitionOffset:volume.partitionOffset,defaultXexBytes:defaultNode.size,securityKeySource:encryptedSecurityKey?'caller':'xex2-security-info',xdvdfsReads:volume.telemetry.reads,xdvdfsBytesRead:volume.telemetry.bytes,xdvdfsMaxRead:volume.telemetry.maxRead};
+  const guestVfsSummary=guestVfs?{available:guestVfs.available!==false,registered:guestVfs.registered??0,eagerBytes:guestVfs.eagerBytes??0,synchronousReads:!!guestVfs.synchronousReads,error:guestVfs.error??null}:null;
+  return {...handoff,guestVfs:guestVfsSummary,inputKind:'xdvdfs',discLayout:volume.layout,discPartitionOffset:volume.partitionOffset,defaultXexBytes:defaultNode.size,securityKeySource:encryptedSecurityKey?'caller':'xex2-security-info',xdvdfsReads:volume.telemetry.reads,xdvdfsBytesRead:volume.telemetry.bytes,xdvdfsMaxRead:volume.telemetry.maxRead};
 }

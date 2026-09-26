@@ -401,6 +401,8 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   // thread registry and trace state (the registered guest VFS is preserved).
   maybe(bootstrap,'r360_kernel_runtime_reset')?.();
   maybe(bootstrap,'r360_kernel_services_reset')?.();
+  // Xenia cvars::license_mask: 0 = trial unless the player marked the title owned.
+  maybe(bootstrap,'r360_xam_set_license_mask')?.(Number(globalThis.render360XamLicenseMask||0)>>>0);
   maybe(bootstrap,'r360_kernel_service_reset')?.();
   const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;

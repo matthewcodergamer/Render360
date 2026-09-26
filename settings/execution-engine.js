@@ -104,7 +104,7 @@ function installRuntimeRouter(){
 }
 
 function option(value,label){const el=document.createElement('option');el.value=value;el.textContent=label;return el;}
-function makeSelect(id,perTitle=false){const select=document.createElement('select');select.id=id;select.className='settings-select';if(perTitle)select.append(option('inherit','Use Global'));select.append(option('auto','Auto'));select.append(option('emulator','Emulator'));select.append(option('recompiled','Recompiled'));return select;}
+function makeSelect(id,perTitle=false){const select=document.createElement('select');select.id=id;select.className='settings-select';if(perTitle)select.append(option('inherit','Global'));select.append(option('auto','Auto'));select.append(option('emulator','Emulator'));select.append(option('recompiled','Recompiled'));return select;}
 function makeMemorySelect(){
   const select=document.createElement('select');select.id='appMemoryReserve';select.className='settings-select';
   select.append(option('0','Auto'));

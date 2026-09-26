@@ -14,6 +14,7 @@ const DEFAULT_PROFILE=Object.freeze({
   shaderValidation:'auto',
   schedulerQuantum:1,
   strictKernelHle:true,
+  xblaLicense:'trial',
   audioEnabled:'inherit',
   audioLatency:'inherit',
   language:'system',

@@ -78,6 +78,8 @@ export class Render360Runtime extends EventTarget{
     this.currentGame=game;this.bindSource(game.id,file);this.resetTelemetry();
     const type=String(game.sourceType||ext(file.name)).toLowerCase(),launchConfig={...this.launchConfig,...config};
     this.inputHost.setSession({kind:type==='iso'?1:type==='xex'?2:3,stage:5,titleId:game.titleId||0});
+    // XBLA license mask for XamContentGetLicenseMask (applied at title handoff).
+    globalThis.render360XamLicenseMask=launchConfig.xblaLicense==='full'?1:0;
     this.emit('bootStage',{stage:'launch',message:`Starting ${game.name}…`,type,fileName:file.name||'',fileSize:file.size||0,titleId:game.titleId||0,mediaId:game.mediaId||0});
     try{
       let result;

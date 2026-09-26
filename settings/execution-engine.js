@@ -104,11 +104,11 @@ function installRuntimeRouter(){
 }
 
 function option(value,label){const el=document.createElement('option');el.value=value;el.textContent=label;return el;}
-function makeSelect(id,perTitle=false){const select=document.createElement('select');select.id=id;select.className='settings-select';if(perTitle)select.append(option('inherit','Use Global'));select.append(option('auto','Auto · Recompiled if available'));select.append(option('emulator','Xbox 360 Emulator'));select.append(option('recompiled','Recompiled WebAssembly'));return select;}
+function makeSelect(id,perTitle=false){const select=document.createElement('select');select.id=id;select.className='settings-select';if(perTitle)select.append(option('inherit','Use Global'));select.append(option('auto','Auto'));select.append(option('emulator','Emulator'));select.append(option('recompiled','Recompiled'));return select;}
 function makeMemorySelect(){
   const select=document.createElement('select');select.id='appMemoryReserve';select.className='settings-select';
-  select.append(option('0','Auto · grow on demand'));
-  for(const [mb,label] of [[96,'96 MB'],[128,'128 MB'],[160,'160 MB'],[192,'192 MB'],[256,'256 MB · high on mobile'],[384,'384 MB · desktop only'],[512,'512 MB · desktop only']]){
+  select.append(option('0','Auto'));
+  for(const [mb,label] of [[96,'96 MB'],[128,'128 MB'],[160,'160 MB'],[192,'192 MB'],[256,'256 MB'],[384,'384 MB · desktop'],[512,'512 MB · desktop']]){
     const item=option(String(mb),label);if(isIosLike()&&mb>256)item.disabled=true;select.append(item);
   }
   return select;
@@ -118,13 +118,13 @@ function makeRow(title,description,select,badgeText='Live router'){const row=doc
 function installGlobalControl(){
   const renderer=document.getElementById('appRenderer'),anchor=renderer?.closest('.row'),group=anchor?.parentElement;if(!anchor||!group)return;
   if(!document.getElementById('appExecutionMode')){
-    const select=makeSelect('appExecutionMode',false),row=makeRow('Execution Engine','CPU path: general Xbox 360 emulation or a title-specific ahead-of-time WebAssembly build.',select);group.insertBefore(row,anchor);
+    const select=makeSelect('appExecutionMode',false),row=makeRow('Execution Engine','Auto runs a title-specific ahead-of-time WebAssembly build when one exists, otherwise the general Xbox 360 emulator.',select);group.insertBefore(row,anchor);
     select.value=currentGlobalMode();select.addEventListener('change',()=>writeGlobalMode(select.value));
     document.getElementById('settingsButton')?.addEventListener('click',()=>{select.value=currentGlobalMode();});
     document.getElementById('resetAppSettings')?.addEventListener('click',()=>setTimeout(()=>{publishGlobalMode('auto');select.value='auto';},0));
   }
   if(!document.getElementById('appMemoryReserve')){
-    const select=makeMemorySelect(),row=makeRow('WASM Memory Reserve','Pre-grows the host WebAssembly heap before title launch. Auto grows only when needed. This is not Xbox guest RAM and it does not map missing guest pages.',select,'Safe reserve');group.insertBefore(row,anchor);
+    const select=makeMemorySelect(),row=makeRow('WASM Memory Reserve','Pre-grows the host WebAssembly heap before title launch. Auto grows only when needed, which is safest on iPhone; 256 MB and up is heavy on phones. This is not Xbox guest RAM.',select,'Safe reserve');group.insertBefore(row,anchor);
     select.value=String(currentGlobalMemory());select.addEventListener('change',()=>writeGlobalMemory(select.value));
     document.getElementById('settingsButton')?.addEventListener('click',()=>{select.value=String(currentGlobalMemory());});
     document.getElementById('resetAppSettings')?.addEventListener('click',()=>setTimeout(()=>{publishGlobalMemory(0);select.value='0';},0));

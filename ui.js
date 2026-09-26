@@ -129,7 +129,7 @@ function installResponsiveShell(){
   const style=document.createElement('style');style.id='r360-responsive-fix';style.textContent=`
     html,body,#app{width:100%;max-width:100%;height:100%;min-height:0!important;overflow:hidden}
     #app{width:var(--app-width,100vw)!important;height:var(--app-height,100dvh)!important;min-height:0!important;inset:0 auto auto 0!important}
-    .view{width:100%;max-width:100%;min-height:0;overflow-x:hidden}.navbar,.detail-nav{max-width:100%}
+    .view{width:100%;max-width:100%;min-height:0;overflow-x:hidden}.navbar,.detail-nav{max-width:none}
     .nav-row{min-width:0}.nav-actions{flex:0 0 auto;isolation:isolate}.r360-brand{min-width:0;overflow:hidden}.r360-brand>.nav-title{overflow:hidden;text-overflow:ellipsis}
     .settings-body,.detail-body{max-width:100%}.row{min-width:0}.setting-copy{min-width:0}.setting-tail{max-width:52%;min-width:0}.settings-select{max-width:100%}
     button,.ios-icon-button,.text-button,.row-button,.primary{touch-action:manipulation;cursor:pointer}

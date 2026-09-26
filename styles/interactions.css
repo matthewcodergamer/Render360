@@ -81,7 +81,7 @@ html body #runtimeView .control,html body #runtimeView .stick{color:rgba(245,245
   #appSettingsView .group,#gameSettingsView .group,#detailView .group{width:100%!important;max-width:none!important}
 
   .r360-profile-sheet{
-    left:0!important;right:0!important;bottom:0!important;
+    left:0!important;right:0!important;bottom:0!important;transform:none!important;
     width:100%!important;max-width:none!important;margin:0!important;
     border-radius:24px 24px 0 0!important;
     max-height:min(620px,82dvh)!important;

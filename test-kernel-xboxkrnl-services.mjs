@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {WASI} from 'node:wasi';
+import crypto from 'node:crypto';
 import {XBOXKRNL_EXPORTS,XAM_EXPORTS} from './render360-kernel-export-names.mjs';
 
 // End-to-end critic for the native xboxkrnl/XAM service layer ported from
@@ -228,6 +229,68 @@ expect(x('XamInputGetState',1,1,P+0xC80)===0x48F,'disconnected pad not reported'
 expect(x('XamInputGetCapabilities',0,1,P+0xCA0)===0&&r8(P+0xCA0)===1,'XamInputGetCapabilities mismatch');
 console.log('XAM_USER_INPUT_INFO=PASS');
 
+// --- Crypto (Xenia xboxkrnl_crypt.cc) against reference implementations ----------
+const Q=0x51008000;
+const put=(a,bytes)=>{for(let i=0;i<bytes.length;i++)w8(a+i,bytes[i]);};
+const get=(a,n)=>Buffer.from(Array.from({length:n},(_,i)=>r8(a+i)));
+const msg=Buffer.from(Array.from({length:150},(_,i)=>(i*37+11)&255));put(Q+0x100,msg);
+k('XeCryptShaInit',Q);k('XeCryptShaUpdate',Q,Q+0x100,70);k('XeCryptShaUpdate',Q,Q+0x100+70,80);ok(k('XeCryptShaFinal',Q,Q+0x300,20),'XeCryptShaFinal');
+expect(get(Q+0x300,20).equals(crypto.createHash('sha1').update(msg).digest()),'SHA-1 init/update/final mismatch');
+k('XeCryptSha',Q+0x100,100,Q+0x100+100,50,0,0,Q+0x320,20);
+expect(get(Q+0x320,20).equals(crypto.createHash('sha1').update(msg).digest()),'XeCryptSha one-shot mismatch');
+k('XeCryptSha256Init',Q+0x400);k('XeCryptSha256Update',Q+0x400,Q+0x100,1);k('XeCryptSha256Update',Q+0x400,Q+0x100+1,149);k('XeCryptSha256Final',Q+0x400,Q+0x340,32);
+expect(get(Q+0x340,32).equals(crypto.createHash('sha256').update(msg).digest()),'SHA-256 mismatch');
+const hmacKey=Buffer.from(Array.from({length:16},(_,i)=>0xA0+i));put(Q+0x480,hmacKey);
+w32(P+0xF054,Q+0x360);w32(P+0xF05C,20);
+ok(k('XeCryptHmacSha',Q+0x480,16,Q+0x100,40,Q+0x100+40,60,Q+0x100+100,50),'XeCryptHmacSha');
+expect(get(Q+0x360,20).equals(crypto.createHmac('sha1',hmacKey).update(msg).digest()),'HMAC-SHA1 mismatch');
+const longKey=Buffer.from(Array.from({length:100},(_,i)=>i));put(Q+0x500,longKey);
+k('XeCryptHmacSha',Q+0x500,100,Q+0x100,150,0,0,0,0);
+expect(get(Q+0x360,20).equals(crypto.createHmac('sha1',longKey).update(msg).digest()),'HMAC-SHA1 long-key mismatch');
+const rc4=(key,data)=>{const S=[...Array(256).keys()];let j=0;for(let i=0;i<256;i++){j=(j+S[i]+key[i%key.length])&255;[S[i],S[j]]=[S[j],S[i]];}let i=0;j=0;return Buffer.from(data.map(b=>{i=(i+1)&255;j=(j+S[i])&255;[S[i],S[j]]=[S[j],S[i]];return b^S[(S[i]+S[j])&255];}));};
+put(Q+0x600,msg.subarray(0,64));k('XeCryptRc4Key',Q+0x700,Q+0x480,16);k('XeCryptRc4Ecb',Q+0x700,Q+0x600,20);k('XeCryptRc4Ecb',Q+0x700,Q+0x600+20,44);
+expect(get(Q+0x600,64).equals(rc4([...hmacKey],[...msg.subarray(0,64)])),'RC4 keyed stream mismatch');
+k('XeCryptRc4',Q+0x480,16,Q+0x600,64);expect(get(Q+0x600,64).equals(msg.subarray(0,64)),'XeCryptRc4 round trip mismatch');
+k('XeCryptRandom',Q+0x800,9);expect(get(Q+0x800,9).every(b=>b===0xFD),'XeCryptRandom is not Xenia deterministic 0xFD');
+console.log('KERNEL_CRYPTO_XENIA=PASS');
+
+// --- Memory, stacks, modules --------------------------------------------------------
+w32(P+0x100,0);w32(P+0x104,0x3000);
+expect(k('NtAllocateVirtualMemory',P+0x100,P+0x104,0x3000,0x04,0)===0,'NtAllocateVirtualMemory for protect test');
+const vbase=r32(P+0x100);w32(P+0x108,vbase+0x10);w32(P+0x10C,0x1000);
+expect(ok(k('NtProtectVirtualMemory',P+0x108,P+0x10C,0x02,P+0x110,0),'NtProtectVirtualMemory')===0&&r32(P+0x108)===vbase&&r32(P+0x10C)===0x2000&&r32(P+0x110)===0x04,'NtProtectVirtualMemory rounding/old protect mismatch');
+expect((w8(vbase+4,1)>>>0)===0,'read-only protection did not block writes');
+w32(P+0x108,vbase);w32(P+0x10C,0x1000);expect(k('NtProtectVirtualMemory',P+0x108,P+0x10C,0x04,P+0x110,0)===0&&r32(P+0x110)===0x02&&(w8(vbase+4,1)>>>0)===1,'restoring old protection failed');
+expect(k('NtProtectVirtualMemory',P+0x108,P+0x10C,0x40,P+0x110,0)===0xC0000022,'execute protection not refused');
+const kstack=ok(k('MmCreateKernelStack',0x4000,0),'MmCreateKernelStack');
+expect(kstack>=0x78004000&&kstack<0x7F000000&&(w8(kstack-4,1)>>>0)===1,'kernel stack not mapped');
+expect(k('MmDeleteKernelStack',kstack,kstack-0x4000)===0&&(w8(kstack-4,1)>>>0)===0,'MmDeleteKernelStack did not release');
+const PE=0x51009000;w8(PE,0x4D);w8(PE+1,0x5A);w8(PE+0x3C,0x80);put(PE+0x80,[0x50,0x45,0,0]);
+expect(k('RtlImageNtHeader',PE)===PE+0x80&&k('RtlImageNtHeader',PE+1)===0,'RtlImageNtHeader mismatch');
+w32(P+0x120,0x82001000);w32(P+0x124,5);expect(ok(k('ExRegisterTitleTerminateNotification',P+0x120,1),'ExRegisterTitleTerminateNotification')===0,'ExRegisterTitleTerminateNotification failed');
+ok(k('KeSetCurrentStackPointers',0x70100000,KTHREAD,0x70000000,0x70100000,0x700F0000),'KeSetCurrentStackPointers');
+expect(r32(KTHREAD+0x5C)===0x70100000&&r32(KTHREAD+0x60)===0x700F0000&&r32(KTHREAD+0xD0)===0x70000000&&r32(PCR+0x70)===0x70100000,'KeSetCurrentStackPointers did not update KTHREAD/KPCR');
+console.log('KERNEL_MEMORY_STACKS_MODULES_XENIA=PASS');
+
+// --- XAM profile, locale, launch data, networking ------------------------------------
+w32(P+0x200,0x10040003);w32(P+0x204,0x4064000F);w32(P+0x208,0x63E83FFF);w32(P+0x20C,0);
+expect(ok(x('XamUserReadProfileSettings',0,0,0,0,3,P+0x200,P+0x20C,0),'XamUserReadProfileSettings')===0x7A,'profile size query did not report insufficient buffer');
+const need2=r32(P+0x20C);expect(need2===8+3*40+(0x064+0x3E8),`profile needed size ${need2}`);
+const PB=0x5100A000;expect(x('XamUserReadProfileSettings',0,0,0,0,3,P+0x200,P+0x20C,PB)===0,'profile read failed');
+expect(r32(PB)===3&&r32(PB+4)===PB+8&&r32(PB+8)===1&&r32(PB+8+16)===0x10040003&&r8(PB+8+24)===1&&r32(PB+8+32)===3,'vibration setting mismatch');
+const pic=PB+8+40;expect(r8(pic+24)===4&&r32(pic+32)===44&&r16(r32(pic+36))==='g'.charCodeAt(0),'gamercard picture key setting mismatch');
+expect(r32(PB+8+80)===0&&r8(PB+8+80+24)===0,'unset title-specific setting should report from=0');
+w32(P+0x240,0);w32(P+0x244,0);w32(P+0x248,0);w32(P+0x24C,0);w32(P+0x250,0x63E83FFF);w32(P+0x254,0);w8(P+0x258,6);w32(P+0x260,4);w32(P+0x264,P+0x280);w32(P+0x280,0xDEADBEEF);
+expect(x('XamUserWriteProfileSettings',0,0,1,P+0x240,0)===0,'XamUserWriteProfileSettings failed');
+w32(P+0x20C,need2);expect(x('XamUserReadProfileSettings',0,0,0,0,3,P+0x200,P+0x20C,PB)===0&&r32(PB+8+80)===2&&r32(PB+8+80+32)===4&&r32(r32(PB+8+80+36))===0xDEADBEEF,'written title-specific setting not read back');
+expect(x('XamGetLocale')===36&&x('XamUserGetMembershipTier',0)===6&&x('XamUserIsOnlineEnabled',0)===1,'XAM locale/membership mismatch');
+expect(x('XamUserGetGamerTag',0,P+0x300,16)===0&&r16(P+0x300)===0x55&&r16(P+0x306)===0x72&&r16(P+0x308)===0,'gamertag mismatch');
+put(P+0x320,[1,2,3]);x('XamLoaderSetLaunchData',P+0x320,3);expect(x('XamLoaderGetLaunchDataSize',P+0x330)===0&&r32(P+0x330)===3,'launch data size mismatch');
+expect(x('NetDll_WSAStartup',0,0x0202,P+0x400)===0&&r16(P+0x400)===0x0202&&r16(P+0x586)===100,'WSAStartup mismatch');
+expect(x('NetDll_XNetGetTitleXnAddr',0,P+0x600)===4&&r32(P+0x600)===0x7F000001&&r8(P+0x60A)===0xCC,'XNetGetTitleXnAddr mismatch');
+expect(ok(x('NetDll_XNetStartup',0,0),'NetDll_XNetStartup')===0&&x('NetDll_XNetGetEthernetLinkStatus',0)===0,'XNet startup/link mismatch');
+console.log('XAM_PROFILE_LOCALE_NET_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;
@@ -239,7 +302,7 @@ w32(P+0xE00,0x82400000);w32(P+0xE04,0xCAFE);expect(k('XAudioRegisterRenderDriver
 expect((need('r360_audio_client_callback')(0)>>>0)===0x82400000&&(need('r360_audio_client_callback_arg')(0)>>>0)===0xCAFE,'audio client callback not recorded');
 expect(k('XAudioSubmitRenderDriverFrame',0x41550000,P+0xE20)===0&&(need('r360_audio_client_frames')(0)>>>0)===1,'audio frame submission not counted');
 expect(k('XMACreateContext',P+0xE30)===0&&r32(P+0xE30)>=0xA0000000,'XMACreateContext mismatch');
-k('XeCryptShaInit',P+0xE40);expect(status()===2,'unimplemented XeCryptShaInit did not fail closed');
+k('XeCryptAesKey',P+0xE40,P+0xE80);expect(status()===2,'unimplemented XeCryptAesKey did not fail closed');
 expect(logOut>=0x5A000000,'pool alloc export mismatch');
 console.log('KERNEL_TERMINAL_AND_FAIL_CLOSED=PASS');
 console.log('KERNEL_XBOXKRNL_SERVICES_CRITIC=PASS');

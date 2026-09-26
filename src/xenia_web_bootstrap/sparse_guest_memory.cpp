@@ -280,6 +280,14 @@ bool SparseGuestMemoryPageMapped(uint32_t virtual_address) {
   return LookupPage(virtual_address >> kPageShift) != nullptr;
 }
 
+bool SparseGuestMemoryPageProtection(uint32_t virtual_address,
+                                     uint32_t* protection) {
+  const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+  if (!entry) return false;
+  if (protection) *protection = entry->protection;
+  return true;
+}
+
 bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
   ClearFault();
   if (!PageRangeValid(virtual_address, page_count)) {

@@ -141,6 +141,8 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry,
   }
 
   context->r[3] = result;
+  uint32_t stack_pointer = 0;
+  if (TakeKernelServiceStackPointer(&stack_pointer)) context->r[1] = stack_pointer;
   g_last_status = kServiceStatusSuccess;
   return true;
 }

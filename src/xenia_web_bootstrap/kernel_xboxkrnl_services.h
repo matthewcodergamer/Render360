@@ -44,6 +44,9 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
                                        const uint32_t args[8],
                                        uint32_t* result);
 void ResetExtendedKernelServices();
+// KeSetCurrentStackPointers moves the calling thread's r1: returns true once
+// with the new stack pointer after such a service call.
+bool TakeKernelServiceStackPointer(uint32_t* value);
 
 }  // namespace render360::xenia_web
 

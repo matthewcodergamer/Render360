@@ -56,6 +56,7 @@ constexpr uint32_t kXStatusUnsuccessful = 0xC0000001u;
 constexpr uint32_t kXStatusInvalidParameter = 0xC000000Du;
 constexpr uint32_t kXStatusNoMemory = 0xC0000017u;
 constexpr uint32_t kXStatusMemoryNotAllocated = 0xC00000A0u;
+constexpr uint32_t kXStatusAccessDenied = 0xC0000022u;
 // Browser guest stacks live in a dedicated 512 MiB sparse virtual arena below
 // the normal 0x82000000 retail XEX image region. Each thread owns a 16 MiB
 // slot, with the first page intentionally left unmapped as a downward-growing
@@ -731,6 +732,78 @@ bool IsGuestVirtualHeapAddress(uint32_t address) {
          (address >= kGuestVirtual64kBase && address < 0x80000000u);
 }
 
+// XDK PAGE_* flags for a sparse R/W/X protection, used for old_protect.
+uint32_t XPageFromSparseProtection(uint32_t protection) {
+  const bool read = protection & kGuestRead, write = protection & kGuestWrite,
+             exec = protection & kGuestExecute;
+  if (exec) return write ? 0x40u : (read ? 0x20u : 0x10u);
+  if (write) return 0x04u;
+  return read ? 0x02u : 0x01u;
+}
+
+// Xenia NtProtectVirtualMemory: guest-virtual heaps only, execute bits
+// refused, base rounded down and size up to the owning heap's page size, and
+// every page in the range must be committed. Unlike Xenia, old_protect is
+// reported as XDK PAGE_* flags so a title can pass it straight back.
+uint32_t NtProtectVirtualMemory(uint32_t base_addr_ptr,
+                                uint32_t region_size_ptr,
+                                uint32_t protect_bits, uint32_t old_protect_ptr,
+                                uint32_t debug_memory) {
+  uint32_t base = 0, size = 0;
+  if (!base_addr_ptr || !region_size_ptr || debug_memory != 0 ||
+      !ReadGuestBe32(base_addr_ptr, &base) ||
+      !ReadGuestBe32(region_size_ptr, &size) || !size) {
+    return kXStatusInvalidParameter;
+  }
+  if (protect_bits & (0x10u | 0x20u | 0x40u | 0x80u)) {
+    return kXStatusAccessDenied;
+  }
+  if (base < kGuestVirtual4kBase || base >= 0x7F000000u) {
+    return kXStatusInvalidParameter;
+  }
+  const uint32_t page_size =
+      base < kGuestVirtual4kEnd ? kGuestPageSize : 0x10000u;
+  const uint32_t adjusted_base = base & ~(page_size - 1u);
+  const uint64_t adjusted_end64 =
+      (uint64_t(base) + size + page_size - 1u) & ~uint64_t(page_size - 1u);
+  if (adjusted_end64 > 0x7F000000u) return kXStatusInvalidParameter;
+  const uint32_t adjusted_size =
+      static_cast<uint32_t>(adjusted_end64 - adjusted_base);
+  const uint32_t protection = SparseProtectionFromXPage(protect_bits);
+  for (uint64_t address = adjusted_base; address < adjusted_end64;
+       address += kGuestPageSize) {
+    if (!SparseGuestMemoryPageMapped(static_cast<uint32_t>(address))) {
+      return kXStatusAccessDenied;
+    }
+  }
+  // Like Xenia's BaseHeap::Protect, old_protect is the first page's.
+  uint32_t first_protection = 0;
+  SparseGuestMemoryPageProtection(adjusted_base, &first_protection);
+  for (uint64_t address = adjusted_base; address < adjusted_end64;
+       address += kGuestPageSize) {
+    if (!ProtectSparseGuestMemory(static_cast<uint32_t>(address), 1,
+                                  protection)) {
+      return kXStatusAccessDenied;
+    }
+  }
+  for (auto& allocation : g_virtual_allocations) {
+    if (allocation.used && allocation.base >= adjusted_base &&
+        uint64_t(allocation.base) + allocation.size <= adjusted_end64) {
+      allocation.protection = protection;
+    }
+  }
+  if (!WriteGuestBe32(base_addr_ptr, adjusted_base) ||
+      !WriteGuestBe32(region_size_ptr, adjusted_size)) {
+    return kXStatusInvalidParameter;
+  }
+  if (old_protect_ptr &&
+      !WriteGuestBe32(old_protect_ptr,
+                      XPageFromSparseProtection(first_protection))) {
+    return kXStatusInvalidParameter;
+  }
+  return kXStatusSuccess;
+}
+
 uint32_t NtFreeVirtualMemory(uint32_t base_addr_ptr,
                              uint32_t region_size_ptr, uint32_t free_type,
                              uint32_t debug_memory) {
@@ -897,6 +970,8 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
         return NtAllocateVirtualMemory(r3, r4, r5, r6, r7);
       case 0x00DC:  // NtFreeVirtualMemory
         return NtFreeVirtualMemory(r3, r4, r5, r6);
+      case 0x00E1:  // NtProtectVirtualMemory
+        return NtProtectVirtualMemory(r3, r4, r5, r6, r7);
       case 0x012B: {  // RtlImageXexHeaderField
         uint32_t value = 0;
         if (!ReadXexOptionalHeaderField(r3, r4, &value)) {

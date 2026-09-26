@@ -110,6 +110,9 @@ constexpr uint32_t X_ERROR_NO_SUCH_USER = 0x00000525u;
 constexpr uint32_t X_E_SUCCESS = 0x00000000u;
 constexpr uint32_t X_E_INVALIDARG = 0x80070057u;
 constexpr uint32_t X_E_NO_SUCH_USER = 0x80070525u;
+constexpr uint32_t X_ERROR_INSUFFICIENT_BUFFER = 0x0000007Au;
+constexpr uint32_t X_ERROR_IO_INCOMPLETE = 0x000003E4u;
+constexpr uint32_t X_ERROR_IO_PENDING = 0x000003E5u;
 
 constexpr uint32_t kPageSize = 4096u;
 constexpr uint32_t kCurrentThreadPseudoHandle = 0xFFFFFFFEu;
@@ -1525,6 +1528,404 @@ bool WriteNetworkOpenInfo(uint32_t out, const VfsEntry* entry, bool is_root) {
 
 // ---------------------------------------------------------------------------
 // xboxkrnl dispatch.
+
+// ---------------------------------------------------------------------------
+// Crypto primitives for Xenia xboxkrnl_crypt.cc (SHA-1, SHA-256, RC4). The
+// guest-visible state structures keep Xenia's layouts.
+
+uint32_t Rotl32(uint32_t v, uint32_t n) { return (v << n) | (v >> (32u - n)); }
+uint32_t Rotr32(uint32_t v, uint32_t n) { return (v >> n) | (v << (32u - n)); }
+
+struct Sha1 {
+  uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u,
+                   0xC3D2E1F0u};
+  uint64_t count = 0;  // bytes
+  uint8_t block[64] = {};
+  void Compress(const uint8_t* p) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; ++i) {
+      w[i] = (uint32_t(p[i * 4]) << 24) | (uint32_t(p[i * 4 + 1]) << 16) |
+             (uint32_t(p[i * 4 + 2]) << 8) | p[i * 4 + 3];
+    }
+    for (int i = 16; i < 80; ++i) w[i] = Rotl32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+    for (int i = 0; i < 80; ++i) {
+      uint32_t f, k;
+      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999u; }
+      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
+      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
+      const uint32_t t = Rotl32(a, 5) + f + e + k + w[i];
+      e = d; d = c; c = Rotl32(b, 30); b = a; a = t;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+  }
+  void Update(const uint8_t* data, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+      block[count % 64] = data[i];
+      ++count;
+      if (count % 64 == 0) Compress(block);
+    }
+  }
+  void Final(uint8_t out[20]) {
+    const uint64_t bits = count * 8u;
+    const uint8_t pad = 0x80, zero = 0;
+    Update(&pad, 1);
+    while (count % 64 != 56) Update(&zero, 1);
+    for (int i = 7; i >= 0; --i) {
+      const uint8_t byte = uint8_t(bits >> (i * 8));
+      Update(&byte, 1);
+    }
+    for (int i = 0; i < 5; ++i) {
+      out[i * 4] = uint8_t(h[i] >> 24); out[i * 4 + 1] = uint8_t(h[i] >> 16);
+      out[i * 4 + 2] = uint8_t(h[i] >> 8); out[i * 4 + 3] = uint8_t(h[i]);
+    }
+  }
+};
+
+struct Sha256 {
+  uint32_t h[8] = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                   0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
+  uint64_t count = 0;
+  uint8_t block[64] = {};
+  void Compress(const uint8_t* p) {
+    static constexpr uint32_t k[64] = {
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+        0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+        0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+        0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+        0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+    uint32_t w[64];
+    for (int i = 0; i < 16; ++i) {
+      w[i] = (uint32_t(p[i * 4]) << 24) | (uint32_t(p[i * 4 + 1]) << 16) |
+             (uint32_t(p[i * 4 + 2]) << 8) | p[i * 4 + 3];
+    }
+    for (int i = 16; i < 64; ++i) {
+      const uint32_t s0 = Rotr32(w[i - 15], 7) ^ Rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      const uint32_t s1 = Rotr32(w[i - 2], 17) ^ Rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5],
+             g = h[6], hh = h[7];
+    for (int i = 0; i < 64; ++i) {
+      const uint32_t s1 = Rotr32(e, 6) ^ Rotr32(e, 11) ^ Rotr32(e, 25);
+      const uint32_t ch = (e & f) ^ (~e & g);
+      const uint32_t t1 = hh + s1 + ch + k[i] + w[i];
+      const uint32_t s0 = Rotr32(a, 2) ^ Rotr32(a, 13) ^ Rotr32(a, 22);
+      const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+      const uint32_t t2 = s0 + maj;
+      hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+    h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  }
+  void Update(const uint8_t* data, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+      block[count % 64] = data[i];
+      ++count;
+      if (count % 64 == 0) Compress(block);
+    }
+  }
+  void Final(uint8_t out[32]) {
+    const uint64_t bits = count * 8u;
+    const uint8_t pad = 0x80, zero = 0;
+    Update(&pad, 1);
+    while (count % 64 != 56) Update(&zero, 1);
+    for (int i = 7; i >= 0; --i) {
+      const uint8_t byte = uint8_t(bits >> (i * 8));
+      Update(&byte, 1);
+    }
+    for (int i = 0; i < 8; ++i) {
+      out[i * 4] = uint8_t(h[i] >> 24); out[i * 4 + 1] = uint8_t(h[i] >> 16);
+      out[i * 4 + 2] = uint8_t(h[i] >> 8); out[i * 4 + 3] = uint8_t(h[i]);
+    }
+  }
+};
+
+// Feeds guest bytes to |hash| in bounded chunks.
+template <typename Hash>
+bool HashGuest(Hash& hash, uint32_t address, uint32_t size) {
+  uint8_t chunk[1024];
+  while (size) {
+    const uint32_t n = std::min<uint32_t>(size, sizeof(chunk));
+    if (!Rd(address, chunk, n)) return false;
+    hash.Update(chunk, n);
+    address += n;
+    size -= n;
+  }
+  return true;
+}
+
+// XECRYPT_SHA_STATE {be32 count; be32 state[5]; u8 buffer[64]} (0x58) and
+// XECRYPT_SHA256_STATE {be32 count; be32 state[8]; u8 buffer[64]}.
+template <typename Hash, int kWords>
+bool LoadHashState(uint32_t state, Hash* hash) {
+  uint32_t count = 0;
+  if (!Rd32(state, &count)) return false;
+  for (int i = 0; i < kWords; ++i) {
+    if (!Rd32(state + 4u + uint32_t(i) * 4u, &hash->h[i])) return false;
+  }
+  hash->count = count;
+  return Rd(state + 4u + kWords * 4u, hash->block, 64);
+}
+template <typename Hash, int kWords>
+bool StoreHashState(uint32_t state, const Hash& hash) {
+  if (!Wr32(state, uint32_t(hash.count))) return false;
+  for (int i = 0; i < kWords; ++i) {
+    if (!Wr32(state + 4u + uint32_t(i) * 4u, hash.h[i])) return false;
+  }
+  return Wr(state + 4u + kWords * 4u, hash.block, 64);
+}
+
+// XECRYPT_RC4_STATE {u8 S[256]; u8 i; u8 j}. Xenia always indexes the key
+// modulo 16; real hardware uses the key length, which is identical for the
+// 16-byte keys titles pass.
+bool Rc4Key(uint32_t state, uint32_t key, uint32_t key_size) {
+  if (!key_size) return false;
+  uint8_t s[256];
+  std::vector<uint8_t> k(key_size);
+  if (!Rd(key, k.data(), key_size)) return false;
+  for (uint32_t x = 0; x < 256; ++x) s[x] = uint8_t(x);
+  uint32_t idx = 0;
+  for (uint32_t x = 0; x < 256; ++x) {
+    idx = (idx + s[x] + k[x % key_size]) & 0xFFu;
+    std::swap(s[idx], s[x]);
+  }
+  const uint8_t ij[2] = {0, 0};
+  return Wr(state, s, 256) && Wr(state + 256u, ij, 2);
+}
+bool Rc4Crypt(uint32_t state, uint32_t data, uint32_t size) {
+  uint8_t s[256], ij[2];
+  if (!Rd(state, s, 256) || !Rd(state + 256u, ij, 2)) return false;
+  uint8_t i = ij[0], j = ij[1];
+  uint8_t chunk[1024];
+  for (uint32_t done = 0; done < size;) {
+    const uint32_t n = std::min<uint32_t>(size - done, sizeof(chunk));
+    if (!Rd(data + done, chunk, n)) return false;
+    for (uint32_t b = 0; b < n; ++b) {
+      i = uint8_t(i + 1);
+      j = uint8_t(j + s[i]);
+      std::swap(s[i], s[j]);
+      chunk[b] ^= s[uint8_t(s[i] + s[j])];
+    }
+    if (!Wr(data + done, chunk, n)) return false;
+    done += n;
+  }
+  ij[0] = i;
+  ij[1] = j;
+  return Wr(state, s, 256) && Wr(state + 256u, ij, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Xenia default user profile settings (xam/user_profile.cc). Title-specific
+// binary settings start unset and keep what the title writes for this run.
+
+struct ProfileSetting {
+  uint32_t id;
+  uint32_t value;  // INT32 / FLOAT bit pattern
+  const char16_t* text;
+};
+constexpr ProfileSetting kDefaultProfileSettings[] = {
+    {0x10040002u, 0, nullptr},           {0x10040003u, 3, nullptr},
+    {0x10040004u, 0, nullptr},           {0x10040005u, 0, nullptr},
+    {0x10040006u, 0xFA, nullptr},        {0x5004000Bu, 0, nullptr},
+    {0x1004000Cu, 0, nullptr},           {0x1004000Du, 0, nullptr},
+    {0x1004000Eu, 0x64, nullptr},        {0x402C0011u, 0, u""},
+    {0x10040012u, 1, nullptr},           {0x10040013u, 0, nullptr},
+    {0x10040015u, 0, nullptr},           {0x10040018u, 0, nullptr},
+    {0x1004001Du, 0xFFFF0000u, nullptr}, {0x1004001Eu, 0xFF00FF00u, nullptr},
+    {0x10040022u, 1, nullptr},           {0x10040023u, 0, nullptr},
+    {0x10040024u, 0, nullptr},           {0x10040026u, 0, nullptr},
+    {0x10040027u, 0, nullptr},           {0x10040028u, 0, nullptr},
+    {0x10040029u, 0, nullptr},           {0x10040038u, 0, nullptr},
+    {0x10040039u, 0, nullptr},           {0x4064000Fu, 0, u"gamercard_picture_key"},
+};
+constexpr uint32_t kTitleSpecificSettings[] = {0x63E83FFFu, 0x63E83FFEu,
+                                               0x63E83FFDu};
+
+std::map<uint32_t, std::vector<uint8_t>>& TitleProfileSettings() {
+  static std::map<uint32_t, std::vector<uint8_t>> settings;
+  return settings;
+}
+
+const ProfileSetting* FindDefaultProfileSetting(uint32_t id) {
+  for (const auto& setting : kDefaultProfileSettings) {
+    if (setting.id == id) return &setting;
+  }
+  return nullptr;
+}
+bool IsTitleSpecificSetting(uint32_t id) {
+  for (uint32_t known : kTitleSpecificSettings) {
+    if (known == id) return true;
+  }
+  return false;
+}
+
+std::vector<uint8_t>& LaunchData() {
+  static std::vector<uint8_t> data;
+  return data;
+}
+bool g_launch_data_present = false;
+
+// Xenia KernelState::CompleteOverlappedImmediate for XAM_OVERLAPPED
+// {result, length, context, event, completion_routine, completion_context,
+// extended_error}. A completion routine would need a guest APC, which the
+// browser kernel does not deliver yet, so that case fails closed.
+bool CompleteOverlappedImmediate(uint32_t overlapped, uint32_t result) {
+  uint32_t event = 0, routine = 0;
+  if (!Rd32(overlapped + 12u, &event) || !Rd32(overlapped + 16u, &routine)) {
+    return false;
+  }
+  if (routine) return false;
+  if (!Wr32(overlapped + 0u, result) || !Wr32(overlapped + 24u, result) ||
+      !Wr32(overlapped + 4u, result ? 0xFFFFFFFFu : 0u) ||
+      !Wr32(overlapped + 8u, CurrentKThread())) {
+    return false;
+  }
+  if (event) {
+    KernelObject* object = ResolveHandle(event);
+    if (!object || object->type != ObjectType::kEvent ||
+        !Wr32(object->guest + 4u, 1u)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Xenia's XamUserReadProfileSettingsEx for the signed-in local profile.
+uint32_t ReadProfileSettings(uint32_t user_index, uint32_t xuid_count,
+                             uint32_t xuids, uint32_t setting_count,
+                             uint32_t setting_ids, uint32_t buffer_size_ptr,
+                             uint32_t buffer, uint32_t overlapped) {
+  auto finish = [&](uint32_t result) -> uint32_t {
+    if (!overlapped) return result;
+    if (!CompleteOverlappedImmediate(overlapped, result)) return Invalid();
+    return X_ERROR_IO_PENDING;
+  };
+  if (xuid_count > 1) xuid_count = 1;
+  if (setting_count < 1 || setting_count > 32 || !buffer_size_ptr) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+  uint32_t buffer_size = 0;
+  if (!Rd32(buffer_size_ptr, &buffer_size)) return Invalid();
+  if (buffer_size && !buffer) return X_ERROR_INVALID_PARAMETER;
+  std::vector<uint32_t> ids(setting_count);
+  uint32_t header = 0, data = 0;
+  for (uint32_t i = 0; i < setting_count; ++i) {
+    if (!Rd32(setting_ids + i * 4u, &ids[i])) return Invalid();
+    header += 40u;
+    const uint32_t type = ids[i] >> 28, size = (ids[i] >> 16) & 0xFFFu;
+    if (type == 4u || type == 6u) data += size;
+  }
+  if (xuids) {
+    header *= xuid_count;
+    data *= xuid_count;
+  }
+  header += 8u;
+  const uint32_t needed = header + data;
+  if (!buffer || buffer_size < needed) {
+    if (!buffer_size && !Wr32(buffer_size_ptr, needed)) return Invalid();
+    return X_ERROR_INSUFFICIENT_BUFFER;
+  }
+  if (!xuids && user_index) return finish(X_ERROR_NO_SUCH_USER);
+  for (uint32_t id : ids) {
+    if (!FindDefaultProfileSetting(id) && !IsTitleSpecificSetting(id)) {
+      DebugLog("XamUserReadProfileSettings: unknown setting " +
+               std::to_string(id));
+      return finish(X_ERROR_INVALID_PARAMETER);
+    }
+  }
+  if (!Wr32(buffer, setting_count) || !Wr32(buffer + 4u, buffer + 8u)) {
+    return Invalid();
+  }
+  uint32_t stream = buffer + header;
+  for (uint32_t n = 0; n < setting_count; ++n) {
+    const uint32_t out = buffer + 8u + n * 40u, id = ids[n];
+    if (!ZeroGuest(out, 40u)) return Invalid();
+    const ProfileSetting* def = FindDefaultProfileSetting(id);
+    auto& title = TitleProfileSettings();
+    const auto stored = title.find(id);
+    const bool is_set = def || stored != title.end();
+    const uint32_t from = !is_set ? 0u : (IsTitleSpecificSetting(id) ? 2u : 1u);
+    if (!Wr32(out, from) || !Wr32(out + 16u, id)) return Invalid();
+    if (xuids) {
+      if (!Wr64(out + 8u, 0xB13EBABEBABEBABEull)) return Invalid();
+    } else if (!Wr32(out + 8u, user_index)) {
+      return Invalid();
+    }
+    if (!is_set) continue;
+    const uint32_t type = id >> 28;
+    if (!Wr8(out + 24u, uint8_t(type))) return Invalid();
+    if (def && def->text) {
+      std::u16string text(def->text);
+      if (text.empty()) continue;
+      const uint32_t bytes = uint32_t(text.size() + 1u) * 2u;
+      for (size_t i = 0; i <= text.size(); ++i) {
+        if (!Wr16(stream + uint32_t(i) * 2u, i < text.size() ? text[i] : 0)) {
+          return Invalid();
+        }
+      }
+      if (!Wr32(out + 32u, bytes) || !Wr32(out + 36u, stream)) return Invalid();
+      stream += bytes;
+    } else if (def) {
+      if (!Wr32(out + 32u, def->value)) return Invalid();
+    } else {
+      const auto& value = stored->second;
+      if (!Wr32(out + 32u, uint32_t(value.size())) || !Wr32(out + 36u, stream) ||
+          (!value.empty() && !Wr(stream, value.data(), uint32_t(value.size())))) {
+        return Invalid();
+      }
+      stream += uint32_t(value.size());
+    }
+  }
+  return finish(X_ERROR_SUCCESS);
+}
+
+// Kernel stacks (MmCreateKernelStack) come from the 0x70000000 stack heap
+// like Xenia; the primary thread's stack owns the bottom of that heap.
+constexpr uint32_t kKernelStackBase = 0x78000000u;
+constexpr uint32_t kKernelStackEnd = 0x7F000000u;
+std::map<uint32_t, uint32_t>& KernelStacks() {  // low address -> size
+  static std::map<uint32_t, uint32_t> stacks;
+  return stacks;
+}
+uint32_t CreateKernelStack(uint32_t stack_size) {
+  const uint32_t size = RoundUp(stack_size, 0x1000u);
+  const uint32_t alignment = (stack_size & 0xF000u) ? 0x1000u : 0x10000u;
+  if (!size) return 0;
+  uint32_t candidate = kKernelStackBase;
+  for (const auto& [base, length] : KernelStacks()) {
+    if (uint64_t(candidate) + size <= base) break;
+    candidate = RoundUp(base + length, alignment);
+  }
+  if (uint64_t(candidate) + size > kKernelStackEnd) return 0;
+  const uint32_t pages = size / 0x1000u;
+  const uint32_t backing = AllocateSparseGuestBacking(pages);
+  if (!backing ||
+      !MapSparseGuestMemory(candidate, pages, backing, 0, kGuestRead | kGuestWrite)) {
+    return 0;
+  }
+  KernelStacks()[candidate] = size;
+  return candidate + stack_size;
+}
+
+// Title terminate notifications (ExRegisterTitleTerminateNotification): the
+// routine + priority pairs a title registers, kept for the terminal report.
+std::map<uint32_t, uint32_t>& TitleTerminateNotifications() {
+  static std::map<uint32_t, uint32_t> routines;
+  return routines;
+}
+
+// KeSetCurrentStackPointers moves the caller's r1; the import probe applies
+// this after the service returns.
+uint32_t g_pending_stack_pointer = 0;
+bool g_pending_stack_pointer_valid = false;
 
 uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
   const uint32_t r3 = a[0], r4 = a[1], r5 = a[2], r6 = a[3], r7 = a[4],
@@ -3081,6 +3482,180 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
     // --- Crypto (Xenia xboxkrnl_crypt.cc) --------------------------------------
     case kx::XeCryptBnQwBeSigVerify:
       return 1;  // Xenia reports every signature as valid.
+    case kx::XeCryptBnDwLePkcs1Verify:
+      return 1;  // Xenia stub: signatures verify.
+    case kx::XeCryptRandom: {
+      // Xenia fills with 0xFD so runs replay deterministically.
+      uint8_t chunk[256];
+      std::memset(chunk, 0xFD, sizeof(chunk));
+      for (uint32_t done = 0; done < r4;) {
+        const uint32_t n = std::min<uint32_t>(r4 - done, sizeof(chunk));
+        if (!Wr(r3 + done, chunk, n)) return Invalid();
+        done += n;
+      }
+      return 0;
+    }
+    case kx::XeCryptShaInit: {
+      Sha1 sha;
+      if (!ZeroGuest(r3, 0x58u) || !StoreHashState<Sha1, 5>(r3, sha)) return Invalid();
+      return 0;
+    }
+    case kx::XeCryptShaUpdate: {
+      Sha1 sha;
+      if (!LoadHashState<Sha1, 5>(r3, &sha) || !HashGuest(sha, r4, r5) ||
+          !StoreHashState<Sha1, 5>(r3, sha)) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XeCryptShaFinal: {
+      Sha1 sha;
+      uint8_t digest[20];
+      if (!LoadHashState<Sha1, 5>(r3, &sha)) return Invalid();
+      sha.Final(digest);
+      if ((r5 && !Wr(r4, digest, std::min<uint32_t>(r5, 20u))) ||
+          !StoreHashState<Sha1, 5>(r3, sha)) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XeCryptSha: {
+      // (in1, size1, in2, size2, in3, size3, out, out_size)
+      Sha1 sha;
+      uint8_t digest[20];
+      for (int i = 0; i < 3; ++i) {
+        const uint32_t in = a[i * 2], size = a[i * 2 + 1];
+        if (in && size && !HashGuest(sha, in, size)) return Invalid();
+      }
+      sha.Final(digest);
+      if (a[7] && !Wr(a[6], digest, std::min<uint32_t>(a[7], 20u))) return Invalid();
+      return 0;
+    }
+    case kx::XeCryptSha256Init: {
+      Sha256 sha;
+      if (!ZeroGuest(r3, 0x64u) || !StoreHashState<Sha256, 8>(r3, sha)) return Invalid();
+      return 0;
+    }
+    case kx::XeCryptSha256Update: {
+      Sha256 sha;
+      if (!LoadHashState<Sha256, 8>(r3, &sha) || !HashGuest(sha, r4, r5) ||
+          !StoreHashState<Sha256, 8>(r3, sha)) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XeCryptSha256Final: {
+      Sha256 sha;
+      uint8_t hash[32];
+      if (!LoadHashState<Sha256, 8>(r3, &sha)) return Invalid();
+      sha.Final(hash);
+      // Xenia leaves the final hash in the state's buffer.
+      if ((r5 && !Wr(r4, hash, std::min<uint32_t>(r5, 32u))) ||
+          !Wr(r3 + 0x24u, hash, 32)) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XeCryptHmacSha: {
+      // (key, key_size, in1, size1, in2, size2, in3, size3, out, out_size)
+      uint32_t out = 0, out_size = 0;
+      if (!StackArg(8, &out) || !StackArg(9, &out_size)) return Invalid();
+      uint8_t key[64] = {}, ipad[64], opad[64];
+      uint32_t key_size = r4;
+      if (key_size > 64u) {
+        Sha1 key_hash;
+        uint8_t digest[20];
+        if (!HashGuest(key_hash, r3, key_size)) return Invalid();
+        key_hash.Final(digest);
+        std::memcpy(key, digest, 20);
+        key_size = 20;
+      } else if (key_size && !Rd(r3, key, key_size)) {
+        return Invalid();
+      }
+      for (int i = 0; i < 64; ++i) {
+        ipad[i] = uint8_t(key[i] ^ 0x36);
+        opad[i] = uint8_t(key[i] ^ 0x5C);
+      }
+      Sha1 inner;
+      inner.Update(ipad, 64);
+      for (int i = 0; i < 3; ++i) {
+        const uint32_t in = a[2 + i * 2], size = a[3 + i * 2];
+        if (size && !HashGuest(inner, in, size)) return Invalid();
+      }
+      uint8_t digest[20];
+      inner.Final(digest);
+      Sha1 outer;
+      outer.Update(opad, 64);
+      outer.Update(digest, 20);
+      outer.Final(digest);
+      if (out_size && !Wr(out, digest, std::min<uint32_t>(out_size, 20u))) return Invalid();
+      return 0;
+    }
+    case kx::XeCryptRc4Key:
+      if (!Rc4Key(r3, r4, r5)) return Invalid();
+      return 0;
+    case kx::XeCryptRc4Ecb:
+      if (!Rc4Crypt(r3, r4, r5)) return Invalid();
+      return 0;
+    case kx::XeCryptRc4: {
+      // (key, key_size, data, size) with a transient state in the pool.
+      const uint32_t state = PoolAlloc(0x104u);
+      if (!state) return X_STATUS_NO_MEMORY;
+      const bool ok = Rc4Key(state, r3, r4) && Rc4Crypt(state, r5, r6);
+      PoolFree(state);
+      if (!ok) return Invalid();
+      return 0;
+    }
+
+    // --- Modules / threads (Xenia xboxkrnl_modules.cc, xboxkrnl_threading.cc)
+    case kx::ExRegisterTitleTerminateNotification: {
+      // X_EX_TITLE_TERMINATE_REGISTRATION {notification_routine, priority, list}
+      uint32_t routine = 0, priority = 0;
+      if (!Rd32(r3, &routine) || !Rd32(r3 + 4u, &priority)) return Invalid();
+      if (r4) TitleTerminateNotifications()[routine] = priority;
+      else TitleTerminateNotifications().erase(routine);
+      return 0;
+    }
+    case kx::KeSetCurrentStackPointers: {
+      // (stack_ptr, thread, stack_alloc_base, stack_base, stack_limit)
+      if (!r4 || !Wr32(r4 + 0xD0u, r5) || !Wr32(r4 + 0x5Cu, r6) ||
+          !Wr32(r4 + 0x60u, r7)) {
+        return Invalid();
+      }
+      if (g_caller_r13 &&
+          (!Wr32(g_caller_r13 + 0x70u, r6) || !Wr32(g_caller_r13 + 0x74u, r7))) {
+        return Invalid();
+      }
+      g_pending_stack_pointer = r3;
+      g_pending_stack_pointer_valid = true;
+      return 0;
+    }
+    case kx::RtlImageNtHeader: {
+      // Little-endian PE headers: MZ at +0, e_lfanew at +0x3C, "PE\0\0".
+      if (!r3) return 0;
+      uint8_t mz[2] = {}, lfanew[4] = {}, pe[4] = {};
+      if (!Rd(r3, mz, 2) || mz[0] != 'M' || mz[1] != 'Z' ||
+          !Rd(r3 + 0x3Cu, lfanew, 4)) {
+        return 0;
+      }
+      const uint32_t offset = uint32_t(lfanew[0]) | (uint32_t(lfanew[1]) << 8) |
+                              (uint32_t(lfanew[2]) << 16) | (uint32_t(lfanew[3]) << 24);
+      if (!Rd(r3 + offset, pe, 4) || pe[0] != 'P' || pe[1] != 'E' || pe[2] || pe[3]) {
+        return 0;
+      }
+      return r3 + offset;
+    }
+    case kx::MmCreateKernelStack:
+      return CreateKernelStack(r3);
+    case kx::MmDeleteKernelStack: {
+      // (stack_base, stack_end) where stack_end is the low address.
+      auto& stacks = KernelStacks();
+      const auto it = stacks.find(r4);
+      if (it == stacks.end()) return X_STATUS_UNSUCCESSFUL;
+      UnmapSparseGuestMemory(it->first, it->second / 0x1000u);
+      stacks.erase(it);
+      return X_STATUS_SUCCESS;
+    }
 
     default:
       g_handled = false;
@@ -3124,12 +3699,27 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return Terminal(kTerminalTitleTerminate, 0, kModuleXam, ordinal, a);
     case xam::XamLoaderLaunchTitle:
       return Terminal(kTerminalLaunchTitle, r3, kModuleXam, ordinal, a);
+    case xam::XamLoaderSetLaunchData: {
+      auto& data = LaunchData();
+      data.assign(r4, 0);
+      if (r4 && !Rd(r3, data.data(), r4)) return Invalid();
+      g_launch_data_present = r4 != 0;
+      return 0;
+    }
     case xam::XamLoaderGetLaunchDataSize:
       if (!r3) return X_ERROR_INVALID_PARAMETER;
-      if (!Wr32(r3, 0)) return Invalid();
-      return X_ERROR_NOT_FOUND;
-    case xam::XamLoaderGetLaunchData:
-      return X_ERROR_NOT_FOUND;
+      if (!g_launch_data_present) {
+        if (!Wr32(r3, 0)) return Invalid();
+        return X_ERROR_NOT_FOUND;
+      }
+      if (!Wr32(r3, uint32_t(LaunchData().size()))) return Invalid();
+      return X_ERROR_SUCCESS;
+    case xam::XamLoaderGetLaunchData: {
+      if (!g_launch_data_present) return X_ERROR_NOT_FOUND;
+      const uint32_t copy = std::min<uint32_t>(r4, uint32_t(LaunchData().size()));
+      if (copy && !Wr(r3, LaunchData().data(), copy)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
     case xam::XamEnableInactivityProcessing:
       return X_ERROR_SUCCESS;
     case xam::XamResetInactivity:
@@ -3231,6 +3821,151 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return X_ERROR_SUCCESS;
     }
 
+    // --- Profile / user (Xenia xam_user.cc) -------------------------------------
+    case xam::XamUserReadProfileSettings: {
+      // (title_id, user_index, xuid_count, xuids, setting_count, setting_ids,
+      //  buffer_size_ptr, buffer, overlapped)
+      uint32_t overlapped = 0;
+      StackArg(8, &overlapped);
+      return ReadProfileSettings(a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                                 overlapped);
+    }
+    case xam::XamUserReadProfileSettingsEx: {
+      // (..., buffer_size_ptr, unk, buffer, overlapped)
+      uint32_t buffer = 0, overlapped = 0;
+      if (!StackArg(8, &buffer)) return Invalid();
+      StackArg(9, &overlapped);
+      return ReadProfileSettings(a[1], a[2], a[3], a[4], a[5], a[6], buffer,
+                                 overlapped);
+    }
+    case xam::XamUserWriteProfileSettings: {
+      // (title_id, user_index, setting_count, settings, overlapped)
+      const uint32_t user = a[1], count = a[2], settings = a[3], overlapped = a[4];
+      if (!count || !settings) return X_ERROR_INVALID_PARAMETER;
+      if (!user) {
+        for (uint32_t n = 0; n < count; ++n) {
+          const uint32_t setting = settings + n * 40u;
+          uint32_t id = 0, size = 0, ptr = 0;
+          uint8_t type = 0;
+          if (!Rd32(setting + 16u, &id) || !Rd8(setting + 24u, &type)) return Invalid();
+          // Xenia stores CONTENT/BINARY settings; other types are logged only.
+          if (type != 0u && type != 6u) continue;
+          if (!Rd32(setting + 32u, &size) || !Rd32(setting + 36u, &ptr)) return Invalid();
+          std::vector<uint8_t> bytes(size, 0);
+          if (ptr && size && !Rd(ptr, bytes.data(), size)) return Invalid();
+          TitleProfileSettings()[id] = std::move(bytes);
+        }
+      }
+      const uint32_t result = user ? X_ERROR_NO_SUCH_USER : X_ERROR_SUCCESS;
+      if (!overlapped) return result;
+      if (!CompleteOverlappedImmediate(overlapped, result)) return Invalid();
+      return X_ERROR_IO_PENDING;
+    }
+    case xam::XamUserGetGamerTag: {
+      // (user_index, buffer (UTF-16), buffer_len in characters)
+      if (r3 >= 4) return X_E_INVALIDARG;
+      if (r3) return X_E_NO_SUCH_USER;
+      if (!r4 || r5 < 16) return X_E_INVALIDARG;
+      static const char16_t kTag[] = u"User";
+      for (uint32_t i = 0; i < 5; ++i) {
+        if (!Wr16(r4 + i * 2u, kTag[i])) return Invalid();
+      }
+      return X_E_SUCCESS;
+    }
+    case xam::XamUserGetMembershipTier:
+      if (r3 >= 4) return X_ERROR_INVALID_PARAMETER;
+      if (r3) return X_ERROR_NO_SUCH_USER;
+      return 6;  // Xenia: Gold.
+    case xam::XamUserIsOnlineEnabled:
+      return 1;
+    case xam::XamUserContentRestrictionGetFlags:
+      if (r3) return X_ERROR_NO_SUCH_USER;
+      if (!Wr32(r4, 0)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case xam::XamUserContentRestrictionGetRating:
+      if (r3) return X_ERROR_NO_SUCH_USER;
+      if (!Wr32(a[2], 0x3Fu) || !Wr32(a[3], 0)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case xam::XamUserContentRestrictionCheckAccess:
+      // (user, unk1..unk4, out_unk5, overlapped)
+      if (!Wr32(a[5], 1)) return Invalid();
+      if (a[6] && !CompleteOverlappedImmediate(a[6], X_ERROR_SUCCESS)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case xam::XamGetOverlappedResult: {
+      // (overlapped, length_ptr, wait): completions here are immediate.
+      uint32_t result = 0, length = 0, event = 0;
+      if (!Rd32(r3, &result) || !Rd32(r3 + 4u, &length) || !Rd32(r3 + 12u, &event)) {
+        return Invalid();
+      }
+      if (result == X_ERROR_IO_PENDING) {
+        if (!event) return X_ERROR_IO_INCOMPLETE;
+        KernelObject* object = ResolveHandle(event);
+        return WouldBlock(kModuleXam, ordinal, object ? object->guest : 0, event, 1);
+      }
+      if (!result && r4 && !Wr32(r4, length)) return Invalid();
+      return result;
+    }
+
+    // --- Locale / info (Xenia xam_locale.cc, xam_info.cc, xam_video.cc) -------
+    case xam::XamGetLocale:
+    case xam::XamGetLocaleEx:
+      // Xenia xeXamGetLocaleEx: user_country 103 (US) maps to locale 36 when
+      // within the caller's limits; otherwise it falls back from the game
+      // region, and region 0xFFFF also resolves to US (36).
+      return 36u;
+    case xam::XamFeatureEnabled:
+      return 0;
+    case xam::XGetVideoCapabilities:
+      return 0;
+    case xam::XamTaskShouldExit:
+      return 0;
+    case xam::XamIsUIActive:
+      return 0;
+
+    // --- Networking startup (Xenia xam_net.cc, offline) ----------------------
+    case xam::NetDll_XNetStartup:
+    case xam::NetDll_XNetCleanup:
+    case xam::NetDll_WSACleanup:
+      return 0;
+    case xam::NetDll_WSAStartup: {
+      // (caller, version, X_WSADATA*) - Xenia's non-Windows values.
+      if (r5) {
+        if (!Wr16(r5, uint16_t(r4)) || !Wr8(r5 + 4u, 0) || !Wr8(r5 + 0x105u, 0) ||
+            !Wr16(r5 + 0x186u, 100) || !Wr16(r5 + 0x188u, 1024)) {
+          return Invalid();
+        }
+      }
+      return 0;
+    }
+    case xam::NetDll_WSAGetLastError:
+      return 0;
+    case xam::NetDll_XNetGetTitleXnAddr: {
+      // XNADDR {ina, inaOnline, wPortOnline, abEnet[6], abOnline[20]}:
+      // loopback, MAC 0xCC.., XNET_GET_XNADDR_STATIC (4).
+      uint8_t enet[6];
+      std::memset(enet, 0xCC, sizeof(enet));
+      if (!Wr32(r4, 0x7F000001u) || !Wr32(r4 + 4u, 0) || !Wr16(r4 + 8u, 0) ||
+          !Wr(r4 + 10u, enet, 6) || !ZeroGuest(r4 + 16u, 20)) {
+        return Invalid();
+      }
+      return 4;
+    }
+    case xam::NetDll_XNetGetDebugXnAddr:
+      if (!ZeroGuest(r4, 36)) return Invalid();
+      return 1;  // XNET_GET_XNADDR_NONE
+    case xam::NetDll_XNetGetEthernetLinkStatus:
+      return 0;  // no link: titles stay offline
+    case xam::NetDll_XNetRandom: {
+      uint8_t chunk[256];
+      std::memset(chunk, 0xBB, sizeof(chunk));
+      for (uint32_t done = 0; done < r5;) {
+        const uint32_t n = std::min<uint32_t>(r5 - done, sizeof(chunk));
+        if (!Wr(r4 + done, chunk, n)) return Invalid();
+        done += n;
+      }
+      return 0;
+    }
+
     default:
       g_handled = false;
       return 0;
@@ -3284,6 +4019,13 @@ void ResetExtendedKernelServices() {
   ThreadAffinity().clear();
   g_kernel_module_handles = {};
   g_audio_clients = {};
+  TitleProfileSettings().clear();
+  LaunchData().clear();
+  g_launch_data_present = false;
+  KernelStacks().clear();
+  TitleTerminateNotifications().clear();
+  g_pending_stack_pointer = 0;
+  g_pending_stack_pointer_valid = false;
   g_xma_context_base = 0;
   g_xma_context_used = {};
   // Title-created symbolic links belong to the run; the registered VFS
@@ -3292,6 +4034,13 @@ void ResetExtendedKernelServices() {
   g_host_io = {};
   g_vfs_reads = 0;
   g_vfs_bytes_read = 0;
+}
+
+bool TakeKernelServiceStackPointer(uint32_t* value) {
+  if (!g_pending_stack_pointer_valid) return false;
+  g_pending_stack_pointer_valid = false;
+  if (value) *value = g_pending_stack_pointer;
+  return true;
 }
 
 }  // namespace render360::xenia_web

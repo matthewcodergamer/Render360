@@ -1103,6 +1103,24 @@ void MarkThreadExited(uint32_t kthread, uint32_t exit_code) {
   Wr64(kthread + 0x138u, QueryGuestSystemTime());
 }
 
+// Audio render-driver clients (Xenia AudioSystem::RegisterClient). The
+// browser audio pump reads callback/argument pairs to drive guest callbacks.
+struct AudioClient {
+  bool used = false;
+  uint32_t callback = 0;
+  uint32_t callback_arg = 0;
+  uint32_t frames_submitted = 0;
+  uint32_t last_samples = 0;
+};
+constexpr uint32_t kMaxAudioClients = 8;
+std::array<AudioClient, kMaxAudioClients> g_audio_clients{};
+// XMA hardware contexts (Xenia XmaDecoder: 320 x 64-byte contexts in
+// physical memory). Decoding is not implemented yet; allocation is.
+constexpr uint32_t kXmaContextCount = 320;
+constexpr uint32_t kXmaContextBytes = 64;
+uint32_t g_xma_context_base = 0;
+std::array<bool, kXmaContextCount> g_xma_context_used{};
+
 // X_LDR_DATA_TABLE_ENTRY stand-ins for xboxkrnl.exe / xam.xex so
 // XexGetModuleHandle succeeds for kernel modules as it does in Xenia.
 std::array<uint32_t, 2> g_kernel_module_handles{};
@@ -3002,6 +3020,64 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
     case kx::VdRetrainEDRAM:
       return 0;
 
+    // --- Audio (Xenia xboxkrnl_audio.cc) ---------------------------------------
+    case kx::XAudioGetSpeakerConfig:
+      if (!Wr32(r3, 0x00010001u)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case kx::XAudioGetVoiceCategoryVolumeChangeMask:
+      if (!Wr32(r4, 0)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case kx::XAudioGetVoiceCategoryVolume:
+      if (!WrF32(r4, 1.0f)) return Invalid();
+      return X_ERROR_SUCCESS;
+    case kx::XAudioEnableDucker:
+      return X_ERROR_SUCCESS;
+    case kx::XAudioRegisterRenderDriverClient: {
+      uint32_t callback = 0, callback_arg = 0;
+      if (!Rd32(r3, &callback) || !Rd32(r3 + 4u, &callback_arg)) return Invalid();
+      for (uint32_t i = 0; i < kMaxAudioClients; ++i) {
+        if (g_audio_clients[i].used) continue;
+        g_audio_clients[i] = {true, callback, callback_arg, 0, 0};
+        if (!Wr32(r4, 0x41550000u | i)) return Invalid();
+        return X_ERROR_SUCCESS;
+      }
+      return X_STATUS_NO_MEMORY;
+    }
+    case kx::XAudioUnregisterRenderDriverClient:
+      if ((r3 & 0xFFFF0000u) == 0x41550000u && (r3 & 0xFFFFu) < kMaxAudioClients) {
+        g_audio_clients[r3 & 0xFFFFu] = {};
+      }
+      return X_ERROR_SUCCESS;
+    case kx::XAudioSubmitRenderDriverFrame:
+      if ((r3 & 0xFFFF0000u) != 0x41550000u || (r3 & 0xFFFFu) >= kMaxAudioClients) {
+        return Invalid();
+      }
+      ++g_audio_clients[r3 & 0xFFFFu].frames_submitted;
+      g_audio_clients[r3 & 0xFFFFu].last_samples = r4;
+      return X_ERROR_SUCCESS;
+    case kx::XMACreateContext: {
+      if (!g_xma_context_base) {
+        g_xma_context_base = AllocatePhysical(kXmaContextCount * kXmaContextBytes,
+                                              0x20000004u, 0, 0x1FFFFFFFu, 256);
+        if (!g_xma_context_base) return X_STATUS_NO_MEMORY;
+      }
+      for (uint32_t i = 0; i < kXmaContextCount; ++i) {
+        if (g_xma_context_used[i]) continue;
+        g_xma_context_used[i] = true;
+        const uint32_t context = g_xma_context_base + i * kXmaContextBytes;
+        if (!ZeroGuest(context, kXmaContextBytes) || !Wr32(r3, context)) return Invalid();
+        return X_STATUS_SUCCESS;
+      }
+      if (!Wr32(r3, 0)) return Invalid();
+      return X_STATUS_NO_MEMORY;
+    }
+    case kx::XMAReleaseContext:
+      if (g_xma_context_base && r3 >= g_xma_context_base &&
+          r3 < g_xma_context_base + kXmaContextCount * kXmaContextBytes) {
+        g_xma_context_used[(r3 - g_xma_context_base) / kXmaContextBytes] = false;
+      }
+      return 0;
+
     // --- Crypto (Xenia xboxkrnl_crypt.cc) --------------------------------------
     case kx::XeCryptBnQwBeSigVerify:
       return 1;  // Xenia reports every signature as valid.
@@ -3207,6 +3283,9 @@ void ResetExtendedKernelServices() {
   ThreadPriority().clear();
   ThreadAffinity().clear();
   g_kernel_module_handles = {};
+  g_audio_clients = {};
+  g_xma_context_base = 0;
+  g_xma_context_used = {};
   // Title-created symbolic links belong to the run; the registered VFS
   // content (r360_vfs_*) survives so a title can be re-run deterministically.
   VfsSymlinks().clear();
@@ -3410,6 +3489,25 @@ uint32_t r360_vfs_entry_path(uint32_t id) {
   std::memcpy(r360k::g_vfs_path_buffer, entry->path.data(), n);
   r360k::g_vfs_path_buffer[n] = 0;
   return uint32_t(n);
+}
+
+R360_WASM_EXPORT("r360_audio_client_callback")
+uint32_t r360_audio_client_callback(uint32_t index) {
+  return index < r360k::kMaxAudioClients && r360k::g_audio_clients[index].used
+             ? r360k::g_audio_clients[index].callback
+             : 0u;
+}
+R360_WASM_EXPORT("r360_audio_client_callback_arg")
+uint32_t r360_audio_client_callback_arg(uint32_t index) {
+  return index < r360k::kMaxAudioClients ? r360k::g_audio_clients[index].callback_arg : 0u;
+}
+R360_WASM_EXPORT("r360_audio_client_frames")
+uint32_t r360_audio_client_frames(uint32_t index) {
+  return index < r360k::kMaxAudioClients ? r360k::g_audio_clients[index].frames_submitted : 0u;
+}
+R360_WASM_EXPORT("r360_audio_client_last_samples")
+uint32_t r360_audio_client_last_samples(uint32_t index) {
+  return index < r360k::kMaxAudioClients ? r360k::g_audio_clients[index].last_samples : 0u;
 }
 
 R360_WASM_EXPORT("r360_kernel_graphics_interrupt_callback")

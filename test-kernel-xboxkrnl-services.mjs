@@ -235,7 +235,11 @@ expect((need('r360_kernel_debug_log_count')()>>>0)>=1,'DbgPrint was not captured
 k('HalReturnToFirmware',1);
 expect(status()===4&&(need('r360_kernel_terminal_kind')()>>>0)===1&&(need('r360_kernel_terminal_code')()>>>0)===1,'HalReturnToFirmware did not stop at a terminal boundary');
 expect((need('r360_kernel_terminal_lr')()>>>0)===0x82000100,'terminal boundary did not record caller LR');
-k('XAudioRegisterRenderDriverClient',P,P+4);expect(status()===2,'unimplemented XAudioRegisterRenderDriverClient did not fail closed');
+w32(P+0xE00,0x82400000);w32(P+0xE04,0xCAFE);expect(k('XAudioRegisterRenderDriverClient',P+0xE00,P+0xE10)===0&&r32(P+0xE10)===0x41550000,'XAudioRegisterRenderDriverClient mismatch');
+expect((need('r360_audio_client_callback')(0)>>>0)===0x82400000&&(need('r360_audio_client_callback_arg')(0)>>>0)===0xCAFE,'audio client callback not recorded');
+expect(k('XAudioSubmitRenderDriverFrame',0x41550000,P+0xE20)===0&&(need('r360_audio_client_frames')(0)>>>0)===1,'audio frame submission not counted');
+expect(k('XMACreateContext',P+0xE30)===0&&r32(P+0xE30)>=0xA0000000,'XMACreateContext mismatch');
+k('XeCryptShaInit',P+0xE40);expect(status()===2,'unimplemented XeCryptShaInit did not fail closed');
 expect(logOut>=0x5A000000,'pool alloc export mismatch');
 console.log('KERNEL_TERMINAL_AND_FAIL_CLOSED=PASS');
 console.log('KERNEL_XBOXKRNL_SERVICES_CRITIC=PASS');

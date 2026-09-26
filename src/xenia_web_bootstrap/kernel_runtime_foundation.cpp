@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 
+#include "kernel_xboxkrnl_services.h"
 #include "sparse_guest_memory.h"
 
 #if defined(__wasm__)
@@ -20,6 +21,9 @@ constexpr uint32_t kStatusIdle = 0;
 constexpr uint32_t kStatusSuccess = 1;
 constexpr uint32_t kStatusUnsupported = 2;
 constexpr uint32_t kStatusInvalid = 3;
+constexpr uint32_t kStatusTerminal = 4;
+constexpr uint32_t kStatusWouldBlock = 5;
+constexpr uint32_t kTlsOutOfIndexesValue = 0xFFFFFFFFu;
 // Match Xenia KernelState process types used by KeGet/SetCurrentProcessType.
 constexpr uint32_t kXProcTypeIdle = 0;
 constexpr uint32_t kXProcTypeUser = 1;
@@ -87,6 +91,15 @@ struct GuestThread {
   uint32_t flags = 0;
   uint32_t suspend_count = 0;
   uint32_t exit_code = 0;
+  // Xbox guest objects (Xenia XThread): KPCR for r13, KTHREAD, the second
+  // argument passed to an XapiThreadStartup trampoline and the thread id.
+  uint32_t pcr = 0;
+  uint32_t kthread = 0;
+  uint32_t arg1 = 0;
+  uint32_t thread_id = 0;
+  // The primary title thread runs on a stack mapped by the browser loader and
+  // is driven by the synchronous PPC probe, not by the cooperative scheduler.
+  bool external = false;
   std::array<uint32_t, kMaxTlsSlots> tls{};
 };
 
@@ -147,6 +160,11 @@ uint32_t ThreadHandleByIndex(uint32_t index) {
 }
 
 void ReleaseThreadStack(GuestThread& thread) {
+  if (thread.external) {
+    // The loader owns an external thread's stack mapping.
+    thread.stack_mapped = false;
+    return;
+  }
   if (thread.stack_mapped && thread.stack_base && thread.stack_size) {
     const uint32_t pages = thread.stack_size / kGuestPageSize;
     // Sparse memory may already have been reset independently. An absent old
@@ -346,7 +364,7 @@ uint32_t NextRunnable() {
     const uint32_t index = (g_scheduler_cursor + step) % kMaxThreads;
     auto& thread = g_threads[index];
     if (!thread.used || thread.state == kThreadTerminated ||
-        thread.suspend_count || !thread.stack_mapped) {
+        thread.suspend_count || !thread.stack_mapped || thread.external) {
       continue;
     }
     const uint32_t handle = ThreadHandleByIndex(index);
@@ -354,6 +372,44 @@ uint32_t NextRunnable() {
   }
   g_runtime_status = kStatusInvalid;
   return 0;
+}
+
+// Registers the loader-created primary thread in the reserved registry slot so
+// kernel services (TLS, critical sections, waits) see a real current thread.
+uint32_t RegisterExternalThread(uint32_t entry, uint32_t stack_base,
+                                uint32_t stack_limit, uint32_t pcr,
+                                uint32_t kthread, uint32_t thread_id) {
+  if (!entry || !stack_base || stack_base <= stack_limit) {
+    g_runtime_status = kStatusInvalid;
+    return 0;
+  }
+  auto& thread = g_threads[kBrowserMainThreadReservedSlot];
+  ReleaseThreadStack(thread);
+  uint16_t generation = uint16_t(thread.generation + 1u);
+  if (!generation) generation = 1;
+  thread = {};
+  thread.used = true;
+  thread.external = true;
+  thread.stack_mapped = true;
+  thread.generation = generation;
+  thread.state = kThreadRunning;
+  thread.entry = entry;
+  thread.stack_base = stack_limit;
+  thread.stack_top = stack_base;
+  thread.stack_size = stack_base - stack_limit;
+  thread.pcr = pcr;
+  thread.kthread = kthread;
+  thread.thread_id = thread_id;
+  const uint32_t handle = MakeHandle(kBrowserMainThreadReservedSlot, generation);
+  uint32_t old_index = 0;
+  if (DecodeHandle(g_current_thread, &old_index) &&
+      g_threads[old_index].state == kThreadRunning) {
+    g_threads[old_index].state = kThreadReady;
+  }
+  g_current_thread = handle;
+  g_scheduler_cursor = kBrowserMainThreadReservedSlot;
+  g_runtime_status = kStatusSuccess;
+  return handle;
 }
 
 uint32_t TlsAlloc() {
@@ -802,9 +858,20 @@ bool ReadXexOptionalHeaderField(uint32_t xex_header, uint32_t field,
   return true;
 }
 
+uint32_t ExtendedService(uint32_t module, uint32_t ordinal, uint32_t r3,
+                         uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7,
+                         uint32_t r8, uint32_t r9, uint32_t r10) {
+  const uint32_t args[8] = {r3, r4, r5, r6, r7, r8, r9, r10};
+  uint32_t result = 0;
+  const uint32_t status =
+      DispatchExtendedKernelService(module, ordinal, args, &result);
+  g_service_status = status == kKernelServiceIdle ? kStatusUnsupported : status;
+  return result;
+}
+
 uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
                      uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6,
-                     uint32_t r7, uint32_t, uint32_t, uint32_t) {
+                     uint32_t r7, uint32_t r8, uint32_t r9, uint32_t r10) {
   ++g_service_calls;
   g_last_module = module;
   g_last_ordinal = ordinal;
@@ -852,6 +919,8 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
         return slot;
       }
       case 0x0153: {  // KeTlsFree
+        // Xenia: X_TLS_OUT_OF_INDEXES returns FALSE without faulting.
+        if (r3 == kTlsOutOfIndexesValue) return 0;
         const bool ok = TlsFree(r3);
         if (!ok) g_service_status = kStatusInvalid;
         return ok ? 1u : 0u;
@@ -861,22 +930,20 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
           g_service_status = kStatusInvalid;
           return 0;
         }
-        const uint32_t value = TlsGet(g_current_thread, r3);
-        if (g_runtime_status != kStatusSuccess) g_service_status = kStatusInvalid;
-        return value;
+        // Xenia: xboxkrnl has no error branch; a bad slot reads zero.
+        return TlsGet(g_current_thread, r3);
       }
       case 0x0155: {  // KeTlsSetValue
         if (!g_current_thread) {
           g_service_status = kStatusInvalid;
           return 0;
         }
-        const bool ok = TlsSet(g_current_thread, r3, r4);
-        if (!ok) g_service_status = kStatusInvalid;
-        return ok ? 1u : 0u;
+        // Xenia: a bad slot returns FALSE rather than faulting.
+        return TlsSet(g_current_thread, r3, r4) ? 1u : 0u;
       }
       default:
-        g_service_status = kStatusUnsupported;
-        return 0;
+        return ExtendedService(module, ordinal, r3, r4, r5, r6, r7, r8, r9,
+                               r10);
     }
   }
 
@@ -913,8 +980,8 @@ uint32_t ServiceCall(uint32_t module, uint32_t ordinal,
       case 0x03CD:  // XGetLanguage - XLanguage::kEnglish in Xenia default path.
         return 1u;
       default:
-        g_service_status = kStatusUnsupported;
-        return 0;
+        return ExtendedService(module, ordinal, r3, r4, r5, r6, r7, r8, r9,
+                               r10);
     }
   }
 
@@ -994,6 +1061,63 @@ R360_WASM_EXPORT("r360_guest_thread_stack_mapped")
 uint32_t r360_guest_thread_stack_mapped(uint32_t handle) {
   auto* thread = render360::xenia_web::LookupThread(handle, true);
   return thread && thread->stack_mapped ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_set_guest_objects")
+uint32_t r360_guest_thread_set_guest_objects(uint32_t handle, uint32_t pcr,
+                                             uint32_t kthread, uint32_t arg1,
+                                             uint32_t thread_id) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  if (!thread) return 0;
+  thread->pcr = pcr;
+  thread->kthread = kthread;
+  thread->arg1 = arg1;
+  thread->thread_id = thread_id;
+  return 1;
+}
+R360_WASM_EXPORT("r360_guest_thread_pcr")
+uint32_t r360_guest_thread_pcr(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->pcr : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_kthread")
+uint32_t r360_guest_thread_kthread(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->kthread : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_arg1")
+uint32_t r360_guest_thread_arg1(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->arg1 : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_id")
+uint32_t r360_guest_thread_id(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread ? thread->thread_id : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_external")
+uint32_t r360_guest_thread_external(uint32_t handle) {
+  auto* thread = render360::xenia_web::LookupThread(handle, true);
+  return thread && thread->external ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_guest_thread_find_by_kthread")
+uint32_t r360_guest_thread_find_by_kthread(uint32_t kthread) {
+  if (!kthread) return 0;
+  for (uint32_t i = 0; i < render360::xenia_web::kMaxThreads; ++i) {
+    const auto& thread = render360::xenia_web::g_threads[i];
+    if (thread.used && thread.kthread == kthread) {
+      return render360::xenia_web::ThreadHandleByIndex(i);
+    }
+  }
+  return 0;
+}
+R360_WASM_EXPORT("r360_guest_thread_register_external")
+uint32_t r360_guest_thread_register_external(uint32_t entry,
+                                             uint32_t stack_base,
+                                             uint32_t stack_limit,
+                                             uint32_t pcr, uint32_t kthread,
+                                             uint32_t thread_id) {
+  return render360::xenia_web::RegisterExternalThread(
+      entry, stack_base, stack_limit, pcr, kthread, thread_id);
 }
 uint32_t r360_guest_runtime_status() {
   return render360::xenia_web::g_runtime_status;

@@ -38,6 +38,15 @@ export async function createGuestThreadScheduler({
   const stackBaseOf=need(bootstrap,'r360_guest_thread_stack_base');
   const stackTopOf=need(bootstrap,'r360_guest_thread_stack_top');
   const stackMappedOf=need(bootstrap,'r360_guest_thread_stack_mapped');
+  // Xbox thread objects (Xenia XThread): KPCR for r13, the XapiThreadStartup
+  // second argument for r4, and the native object allocator. Older published
+  // bootstraps lack these and keep the historical r1/r3-only seeding.
+  const pcrOf=pick(bootstrap,'r360_guest_thread_pcr');
+  const arg1Of=pick(bootstrap,'r360_guest_thread_arg1');
+  const prepareThreadObjects=pick(bootstrap,'r360_kernel_prepare_thread_objects');
+  const kernelLastStatus=pick(bootstrap,'r360_kernel_import_last_status');
+  const kernelTerminalKind=pick(bootstrap,'r360_kernel_terminal_kind');
+  const kernelTerminalCode=pick(bootstrap,'r360_kernel_terminal_code');
   const ppc=session??await createPersistentPpcSession({bootstrap});
   const contextPtr=ppc.contextPtr>>>0;
   const contextSize=ppc.contextSize>>>0;
@@ -84,6 +93,10 @@ export async function createGuestThreadScheduler({
     ppc.resetContext();
     ppc.setGpr(1,BigInt(thread.stackTop));
     ppc.setGpr(3,BigInt(thread.context));
+    const pcr=typeof pcrOf==='function'?pcrOf(handle)>>>0:0;
+    if(pcr)ppc.setGpr(13,BigInt(pcr));
+    const arg1=typeof arg1Of==='function'?arg1Of(handle)>>>0:0;
+    if(arg1)ppc.setGpr(4,BigInt(arg1));
     ppc.setLr(0n);
     ppc.setCtr(0n);
     const snapshot=copyLiveContext();
@@ -105,6 +118,9 @@ export async function createGuestThreadScheduler({
     if(!entry)throw new Error('Guest thread entry must be nonzero');
     const handle=createThread(entry,context,stackSize,flags)>>>0;
     if(!handle)throw new Error(`FAIL_CLOSED_GUEST_THREAD_CREATE_0x${entry.toString(16)}`);
+    if(typeof prepareThreadObjects==='function'&&typeof pcrOf==='function'&&!(pcrOf(handle)>>>0)){
+      if(!(prepareThreadObjects(handle,entry,flags)>>>0))throw new Error(`FAIL_CLOSED_GUEST_THREAD_OBJECTS_0x${entry.toString(16)}`);
+    }
     return inspectThread(handle);
   }
 
@@ -117,7 +133,19 @@ export async function createGuestThreadScheduler({
     restoreThreadContext(handle);
     let result;
     try{result=await ppc.runFunctionSlice(thread.entry,{continuationKey:handle});}
-    catch(error){saveThreadContext(handle);lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};throw error;}
+    catch(error){
+      saveThreadContext(handle);
+      // ExTerminateThread from a secondary thread is a normal thread exit:
+      // the native kernel already terminated it and signalled its KTHREAD.
+      const exited=typeof kernelLastStatus==='function'&&(kernelLastStatus()>>>0)===4&&
+        typeof kernelTerminalKind==='function'&&(kernelTerminalKind()>>>0)===3&&(stateOf(handle)>>>0)===4;
+      if(exited){
+        sliceCount++;completedThreads++;
+        dispatchCounts.set(handle,(dispatchCounts.get(handle)??0)+1);
+        return {handle,thread,terminated:true,yielded:false,guestReturned:false,exitCode:typeof kernelTerminalCode==='function'?kernelTerminalCode()>>>0:0,exitKind:'ExTerminateThread'};
+      }
+      lastBlocker={handle,entry:thread.entry,error:String(error?.message??error)};throw error;
+    }
     saveThreadContext(handle);
     sliceCount++;
     dispatchCounts.set(handle,(dispatchCounts.get(handle)??0)+1);

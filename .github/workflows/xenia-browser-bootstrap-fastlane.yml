@@ -31,6 +31,11 @@ on:
       - 'test-xenia-entry-lr-abi.mjs'
       - 'test-kernel-rtl-image-xex-header-field.mjs'
       - 'test-kernel-nt-allocate-virtual-memory.mjs'
+      - 'test-kernel-nt-free-virtual-memory.mjs'
+      - 'test-kernel-services-critic.mjs'
+      - 'test-kernel-xboxkrnl-services.mjs'
+      - 'render360-kernel-export-names.mjs'
+      - 'tools/generate-kernel-export-tables.py'
       - 'test-xex-guest-mapper.mjs'
       - 'test-braid-frame-history.mjs'
       - 'VERSION'
@@ -94,6 +99,9 @@ jobs:
           echo "R360_PHASE fetch-xenia start=$(date -u +%FT%TZ)"
           bash ./fetch-xenia.sh
           echo "R360_PHASE fetch-xenia done=$(date -u +%FT%TZ)"
+
+      - name: Verify generated Xenia kernel export tables
+        run: python3 tools/generate-kernel-export-tables.py --check
 
       - name: Verify Braid frame-history instrumentation contract
         run: node ./test-braid-frame-history.mjs
@@ -236,6 +244,14 @@ jobs:
 
       - name: Verify NtAllocateVirtualMemory kernel service
         run: timeout 90s node ./test-kernel-nt-allocate-virtual-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify NtFreeVirtualMemory and kernel service critics
+        run: |
+          timeout 90s node ./test-kernel-nt-free-virtual-memory.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+          timeout 90s node ./test-kernel-services-critic.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify Xenia-ported xboxkrnl/XAM service layer
+        run: timeout 90s node ./test-kernel-xboxkrnl-services.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify browser bootstrap runtime contract
         run: |

@@ -2,6 +2,7 @@ import { prepareRetailXexImage } from './retail-xex-image-pipeline.mjs';
 import { decodeXexImportLibraries } from './render360-xex-imports.mjs';
 import { buildKernelImportPlan } from './render360-kernel-imports.mjs';
 import { installBrowserTitleHle, readBrowserTitleHleTelemetry } from './render360-browser-title-hle.mjs';
+import { kernelExportName } from './render360-kernel-export-names.mjs';
 
 const be32=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
 const pick=(bootstrap,n)=>bootstrap.exports[n]??bootstrap.exports[`_${n}`];
@@ -14,16 +15,32 @@ const XENIA_KE_DEBUG_MONITOR_DATA=XENIA_KERNEL_DATA_BASE+0x004;
 const XENIA_KE_CERT_MONITOR_DATA=XENIA_KERNEL_DATA_BASE+0x008;
 const XENIA_EXECUTABLE_HMODULE=XENIA_KERNEL_DATA_BASE+0x100;
 const XENIA_XEX_HEADER_BASE=XENIA_KERNEL_DATA_BASE+0x1000;
+// Every xboxkrnl variable export Xenia backs with real guest storage
+// (XboxkrnlModule constructor + RegisterVideoExports), laid out in the kernel
+// data page. Offsets of the first three are part of the locked V74 ABI.
+const XENIA_PROCESS_INFO_BLOCK=XENIA_KERNEL_DATA_BASE+0x200;
 const XENIA_KERNEL_VARIABLE_LAYOUT=new Map([
-  [0x59,{name:'KeDebugMonitorData',address:XENIA_KE_DEBUG_MONITOR_DATA,value:0}],
+  [0x0C,{name:'ExConsoleGameRegion',address:XENIA_KERNEL_DATA_BASE+0x00C,words:[0xFFFFFFFF]}],
+  [0x59,{name:'KeDebugMonitorData',address:XENIA_KE_DEBUG_MONITOR_DATA,value:0,words:[0]}],
+  [0xAD,{name:'KeTimeStampBundle',address:XENIA_KERNEL_DATA_BASE+0x040,words:[0,0,0,0,0,0]}],
+  [0x156,{name:'XboxHardwareInfo',address:XENIA_KERNEL_DATA_BASE+0x010,words:[0x20,0x06000000,0,0]}],
+  [0x158,{name:'XboxKrnlVersion',address:XENIA_KERNEL_DATA_BASE+0x020,words:[0x0002FFFF,0xFFFF8000]}],
   [0x193,{name:'XexExecutableModuleHandle',address:XENIA_EXECUTABLE_MODULE_VAR}],
-  [0x266,{name:'KeCertMonitorData',address:XENIA_KE_CERT_MONITOR_DATA,value:0}],
+  [0x1AE,{name:'ExLoadedCommandLine',address:XENIA_KERNEL_DATA_BASE+0x800,text:'"default.xex"',bytes:0x400}],
+  [0x1AF,{name:'ExLoadedImageName',address:XENIA_KERNEL_DATA_BASE+0x400,text:'\\Device\\Cdrom0\\default.xex',bytes:0x100}],
+  [0x1BE,{name:'VdGlobalDevice',address:XENIA_KERNEL_DATA_BASE+0x028,words:[0]}],
+  [0x1BF,{name:'VdGlobalXamDevice',address:XENIA_KERNEL_DATA_BASE+0x02C,words:[0]}],
+  [0x1C0,{name:'VdGpuClockInMHz',address:XENIA_KERNEL_DATA_BASE+0x030,words:[500]}],
+  // X_RTL_CRITICAL_SECTION initialized with spin count 10000 (Xenia).
+  [0x1C1,{name:'VdHSIOCalibrationLock',address:XENIA_KERNEL_DATA_BASE+0x060,words:[0x01280000,0,0,0,0xFFFFFFFF,0,0]}],
+  [0x266,{name:'KeCertMonitorData',address:XENIA_KE_CERT_MONITOR_DATA,value:0,words:[0]}],
 ]);
-const XENIA_BUILTIN_VARIABLE_EXPORTS={
-  'xboxkrnl.exe:89':{kind:'kernel-variable',name:'KeDebugMonitorData'},
-  'xboxkrnl.exe:403':{kind:'kernel-variable',name:'XexExecutableModuleHandle'},
-  'xboxkrnl.exe:614':{kind:'kernel-variable',name:'KeCertMonitorData'},
-};
+// Xenia XexModule::SetupLibraryImports writes 0xD000BEEF | (ordinal & 0xFFF)
+// << 16 into variable imports it has no storage for. Titles that run in Xenia
+// only compare these against ObjectType placeholders, so use the same values
+// instead of leaving the raw XEX descriptor in the slot.
+const xeniaUnmappedVariableValue=ordinal=>(0xD000BEEF|((ordinal&0xFFF)<<16))>>>0;
+const XENIA_BUILTIN_VARIABLE_EXPORTS=Object.fromEntries([...XENIA_KERNEL_VARIABLE_LAYOUT].map(([ordinal,spec])=>[`xboxkrnl.exe:${ordinal}`,{kind:'kernel-variable',name:spec.name}]));
 
 function readXexEntryPoint(xex,headerSize){
   const count=be32(xex,0x14);
@@ -35,6 +52,61 @@ function readXexEntryPoint(xex,headerSize){
     return entry>>>0;
   }
   throw new Error('XEX entry point optional header missing');
+}
+
+function readXexOptionalHeader(xex,headerSize,key){
+  const count=be32(xex,0x14);
+  if(headerSize<0x18||count>((headerSize-0x18)>>>3))return null;
+  for(let i=0,p=0x18;i<count;i++,p+=8){
+    if(be32(xex,p)!==key)continue;
+    const value=be32(xex,p+4);
+    return (key&0xff)===0?{inline:value}:(key&0xff)===1?{offset:p+4}:{offset:value};
+  }
+  return null;
+}
+
+// XEX_HEADER_TLS_INFO: slot count, raw template address, data size, raw size.
+function readXexTlsInfo(xex,headerSize){
+  const found=readXexOptionalHeader(xex,headerSize,0x00020104);
+  if(!found?.offset||found.offset+16>headerSize)return null;
+  const o=found.offset;
+  return {slotCount:be32(xex,o),rawDataAddress:be32(xex,o+4),dataSize:be32(xex,o+8),rawDataSize:be32(xex,o+12)};
+}
+
+function readXexDefaultStackSize(xex,headerSize){
+  return readXexOptionalHeader(xex,headerSize,0x00020200)?.inline>>>0||0;
+}
+
+const TERMINAL_KINDS=['none','HalReturnToFirmware','KeBugCheck','ExTerminateThread','XamLoaderTerminateTitle','XamLoaderLaunchTitle','title process exit'];
+const WAIT_REASONS=['none','infinite wait on an unsignalled object','bounded wait spinning without progress','lock held by another guest thread'];
+
+// Names the terminal (title exit) or would-block (wait) boundary reported by
+// the native kernel so diagnostics say *why* execution stopped.
+export function readKernelBoundaryTelemetry(bootstrap,kernelLastStatus){
+  const get=(n,...a)=>{const f=maybe(bootstrap,n);return f?(f(...a)>>>0):0;};
+  if(kernelLastStatus===4){
+    const kind=get('r360_kernel_terminal_kind'),module=get('r360_kernel_terminal_module'),ordinal=get('r360_kernel_terminal_ordinal');
+    return {kind:'title-requested-exit',reason:TERMINAL_KINDS[kind]||`terminal-${kind}`,export:kernelExportName(module,ordinal),code:get('r360_kernel_terminal_code'),callerLr:get('r360_kernel_terminal_lr'),args:[0,1,2,3].map(i=>get('r360_kernel_terminal_arg',i))};
+  }
+  if(kernelLastStatus===5){
+    const reason=get('r360_kernel_wait_reason'),module=get('r360_kernel_wait_module'),ordinal=get('r360_kernel_wait_ordinal');
+    return {kind:'guest-wait-blocked',reason:WAIT_REASONS[reason]||`wait-${reason}`,export:kernelExportName(module,ordinal),object:get('r360_kernel_wait_object'),handle:get('r360_kernel_wait_handle'),objectType:get('r360_kernel_wait_object_type')};
+  }
+  return null;
+}
+
+// Most recent kernel calls with Xenia export names, arguments and results.
+export function readKernelServiceTrace(bootstrap,limit=64){
+  const count=maybe(bootstrap,'r360_kernel_import_trace_count');
+  if(!count)return [];
+  const n=count()>>>0;
+  const get=(name,...a)=>maybe(bootstrap,name)?.(...a)>>>0;
+  const out=[];
+  for(let i=Math.max(0,n-limit);i<n;i++){
+    const module=get('r360_kernel_import_trace_module',i),ordinal=get('r360_kernel_import_trace_ordinal',i);
+    out.push({sequence:get('r360_kernel_import_trace_sequence',i),name:kernelExportName(module,ordinal),module,ordinal,thunk:get('r360_kernel_import_trace_thunk',i),args:[0,1,2,3,4,5].map(a=>get('r360_kernel_import_trace_arg',i,a)),result:get('r360_kernel_import_trace_result',i),status:get('r360_kernel_import_trace_status',i)});
+  }
+  return out;
 }
 
 function hasNativeTitleGpuRuntime(bootstrap){
@@ -76,7 +148,7 @@ function registerKernelImportPlan(bootstrap,kernelImports){
 }
 
 function installKernelVariableImports(bootstrap,kernelImports,xex,{entry,headerSize}){
-  const supported=kernelImports.plan.filter(item=>item.isKernelModule&&item.kind==='variable'&&item.module.toLowerCase()==='xboxkrnl.exe'&&XENIA_KERNEL_VARIABLE_LAYOUT.has(item.ordinal));
+  const supported=kernelImports.plan.filter(item=>item.isKernelModule&&item.kind==='variable');
   if(!supported.length)return {available:true,patched:0,supported:0};
   const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
   const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
@@ -107,22 +179,46 @@ function installKernelVariableImports(bootstrap,kernelImports,xex,{entry,headerS
   // distinct backing cells and relocate only the exact variable ordinals that
   // have faithful state here; unknown variables remain fail-closed.
   put32(XENIA_EXECUTABLE_MODULE_VAR,XENIA_EXECUTABLE_HMODULE);
-  put32(XENIA_KE_DEBUG_MONITOR_DATA,0);
-  put32(XENIA_KE_CERT_MONITOR_DATA,0);
+  for(const spec of XENIA_KERNEL_VARIABLE_LAYOUT.values()){
+    if(spec.words)spec.words.forEach((word,i)=>put32(spec.address+i*4,word));
+    if(spec.text){for(let i=0;i<spec.bytes;i++)put8(spec.address+i,i<spec.text.length?spec.text.charCodeAt(i):0);}
+  }
+  // ProcessInfoBlock (KernelState::SetExecutableModule), pointed to by
+  // KTHREAD+0x84 of every title thread.
+  const tlsInfo=readXexTlsInfo(xex,headerSize);
+  for(let i=0;i<0x60;i+=4)put32(XENIA_PROCESS_INFO_BLOCK+i,0);
+  put32(XENIA_PROCESS_INFO_BLOCK+0x0C,0x0000007F);
+  put32(XENIA_PROCESS_INFO_BLOCK+0x10,0x001F0000);
+  put8(XENIA_PROCESS_INFO_BLOCK+0x1B,0x06);
+  put32(XENIA_PROCESS_INFO_BLOCK+0x1C,16*1024);
+  if(tlsInfo){
+    put32(XENIA_PROCESS_INFO_BLOCK+0x24,tlsInfo.dataSize);
+    put32(XENIA_PROCESS_INFO_BLOCK+0x28,tlsInfo.rawDataSize);
+    put8(XENIA_PROCESS_INFO_BLOCK+0x2C,((tlsInfo.slotCount*4)>>>8)&0xff);
+    put8(XENIA_PROCESS_INFO_BLOCK+0x2D,(tlsInfo.slotCount*4)&0xff);
+  }
+  put8(XENIA_PROCESS_INFO_BLOCK+0x2F,1); // X_PROCTYPE_USER
+  const setModule=maybe(bootstrap,'r360_kernel_set_executable_module');
+  if(setModule&&(setModule(XENIA_EXECUTABLE_HMODULE,XENIA_XEX_HEADER_BASE,XENIA_PROCESS_INFO_BLOCK)>>>0)!==1)throw new Error('native kernel rejected the guest XEX header');
+  maybe(bootstrap,'r360_kernel_set_timestamp_bundle')?.(XENIA_KERNEL_DATA_BASE+0x040);
 
   let patched=0;
   const relocated=[];
+  const placeholders=[];
   for(const item of supported){
-    const spec=XENIA_KERNEL_VARIABLE_LAYOUT.get(item.ordinal);
-    const targetAddress=spec.address>>>0;
+    const isXboxkrnl=item.module.toLowerCase()==='xboxkrnl.exe';
+    const spec=isXboxkrnl?XENIA_KERNEL_VARIABLE_LAYOUT.get(item.ordinal):null;
+    const targetAddress=spec?spec.address>>>0:xeniaUnmappedVariableValue(item.ordinal);
     if((patch32(item.valueAddress>>>0,targetAddress)>>>0)!==1){
       const status=maybe(bootstrap,'r360_xex_guest_mapper_status')?.()>>>0||0;
-      throw new Error(`failed to relocate ${item.module}!${spec.name} at 0x${(item.valueAddress>>>0).toString(16)} (mapper 0x${status.toString(16)})`);
+      throw new Error(`failed to relocate ${item.module}!${spec?.name??`0x${item.ordinal.toString(16)}`} at 0x${(item.valueAddress>>>0).toString(16)} (mapper 0x${status.toString(16)})`);
     }
-    relocated.push({module:item.module,ordinal:item.ordinal,name:spec.name,slotAddress:item.valueAddress>>>0,targetAddress});
+    if(spec)relocated.push({module:item.module,ordinal:item.ordinal,name:spec.name,slotAddress:item.valueAddress>>>0,targetAddress});
+    else placeholders.push({module:item.module,ordinal:item.ordinal,slotAddress:item.valueAddress>>>0,value:targetAddress});
     patched++;
   }
-  return {available:true,patched,supported:supported.length,variableAddress:XENIA_EXECUTABLE_MODULE_VAR,variableAddresses:{XexExecutableModuleHandle:XENIA_EXECUTABLE_MODULE_VAR,KeDebugMonitorData:XENIA_KE_DEBUG_MONITOR_DATA,KeCertMonitorData:XENIA_KE_CERT_MONITOR_DATA},relocated,hmoduleAddress:XENIA_EXECUTABLE_HMODULE,xexHeaderAddress:XENIA_XEX_HEADER_BASE,headerBytes:headerSize,imageBase:kernelImports.imageBase>>>0,imageSize,entry:entry>>>0};
+  const variableAddresses=Object.fromEntries([...XENIA_KERNEL_VARIABLE_LAYOUT.values()].map(spec=>[spec.name,spec.address>>>0]));
+  return {available:true,patched,supported:supported.length,variableAddress:XENIA_EXECUTABLE_MODULE_VAR,variableAddresses,relocated,placeholders,processInfoBlock:XENIA_PROCESS_INFO_BLOCK,hmoduleAddress:XENIA_EXECUTABLE_HMODULE,xexHeaderAddress:XENIA_XEX_HEADER_BASE,headerBytes:headerSize,imageBase:kernelImports.imageBase>>>0,imageSize,entry:entry>>>0};
 }
 
 function applyInitialGprs(bootstrap,initialGprs){
@@ -133,7 +229,7 @@ function applyInitialGprs(bootstrap,initialGprs){
   return applied;
 }
 
-function prepareBrowserMainThreadContext(bootstrap,entry){
+function prepareBrowserMainThreadContext(bootstrap,entry,{xex=null,headerSize=0}={}){
   const alloc=maybe(bootstrap,'r360_sparse_guest_memory_alloc');
   const map=maybe(bootstrap,'r360_sparse_guest_memory_map');
   const write8=maybe(bootstrap,'r360_sparse_guest_memory_write_u8');
@@ -146,7 +242,10 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   const stackSlotBase=0x70000000;
   const stackGuardBytes=pageSize;
   const stackLimit=(stackSlotBase+stackGuardBytes)>>>0;
-  const stackPages=128;
+  // Xenia sizes the primary stack from XEX_HEADER_DEFAULT_STACK_SIZE. Keep the
+  // historical 512 KiB as a floor so small headers never shrink the stack.
+  const xexStackBytes=xex?readXexDefaultStackSize(xex,headerSize):0;
+  const stackPages=Math.max(128,Math.min(0x0F00,Math.ceil(xexStackBytes/4096)));
   // Xenia ThreadState starts r1 at the high stack boundary. Processor::Execute
   // then reserves 64 + 112 bytes before entering guest code. We previously
   // entered default.xex with an invented -0x100 stack pointer, which is not the
@@ -194,8 +293,47 @@ function prepareBrowserMainThreadContext(bootstrap,entry){
   be32(threadAddress+0x0D0,stackBasePointer);
   be32(threadAddress+0x14C,1);
   be32(threadAddress+0x150,entry>>>0);
+  // Remaining XThread::InitializeGuestObject fields: dispatcher header type 6
+  // and self-linked list heads, process info block, creation time, flags.
+  const put8=(address,value)=>{if((write8(address>>>0,value&0xff)>>>0)!==1)throw new Error(`unable to initialize Xbox thread memory @ 0x${(address>>>0).toString(16)}`)};
+  put8(threadAddress+0x000,6);
+  for(const [off,target] of [[0x008,0x008],[0x00C,0x008],[0x010,0x010],[0x014,0x010],[0x040,0x020],[0x044,0x020],[0x048,0x000],[0x04C,0x018],[0x074,0x074],[0x078,0x074],[0x07C,0x07C],[0x080,0x07C],[0x144,0x144],[0x148,0x144],[0x154,0x154],[0x158,0x154]])be32(threadAddress+off,threadAddress+target);
+  be32(threadAddress+0x054,0x01020001);
+  be32(threadAddress+0x084,XENIA_PROCESS_INFO_BLOCK);
+  put8(threadAddress+0x08B,1);
+  be32(threadAddress+0x09C,0xFDFFD7FF);
+  be32(threadAddress+0x17C,1);
 
-  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress,threadAddress,startAddress:entry>>>0,stackBytes:stackPages*pageSize,zeroPageCompat:false,lowMemoryCompatBytes:0,lowMemoryPolicy:'xenia-protected'};
+  // TLS: Xenia allocates slots*4 + extended data and copies the XEX TLS
+  // template (__declspec(thread) initial values) into the static block.
+  const tlsInfo=xex?readXexTlsInfo(xex,headerSize):null;
+  let tlsBlock=tlsAddress,tlsBytes=pageSize;
+  if(tlsInfo){
+    const slots=tlsInfo.slotCount||1024;
+    const total=slots*4+tlsInfo.dataSize;
+    const poolAlloc=maybe(bootstrap,'r360_kernel_pool_alloc');
+    if(total>pageSize){
+      if(!poolAlloc)throw new Error(`XEX TLS block of ${total} bytes needs the native kernel pool; refresh to the synchronized runtime`);
+      tlsBlock=poolAlloc(total,16)>>>0;
+      if(!tlsBlock)throw new Error(`unable to allocate ${total}-byte Xbox TLS block`);
+    }
+    tlsBytes=total;
+    const read8=maybe(bootstrap,'r360_sparse_guest_memory_read_u8');
+    const copy=Math.min(tlsInfo.rawDataSize,tlsInfo.dataSize);
+    if(copy&&tlsInfo.rawDataAddress){
+      if(!read8)throw new Error('published browser bootstrap cannot read the XEX TLS template');
+      for(let i=0;i<copy;i++)put8(tlsBlock+i,read8((tlsInfo.rawDataAddress+i)>>>0));
+    }
+    be32(pcrAddress+0x000,tlsBlock);
+    be32(threadAddress+0x068,tlsBlock);
+  }
+
+  // Register the primary thread with the native thread registry so TLS,
+  // critical sections, waits and thread-object queries see a current thread.
+  const registerExternal=maybe(bootstrap,'r360_guest_thread_register_external');
+  const registryHandle=registerExternal?(registerExternal(entry>>>0,stackBasePointer,stackLimit,pcrAddress,threadAddress,1)>>>0):0;
+
+  return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress:tlsBlock,tlsBytes,tlsTemplate:tlsInfo,threadAddress,registryHandle,startAddress:entry>>>0,stackBytes:stackPages*pageSize,xexStackBytes,zeroPageCompat:false,lowMemoryCompatBytes:0,lowMemoryPolicy:'xenia-protected'};
 }
 
 function stagePreparedPeImage(bootstrap,prepared,xexEntry){
@@ -262,7 +400,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
 
   pick(bootstrap,'r360_title_handoff_reset')();
   if(prepareMainThreadContext){const warm=maybe(bootstrap,'r360_ppc_probe_page_sparse_code');if(typeof warm==='function'&&(warm(entry)>>>0)===0)throw new Error('unable to initialize Xenia title decoder before main-thread context');pick(bootstrap,'r360_title_handoff_reset')();}
-  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap,entry):null;
+  const mainThreadContext=prepareMainThreadContext?prepareBrowserMainThreadContext(bootstrap,entry,{xex,headerSize}):null;
   let startupGprCount=0;
   if(mainThreadContext){
     // R360_XENIA_ENTRY_ABI_V51: match upstream Processor::Execute special state.
@@ -360,12 +498,14 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelLastOrdinal=kernelLastOrdinalFn?(kernelLastOrdinalFn()>>>0):0;
   const kernelLastStatus=kernelLastStatusFn?(kernelLastStatusFn()>>>0):0;
   const reachedKernelModule=kernelLastModuleId===1?'xboxkrnl.exe':kernelLastModuleId===2?'xam.xex':null;
-  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
+  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':kernelLastStatus===4?'title-requested-exit':kernelLastStatus===5?'guest-wait-blocked':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
-  const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,thunkAddress:kernelLastThunk}:null;
+  const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,name:kernelExportName(reachedKernelModule??kernelLastModuleId,kernelLastOrdinal),thunkAddress:kernelLastThunk}:null;
+  const kernelBoundary=readKernelBoundaryTelemetry(bootstrap,kernelLastStatus);
+  const kernelTrace=readKernelServiceTrace(bootstrap);
   const titleGpuTelemetry=nativeTitleGpu?readNativeTitleGpuTelemetry(bootstrap,entry):null;
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,kernelBoundary,kernelTrace,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
 }

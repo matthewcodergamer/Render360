@@ -175,6 +175,7 @@ queue_cpp "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap
 queue_cpp "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
 queue_cpp "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 queue_cpp "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
+queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 queue_cpp "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
 queue_cpp "render360/xenos_shader_interpreter_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_shader_interpreter_probe.cpp"
@@ -207,7 +208,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 25 ))
+expected=$(( ${#SOURCES[@]} + 2 + 26 ))
 actual=$(( passed + failed ))
 
 echo

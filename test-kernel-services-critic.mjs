@@ -21,5 +21,7 @@ if(call(99,1)!==0||(pick('r360_kernel_service_status')()>>>0)!==2)throw new Erro
 console.log('KERNEL_SERVICE_UNSUPPORTED_FAIL_CLOSED=PASS');
 // Prove real KeTls* service ordinals are backed by the guest runtime rather than constants.
 const t=pick('r360_guest_thread_create')(0x82000000,0x1234,0x4000,0)>>>0;if(!t||!(pick('r360_guest_thread_set_current')(t)>>>0))throw new Error('thread setup failed');
-const slot=call(1,0x152);if(slot===0xFFFFFFFF)throw new Error('KeTlsAlloc failed');if(call(1,0x155,slot,0xCAFEBABE)!==1)throw new Error('KeTlsSetValue failed');if(call(1,0x154,slot)!==0xCAFEBABE)throw new Error('KeTlsGetValue failed');if(call(1,0x153,slot)!==1)throw new Error('KeTlsFree failed');if(call(1,0x154,slot)!==0||(pick('r360_kernel_service_status')()>>>0)!==3)throw new Error('freed TLS slot did not fail closed');
+const slot=call(1,0x152);if(slot===0xFFFFFFFF)throw new Error('KeTlsAlloc failed');if(call(1,0x155,slot,0xCAFEBABE)!==1)throw new Error('KeTlsSetValue failed');if(call(1,0x154,slot)!==0xCAFEBABE)throw new Error('KeTlsGetValue failed');if(call(1,0x153,slot)!==1)throw new Error('KeTlsFree failed');// Xenia KeTlsGetValue has no error branch: a freed/unallocated slot reads 0 and the guest keeps running.
+if(call(1,0x154,slot)!==0||(pick('r360_kernel_service_status')()>>>0)!==1)throw new Error('freed TLS slot did not match Xenia (value 0, no emulator fault)');
+if(call(1,0x153,0xFFFFFFFF)!==0||(pick('r360_kernel_service_status')()>>>0)!==1)throw new Error('KeTlsFree(TLS_OUT_OF_INDEXES) did not return FALSE like Xenia');
 console.log('KERNEL_SERVICE_TLS_RUNTIME_INTEGRATION=PASS');console.log('KERNEL_SERVICES_HARSH_CRITIC=PASS');

@@ -197,9 +197,13 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
     }
     return true;
   }
-  if (KernelImportProbeLastThunk() == address && KernelImportProbeLastStatus() == 2) {
-    std::fprintf(stderr, "R360_KERNEL_IMPORT unresolved target=0x%08X module=%u ordinal=0x%X\n",
-                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal());
+  // Any non-success outcome at a registered import thunk (unsupported,
+  // invalid ABI, terminal title exit, would-block wait) is a kernel boundary.
+  // Never fall through and translate the loader's thunk bytes as guest code.
+  if (KernelImportProbeLastThunk() == address && KernelImportProbeLastStatus() >= 2) {
+    std::fprintf(stderr, "R360_KERNEL_IMPORT stopped target=0x%08X module=%u ordinal=0x%X status=%u\n",
+                 address, KernelImportProbeLastModule(), KernelImportProbeLastOrdinal(),
+                 KernelImportProbeLastStatus());
     return false;
   }
   if (!g_probe_backend || !g_probe_backend->processor()) {

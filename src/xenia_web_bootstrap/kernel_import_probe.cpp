@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "hir_correctness_executor.h"
+#include "kernel_xboxkrnl_services.h"
 #include "title_gpu_runtime.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 
@@ -42,11 +43,15 @@ struct KernelServiceTraceEntry {
 };
 
 constexpr uint32_t kMaxKernelImports = 256;
-constexpr uint32_t kMaxKernelServiceTrace = 32;
+// Rolling window of the most recent kernel calls. Sequence numbers keep the
+// full ordering even after older entries are overwritten.
+constexpr uint32_t kMaxKernelServiceTrace = 256;
 constexpr uint32_t kModuleXboxkrnl = 1;
 constexpr uint32_t kModuleXam = 2;
 constexpr uint32_t kServiceStatusSuccess = 1;
 constexpr uint32_t kServiceStatusInvalid = 3;
+constexpr uint32_t kServiceStatusTerminal = 4;
+constexpr uint32_t kServiceStatusWouldBlock = 5;
 std::array<KernelImportEntry, kMaxKernelImports> g_entries{};
 std::array<KernelServiceTraceEntry, kMaxKernelServiceTrace> g_service_trace{};
 uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
@@ -55,8 +60,9 @@ uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
 
 KernelServiceTraceEntry* BeginKernelServiceTrace(
     const KernelImportEntry& entry, xe::cpu::ppc::PPCContext* context) {
-  if (!context || g_service_trace_count >= kMaxKernelServiceTrace) return nullptr;
-  auto& trace = g_service_trace[g_service_trace_count++];
+  if (!context) return nullptr;
+  auto& trace = g_service_trace[g_service_trace_count % kMaxKernelServiceTrace];
+  ++g_service_trace_count;
   trace = {};
   trace.used = true;
   trace.sequence = g_calls;
@@ -106,6 +112,9 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry,
     return true;
   }
 
+  r360_kernel_service_set_caller(static_cast<uint32_t>(context->r[13]),
+                                 static_cast<uint32_t>(context->lr),
+                                 static_cast<uint32_t>(context->r[1]));
   const uint32_t result = r360_kernel_service_call(
       entry.module_id, entry.ordinal,
       static_cast<uint32_t>(context->r[3]),
@@ -123,8 +132,11 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry,
     // Keep unsupported services as the exact title blocker. Invalid service
     // state (for example TLS without a current guest thread) is distinguished
     // as an ABI/runtime failure rather than silently becoming success.
-    if (service_status == kServiceStatusInvalid)
-      g_last_status = kServiceStatusInvalid;
+    if (service_status == kServiceStatusInvalid ||
+        service_status == kServiceStatusTerminal ||
+        service_status == kServiceStatusWouldBlock) {
+      g_last_status = service_status;
+    }
     return false;
   }
 
@@ -148,12 +160,16 @@ void RecordKernelImportCall(const KernelImportEntry& entry) {
   g_last_abi_target = entry.abi_target;
 }
 
+// |index| is chronological within the retained window: 0 is the oldest call
+// still held, KernelImportServiceTraceCount() - 1 the most recent.
 const KernelServiceTraceEntry* KernelServiceTraceAt(uint32_t index) {
-  if (index >= g_service_trace_count || index >= kMaxKernelServiceTrace ||
-      !g_service_trace[index].used) {
-    return nullptr;
-  }
-  return &g_service_trace[index];
+  const uint32_t retained = g_service_trace_count < kMaxKernelServiceTrace
+                                ? g_service_trace_count
+                                : kMaxKernelServiceTrace;
+  if (index >= retained) return nullptr;
+  const uint32_t first = g_service_trace_count - retained;
+  const auto& trace = g_service_trace[(first + index) % kMaxKernelServiceTrace];
+  return trace.used ? &trace : nullptr;
 }
 }  // namespace
 
@@ -241,7 +257,11 @@ uint32_t KernelImportProbeLastModule() { return g_last_module; }
 uint32_t KernelImportProbeLastOrdinal() { return g_last_ordinal; }
 uint32_t KernelImportProbeLastStatus() { return g_last_status; }
 uint32_t KernelImportProbeLastAbiTarget() { return g_last_abi_target; }
-uint32_t KernelImportServiceTraceCount() { return g_service_trace_count; }
+uint32_t KernelImportServiceTraceCount() {
+  return g_service_trace_count < kMaxKernelServiceTrace ? g_service_trace_count
+                                                        : kMaxKernelServiceTrace;
+}
+uint32_t KernelImportServiceTraceTotal() { return g_service_trace_count; }
 uint32_t KernelImportServiceTraceSequence(uint32_t index) {
   const auto* trace = KernelServiceTraceAt(index);
   return trace ? trace->sequence : 0u;
@@ -320,6 +340,10 @@ uint32_t r360_kernel_import_last_status() {
 }
 uint32_t r360_kernel_import_trace_count() {
   return render360::xenia_web::KernelImportServiceTraceCount();
+}
+__attribute__((used, export_name("r360_kernel_import_trace_total")))
+uint32_t r360_kernel_import_trace_total() {
+  return render360::xenia_web::KernelImportServiceTraceTotal();
 }
 uint32_t r360_kernel_import_trace_sequence(uint32_t index) {
   return render360::xenia_web::KernelImportServiceTraceSequence(index);

@@ -291,6 +291,33 @@ expect(x('NetDll_XNetGetTitleXnAddr',0,P+0x600)===4&&r32(P+0x600)===0x7F000001&&
 expect(ok(x('NetDll_XNetStartup',0,0),'NetDll_XNetStartup')===0&&x('NetDll_XNetGetEthernetLinkStatus',0)===0,'XNet startup/link mismatch');
 console.log('XAM_PROFILE_LOCALE_NET_XENIA=PASS');
 
+// --- XMA context registers (Xenia xboxkrnl_audio_xma.cc) --------------------------
+expect(k('XMACreateContext',P+0x700)===0,'XMACreateContext for register test');
+const xctx=r32(P+0x700);expect(k('XMAIsInputBuffer0Valid',xctx)===0&&k('XMAIsInputBuffer1Valid',xctx)===0,'fresh XMA context should have no valid buffers');
+const XI=P+0x740;[0x51001000,4,0,0,0x80,0x51002000,8,0,2,2,1].forEach((v,i)=>w32(XI+i*4,v));w32(XI+44,0x100);w32(XI+48,0x2000);w8(XI+52,3);w8(XI+53,1);w8(XI+54,2);
+expect(ok(k('XMAInitializeContext',xctx,XI),'XMAInitializeContext')===0,'XMAInitializeContext failed');
+expect(r32(xctx+20)===0x51001000&&r32(xctx+28)===0x51002000&&k('XMAGetInputBufferReadOffset',xctx)===0x80,'XMA init pointers/read offset mismatch');
+expect(((r32(xctx)&0xFFF)===4)&&(((r32(xctx)>>>12)&0xFF)===3)&&(((r32(xctx)>>>22)&31)===8),'XMA dword0 bitfields mismatch');
+expect((((r32(xctx+4)>>>20)&15)===2)&&(((r32(xctx+4)>>>27)&3)===1)&&(((r32(xctx+4)>>>29)&1)===1)&&(r32(xctx+12)&0x3FFFFFF)===0x100,'XMA dword1/loop bitfields mismatch');
+k('XMASetInputBuffer1',xctx,0x51003000,6);k('XMASetInputBuffer0Valid',xctx);k('XMASetOutputBufferValid',xctx);
+expect(k('XMAIsInputBuffer0Valid',xctx)===1&&k('XMAIsOutputBufferValid',xctx)===1&&r32(xctx+24)===0x51003000&&(r32(xctx+4)&0xFFF)===6,'XMA buffer set/valid mismatch');
+k('XMASetOutputBufferReadOffset',xctx,7);expect(k('XMAGetOutputBufferReadOffset',xctx)===7,'XMA output read offset mismatch');
+expect(k('XMAEnableContext',xctx)===0&&k('XMADisableContext',xctx,0)===0,'XMA enable/disable failed');
+k('XMABlockWhileInUse',xctx);expect(status()===5&&(need('r360_kernel_wait_reason')()>>>0)===5,'XMABlockWhileInUse with valid buffers should be a named decoder wait');
+console.log('KERNEL_XMA_CONTEXT_XENIA=PASS');
+
+// --- Notification listeners (Xenia XNotifyListener startup queue) -------------------
+const liveOnly=x('XamNotifyCreateListener',0x2,10);expect(liveOnly>=0xF8000000,'listener handle is not a kernel object handle');
+const sys=x('XamNotifyCreateListener',0x1,10);
+w64(P+0x8F0,0n);expect(k('NtWaitForSingleObjectEx',sys,1,0,P+0x8F0)===0,'listener with queued notifications should be signalled');
+expect(k('NtWaitForSingleObjectEx',liveOnly,1,0,P+0x8F0)===0x102,'listener without notifications should time out');
+expect(x('XNotifyGetNext',sys,0x0A,P+0x900,P+0x904)===1&&r32(P+0x900)===0x0A&&r32(P+0x904)===1,'match-id dequeue of XN_SYS_SIGNINCHANGED failed');
+const seen=[];while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1)seen.push(`${r32(P+0x900).toString(16)}:${r32(P+0x904)}`);
+expect(JSON.stringify(seen)===JSON.stringify(['9:1','9:0','a:1','12:0','12:0','13:0','13:0']),`startup notification order ${seen}`);
+expect(k('NtWaitForSingleObjectEx',sys,1,0,P+0x8F0)===0x102,'drained listener should reset its event');
+const second=x('XamNotifyCreateListener',0x1,10);expect(x('XNotifyGetNext',second,0,P+0x900,P+0x904)===0&&r32(P+0x900)===0,'startup notifications must only go to the first system listener');
+console.log('XAM_NOTIFY_LISTENER_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

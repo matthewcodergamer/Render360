@@ -24,7 +24,9 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1927,6 +1929,105 @@ std::map<uint32_t, uint32_t>& TitleTerminateNotifications() {
 uint32_t g_pending_stack_pointer = 0;
 bool g_pending_stack_pointer_valid = false;
 
+// ---------------------------------------------------------------------------
+// XMA contexts (Xenia xboxkrnl_audio_xma.cc / apu/xma_context.h). A context
+// is 16 big-endian dwords whose bitfields are numbered from the LSB of each
+// dword. There is no XMA decoder yet, so buffers the title marks valid are
+// never consumed; XMABlockWhileInUse reports that as a named wait.
+
+constexpr uint32_t kWaitReasonXmaDecoder = 5u;
+
+struct XmaField {
+  uint32_t dword, shift, bits;
+};
+constexpr XmaField kXmaInput0PacketCount{0, 0, 12}, kXmaLoopCount{0, 12, 8},
+    kXmaInput0Valid{0, 20, 1}, kXmaInput1Valid{0, 21, 1},
+    kXmaOutputBlockCount{0, 22, 5}, kXmaOutputWriteOffset{0, 27, 5},
+    kXmaInput1PacketCount{1, 0, 12}, kXmaLoopSubframeEnd{1, 14, 3},
+    kXmaLoopSubframeSkip{1, 17, 3}, kXmaSubframeDecodeCount{1, 20, 4},
+    kXmaSampleRate{1, 27, 2}, kXmaIsStereo{1, 29, 1},
+    kXmaOutputValid{1, 31, 1}, kXmaInputReadOffset{2, 0, 26},
+    kXmaLoopStart{3, 0, 26}, kXmaLoopEnd{4, 0, 26},
+    kXmaPacketMetadata{4, 26, 5}, kXmaInput0Ptr{5, 0, 32},
+    kXmaInput1Ptr{6, 0, 32}, kXmaOutputPtr{7, 0, 32},
+    kXmaOutputReadOffset{9, 0, 5};
+
+bool XmaGet(uint32_t context, XmaField field, uint32_t* value) {
+  uint32_t word = 0;
+  if (!Rd32(context + field.dword * 4u, &word)) return false;
+  *value = field.bits == 32 ? word : (word >> field.shift) & ((1u << field.bits) - 1u);
+  return true;
+}
+bool XmaSet(uint32_t context, XmaField field, uint32_t value) {
+  uint32_t word = 0;
+  if (!Rd32(context + field.dword * 4u, &word)) return false;
+  if (field.bits == 32) {
+    word = value;
+  } else {
+    const uint32_t mask = ((1u << field.bits) - 1u) << field.shift;
+    word = (word & ~mask) | ((value << field.shift) & mask);
+  }
+  return Wr32(context + field.dword * 4u, word);
+}
+// The address the title's MmGetPhysicalAddress view gives for a buffer.
+uint32_t GuestPhysicalAddress(uint32_t address) {
+  if (const auto* p = FindPhysical(address)) {
+    return p->physical_address + (address - p->virtual_address);
+  }
+  return address;
+}
+std::set<uint32_t>& XmaEnabledContexts() {
+  static std::set<uint32_t> contexts;
+  return contexts;
+}
+
+// ---------------------------------------------------------------------------
+// XAM notification listeners (Xenia XNotifyListener + KernelState). A listener
+// is a waitable object: its manual-reset event is set while notifications are
+// queued. The first system listener receives Xenia's startup notifications.
+
+struct NotifyListener {
+  uint32_t mask = 0;  // low 32 bits of the 64-bit mask (indices 0..31)
+  uint32_t max_version = 0;
+  std::deque<std::pair<uint32_t, uint32_t>> queue;
+};
+std::map<uint32_t, NotifyListener>& NotifyListeners() {  // handle -> listener
+  static std::map<uint32_t, NotifyListener> listeners;
+  return listeners;
+}
+bool g_notified_startup = false;
+
+void EnqueueNotification(uint32_t handle, NotifyListener& listener,
+                         uint32_t id, uint32_t data) {
+  const uint32_t mask_index = (id >> 25) & 0x3Fu, version = (id >> 16) & 0x1FFu;
+  if (mask_index >= 32 || !(listener.mask & (1u << mask_index))) return;
+  if (version > listener.max_version) return;
+  listener.queue.emplace_back(id, data);
+  if (KernelObject* object = ResolveHandle(handle)) Wr32(object->guest + 4u, 1u);
+}
+
+uint32_t CreateNotifyListener(uint32_t mask, uint32_t max_version) {
+  if (max_version > 10) max_version = 10;
+  const uint32_t event = PoolAlloc(16);
+  if (!event || !InitDispatcher(event, kDispNotificationEvent, 16, 0)) return 0;
+  const uint32_t handle = CreateObject(ObjectType::kNotifyListener, event, true, "");
+  if (!handle) return 0;
+  auto& listener = NotifyListeners()[handle];
+  listener = {};
+  listener.mask = mask;
+  listener.max_version = max_version;
+  if (!g_notified_startup && (mask & 1u)) {
+    g_notified_startup = true;
+    for (const auto& [id, data] : {std::pair<uint32_t, uint32_t>{0x09u, 1u},
+                                   {0x09u, 0u}, {0x0Au, 1u}, {0x0Au, 1u},
+                                   {0x12u, 0u}, {0x12u, 0u}, {0x13u, 0u},
+                                   {0x13u, 0u}}) {
+      EnqueueNotification(handle, listener, id, data);
+    }
+  }
+  return handle;
+}
+
 uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
   const uint32_t r3 = a[0], r4 = a[1], r5 = a[2], r6 = a[3], r7 = a[4],
                  r8 = a[5], r9 = a[6];
@@ -2401,11 +2502,6 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       // (handle, wait_mode, alertable, timeout_ptr)
       uint32_t guest = 0;
       if (!GuestObjectForHandle(r3, &guest)) {
-        if ((r3 & 0xFF000000u) == 0x37000000u) {
-          // XamNotifyCreateListener handles: no queued notifications.
-          if (!r6) return WouldBlock(kModuleXboxkrnl, ordinal, 0, r3, 1);
-          return X_STATUS_TIMEOUT;
-        }
         return X_STATUS_INVALID_HANDLE;
       }
       return WaitObjects(kModuleXboxkrnl, ordinal, {guest}, {r3}, false, r6);
@@ -2557,8 +2653,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
 
     // --- Object manager ----------------------------------------------------
     case kx::NtClose: {
-      if (r3 == kCurrentThreadPseudoHandle || r3 == kCurrentProcessPseudoHandle ||
-          (r3 & 0xFF000000u) == 0x37000000u) {
+      if (r3 == kCurrentThreadPseudoHandle || r3 == kCurrentProcessPseudoHandle) {
         return X_STATUS_SUCCESS;
       }
       uint32_t slot = 0;
@@ -3477,7 +3572,113 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
           r3 < g_xma_context_base + kXmaContextCount * kXmaContextBytes) {
         g_xma_context_used[(r3 - g_xma_context_base) / kXmaContextBytes] = false;
       }
+      XmaEnabledContexts().erase(r3);
       return 0;
+    case kx::XMAInitializeContext: {
+      // XMA_CONTEXT_INIT {in0, in0_packets, in1, in1_packets, in_read_offset,
+      // out, out_blocks, work, subframe_decode_count, channels, sample_rate,
+      // loop {start, end, count u8, subframe_end u8, subframe_skip u8}}
+      uint32_t init[11] = {};
+      for (uint32_t i = 0; i < 11; ++i) {
+        if (!Rd32(r4 + i * 4u, &init[i])) return Invalid();
+      }
+      uint32_t loop_start = 0, loop_end = 0;
+      uint8_t loop_count = 0, loop_subframe_end = 0, loop_subframe_skip = 0;
+      if (!Rd32(r4 + 44u, &loop_start) || !Rd32(r4 + 48u, &loop_end) ||
+          !Rd8(r4 + 52u, &loop_count) || !Rd8(r4 + 53u, &loop_subframe_end) ||
+          !Rd8(r4 + 54u, &loop_subframe_skip) || !ZeroGuest(r3, kXmaContextBytes)) {
+        return Invalid();
+      }
+      const bool ok =
+          XmaSet(r3, kXmaInput0Ptr, init[0] ? GuestPhysicalAddress(init[0]) : 0) &&
+          XmaSet(r3, kXmaInput0PacketCount, init[1]) &&
+          XmaSet(r3, kXmaInput1Ptr, init[2] ? GuestPhysicalAddress(init[2]) : 0) &&
+          XmaSet(r3, kXmaInput1PacketCount, init[3]) &&
+          XmaSet(r3, kXmaInputReadOffset, init[4]) &&
+          XmaSet(r3, kXmaOutputPtr, GuestPhysicalAddress(init[5])) &&
+          XmaSet(r3, kXmaOutputBlockCount, init[6]) &&
+          XmaSet(r3, kXmaSubframeDecodeCount, init[8]) &&
+          XmaSet(r3, kXmaIsStereo, init[9] >= 1 ? 1u : 0u) &&
+          XmaSet(r3, kXmaSampleRate, init[10]) &&
+          XmaSet(r3, kXmaLoopStart, loop_start) && XmaSet(r3, kXmaLoopEnd, loop_end) &&
+          XmaSet(r3, kXmaLoopCount, loop_count) &&
+          XmaSet(r3, kXmaLoopSubframeEnd, loop_subframe_end) &&
+          XmaSet(r3, kXmaLoopSubframeSkip, loop_subframe_skip);
+      if (!ok) return Invalid();
+      return 0;
+    }
+    case kx::XMASetLoopData: {
+      // Takes an XMA_CONTEXT_DATA-shaped source (Xenia).
+      uint32_t v[5] = {};
+      if (!XmaGet(r4, kXmaLoopStart, &v[0]) || !XmaGet(r4, kXmaLoopEnd, &v[1]) ||
+          !XmaGet(r4, kXmaLoopCount, &v[2]) || !XmaGet(r4, kXmaLoopSubframeEnd, &v[3]) ||
+          !XmaGet(r4, kXmaLoopSubframeSkip, &v[4]) ||
+          !XmaSet(r3, kXmaLoopStart, v[0]) || !XmaSet(r3, kXmaLoopEnd, v[1]) ||
+          !XmaSet(r3, kXmaLoopCount, v[2]) || !XmaSet(r3, kXmaLoopSubframeEnd, v[3]) ||
+          !XmaSet(r3, kXmaLoopSubframeSkip, v[4])) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XMAGetInputBufferReadOffset:
+    case kx::XMAIsInputBuffer0Valid:
+    case kx::XMAIsInputBuffer1Valid:
+    case kx::XMAIsOutputBufferValid:
+    case kx::XMAGetOutputBufferReadOffset:
+    case kx::XMAGetOutputBufferWriteOffset:
+    case kx::XMAGetPacketMetadata: {
+      const XmaField field =
+          ordinal == kx::XMAGetInputBufferReadOffset ? kXmaInputReadOffset
+          : ordinal == kx::XMAIsInputBuffer0Valid    ? kXmaInput0Valid
+          : ordinal == kx::XMAIsInputBuffer1Valid    ? kXmaInput1Valid
+          : ordinal == kx::XMAIsOutputBufferValid    ? kXmaOutputValid
+          : ordinal == kx::XMAGetOutputBufferReadOffset ? kXmaOutputReadOffset
+          : ordinal == kx::XMAGetOutputBufferWriteOffset ? kXmaOutputWriteOffset
+                                                         : kXmaPacketMetadata;
+      uint32_t value = 0;
+      if (!XmaGet(r3, field, &value)) return Invalid();
+      return value;
+    }
+    case kx::XMASetInputBufferReadOffset:
+      if (!XmaSet(r3, kXmaInputReadOffset, r4)) return Invalid();
+      return 0;
+    case kx::XMASetOutputBufferReadOffset:
+      if (!XmaSet(r3, kXmaOutputReadOffset, r4)) return Invalid();
+      return 0;
+    case kx::XMASetInputBuffer0:
+    case kx::XMASetInputBuffer1: {
+      const bool zero = ordinal == kx::XMASetInputBuffer0;
+      if (!XmaSet(r3, zero ? kXmaInput0Ptr : kXmaInput1Ptr, GuestPhysicalAddress(r4)) ||
+          !XmaSet(r3, zero ? kXmaInput0PacketCount : kXmaInput1PacketCount, r5)) {
+        return Invalid();
+      }
+      return 0;
+    }
+    case kx::XMASetInputBuffer0Valid:
+    case kx::XMASetInputBuffer1Valid:
+    case kx::XMASetOutputBufferValid: {
+      const XmaField field = ordinal == kx::XMASetInputBuffer0Valid   ? kXmaInput0Valid
+                             : ordinal == kx::XMASetInputBuffer1Valid ? kXmaInput1Valid
+                                                                      : kXmaOutputValid;
+      if (!XmaSet(r3, field, 1)) return Invalid();
+      return 0;
+    }
+    case kx::XMAEnableContext:
+      XmaEnabledContexts().insert(r3);
+      return 0;
+    case kx::XMADisableContext:
+      XmaEnabledContexts().erase(r3);
+      return X_E_SUCCESS;
+    case kx::XMABlockWhileInUse: {
+      uint32_t valid0 = 0, valid1 = 0;
+      if (!XmaGet(r3, kXmaInput0Valid, &valid0) || !XmaGet(r3, kXmaInput1Valid, &valid1)) {
+        return Invalid();
+      }
+      if (valid0 || valid1) {
+        return WouldBlock(kModuleXboxkrnl, ordinal, r3, 0, kWaitReasonXmaDecoder);
+      }
+      return 0;
+    }
 
     // --- Crypto (Xenia xboxkrnl_crypt.cc) --------------------------------------
     case kx::XeCryptBnQwBeSigVerify:
@@ -3821,6 +4022,37 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return X_ERROR_SUCCESS;
     }
 
+    // --- Notifications (Xenia xam_notify.cc) -----------------------------------
+    case xam::XamNotifyCreateListener:
+      return CreateNotifyListener(r3, r4);
+    case xam::XamNotifyCreateListenerInternal:
+      return CreateNotifyListener(r3, r5);
+    case xam::XNotifyGetNext: {
+      // (handle, match_id, id_ptr, param_ptr)
+      if (a[3] && !Wr32(a[3], 0)) return Invalid();
+      if (!r5) return 0;
+      if (!Wr32(r5, 0)) return Invalid();
+      KernelObject* listener_object = ResolveHandle(r3);
+      auto it = NotifyListeners().find(r3);
+      if (!listener_object || listener_object->type != ObjectType::kNotifyListener ||
+          it == NotifyListeners().end()) {
+        return 0;
+      }
+      auto& queue = it->second.queue;
+      auto entry = queue.begin();
+      if (r4) {
+        while (entry != queue.end() && entry->first != r4) ++entry;
+      }
+      if (entry == queue.end()) return 0;
+      const uint32_t id = entry->first, data = entry->second;
+      queue.erase(entry);
+      if (queue.empty()) {
+        if (KernelObject* object = ResolveHandle(r3)) Wr32(object->guest + 4u, 0u);
+      }
+      if (!Wr32(r5, id) || (a[3] && !Wr32(a[3], data))) return Invalid();
+      return 1;
+    }
+
     // --- Profile / user (Xenia xam_user.cc) -------------------------------------
     case xam::XamUserReadProfileSettings: {
       // (title_id, user_index, xuid_count, xuids, setting_count, setting_ids,
@@ -4028,6 +4260,9 @@ void ResetExtendedKernelServices() {
   g_pending_stack_pointer_valid = false;
   g_xma_context_base = 0;
   g_xma_context_used = {};
+  XmaEnabledContexts().clear();
+  NotifyListeners().clear();
+  g_notified_startup = false;
   // Title-created symbolic links belong to the run; the registered VFS
   // content (r360_vfs_*) survives so a title can be re-run deterministically.
   VfsSymlinks().clear();

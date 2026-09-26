@@ -78,7 +78,7 @@ function readXexDefaultStackSize(xex,headerSize){
 }
 
 const TERMINAL_KINDS=['none','HalReturnToFirmware','KeBugCheck','ExTerminateThread','XamLoaderTerminateTitle','XamLoaderLaunchTitle','title process exit'];
-const WAIT_REASONS=['none','infinite wait on an unsignalled object','bounded wait spinning without progress','lock held by another guest thread','game file bytes not yet available to the synchronous kernel'];
+const WAIT_REASONS=['none','infinite wait on an unsignalled object','bounded wait spinning without progress','lock held by another guest thread','game file bytes not yet available to the synchronous kernel','XMA audio buffers waiting for a decoder (not implemented yet)'];
 
 // Names the terminal (title exit) or would-block (wait) boundary reported by
 // the native kernel so diagnostics say *why* execution stopped.

@@ -383,9 +383,6 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   std::fprintf(stderr,"R360_SCAN_RANGE entry=0x%08X function=0x%08X end=0x%08X pdata=%u prolog=%u\n",address,fn_begin,g_scan_function_end,pdata?1u:0u,prolog);g_scan_diagnostic=kProbeScanTranslated;g_status=kProbeTranslated;return hir;
 }
 
-uint32_t r360_ppc_probe_execute_on_translate();
-uint32_t r360_ppc_probe_set_execute_on_translate(uint32_t enabled);
-
 // Port of XexModule::FindSaveRest (gpr and fpr helpers): locate the shared
 // __savegprlr_N/__restgprlr_N and __savefpr_N/__restfpr_N sequences in a code
 // range of the loaded title and declare them on the probe module with Xenia's
@@ -458,16 +455,9 @@ uint32_t r360_ppc_probe_register_save_rest(uint32_t start, uint32_t end) {
       declare(a, a + (31 - n) * 4u + 3 * 4u,
               xe::cpu::Function::Behavior::kEpilogReturn);
     }
-    // PPCScanner::IsRestGprLr asks Processor::QueryFunction, which only sees
-    // resolved entries; Xenia resolves these on their first call. Resolve
-    // them now, translation-only (no guest execution).
-    const uint32_t execute = r360_ppc_probe_execute_on_translate();
-    r360_ppc_probe_set_execute_on_translate(0);
     for (uint32_t n = 14; n <= 31; ++n) {
-      const uint32_t a = gplr + 20 * 4u + (n - 14) * 4u;
-      if (PageSparseCodeWindow(a)) g_processor->ResolveFunction(a);
+      RegisterRestGprLrAddress(gplr + 20 * 4u + (n - 14) * 4u);
     }
-    r360_ppc_probe_set_execute_on_translate(execute);
     found |= 1u;
   }
   if (const uint32_t fpr = search(kFpr, sizeof(kFpr) / 4)) {

@@ -12,6 +12,7 @@ on:
       - 'prepare-hir-stack-history-overlay.py'
       - 'prepare-hir-tail-frame-overlay.py'
       - 'prepare-xenia-hir-value-overlay.py'
+      - 'prepare-xenia-ppc-scanner-overlay.py'
       - 'test-xenia-ppc-instruction-suite.mjs'
       - 'test-core-trap-recovery.mjs'
       - 'test-xex-page-protection.mjs'

@@ -28,6 +28,8 @@ struct ProbeTelemetry {
 void ResetProbeTelemetry();
 void ResetTrapReport();
 void ResetTailTrampoline();
+void RegisterRestGprLrAddress(uint32_t address);
+bool IsRegisteredRestGprLr(uint32_t address);
 void NoteTopLevelTranslate(uint32_t address);
 const ProbeTelemetry& GetProbeTelemetry();
 

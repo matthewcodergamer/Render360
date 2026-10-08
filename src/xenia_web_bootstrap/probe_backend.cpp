@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <vector>
 
 #include "hir_correctness_executor.h"
 #include "kernel_import_probe.h"
@@ -527,6 +528,22 @@ bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAd
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
+// __restgprlr_N entries found by r360_ppc_probe_register_save_rest
+// (XexModule::FindSaveRest). The PPC scanner overlay consults this so a
+// function ends at `b __restgprlr_N` before that helper was ever resolved.
+namespace {
+std::vector<uint32_t> g_rest_gpr_lr_addresses;
+}
+void RegisterRestGprLrAddress(uint32_t address) {
+  if (!IsRegisteredRestGprLr(address)) g_rest_gpr_lr_addresses.push_back(address);
+}
+bool IsRegisteredRestGprLr(uint32_t address) {
+  for (const uint32_t a : g_rest_gpr_lr_addresses) {
+    if (a == address) return true;
+  }
+  return false;
+}
+
 void ResetTailTrampoline() {
   g_tail_frames_active = 0;
   g_pending_tail_valid = false;

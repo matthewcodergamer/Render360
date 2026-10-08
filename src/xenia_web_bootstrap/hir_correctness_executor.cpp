@@ -1036,6 +1036,12 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
   return true;
 }
 
+// Optional cap on guest instructions across every frame of one title run
+// (r360_hir_set_total_instruction_budget; 0 = unlimited). Lets a headless
+// run stop at a chosen point and report where the title is.
+uint64_t g_total_instruction_budget = 0;
+uint64_t g_total_instructions = 0;
+
 // PPC FPSCR[RN] as set through SET_ROUNDING_MODE (Xenia loads the matching
 // MXCSR: 0 nearest, 1 toward zero, 2 toward +inf, 3 toward -inf; bit 2 is
 // FPSCR[NI] flush-to-zero). WebAssembly arithmetic always rounds to nearest,
@@ -1358,6 +1364,21 @@ bool ExecuteFlaggedOperation(const xe::cpu::hir::Instr* instr,
     case OPCODE_NOP:
       *supported = true;
       return true;
+    case OPCODE_MEMSET: {
+      // dcbz / dcbz128: MEMSET(address, i8 value, length) on guest memory.
+      uint64_t address = 0, length = 0, byte = 0;
+      *supported = ResolveUint64(instr->src1.value, values, &address) &&
+                   ResolveUint64(instr->src2.value, values, &byte) &&
+                   ResolveUint64(instr->src3.value, values, &length) &&
+                   length <= 4096;
+      if (*supported && length) {
+        uint8_t fill[4096];
+        std::memset(fill, int(byte & 0xFF), size_t(length));
+        *supported = WriteSparseGuestMemory(static_cast<uint32_t>(address), fill,
+                                            static_cast<uint32_t>(length));
+      }
+      return true;
+    }
     case OPCODE_ATOMIC_EXCHANGE:
     case OPCODE_ATOMIC_COMPARE_EXCHANGE: {
       // stwcx./stdcx. (and kernel interlocked helpers): the HIR values are
@@ -1601,6 +1622,13 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         break;
       }
 
+      if (g_total_instruction_budget &&
+          ++g_total_instructions > g_total_instruction_budget) {
+        result.blocker_kind = kHIRBlockerInstructionLimit;
+        result.blocker_address = current_source_address;
+        supported = false;
+        break;
+      }
       if (ExecuteFlaggedOperation(instr, values, &supported)) {
         if (!supported) {
           result.blocker_kind = kHIRBlockerUnsupportedOpcode;
@@ -1906,6 +1934,26 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
                                                     : kHIRBlockerUnsupportedOpcode;
         result.blocker_opcode = opcode;
         result.blocker_address = current_source_address;
+        auto describe = [&](const Value* v) -> std::string {
+          if (!v) return "-";
+          char text[64];
+          const bool known = v->IsConstant() || values.find(v) != values.end();
+          std::snprintf(text, sizeof(text), "v%u:t%u:%s", v->ordinal,
+                        unsigned(v->type), v->IsConstant() ? "const" : known ? "set" : "UNDEFINED");
+          return text;
+        };
+        using xe::cpu::hir::OpcodeSignatureType;
+        const auto* info = instr->opcode;
+        const bool src1_value = info && (GET_OPCODE_SIG_TYPE_SRC1(info->signature) == xe::cpu::hir::OPCODE_SIG_TYPE_V);
+        const bool src2_value = info && (GET_OPCODE_SIG_TYPE_SRC2(info->signature) == xe::cpu::hir::OPCODE_SIG_TYPE_V);
+        const bool src3_value = info && (GET_OPCODE_SIG_TYPE_SRC3(info->signature) == xe::cpu::hir::OPCODE_SIG_TYPE_V);
+        std::fprintf(stderr,
+                     "R360_HIR_BLOCK_DETAIL ppc=0x%08X opcode=%s flags=0x%X dest=%s src1=%s src2=%s src3=%s\n",
+                     current_source_address, info && info->name ? info->name : "?",
+                     unsigned(instr->flags), describe(instr->dest).c_str(),
+                     src1_value ? describe(instr->src1.value).c_str() : "n/a",
+                     src2_value ? describe(instr->src2.value).c_str() : "n/a",
+                     src3_value ? describe(instr->src3.value).c_str() : "n/a");
       }
       if (block_terminated) break;
     }
@@ -1969,6 +2017,7 @@ void ApplyInitialRegisterStrings(xe::cpu::ppc::PPCContext& context) {
 // stays raised, so the next title would run as a "nested" call. Every title
 // handoff starts a fresh outermost run.
 void AbandonHIRCorrectnessExecution() {
+  g_total_instructions = 0;
   g_ppc_rounding_mode = 0;
   g_initial_register_strings.clear();
   g_last_context = {};
@@ -2132,4 +2181,14 @@ uint32_t r360_trace_set_verbose(uint32_t enabled) {
 uint32_t r360_trace_verbose() {
   return render360::xenia_web::g_r360_verbose_trace ? 1u : 0u;
 }
+}
+
+extern "C" __attribute__((used, export_name("r360_hir_set_total_instruction_budget")))
+uint32_t r360_hir_set_total_instruction_budget(uint32_t millions) {
+  render360::xenia_web::g_total_instruction_budget = uint64_t(millions) * 1000000ull;
+  return millions;
+}
+extern "C" __attribute__((used, export_name("r360_hir_total_instructions_millions")))
+uint32_t r360_hir_total_instructions_millions() {
+  return uint32_t(render360::xenia_web::g_total_instructions / 1000000ull);
 }

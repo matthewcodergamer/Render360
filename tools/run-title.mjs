@@ -38,6 +38,7 @@ function parseArgs(argv){
     if(a==='--bootstrap')args.bootstrap=argv[++i];
     else if(a==='--trace')args.trace=Number(argv[++i]);
     else if(a==='--budget')args.budget=Number(argv[++i]);
+    else if(a==='--max-minstr')args.maxMillions=Number(argv[++i]);
     else if(a==='--json')args.json=argv[++i];
     else if(a==='--verbose'||a==='-v')args.verbose=true;
     else if(a==='--trace-calls')args.traceCalls=true;
@@ -154,6 +155,8 @@ async function main(){
   const budget=bootstrap.exports.r360_hir_set_instruction_budget?.(args.budget>>>0)>>>0;
   // Per-call/per-function stderr tracing is off by default for speed.
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
+  // --max-minstr N: stop after N million guest instructions in total.
+  bootstrap.exports.r360_hir_set_total_instruction_budget?.(args.maxMillions>>>0||0);
   // XBLA license mask (Xenia license_mask): trial by default, --license full for an owned title.
   globalThis.render360XamLicenseMask=args.license==='full'?1:0;
   const setExecute=bootstrap.exports.r360_ppc_probe_set_execute_on_translate;
@@ -201,8 +204,9 @@ async function main(){
     fs.writeFileSync(dump.file,out);
   }
   report.gprsAtStop=Array.from({length:32},(_,i)=>hex(Number(BigInt.asUintN(32,BigInt(bootstrap.exports.r360_ppc_probe_correctness_gpr?.(i)??0)))));
+  report.totalInstructionsMillions=bootstrap.exports.r360_hir_total_instructions_millions?.()>>>0;
   report.hostStackHeadroom=bootstrap.exports.r360_trap_stack_headroom?.()>>>0;
-  report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK)/.test(l)).slice(-12);
+  report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK|HIR_MEMORY)/.test(l)).slice(-12);
 
   const statusOf=s=>['?','ok','UNSUPPORTED','INVALID','EXIT','BLOCKED'][s]||String(s);
   console.log(`Render360 title runner · ${report.kind} · ${report.vfs.files} files · ${elapsedMs} ms`);

@@ -22,7 +22,7 @@ let activePresenter=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
 function guestRunOptions(bootstrap,onStage){
-  return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra)});
+  return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),onFrame:()=>{const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);}});
 }
 async function getBootstrap(onStage=null){
   const wasCached=Boolean(globalThis.render360PpcRuntimeIdentity?.verified);

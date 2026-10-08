@@ -277,7 +277,7 @@ export async function runModernXboxIso(file){
   try{
     const [core,bootstrap]=await Promise.all([getCore(),getBootstrap()]);trapBootstrap=bootstrap;if(run!==activeRun)return null;
     setGate('gateExtract','','DEFAULT.XEX');setText('boundaryTitle','default.xex found — preparing retail image…');setText('boundaryText','Decrypting/decompressing and mapping the real title image, translating it without side effects, then running it through the native Xbox guest-thread scheduler.');
-    const guestRun=browserGuestRunOptions({bootstrap,onProgress:message=>{if(run===activeRun){setText('boundaryTitle','Game running');setText('boundaryText',message);}}});
+    const guestRun=browserGuestRunOptions({bootstrap,onFrame:()=>{const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);},onProgress:message=>{if(run===activeRun){setText('boundaryTitle','Game running');setText('boundaryText',message);}}});
     const handoff=await handoffXboxIsoBrowser({core,file,bootstrap,entryBytes:ENTRY_WINDOW_BYTES,guestRun});if(run!==activeRun)return handoff.result;
     const {result,threadScheduler,primaryThread,schedulerReport,schedulerBlocker}=handoff;
     let ppcSession=handoff.ppcSession??null;

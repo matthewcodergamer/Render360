@@ -44,6 +44,7 @@ function parseArgs(argv){
     else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--license')args.license=String(argv[++i]||'trial');
     else if(a==='--log-draws')args.logDraws=Number(argv[++i])>>>0;
+    else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
     else if(a==='--slice-ms')args.sliceMs=Number(argv[++i])>>>0;
     else if(a==='--watch')args.watch=Number(argv[++i])>>>0;
@@ -163,6 +164,7 @@ async function main(){
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
   if(args.watch)bootstrap.exports.r360_debug_watch?.(args.watch);
   if(args.logDraws)bootstrap.exports.r360_xenos_debug_draws?.(args.logDraws);
+  if(args.renderFrom!==undefined)bootstrap.exports.r360_xenos_soft_set_rasterize?.(args.renderFrom===0?1:0);
   // --max-minstr N: stop after N million guest instructions in total.
   bootstrap.exports.r360_hir_set_total_instruction_budget?.(args.maxMillions>>>0||0);
   // XBLA license mask (Xenia license_mask): trial by default, --license full for an owned title.
@@ -172,7 +174,7 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||0,onGuestSlice:args.sliceMs?(s=>{if(s.slices<5||s.slices%50===0)process.stderr.write(`slice ${s.slices}: ${bootstrap.exports.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||(args.renderFrom!==undefined?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined)?(s=>{const x=bootstrap.exports;if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}
@@ -192,7 +194,7 @@ async function main(){
       hirBlocker:result.executionBlockerKind?{kind:result.executionBlockerKind,opcode:result.executionBlockerOpcode,address:hex(result.executionBlockerAddress)}:null,
       memoryFault:result.memoryFaultCode?{code:result.memoryFaultCode,address:hex(result.memoryFaultAddress)}:null,
       guestFibers:result.guestFibers??null,
-      framesPresented:(()=>{const x=bootstrap.exports;const f=n=>typeof x[n]==='function'?(x[n]()>>>0):null;return {vdSwapCalls:f('r360_title_gpu_vd_swap_calls'),vblankInterrupts:f('r360_kernel_vblank_interrupts'),cpInterrupts:f('r360_kernel_cp_interrupts'),gpuPackets:f('r360_xenos_packets'),gpuDraws:f('r360_xenos_draws'),gpuIndirect:f('r360_xenos_indirect_buffers'),gpuStatus:f('r360_xenos_status'),gpuInterruptsRaised:f('r360_xenos_interrupts'),gpuLastOpcode:f('r360_xenos_last_opcode'),gpuFaultWord:f('r360_xenos_last_fault_word'),gpuMemoryWrites:f('r360_xenos_memory_writes'),gpuSwaps:f('r360_xenos_swaps'),gpuWaits:f('r360_xenos_waits'),softDraws:f('r360_xenos_soft_draws'),softSkipped:f('r360_xenos_soft_skipped'),softLastSkip:f('r360_xenos_soft_last_skip'),softResolves:f('r360_xenos_soft_resolves'),softPixels:f('r360_xenos_soft_pixels'),softTextureFailures:f('r360_xenos_soft_texture_failures'),softLastTextureFormat:f('r360_xenos_soft_last_texture_format'),vdSwapFailures:f('r360_title_gpu_vd_swap_failures'),width:f('r360_title_gpu_last_vd_swap_width'),height:f('r360_title_gpu_last_vd_swap_height')};})(),
+      framesPresented:(()=>{const x=bootstrap.exports;const f=n=>typeof x[n]==='function'?(x[n]()>>>0):null;return {vdSwapCalls:f('r360_title_gpu_vd_swap_calls'),vblankInterrupts:f('r360_kernel_vblank_interrupts'),cpInterrupts:f('r360_kernel_cp_interrupts'),gpuPackets:f('r360_xenos_packets'),gpuDraws:f('r360_xenos_draws'),gpuIndirect:f('r360_xenos_indirect_buffers'),gpuStatus:f('r360_xenos_status'),gpuInterruptsRaised:f('r360_xenos_interrupts'),gpuLastOpcode:f('r360_xenos_last_opcode'),gpuFaultWord:f('r360_xenos_last_fault_word'),gpuMemoryWrites:f('r360_xenos_memory_writes'),gpuSwaps:f('r360_xenos_swaps'),gpuWaits:f('r360_xenos_waits'),softDraws:f('r360_xenos_soft_draws'),cacheHits:f('r360_hir_cache_hits'),cacheMisses:f('r360_hir_cache_misses'),cacheEntries:f('r360_hir_cache_entries'),cacheKB:f('r360_hir_cache_kilobytes'),softSkipped:f('r360_xenos_soft_skipped'),softLastSkip:f('r360_xenos_soft_last_skip'),softResolves:f('r360_xenos_soft_resolves'),softPixels:f('r360_xenos_soft_pixels'),softTextureFailures:f('r360_xenos_soft_texture_failures'),softLastTextureFormat:f('r360_xenos_soft_last_texture_format'),vdSwapFailures:f('r360_title_gpu_vd_swap_failures'),width:f('r360_title_gpu_last_vd_swap_width'),height:f('r360_title_gpu_last_vd_swap_height')};})(),
       mainThread:result.mainThreadContext?{stackBytes:result.mainThreadContext.stackBytes,tlsBytes:result.mainThreadContext.tlsBytes,tlsTemplate:result.mainThreadContext.tlsTemplate}:null,
       kernelVariables:{relocated:result.kernelVariableRegistration?.relocated?.map(v=>v.name),placeholders:result.kernelVariableRegistration?.placeholders?.map(v=>kernelExportName(v.module,v.ordinal))},
       importedKernelFunctions:result.kernelImports?.plan?.filter(i=>i.isKernelModule&&i.kind==='function').length,

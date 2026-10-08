@@ -187,6 +187,10 @@ bool WriteGpu32(uint32_t gpu_address, uint32_t value) {
 
 // --- Telemetry ------------------------------------------------------------------
 uint32_t g_draws_rendered = 0;
+// 1 = rasterize draws (default); 0 = fast-forward: color/depth draws are not
+// rasterized, while resolves and clears still run so GPU/CPU synchronization
+// (fences, write-backs, interrupts) is unchanged.
+uint32_t g_rasterize = 1;
 uint32_t g_draws_skipped = 0;
 uint32_t g_resolves = 0;
 uint32_t g_pixels_shaded = 0;
@@ -1107,9 +1111,9 @@ bool RenderXenosDraw(const XenosSoftDraw& draw) {
   const auto mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
   switch (mode) {
     case xenos::EdramMode::kColorDepth:
-      return RenderPrimitives(draw, false);
+      return g_rasterize ? RenderPrimitives(draw, false) : true;
     case xenos::EdramMode::kDepthOnly:
-      return RenderPrimitives(draw, true);
+      return g_rasterize ? RenderPrimitives(draw, true) : true;
     case xenos::EdramMode::kCopy:
       return Resolve();
     case xenos::EdramMode::kNoOperation:
@@ -1130,6 +1134,7 @@ void ResetXenosSoftRenderer() {
 namespace rx = render360::xenia_web;
 extern "C" {
 uint32_t r360_xenos_soft_draws() { return rx::g_draws_rendered; }
+uint32_t r360_xenos_soft_set_rasterize(uint32_t on) { rx::g_rasterize = on ? 1u : 0u; return rx::g_rasterize; }
 uint32_t r360_xenos_soft_skipped() { return rx::g_draws_skipped; }
 uint32_t r360_xenos_soft_resolves() { return rx::g_resolves; }
 uint32_t r360_xenos_soft_pixels() { return rx::g_pixels_shaded; }

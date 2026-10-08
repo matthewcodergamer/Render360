@@ -76,7 +76,8 @@ export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,
 // Browser options for a continuous title run: ~25 ms host slices, Stop through
 // globalThis.render360GuestRun.stop() (aborts at the next slice), and a
 // progress line about twice a second.
-export function browserGuestRunOptions({bootstrap,onProgress=null,sliceMs=25}={}){
+export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,sliceMs=25}={}){
+  let lastFrames=-1;
   globalThis.render360GuestRun?.stop?.();
   const controller=new AbortController();
   const now=()=>globalThis.performance?.now?.()??Date.now();
@@ -86,10 +87,12 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,sliceMs=25}={}
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
     const t=now();
-    if(!onProgress||t-lastReport<500)return;
+    if(t-lastReport<500)return;
     lastReport=t;
     const frames=read('r360_title_gpu_vd_swap_calls'),draws=read('r360_xenos_draws');
+    // Show the newest swapped frontbuffer (software Xenos backend output).
+    if(onFrame&&frames!==lastFrames){lastFrames=frames;try{onFrame();}catch{}}
     const seconds=Math.max(0.001,(t-started)/1000);
-    onProgress(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
+    onProgress?.(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
   }};
 }

@@ -527,10 +527,7 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                is_epilog_return ? 1u : 0u, pdata ? 1u : 0u,
                use_owner ? 1u : 0u, prolog);
 
-  // A cached translation needs neither the code window nor a scan.
-  const uint64_t cache_key = TranslationKey(fn_begin, use_owner ? fn_end : 0u, false);
-  const bool cached = LookupTranslation(cache_key) != nullptr;
-  if (!cached && !loaded()) {
+  if (!loaded()) {
     const uint32_t paged = r360_ppc_probe_page_sparse_code(fn_begin);
     if (!paged || !loaded()) {
       std::fprintf(stderr,
@@ -551,13 +548,13 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   ProbeGuestFunction nested_function(module, fn_begin);
   const uint32_t loaded_base = r360_ppc_probe_guest_base();
   const uint32_t loaded_size = r360_ppc_probe_loaded_size();
-  if (loaded_size < 4 && !cached) return false;
+  if (loaded_size < 4) return false;
   const uint32_t scan_end =
       use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
   nested_function.set_end_address(scan_end);
 
   xe::cpu::ppc::PPCScanner scanner(frontend);
-  if (!cached && !scanner.Scan(&nested_function, nullptr)) {
+  if (!scanner.Scan(&nested_function, nullptr)) {
     std::fprintf(stderr,
                  "R360_CALL_RESOLVE scan failed target=0x%08X function=0x%08X "
                  "owner=%u\n",
@@ -577,7 +574,9 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   SetHIRCorrectnessExecutionEntry(interior_entry);
   NoteTrapPhase(kTrapPhaseTranslate, address);
   ++g_trap_depth;
-  const bool translated = DefineOrRunCached(frontend, &nested_function, cache_key);
+  const bool translated = DefineOrRunCached(
+      frontend, &nested_function,
+      TranslationKey(fn_begin, use_owner ? fn_end : 0u, false));
   --g_trap_depth;
   SetHIRCorrectnessExecutionEntry(0u);
   const uint32_t missing_entry =
@@ -603,8 +602,6 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                "R360_TAIL_INTERIOR target=0x%08X owner=0x%08X end=0x%08X marker=0\n",
                address, fn_begin, fn_end);
 
-  // The owner may have run from the translation cache without paging code.
-  if (!loaded() && (!r360_ppc_probe_page_sparse_code(fn_begin) || !loaded())) return false;
   ProbeGuestFunction fragment(module, address);
   fragment.set_end_address(scan_end);
   xe::cpu::ppc::PPCScanner fragment_scanner(frontend);

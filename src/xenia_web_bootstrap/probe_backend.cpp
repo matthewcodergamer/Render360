@@ -1,8 +1,10 @@
 #include "probe_backend.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 
 #include "hir_correctness_executor.h"
 #include "kernel_import_probe.h"
@@ -35,8 +37,108 @@ extern "C" uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 #define R360_WASM_EXPORT(name)
 #endif
 
+// ---------------------------------------------------------------------------
+// Trap report. A wasm trap (abort, failed allocation, unreachable) unwinds the
+// whole call into the core and the browser only sees "Unreachable code should
+// not be executed". Keep enough state in linear memory for the page to say
+// what the core was doing; memory and exports stay readable after a trap.
+// ---------------------------------------------------------------------------
+#if defined(__wasm__)
+extern "C" char __stack_low;
+extern "C" char __stack_high;
+extern "C" uintptr_t emscripten_stack_get_current(void);
+#endif
+
 namespace render360::xenia_web {
 namespace {
+enum TrapPhase : uint32_t {
+  kTrapPhaseIdle = 0,
+  kTrapPhaseTranslate = 1,
+  kTrapPhaseExecute = 2,
+};
+char g_trap_reason[384] = {};
+uint32_t g_trap_phase = kTrapPhaseIdle;
+uint32_t g_trap_address = 0;
+uint32_t g_trap_depth = 0;
+uint32_t g_trap_stack_low_water = 0;
+uint32_t g_trap_stack_exhausted = 0;
+
+uint32_t CurrentStackPointer() {
+#if defined(__wasm__)
+  return static_cast<uint32_t>(emscripten_stack_get_current());
+#else
+  return 0;
+#endif
+}
+
+uint32_t StackHeadroom() {
+#if defined(__wasm__)
+  const uint32_t sp = CurrentStackPointer();
+  const uint32_t low = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&__stack_low));
+  if (!g_trap_stack_low_water || sp < g_trap_stack_low_water) g_trap_stack_low_water = sp;
+  return sp > low ? sp - low : 0;
+#else
+  return UINT32_MAX;
+#endif
+}
+
+void SetTrapReason(const char* reason) {
+  std::snprintf(g_trap_reason, sizeof(g_trap_reason), "%s", reason ? reason : "");
+}
+
+void NoteTrapPhase(uint32_t phase, uint32_t address) {
+  g_trap_phase = phase;
+  g_trap_address = address;
+}
+}  // namespace
+}  // namespace render360::xenia_web
+
+extern "C" {
+// Xenia's own assert() calls land here when NDEBUG is not defined (third-party
+// code still uses <cassert>). Record the text before trapping.
+void __assert_fail(const char* expr, const char* file, int line,
+                                const char* func) {
+  const char* base = file ? std::strrchr(file, '/') : nullptr;
+  std::snprintf(render360::xenia_web::g_trap_reason,
+                sizeof(render360::xenia_web::g_trap_reason),
+                "assertion failed: %s (%s:%d %s)", expr ? expr : "?",
+                base ? base + 1 : (file ? file : "?"), line, func ? func : "?");
+  std::fprintf(stderr, "R360_ASSERT %s\n", render360::xenia_web::g_trap_reason);
+  __builtin_trap();
+}
+}
+
+// Allocation failure would otherwise abort() with no message. On phones this
+// is the usual "out of memory" path once wasm memory can no longer grow.
+void* operator new(std::size_t size) {
+  void* p = std::malloc(size ? size : 1);
+  if (!p) {
+    std::snprintf(render360::xenia_web::g_trap_reason,
+                  sizeof(render360::xenia_web::g_trap_reason),
+                  "out of memory allocating %zu bytes", size);
+    std::fprintf(stderr, "R360_OOM %s\n", render360::xenia_web::g_trap_reason);
+    __builtin_trap();
+  }
+  return p;
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  return std::malloc(size ? size : 1);
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+  return std::malloc(size ? size : 1);
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+
+namespace render360::xenia_web {
+namespace {
+// Each nested guest call keeps a full Xenia scan/translate/execute chain on the
+// host stack. Stop with a named blocker well before the wasm stack runs into
+// static data (overflow corrupts globals silently).
+constexpr uint32_t kMinNestedStackHeadroom = 192u * 1024u;
 ProbeTelemetry g_probe_telemetry;
 ProbeBackend* g_probe_backend = nullptr;
 bool g_execute_correctness_on_assemble = true;
@@ -286,6 +388,13 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
     }
   }
 
+  if (StackHeadroom() < kMinNestedStackHeadroom) {
+    g_trap_stack_exhausted = address;
+    std::fprintf(stderr,
+                 "R360_CALL_RESOLVE rejected: host stack exhausted target=0x%08X "
+                 "depth=%u\n", address, g_trap_depth);
+    return false;
+  }
   ProbeGuestFunction nested_function(module, fn_begin);
   const uint32_t loaded_base = r360_ppc_probe_guest_base();
   const uint32_t loaded_size = r360_ppc_probe_loaded_size();
@@ -313,7 +422,10 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
     (void)ConsumeHIRCorrectnessInteriorEntryMissing();
   }
   SetHIRCorrectnessExecutionEntry(interior_entry);
+  NoteTrapPhase(kTrapPhaseTranslate, address);
+  ++g_trap_depth;
   const bool translated = frontend->DefineFunction(&nested_function, 0);
+  --g_trap_depth;
   SetHIRCorrectnessExecutionEntry(0u);
   const uint32_t missing_entry =
       interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
@@ -375,6 +487,17 @@ bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAd
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
+void ResetTrapReport() {
+  g_trap_reason[0] = 0;
+  g_trap_phase = kTrapPhaseIdle;
+  g_trap_address = 0;
+  g_trap_depth = 0;
+  g_trap_stack_low_water = 0;
+  g_trap_stack_exhausted = 0;
+}
+void NoteTopLevelTranslate(uint32_t address) {
+  NoteTrapPhase(kTrapPhaseTranslate, address);
+}
 const ProbeTelemetry& GetProbeTelemetry() { return g_probe_telemetry; }
 void SetProbeExecuteCorrectnessOnAssemble(bool enabled) {
   g_execute_correctness_on_assemble = enabled;
@@ -436,6 +559,7 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
 
   HIRCorrectnessResult correctness;
   if (execute_correctness) {
+    NoteTrapPhase(kTrapPhaseExecute, function ? function->address() : 0u);
     correctness = ExecuteHIRCorrectnessProbe(builder, memory);
   } else {
     // Production browser translation must be side-effect-free. Register/lower
@@ -504,4 +628,50 @@ R360_WASM_EXPORT("r360_ppc_probe_execute_on_translate")
 uint32_t r360_ppc_probe_execute_on_translate(){
   return render360::xenia_web::GetProbeExecuteCorrectnessOnAssemble() ? 1u : 0u;
 }
+}
+extern "C" {
+#if defined(__wasm__)
+// WASI reactor entry. Runs every global constructor once, as a native Xenia
+// process start would: Xenia's cvar registration and dynamically initialized
+// tables (e.g. ppc_emit_altivec.cc __vsldoi_table, which vsldoi permutes
+// through) are zero otherwise. Node's WASI.initialize() and the browser host
+// (render360-browser-wasi.mjs) call _initialize before any other export.
+void __wasm_call_ctors(void);
+R360_WASM_EXPORT("_initialize")
+void render360_wasi_initialize() {
+  static bool initialized = false;
+  if (initialized) return;
+  initialized = true;
+  __wasm_call_ctors();
+}
+#endif
+
+R360_WASM_EXPORT("r360_trap_reason")
+uint32_t r360_trap_reason() {
+  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::g_trap_reason));
+}
+R360_WASM_EXPORT("r360_trap_reason_length")
+uint32_t r360_trap_reason_length() {
+  return static_cast<uint32_t>(std::strlen(render360::xenia_web::g_trap_reason));
+}
+R360_WASM_EXPORT("r360_trap_phase")
+uint32_t r360_trap_phase() { return render360::xenia_web::g_trap_phase; }
+R360_WASM_EXPORT("r360_trap_address")
+uint32_t r360_trap_address() { return render360::xenia_web::g_trap_address; }
+R360_WASM_EXPORT("r360_trap_depth")
+uint32_t r360_trap_depth() { return render360::xenia_web::g_trap_depth; }
+R360_WASM_EXPORT("r360_trap_stack_headroom")
+uint32_t r360_trap_stack_headroom() {
+#if defined(__wasm__)
+  const uint32_t low = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&__stack_low));
+  const uint32_t water = render360::xenia_web::g_trap_stack_low_water;
+  return water > low ? water - low : 0;
+#else
+  return 0;
+#endif
+}
+R360_WASM_EXPORT("r360_trap_stack_exhausted")
+uint32_t r360_trap_stack_exhausted() { return render360::xenia_web::g_trap_stack_exhausted; }
+R360_WASM_EXPORT("r360_trap_reset")
+void r360_trap_reset() { render360::xenia_web::ResetTrapReport(); }
 }

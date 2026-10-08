@@ -126,13 +126,25 @@ export async function loadRender360Bootstrap({
   if(!canonical)return instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl});
   const existing=globalThis[BOOTSTRAP_SINGLETON_KEY];
   if(existing?.promise)return existing.promise;
-  const state={promise:null};
-  state.promise=instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl}).catch(error=>{
+  const state={promise:null,instance:null};
+  state.promise=instantiateVerifiedBootstrap({url,metadataUrl,fetchImpl,onStdout,onStderr,cryptoImpl}).then(instance=>{state.instance=instance;return instance;}).catch(error=>{
     if(globalThis[BOOTSTRAP_SINGLETON_KEY]===state)delete globalThis[BOOTSTRAP_SINGLETON_KEY];
     throw error;
   });
   globalThis[BOOTSTRAP_SINGLETON_KEY]=state;
   return state.promise;
+}
+
+// A trapped core keeps half-updated C++ state (dangling execution context,
+// partly built functions, possibly a corrupted heap). Never reuse it: the next
+// launch instantiates a fresh, verified bootstrap.
+export function discardRender360Bootstrap(instance=null){
+  const state=globalThis[BOOTSTRAP_SINGLETON_KEY];
+  if(!state)return false;
+  if(instance&&state.instance&&state.instance!==instance)return false;
+  delete globalThis[BOOTSTRAP_SINGLETON_KEY];
+  if(globalThis.render360PpcRuntimeIdentity)globalThis.render360PpcRuntimeIdentity={...globalThis.render360PpcRuntimeIdentity,verified:false,discardedAt:new Date().toISOString()};
+  return true;
 }
 
 export async function createBrowserTitlePpcSession({bootstrap,initialGprs={},clearContext=true}={}){

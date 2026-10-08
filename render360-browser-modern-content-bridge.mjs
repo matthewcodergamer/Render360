@@ -1,5 +1,6 @@
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
-import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,discardRender360Bootstrap,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {wrapCoreTrap} from './render360-trap-report.mjs';
 import {describeKernelBoundary,handoffDefaultXex} from './render360-title-controller.mjs';
 import {extractXex2EncryptedImageKey} from './render360-iso-title-controller.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
@@ -208,18 +209,28 @@ function driveScheduler(run,state,onStage){
   activeScheduler=state.threadScheduler;
   const loop=state.threadScheduler.runLoop({
     onPump:async report=>{if(run!==activeRun){state.threadScheduler.stop();return;}state.schedulerReport=report;await inspectRuntime(state);updatePersistentCpu(state);publish(state);if(state.frontbufferFrame?.realTitleFrameReady)stage(onStage,'frame',`Real title frame ${state.frontbufferFrame.width}×${state.frontbufferFrame.height}`);},
-    onError:async(error,blocker)=>{state.schedulerBlocker={kind:error?.kernelBoundary?.kind??'commercial-cpu-scheduler-blocker',entry:blocker?.entry??state.result.entry??0,message:error?.message||String(error),kernelBoundary:error?.kernelBoundary??null,...blocker};updatePersistentCpu(state);publish(state);stage(onStage,'blocked',state.schedulerBlocker.message,{blocker:state.schedulerBlocker});},
+    onError:async(error,blocker)=>{error=wrapCoreTrap(error,state.bootstrap,{onPoisoned:discardRender360Bootstrap,context:'scheduler'});if(error?.code==='R360_CORE_TRAP')state.threadScheduler?.stop?.();state.schedulerBlocker={kind:error?.kernelBoundary?.kind??'commercial-cpu-scheduler-blocker',entry:blocker?.entry??state.result.entry??0,message:error?.message||String(error),kernelBoundary:error?.kernelBoundary??null,...blocker};updatePersistentCpu(state);publish(state);stage(onStage,'blocked',state.schedulerBlocker.message,{blocker:state.schedulerBlocker});},
   });
-  state.runtimeLoop=loop;publish(state);loop.then(()=>{if(run===activeRun){updatePersistentCpu(state);publish(state);}}).catch(error=>{if(run===activeRun)stage(onStage,'blocked',error?.message||String(error));});return loop;
+  state.runtimeLoop=loop;publish(state);loop.then(()=>{if(run===activeRun){updatePersistentCpu(state);publish(state);}}).catch(error=>{error=wrapCoreTrap(error,state.bootstrap,{onPoisoned:discardRender360Bootstrap,context:'scheduler'});if(run===activeRun)stage(onStage,'blocked',error?.message||String(error),error?.render360?{blocker:error.render360}:{});});return loop;
 }
 
-export async function runModernXboxContent({core,file,type,onStage=null,config={}}={}){
+export async function runModernXboxContent(options={}){
+  const holder={bootstrap:null};
+  try{return await runModernXboxContentInner(options,holder);}
+  catch(error){
+    const wrapped=wrapCoreTrap(error,holder.bootstrap,{onPoisoned:discardRender360Bootstrap,context:'title-launch'});
+    if(wrapped!==error){stopActive();stage(options.onStage,'blocked',wrapped.message,{blocker:wrapped.render360});}
+    throw wrapped;
+  }
+}
+
+async function runModernXboxContentInner({core,file,type,onStage=null,config={}}={},holder={}){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
   if(!file||typeof file.slice!=='function')throw new TypeError('Xbox 360 File/Blob required');
   const kind=String(type||'').toLowerCase();
   if(!['xex','con','live','pirs'].includes(kind))throw new Error(`Modern content bridge does not support ${kind||'unknown'} input`);
   const run=++activeRun;stopActive();stage(onStage,'launch',`Starting ${file.name||'Xbox 360 title'}…`);
-  const bootstrap=await getBootstrap(onStage);if(run!==activeRun)return null;
+  const bootstrap=await getBootstrap(onStage);holder.bootstrap=bootstrap;if(run!==activeRun)return null;
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
   const guestVfs=await prepareGuestVfs({core,bootstrap,file,prepared,onStage});if(run!==activeRun)return null;
 let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;

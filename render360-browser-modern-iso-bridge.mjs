@@ -1,5 +1,6 @@
 import {Render360Core} from './wasm-core.js';
-import {createBrowserTitlePpcSession,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {createBrowserTitlePpcSession,discardRender360Bootstrap,handoffXboxIsoBrowser,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
+import {wrapCoreTrap} from './render360-trap-report.mjs';
 import {submitCapturedTitleGpuTraffic} from './render360-title-gpu-traffic.mjs';
 import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs';
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
@@ -260,6 +261,7 @@ async function driveRemainingTitleThreads({run,state}){
       hostLog('info',`Guest-thread scheduler idle · ${inspect.sliceCount} slices · ${inspect.completedThreads} completed threads`);
     }
   }).catch(error=>{
+    error=wrapCoreTrap(error,state.bootstrap,{onPoisoned:discardRender360Bootstrap,context:'scheduler'});
     if(run===activeRun)hostLog('warn',`Guest-thread loop stopped: ${error?.message||error}`);
   });
   return loop;
@@ -270,8 +272,9 @@ export async function runModernXboxIso(file){
   const run=++activeRun;showGame(file);
   setText('boundaryTitle','Mounting real XDVDFS ISO…');setText('boundaryText','Reading the disc filesystem directly from the selected File/Blob, locating default.xex, then entering the modern retail XEX → PPC/kernel path. The whole ISO is not copied into memory.');
   hostLog('info',`Modern ISO handoff started · ${file.name||'Xbox ISO'} · ${fmtBytes(file.size)}`);
+  let trapBootstrap=null;
   try{
-    const [core,bootstrap]=await Promise.all([getCore(),getBootstrap()]);if(run!==activeRun)return null;
+    const [core,bootstrap]=await Promise.all([getCore(),getBootstrap()]);trapBootstrap=bootstrap;if(run!==activeRun)return null;
     setGate('gateExtract','','DEFAULT.XEX');setText('boundaryTitle','default.xex found — preparing retail image…');setText('boundaryText','Decrypting/decompressing and mapping the real title image, translating it without side effects, then running it through the native Xbox guest-thread scheduler.');
     const handoff=await handoffXboxIsoBrowser({core,file,bootstrap,entryBytes:ENTRY_WINDOW_BYTES});if(run!==activeRun)return handoff.result;
     const {result,threadScheduler,primaryThread,schedulerReport,schedulerBlocker}=handoff;
@@ -302,7 +305,7 @@ export async function runModernXboxIso(file){
     }
 
     return {...result,persistentCpu:state.persistentCpu,ppcSession:state.ppcSession,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,schedulerBlocker:state.schedulerBlocker,runtimeLoop:state.runtimeLoop,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,shaderWebGPU:state.shaderWebGPU,frontbufferFrame:state.frontbufferFrame,presentation:state.presentation};
-  }catch(error){if(run===activeRun)showFailure(error);throw error}
+  }catch(error){error=wrapCoreTrap(error,trapBootstrap,{onPoisoned:discardRender360Bootstrap,context:'iso-launch'});if(run===activeRun)showFailure(error);throw error}
 }
 
 export function modernIsoBridgeContract(){return {

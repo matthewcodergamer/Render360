@@ -2,6 +2,7 @@
 #define RENDER360_XENIA_WEB_BOOTSTRAP_HIR_CORRECTNESS_EXECUTOR_H_
 
 #include <cstdint>
+#include <string>
 #include <cstdio>
 
 namespace render360::xenia_web {
@@ -75,6 +76,10 @@ uint32_t GetHIRCorrectnessCurrentCallFlags();
 uint32_t ConsumeHIRCorrectnessInteriorEntryMissing();
 void SetHIRCorrectnessContextProvenanceRecovery(bool enabled);
 bool IsHIRCorrectnessExecutionActive();
+void AbandonHIRCorrectnessExecution();
+bool AddHIRCorrectnessInitialRegister(const char* name, const char* value);
+int CompareHIRCorrectnessLastRegister(const char* name, const char* value,
+                                      std::string* actual);
 
 // The kernel/XAM import bridge uses this only while finalized HIR is actively
 // executing. It lets a resolved HLE import consume the caller's real r3..r10

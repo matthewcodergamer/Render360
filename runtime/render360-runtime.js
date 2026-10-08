@@ -85,6 +85,7 @@ export class Render360Runtime extends EventTarget{
       let result;
       if(type==='iso'){const {runModernXboxIso}=await isoBridge();result=await runModernXboxIso(file);}
       else if(['xex','live','pirs','con'].includes(type)){const {runModernXboxContent}=await contentBridge();result=await runModernXboxContent({core:this.core,file,type,config:launchConfig,onStage:event=>{this.emit('bootStage',event);if(event.stage==='blocked')this.emit('runtimeBlocker',event);}});}
+      else if(['7z','zip','rar','gz','tar'].includes(type))throw new Error(`${file?.name||'This file'} is a .${type} archive. Extract it first, then add the ISO, XEX or Xbox package (CON/LIVE/PIRS) inside it.`);
       else throw new Error(`${type.toUpperCase()} is not a runnable Render360 source type`);
       this.emit('titleStarted',{game,result,type,config:launchConfig});return result;
     }catch(error){this.emit('fatalError',{message:error?.message||String(error),error,type,lastStage:globalThis.render360ModernTitle?.result?.runtimeBoundary||null});throw error;}

@@ -26,6 +26,8 @@ struct ProbeTelemetry {
 };
 
 void ResetProbeTelemetry();
+void ResetTrapReport();
+void NoteTopLevelTranslate(uint32_t address);
 const ProbeTelemetry& GetProbeTelemetry();
 
 class ProbeGuestFunction final : public xe::cpu::GuestFunction {

@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <limits>
+#include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -19,6 +22,7 @@
 #include "xenia/cpu/hir/value.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/memory.h"
+#include "hir_vector_semantics.h"
 #include "sparse_guest_memory.h"
 #include "title_gpu_runtime.h"
 
@@ -1032,6 +1036,464 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
   return true;
 }
 
+// Vector (VMX/VMX128) and floating-point HIR operations, ported from Xenia's
+// x64 sequences via hir_vector_semantics.h. Returns false when the opcode is
+// not handled here; *supported reports the outcome when it is.
+bool ExecuteVectorOperation(const xe::cpu::hir::Instr* instr,
+                            RuntimeValues& values, bool* supported) {
+  using namespace xe::cpu::hir;
+  namespace vs = vector_semantics;
+  const auto opcode = instr->opcode->num;
+  Value* dest = instr->dest;
+  const Value* s1 = instr->src1.value;
+  auto is_vec = [](const Value* v) { return v && v->type == VEC128_TYPE; };
+  switch (opcode) {
+    case OPCODE_PACK: case OPCODE_UNPACK: case OPCODE_PERMUTE:
+    case OPCODE_SWIZZLE: case OPCODE_EXTRACT: case OPCODE_INSERT:
+    case OPCODE_SPLAT: case OPCODE_VECTOR_CONVERT_I2F:
+    case OPCODE_VECTOR_CONVERT_F2I: case OPCODE_LOAD_VECTOR_SHL:
+    case OPCODE_LOAD_VECTOR_SHR: case OPCODE_VECTOR_MAX:
+    case OPCODE_VECTOR_MIN: case OPCODE_VECTOR_ADD: case OPCODE_VECTOR_SUB:
+    case OPCODE_VECTOR_ROTATE_LEFT: case OPCODE_VECTOR_AVERAGE:
+    case OPCODE_DOT_PRODUCT_3: case OPCODE_DOT_PRODUCT_4:
+    case OPCODE_MUL_ADD: case OPCODE_MUL_SUB: case OPCODE_SQRT:
+    case OPCODE_RSQRT: case OPCODE_RECIP: case OPCODE_POW2: case OPCODE_LOG2:
+      break;
+    case OPCODE_VECTOR_COMPARE_EQ: case OPCODE_VECTOR_COMPARE_SGT:
+    case OPCODE_VECTOR_COMPARE_SGE: case OPCODE_VECTOR_COMPARE_UGT:
+    case OPCODE_VECTOR_COMPARE_UGE:
+      // Integer lanes stay on the VMX overlay path.
+      if (instr->flags != FLOAT32_TYPE) return false;
+      break;
+    case OPCODE_MUL: case OPCODE_DIV: case OPCODE_ADD: case OPCODE_SUB:
+    case OPCODE_MAX: case OPCODE_MIN:
+      if (!is_vec(dest)) return false;
+      break;
+    case OPCODE_SELECT:
+      if (!is_vec(s1)) return false;
+      break;
+    case OPCODE_NOT: case OPCODE_NEG: case OPCODE_SHL: case OPCODE_SHR:
+    case OPCODE_ROUND:
+      if (!is_vec(dest)) return false;
+      break;
+    case OPCODE_IS_TRUE: case OPCODE_IS_FALSE:  // vptest + setnz/setz
+      if (!is_vec(s1)) return false;
+      break;
+    case OPCODE_CONVERT:
+      // Float -> integer keeps x86's out-of-range behaviour as Xenia does.
+      if (!dest || !IsIntegerType(dest->type) || !s1 || !IsFloatType(s1->type)) return false;
+      break;
+    case OPCODE_DID_SATURATE:
+      // x64 DID_SATURATE: "TODO: implement saturation check" -> always 0.
+      *supported = dest != nullptr;
+      if (dest) { RuntimeValue zero; SetUnsigned(&zero, dest->type, 0); values[dest] = zero; }
+      return true;
+    default:
+      return false;
+  }
+  *supported = false;
+  if (!dest) return true;
+  RuntimeValue a{}, b{}, c{};
+  const bool has2 = instr->src2.value && opcode != OPCODE_SWIZZLE;
+  if (!ResolveRuntimeValue(s1, values, &a)) return true;
+  if (has2 && !ResolveRuntimeValue(instr->src2.value, values, &b)) return true;
+  const bool has3 = opcode == OPCODE_PERMUTE || opcode == OPCODE_INSERT ||
+                    opcode == OPCODE_MUL_ADD || opcode == OPCODE_MUL_SUB ||
+                    opcode == OPCODE_SELECT;
+  if (has3 && !ResolveRuntimeValue(instr->src3.value, values, &c)) return true;
+  const vec128_t& va = a.value.v128;
+  const vec128_t& vb = b.value.v128;
+  const vec128_t& vc = c.value.v128;
+  RuntimeValue result;
+  result.type = dest->type;
+  result.value = {};
+  vec128_t& out = result.value.v128;
+  bool ok = true;
+  // Applies a float function lane-wise for F32/F64/V128 destinations.
+  auto unary_float = [&](auto fn) {
+    if (dest->type == FLOAT32_TYPE) result.value.f32 = float(fn(double(a.value.f32), true));
+    else if (dest->type == FLOAT64_TYPE) result.value.f64 = fn(a.value.f64, false);
+    else if (dest->type == VEC128_TYPE) for (int i = 0; i < 4; ++i) out.f32[i] = float(fn(double(va.f32[i]), true));
+    else ok = false;
+  };
+  switch (opcode) {
+    case OPCODE_PACK: ok = vs::Pack(instr->flags, va, vb, &out); break;
+    case OPCODE_UNPACK: ok = vs::Unpack(instr->flags, va, &out); break;
+    case OPCODE_PERMUTE:
+      if (s1->type == INT32_TYPE) out = vs::PermuteI32(a.value.u32, vb, vc);
+      else if (instr->flags == INT8_TYPE) out = vs::PermuteBytes(va, vb, vc);
+      else if (instr->flags == INT16_TYPE) out = vs::PermuteHalves(va, vb, vc);
+      else ok = false;
+      break;
+    case OPCODE_SWIZZLE:
+      if (instr->flags == INT32_TYPE || instr->flags == FLOAT32_TYPE)
+        out = vs::PShufD(va, uint8_t(instr->src2.offset));
+      else ok = false;
+      break;
+    case OPCODE_EXTRACT: {
+      const uint32_t index = b.value.u8;
+      switch (dest->type) {
+        case INT8_TYPE: result.value.u8 = va.u8[(index ^ 3) & 0xF]; break;
+        case INT16_TYPE: result.value.u16 = va.u16[(index ^ 1) & 7]; break;
+        case INT32_TYPE: result.value.u32 = va.u32[index & 3]; break;
+        case FLOAT32_TYPE: result.value.f32 = va.f32[index & 3]; break;
+        default: ok = false;
+      }
+      break;
+    }
+    case OPCODE_INSERT: {
+      out = va;
+      const uint32_t index = b.value.u8;
+      switch (instr->src3.value->type) {
+        case INT8_TYPE: out.u8[(index ^ 3) & 0xF] = c.value.u8; break;
+        case INT16_TYPE: out.u16[(index ^ 1) & 7] = c.value.u16; break;
+        case INT32_TYPE: out.u32[index & 3] = c.value.u32; break;
+        case FLOAT32_TYPE: out.f32[index & 3] = c.value.f32; break;
+        default: ok = false;
+      }
+      break;
+    }
+    case OPCODE_SPLAT:
+      switch (s1->type) {
+        case INT8_TYPE: for (int i = 0; i < 16; ++i) out.u8[i] = a.value.u8; break;
+        case INT16_TYPE: for (int i = 0; i < 8; ++i) out.u16[i] = a.value.u16; break;
+        case INT32_TYPE: for (int i = 0; i < 4; ++i) out.u32[i] = a.value.u32; break;
+        case FLOAT32_TYPE: for (int i = 0; i < 4; ++i) out.f32[i] = a.value.f32; break;
+        default: ok = false;
+      }
+      break;
+    case OPCODE_VECTOR_CONVERT_I2F:
+      out = vs::VectorConvertI2F(va, instr->flags & ARITHMETIC_UNSIGNED);
+      break;
+    case OPCODE_VECTOR_CONVERT_F2I:
+      out = vs::VectorConvertF2I(va, instr->flags & ARITHMETIC_UNSIGNED);
+      break;
+    case OPCODE_LOAD_VECTOR_SHL:
+    case OPCODE_LOAD_VECTOR_SHR: {
+      // lvsl_table / lvsr_table: PPC byte j = sh + j (lvsl) or 16 - sh + j.
+      const uint32_t sh = a.value.u8 & 0xF;
+      for (int j = 0; j < 16; ++j)
+        out.u8[j ^ 3] = uint8_t(opcode == OPCODE_LOAD_VECTOR_SHL ? sh + j : 16 - sh + j);
+      break;
+    }
+    case OPCODE_VECTOR_MAX: case OPCODE_VECTOR_MIN:
+      ok = vs::VectorMinMax(instr->flags, opcode == OPCODE_VECTOR_MAX, va, vb, &out);
+      break;
+    case OPCODE_VECTOR_ADD: case OPCODE_VECTOR_SUB:
+      ok = vs::VectorAddSub(instr->flags, opcode == OPCODE_VECTOR_SUB, va, vb, &out);
+      break;
+    case OPCODE_VECTOR_COMPARE_EQ: case OPCODE_VECTOR_COMPARE_SGT:
+    case OPCODE_VECTOR_COMPARE_SGE: case OPCODE_VECTOR_COMPARE_UGT:
+    case OPCODE_VECTOR_COMPARE_UGE:
+      ok = vs::VectorCompareFloat(opcode, va, vb, &out);
+      break;
+    case OPCODE_VECTOR_ROTATE_LEFT:
+      ok = vs::VectorRotateLeft(instr->flags, va, vb, &out);
+      break;
+    case OPCODE_VECTOR_AVERAGE:
+      ok = vs::VectorAverage(instr->flags, va, vb, &out);
+      break;
+    case OPCODE_DOT_PRODUCT_3: case OPCODE_DOT_PRODUCT_4:
+      result.value.f32 = vs::DotProduct(va, vb, opcode == OPCODE_DOT_PRODUCT_3 ? 3 : 4);
+      break;
+    case OPCODE_MUL_ADD: case OPCODE_MUL_SUB: {
+      const bool sub = opcode == OPCODE_MUL_SUB;
+      if (dest->type == FLOAT64_TYPE) {
+        // vfmadd/vfmsub (fused) as Xenia emits with FMA.
+        result.value.f64 = std::fma(a.value.f64, b.value.f64, sub ? -c.value.f64 : c.value.f64);
+      } else if (dest->type == FLOAT32_TYPE) {
+        result.value.f32 = std::fma(a.value.f32, b.value.f32, sub ? -c.value.f32 : c.value.f32);
+      } else if (dest->type == VEC128_TYPE) {
+        // MUL_ADD_V128: Xenia keeps vmulps + vaddps (unfused) so tests pass.
+        for (int i = 0; i < 4; ++i) {
+          const float m = va.f32[i] * vb.f32[i];
+          out.f32[i] = sub ? m - vc.f32[i] : m + vc.f32[i];
+        }
+      } else {
+        ok = false;
+      }
+      break;
+    }
+    case OPCODE_SQRT:
+      unary_float([](double x, bool f32) { return f32 ? double(std::sqrt(float(x))) : std::sqrt(x); });
+      break;
+    case OPCODE_RSQRT:
+      unary_float([](double x, bool f32) { return f32 ? double(1.0f / std::sqrt(float(x))) : 1.0 / std::sqrt(x); });
+      break;
+    case OPCODE_RECIP:
+      unary_float([](double x, bool f32) { return f32 ? double(1.0f / float(x)) : 1.0 / x; });
+      break;
+    case OPCODE_POW2:
+      unary_float([](double x, bool f32) { return f32 ? double(std::exp2(float(x))) : std::exp2(x); });
+      break;
+    case OPCODE_LOG2:
+      unary_float([](double x, bool f32) { return f32 ? double(std::log2(float(x))) : std::log2(x); });
+      break;
+    case OPCODE_MUL: case OPCODE_DIV: case OPCODE_ADD: case OPCODE_SUB:
+      for (int i = 0; i < 4; ++i) {
+        const float x = va.f32[i], y = vb.f32[i];
+        out.f32[i] = opcode == OPCODE_MUL ? x * y : opcode == OPCODE_DIV ? x / y
+                   : opcode == OPCODE_ADD ? x + y : x - y;
+      }
+      break;
+    case OPCODE_MAX: out = vs::MaxPS(va, vb); break;
+    case OPCODE_MIN: out = vs::MinPS(va, vb); break;
+    case OPCODE_IS_TRUE: case OPCODE_IS_FALSE: {
+      const bool any = (va.u64[0] | va.u64[1]) != 0;
+      SetUnsigned(&result, dest->type, (opcode == OPCODE_IS_TRUE) == any ? 1u : 0u);
+      break;
+    }
+    case OPCODE_NOT:
+      out.u64[0] = ~va.u64[0]; out.u64[1] = ~va.u64[1];
+      break;
+    case OPCODE_NEG:  // vxorps with the sign mask.
+      for (int i = 0; i < 4; ++i) out.u32[i] = va.u32[i] ^ 0x80000000u;
+      break;
+    case OPCODE_SHL: case OPCODE_SHR: {
+      // EmulateShlV128 / EmulateShrV128: whole-register shift by 0..7 bits
+      // in PPC byte order (vsl / vsr).
+      const uint8_t sh = b.value.u8 & 0x7;
+      out = va;
+      if (sh) {
+        if (opcode == OPCODE_SHL) {
+          for (int j = 0; j < 15; ++j)
+            out.u8[j ^ 3] = uint8_t((out.u8[j ^ 3] << sh) | (out.u8[(j + 1) ^ 3] >> (8 - sh)));
+          out.u8[15 ^ 3] = uint8_t(out.u8[15 ^ 3] << sh);
+        } else {
+          for (int j = 15; j > 0; --j)
+            out.u8[j ^ 3] = uint8_t((out.u8[j ^ 3] >> sh) | (out.u8[(j - 1) ^ 3] << (8 - sh)));
+          out.u8[0 ^ 3] = uint8_t(out.u8[0 ^ 3] >> sh);
+        }
+      }
+      break;
+    }
+    case OPCODE_ROUND:  // vroundps with the HIR rounding mode.
+      for (int i = 0; i < 4; ++i) {
+        const float x = va.f32[i];
+        switch (instr->flags) {
+          case ROUND_TO_ZERO: out.f32[i] = std::trunc(x); break;
+          case ROUND_TO_NEAREST: out.f32[i] = std::nearbyint(x); break;
+          case ROUND_TO_MINUS_INFINITY: out.f32[i] = std::floor(x); break;
+          case ROUND_TO_POSITIVE_INFINITY: out.f32[i] = std::ceil(x); break;
+          default: ok = false;
+        }
+      }
+      break;
+    case OPCODE_CONVERT: {
+      double x = s1->type == FLOAT32_TYPE ? double(a.value.f32) : a.value.f64;
+      const bool trunc = instr->flags == ROUND_TO_ZERO;
+      auto cvt = [&](double v, double lo, double hi, int64_t indefinite) -> int64_t {
+        // cvt(t)sd2si: NaN or out of range gives the "integer indefinite".
+        if (std::isnan(v)) return indefinite;
+        const double r = trunc ? std::trunc(v) : std::nearbyint(v);
+        if (r < lo || r > hi) return indefinite;
+        return int64_t(r);
+      };
+      if (dest->type == INT64_TYPE) {
+        int64_t r = cvt(x, -9223372036854775808.0, 9223372036854774784.0, INT64_MIN);
+        // CONVERT_I64_F64: an indefinite result from a non-negative source
+        // saturates to INT64_MAX.
+        if (r == INT64_MIN && !std::signbit(x)) r = INT64_MAX;
+        SetUnsigned(&result, dest->type, uint64_t(r));
+      } else {
+        // CONVERT_I32_F64 clamps with vminsd(src, INT_MAX) first (a NaN
+        // source yields the INT_MAX operand); I32_F32 does not.
+        if (s1->type == FLOAT64_TYPE) x = x < 2147483647.0 ? x : 2147483647.0;
+        const int64_t r = cvt(x, -2147483648.0, 2147483647.0, INT32_MIN);
+        SetUnsigned(&result, dest->type, uint64_t(r));
+      }
+      break;
+    }
+    case OPCODE_SELECT:
+      // SELECT_V128_V128: (src1 & src3) | (~src1 & src2).
+      for (int i = 0; i < 2; ++i) out.u64[i] = (va.u64[i] & vc.u64[i]) | (~va.u64[i] & vb.u64[i]);
+      break;
+    default:
+      ok = false;
+  }
+  if (!ok) return true;
+  values[dest] = result;
+  *supported = true;
+  return true;
+}
+
+// Integer HIR operations whose semantics depend on instr->flags or a third
+// operand. Each case follows Xenia's x64 backend sequence for the same opcode
+// (x64_sequences.cc) so a title computes exactly what it computes in Xenia.
+// Returns false when the opcode is not one of these; *supported reports the
+// outcome when it is.
+bool ExecuteFlaggedOperation(const xe::cpu::hir::Instr* instr,
+                             RuntimeValues& values, bool* supported) {
+  using namespace xe::cpu::hir;
+  if (ExecuteVectorOperation(instr, values, supported)) return true;
+  const auto opcode = instr->opcode->num;
+  Value* dest = instr->dest;
+  switch (opcode) {
+    case OPCODE_ADD_CARRY:
+    case OPCODE_MUL_HI:
+    case OPCODE_SELECT:
+    case OPCODE_MIN:
+    case OPCODE_MAX:
+      break;
+    case OPCODE_DIV:
+      if (!dest || !IsIntegerType(dest->type)) return false;
+      break;
+    case OPCODE_COMMENT:
+    case OPCODE_NOP:
+      *supported = true;
+      return true;
+    case OPCODE_LOAD_LOCAL:
+    case OPCODE_STORE_LOCAL: {
+      // HIR locals (HIRBuilder::AllocLocal) are ordinary Values used as
+      // slots; Xenia's backends give each one a stack slot.
+      RuntimeValue v;
+      Value* slot = instr->src1.value;
+      const Value* source =
+          opcode == OPCODE_LOAD_LOCAL ? slot : instr->src2.value;
+      Value* target = opcode == OPCODE_LOAD_LOCAL ? dest : slot;
+      *supported = slot && target && ResolveRuntimeValue(source, values, &v);
+      if (*supported) {
+        v.type = target->type;
+        values[target] = v;
+      }
+      return true;
+    }
+    case OPCODE_LOAD_CLOCK: {
+      // mftb: Xenia's guest timebase runs at 50 MHz (Clock::guest_tick_frequency,
+      // and KeQueryPerformanceFrequency here).
+      timespec ts{};
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      const uint64_t ns = uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+      RuntimeValue v;
+      SetUnsigned(&v, xe::cpu::hir::INT64_TYPE, ns / 20u);
+      *supported = dest != nullptr;
+      if (dest) values[dest] = v;
+      return true;
+    }
+    case OPCODE_DEBUG_BREAK:
+    case OPCODE_DEBUG_BREAK_TRUE: {
+      // Xenia's x64 backend only breaks into an attached host debugger.
+      bool taken = true;
+      *supported = opcode == OPCODE_DEBUG_BREAK ||
+                   ResolveCondition(instr->src1.value, values, &taken);
+      return true;
+    }
+    case OPCODE_TRAP:
+    case OPCODE_TRAP_TRUE: {
+      bool taken = true;
+      if (opcode == OPCODE_TRAP_TRUE &&
+          !ResolveCondition(instr->src1.value, values, &taken)) {
+        *supported = false;
+        return true;
+      }
+      if (taken) {
+        // X64Emitter::Trap: 20/26 are DbgPrint (r3 = text), 0/22 are debug
+        // breaks Xenia logs and continues past, 25 is ignored.
+        std::fprintf(stderr, "R360_TRAP type=%u\n", unsigned(instr->flags));
+      }
+      *supported = true;
+      return true;
+    }
+    default:
+      return false;
+  }
+  *supported = false;
+  if (!dest) return true;
+  RuntimeValue a, b;
+  if (!ResolveRuntimeValue(instr->src1.value, values, &a) ||
+      !ResolveRuntimeValue(instr->src2.value, values, &b)) {
+    return true;
+  }
+  RuntimeValue result;
+  if (opcode == OPCODE_SELECT) {
+    // SELECT(i8 cond, T if_true, T if_false), any T including floats/vectors.
+    RuntimeValue c;
+    uint64_t cond = 0;
+    if (!ResolveRuntimeValue(instr->src3.value, values, &c) ||
+        !GetUnsigned(a, &cond)) {
+      return true;
+    }
+    result = cond ? b : c;
+    result.type = dest->type;
+    values[dest] = result;
+    *supported = true;
+    return true;
+  }
+  if ((opcode == OPCODE_MIN || opcode == OPCODE_MAX) && IsFloatType(dest->type)) {
+    // vminss/vmaxss: src1 when it compares less/greater, otherwise src2.
+    result.type = dest->type;
+    result.value = {};
+    if (dest->type == FLOAT32_TYPE) {
+      const float x = a.value.f32, y = b.value.f32;
+      result.value.f32 = opcode == OPCODE_MIN ? (x < y ? x : y) : (x > y ? x : y);
+    } else {
+      const double x = a.value.f64, y = b.value.f64;
+      result.value.f64 = opcode == OPCODE_MIN ? (x < y ? x : y) : (x > y ? x : y);
+    }
+    values[dest] = result;
+    *supported = true;
+    return true;
+  }
+  if (!IsIntegerType(dest->type)) return true;
+  const uint32_t width = IntegerBitWidth(dest->type);
+  const bool is_unsigned = (instr->flags & ARITHMETIC_UNSIGNED) != 0;
+  uint64_t au = 0, bu = 0;
+  int64_t as = 0, bs = 0;
+  if (!GetUnsigned(a, &au) || !GetUnsigned(b, &bu) || !GetSigned(a, &as) ||
+      !GetSigned(b, &bs)) {
+    return true;
+  }
+  uint64_t out = 0;
+  switch (opcode) {
+    case OPCODE_ADD_CARRY: {
+      // sahf loads bit 0 of the carry operand into CF, then adc.
+      RuntimeValue c;
+      uint64_t carry = 0;
+      if (!ResolveRuntimeValue(instr->src3.value, values, &c) ||
+          !GetUnsigned(c, &carry)) {
+        return true;
+      }
+      out = au + bu + (carry & 1u);
+      break;
+    }
+    case OPCODE_MUL_HI:
+      if (width == 64) {
+        out = is_unsigned
+                  ? uint64_t((unsigned __int128)au * (unsigned __int128)bu >> 64)
+                  : uint64_t(((__int128)as * (__int128)bs) >> 64);
+      } else {
+        out = is_unsigned ? (au * bu) >> width
+                          : uint64_t((as * bs) >> width);
+      }
+      break;
+    case OPCODE_DIV:
+      // Xenia's PPC emitter does not guard the divisor; the x64 sequence skips
+      // a zero divide (PPC leaves RT undefined) and the tests expect 0.
+      if (!bu) {
+        out = 0;
+      } else if (is_unsigned) {
+        out = au / bu;
+      } else if (bs == -1) {
+        out = uint64_t(0) - au;  // INT_MIN / -1 wraps instead of faulting.
+      } else {
+        out = uint64_t(as / bs);
+      }
+      break;
+    case OPCODE_MIN:  // cmp + cmovg: signed.
+      out = bs < as ? bu : au;
+      break;
+    case OPCODE_MAX:  // cmp + cmovl: signed.
+      out = bs > as ? bu : au;
+      break;
+    default:
+      return true;
+  }
+  SetUnsigned(&result, dest->type, out);
+  values[dest] = result;
+  *supported = true;
+  return true;
+}
+
 HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
                                     xe::Memory* memory,
                                     xe::cpu::ppc::PPCContext& context) {
@@ -1062,6 +1524,14 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         break;
       }
 
+      if (ExecuteFlaggedOperation(instr, values, &supported)) {
+        if (!supported) {
+          result.blocker_kind = kHIRBlockerUnsupportedOpcode;
+          result.blocker_opcode = instr->opcode->num;
+          result.blocker_address = current_source_address;
+        }
+        continue;
+      }
       switch (instr->opcode->num) {
         case xe::cpu::hir::OPCODE_SOURCE_OFFSET:
           current_source_address = static_cast<uint32_t>(instr->src1.offset);
@@ -1404,6 +1874,43 @@ void SetHIRCorrectnessContextProvenanceRecovery(bool enabled) {
   g_context_provenance_recovery_enabled = enabled;
 }
 
+// Xenia PPC test-runner register annotations (#_ REGISTER_IN f1 1.5, v3 [..],
+// cr 0x...) applied to the outermost context through Xenia's own
+// PPCContext::SetRegFromString, and the final context kept for
+// CompareRegWithString. Integer registers keep using g_initial_gprs.
+std::vector<std::pair<std::string, std::string>> g_initial_register_strings;
+xe::cpu::ppc::PPCContext g_last_context{};
+
+void ApplyInitialRegisterStrings(xe::cpu::ppc::PPCContext& context) {
+  for (const auto& entry : g_initial_register_strings) {
+    context.SetRegFromString(entry.first.c_str(), entry.second.c_str());
+  }
+}
+
+// A wasm trap unwinds straight out of the executor: the outermost frame's
+// context pointer is left pointing at a dead stack frame and the depth counter
+// stays raised, so the next title would run as a "nested" call. Every title
+// handoff starts a fresh outermost run.
+void AbandonHIRCorrectnessExecution() {
+  g_initial_register_strings.clear();
+  g_last_context = {};
+  g_active_context = nullptr;
+  g_execution_depth = 0;
+  ClearPendingNestedFailure();
+}
+
+bool AddHIRCorrectnessInitialRegister(const char* name, const char* value) {
+  if (!name || !value || !*name) return false;
+  g_initial_register_strings.emplace_back(name, value);
+  return true;
+}
+
+int CompareHIRCorrectnessLastRegister(const char* name, const char* value,
+                                      std::string* actual) {
+  if (!name || !value || !actual) return -1;
+  return g_last_context.CompareRegWithString(name, value, *actual) ? 1 : 0;
+}
+
 bool IsHIRCorrectnessExecutionActive() { return g_execution_depth != 0; }
 
 HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
@@ -1421,6 +1928,7 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
     g_active_context = &local_context;
   }
 
+  if (outermost) ApplyInitialRegisterStrings(*g_active_context);
   ++g_execution_depth;
   result = ExecuteBuilder(builder, memory, *g_active_context);
   // Snapshot after the builder returns, including failure. The context still
@@ -1431,6 +1939,7 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
       g_last_gprs[i] = g_active_context->r[i];
     }
   }
+  if (outermost && g_active_context) g_last_context = *g_active_context;
   --g_execution_depth;
 
   if (!outermost && !result.supported &&

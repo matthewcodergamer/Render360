@@ -43,6 +43,7 @@ python3 "$ROOT/prepare-xenia-relocatable-probe-memory-overlay.py"
 python3 "$ROOT/prepare-xenia-arena-overlay.py"
 python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
+python3 "$ROOT/prepare-xenia-hir-value-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
 # Keep the HIR frame-history overlay last: it instruments the fully patched
@@ -62,8 +63,11 @@ python3 "$ROOT/prepare-wasm-backend-cfg-overlay.py"
 # Override with R360_OPT=-O0 when bisecting a suspected miscompile.
 R360_OPT="${R360_OPT:--O2}"
 case "$R360_OPT" in -O0|-O1|-O2|-O3|-Os|-Oz) ;; *) echo "ERROR: invalid R360_OPT=$R360_OPT" >&2; exit 2 ;; esac
-COMMON=(-std=c++20 "$R360_OPT" -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include" -I"$XENIA/third_party/glslang")
-COMMON_C=("$R360_OPT" -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
+# Xenia ships Release builds with NDEBUG ("We rely on assert being compiled out
+# in NDEBUG", xenia/base/assert.h). Debug-only asserts fire on real retail code
+# and, in wasm, abort() is an "unreachable" trap that kills the whole core.
+COMMON=(-std=c++20 "$R360_OPT" -DNDEBUG -g0 -I"$OVERLAY" -I"$ROOT/src/xenia_web_shims" -I"$ROOT/src/xenia_web_bootstrap" -I"$XENIA/src" -I"$XENIA" -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/fmt/include" -I"$XENIA/third_party/utfcpp/source" -I"$XENIA/third_party/capstone/include" -I"$XENIA/third_party/cpptoml/include" -I"$XENIA/third_party/cxxopts/include" -I"$XENIA/third_party/glslang")
+COMMON_C=("$R360_OPT" -DNDEBUG -g0 -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto")
 LLVM_INCLUDE="$(llvm-config --includedir 2>/dev/null || true)"
 if [ -n "$LLVM_INCLUDE" ] && [ -d "$LLVM_INCLUDE" ]; then
   COMMON+=("-I$LLVM_INCLUDE")
@@ -167,6 +171,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/memory.cc") queue_cpp "$rel" "$OVERLAY/xenia/memory.cc" ;;
     "src/xenia/cpu/mmio_handler.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/mmio_handler.cc" ;;
     "src/xenia/cpu/processor.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
+    "src/xenia/cpu/hir/value.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/hir/value.cc" ;;
     "src/xenia/gpu/shader_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_translator.cc" ;;
     "src/xenia/gpu/shader_interpreter.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) queue_cpp "$rel" "$XENIA/$rel" ;;

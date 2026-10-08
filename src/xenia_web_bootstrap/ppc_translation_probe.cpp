@@ -216,10 +216,16 @@ xe::Memory* ActiveProbeMemory() {
 
 }  // namespace render360::xenia_web
 
+namespace {
+std::string g_register_actual;
+}  // namespace
+
 extern "C" {
 
 void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
+  render360::xenia_web::ResetTrapReport();
+  render360::xenia_web::AbandonHIRCorrectnessExecution();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::ResetWasmBackendCallProbe();
   render360::xenia_web::ResetScanDiagnostic();
@@ -245,6 +251,28 @@ uint32_t r360_ppc_probe_set_initial_lr(uint64_t value) {
 
 uint64_t r360_ppc_probe_initial_lr() {
   return render360::xenia_web::GetHIRCorrectnessInitialLR();
+}
+
+// Register annotations from Xenia's PPC test suite (name and value are
+// NUL-terminated strings in wasm memory, e.g. "f1" "1.5" or "cr" "0x2").
+uint32_t r360_ppc_probe_set_initial_register(const char* name,
+                                             const char* value) {
+  return render360::xenia_web::AddHIRCorrectnessInitialRegister(name, value)
+             ? 1u
+             : 0u;
+}
+
+// 1 = matches, 0 = differs (actual value via r360_ppc_probe_register_actual).
+uint32_t r360_ppc_probe_compare_register(const char* name, const char* value) {
+  g_register_actual.clear();
+  const int r = render360::xenia_web::CompareHIRCorrectnessLastRegister(
+      name, value, &g_register_actual);
+  return r < 0 ? 2u : uint32_t(r);
+}
+
+uint32_t r360_ppc_probe_register_actual() {
+  return static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(g_register_actual.c_str()));
 }
 
 uint64_t r360_ppc_probe_correctness_gpr(uint32_t index) {
@@ -347,7 +375,7 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   g_scan_window_end=g_loaded_size>=4?g_active_guest_base+g_loaded_size-4:0;if(!EnsureRuntime()||!g_probe_module||(address&3u)){g_scan_diagnostic=kProbeScanGuardRejected;return 0;}
   ResetProbeTelemetry();ProbeGuestFunction function(g_probe_module,fn_begin);const uint32_t scan_end=pdata?fn_end-4:g_active_guest_base+g_loaded_size-4;function.set_end_address(scan_end);
   xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());if(!scanner.Scan(&function,nullptr)){g_scan_diagnostic=kProbeScanScannerFailed;g_status=kProbeErrorTranslate;return 0;}if(pdata&&function.end_address()<address)function.set_end_address(scan_end);g_scan_function_end=function.end_address();
-  SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);const bool defined=g_processor->frontend()->DefineFunction(&function,0);SetHIRCorrectnessExecutionEntry(0u);if(!defined){g_scan_diagnostic=kProbeScanDefineFailed;g_status=kProbeErrorTranslate;return 0;}
+  NoteTopLevelTranslate(address);SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);const bool defined=g_processor->frontend()->DefineFunction(&function,0);SetHIRCorrectnessExecutionEntry(0u);if(!defined){g_scan_diagnostic=kProbeScanDefineFailed;g_status=kProbeErrorTranslate;return 0;}
   const uint32_t hir=GetProbeTelemetry().hir_instructions;g_scan_hir_instructions=hir;if(!hir){g_scan_diagnostic=kProbeScanZeroHIR;g_status=kProbeErrorTranslate;return 0;}
   std::fprintf(stderr,"R360_SCAN_RANGE entry=0x%08X function=0x%08X end=0x%08X pdata=%u prolog=%u\n",address,fn_begin,g_scan_function_end,pdata?1u:0u,prolog);g_scan_diagnostic=kProbeScanTranslated;g_status=kProbeTranslated;return hir;
 }

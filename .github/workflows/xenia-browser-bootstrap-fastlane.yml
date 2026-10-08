@@ -11,6 +11,8 @@ on:
       - 'prepare-hir-return-metadata-v3-overlay.py'
       - 'prepare-hir-stack-history-overlay.py'
       - 'prepare-hir-tail-frame-overlay.py'
+      - 'prepare-xenia-hir-value-overlay.py'
+      - 'test-xenia-ppc-instruction-suite.mjs'
       - 'tools/apply-xenia-entry-abi-v51.py'
       - 'tools/apply-xenia-epilog-tail-v57.py'
       - 'tools/apply-xenia-epilog-inline-v58.py'
@@ -167,6 +169,17 @@ jobs:
           { bash ./build-xenia-ppc-bootstrap.sh && bash ./link-xenia-ppc-bootstrap.sh; } \
             2>&1 | tee browser-bootstrap-build.log
           echo "R360_PHASE bootstrap-build done=$(date -u +%FT%TZ)"
+
+      - name: Run Xenia PPC instruction tests through the HIR executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v powerpc64-linux-gnu-as >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils-powerpc64-linux-gnu >/dev/null
+          fi
+          timeout 600s node ./test-xenia-ppc-instruction-suite.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm 2>ppc-suite-stderr.log \
+            || { tail -n 40 ppc-suite-stderr.log; exit 1; }
 
       - name: Show compiler cache statistics
         if: always()

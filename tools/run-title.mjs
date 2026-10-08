@@ -29,6 +29,7 @@ const {mountXdvdfs}=await import(rel('render360-xdvdfs.mjs'));
 const {registerGuestVfs,listXdvdfsVfsFiles,listStfsVfsFiles,runWithGuestVfsRetries,pendingGuestVfsRead}=await import(rel('render360-guest-vfs.mjs'));
 const {kernelExportName}=await import(rel('render360-kernel-export-names.mjs'));
 const {Render360Core}=await import(rel('wasm-core.js'));
+const {wrapCoreTrap,formatTrapReport}=await import(rel('render360-trap-report.mjs'));
 
 function parseArgs(argv){
   const args={input:null,bootstrap:null,trace:48,json:null,verbose:false,traceCalls:false,license:'trial',budget:1<<30};
@@ -162,7 +163,7 @@ async function main(){
       ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true}),
       {bootstrap,fetchPending:async()=>false},
     );
-  }catch(caught){error=caught;}
+  }catch(caught){error=wrapCoreTrap(caught,bootstrap,{context:'run-title'});}
   const elapsedMs=Date.now()-started;
 
   const report={
@@ -187,11 +188,12 @@ async function main(){
       guestVfsFetched:result.guestVfsFetched,
     });
   }
+  report.hostStackHeadroom=bootstrap.exports.r360_trap_stack_headroom?.()>>>0;
   report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK)/.test(l)).slice(-12);
 
   const statusOf=s=>['?','ok','UNSUPPORTED','INVALID','EXIT','BLOCKED'][s]||String(s);
   console.log(`Render360 title runner · ${report.kind} · ${report.vfs.files} files · ${elapsedMs} ms`);
-  if(error){console.log(`FAILED BEFORE EXECUTION: ${error.message}`);}
+  if(error){console.log(`${error.code==='R360_CORE_TRAP'?'CORE CRASHED':'FAILED BEFORE EXECUTION'}: ${error.message}`);for(const line of formatTrapReport(error.render360?.trap))console.log(`  ${line}`);}
   else{
     console.log(`entry ${report.entry} · ${report.instructions} PPC instructions (native HIR) · ${report.kernelCalls} kernel calls`);
     console.log(`stopped at: ${report.runtimeBoundary}`);

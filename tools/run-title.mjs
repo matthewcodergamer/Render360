@@ -44,6 +44,7 @@ function parseArgs(argv){
     else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--license')args.license=String(argv[++i]||'trial');
     else if(a==='--log-draws')args.logDraws=Number(argv[++i])>>>0;
+    else if(a==='--progress')args.progress=true;
     else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
     else if(a==='--slice-ms')args.sliceMs=Number(argv[++i])>>>0;
@@ -148,7 +149,7 @@ function readDebugLog(bootstrap){
 async function main(){
   const args=parseArgs(process.argv.slice(2));
   if(args.help||!args.input){
-    console.log('usage: node tools/run-title.mjs <game.iso|package|default.xex|folder> [--bootstrap file.wasm] [--trace N] [--json out.json] [--budget N] [--verbose] [--trace-calls] [--license trial|full]');
+    console.log('usage: node tools/run-title.mjs <game.iso|package|default.xex|folder> [--bootstrap file.wasm] [--trace N] [--json out.json] [--budget N] [--verbose] [--trace-calls] [--license trial|full] [--max-minstr N] [--render-from-minstr N] [--frame out.png] [--progress]');
     process.exit(args.help?0:2);
   }
   const bootstrapFile=args.bootstrap||(fs.existsSync(rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'))?rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'):rel('xenia_ppc_bootstrap.wasm'));
@@ -174,7 +175,7 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||(args.renderFrom!==undefined?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined)?(s=>{const x=bootstrap.exports;if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress)?(s=>{const x=bootstrap.exports;if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}

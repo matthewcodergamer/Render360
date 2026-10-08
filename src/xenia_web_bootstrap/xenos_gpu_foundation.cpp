@@ -317,8 +317,12 @@ bool ExecuteDraw(uint32_t opcode, const uint32_t* payload, uint32_t count) {
   if (!primitive || primitive > 0x16u) { g_status = kStatusUnsupported; return false; }
   WriteRegister(0x21FCu, initiator);  // VGT_DRAW_INITIATOR
   uint32_t index_base = 0, index_count = 0;
-  if (((initiator >> 6) & 3u) == 0u) {  // SourceSelect::kDMA
-    if (at + 2u > count) { g_status = kStatusInvalid; return false; }
+  // A DMA draw without its index-buffer words (minimal synthetic streams)
+  // cannot be shaded; it keeps the bounded placeholder raster below.
+  bool renderable = true;
+  if (((initiator >> 6) & 3u) == 0u && at + 2u > count) {
+    renderable = false;
+  } else if (((initiator >> 6) & 3u) == 0u) {  // SourceSelect::kDMA
     WriteRegister(0x21FAu, payload[at]);      // VGT_DMA_BASE
     WriteRegister(0x21FBu, payload[at + 1]);  // VGT_DMA_SIZE
     const uint32_t index_bytes = (initiator & (1u << 11)) ? 4u : 2u;
@@ -337,7 +341,7 @@ bool ExecuteDraw(uint32_t opcode, const uint32_t* payload, uint32_t count) {
   draw.pixel_shader = g_pixel_shader.words.data();
   draw.pixel_shader_dwords = g_pixel_shader.dword_count;
   draw.pixel_shader_hash = g_pixel_shader.hash;
-  if (RenderXenosDraw(draw)) {
+  if (renderable && RenderXenosDraw(draw)) {
     ++g_draws; g_last_opcode = opcode; g_frame_provenance_rendered = true; return true;
   }
   const uint32_t seed = g_regs[kRegRbColorInfo] ^

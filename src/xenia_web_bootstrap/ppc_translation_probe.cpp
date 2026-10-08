@@ -228,6 +228,7 @@ void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
   render360::xenia_web::ResetTrapReport();
   render360::xenia_web::ResetTailTrampoline();
+  render360::xenia_web::ResetTranslationCache();
   render360::xenia_web::AbandonHIRCorrectnessExecution();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::ResetWasmBackendCallProbe();

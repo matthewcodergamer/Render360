@@ -5,6 +5,16 @@
 #include <string>
 #include <cstdio>
 
+// Executor state that belongs to one guest thread. In the browser build every
+// such variable lives in the "r360_fiber" data section, which guest_fibers.cpp
+// swaps as one block when it switches guest threads (Xenia gives each XThread
+// its own host thread and thread_local state).
+#if defined(__wasm__)
+#define R360_FIBER_LOCAL __attribute__((section("r360_fiber")))
+#else
+#define R360_FIBER_LOCAL thread_local
+#endif
+
 namespace render360::xenia_web {
 // Verbose per-function / per-call text tracing, off by default. In the browser
 // every stderr line is a synchronous WASI fd_write that lands in
@@ -77,6 +87,9 @@ uint32_t ConsumeHIRCorrectnessInteriorEntryMissing();
 void SetHIRCorrectnessContextProvenanceRecovery(bool enabled);
 bool IsHIRCorrectnessExecutionActive();
 void AbandonHIRCorrectnessExecution();
+// Drops startup register strings so a new guest thread does not inherit the
+// title entry's special registers.
+void ClearHIRCorrectnessInitialRegisterStrings();
 bool AddHIRCorrectnessInitialRegister(const char* name, const char* value);
 int CompareHIRCorrectnessLastRegister(const char* name, const char* value,
                                       std::string* actual);

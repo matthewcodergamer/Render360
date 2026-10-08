@@ -13,6 +13,11 @@ on:
       - 'prepare-hir-tail-frame-overlay.py'
       - 'prepare-xenia-hir-value-overlay.py'
       - 'prepare-xenia-ppc-scanner-overlay.py'
+      - 'prepare-xenia-ppc-translator-overlay.py'
+      - 'prepare-xenia-arena-overlay.py'
+      - 'prepare-hir-fiber-locals-overlay.py'
+      - 'render360-guest-fibers.mjs'
+      - 'test-xenos-wait-resume.mjs'
       - 'test-xenia-ppc-instruction-suite.mjs'
       - 'test-core-trap-recovery.mjs'
       - 'test-xex-page-protection.mjs'
@@ -231,6 +236,9 @@ jobs:
 
       - name: Verify Xenia XEX page layout and protection
         run: timeout 90s node ./test-xex-page-protection.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify Xenos WAIT_REG_MEM stall/resume and coherency
+        run: timeout 90s node ./test-xenos-wait-resume.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify a trapped run does not poison the next title run
         run: timeout 90s node ./test-core-trap-recovery.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

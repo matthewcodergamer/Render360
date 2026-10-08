@@ -11,6 +11,13 @@ uint32_t r360_xenos_ring_capacity();
 uint32_t r360_xenos_submit(uint32_t words);
 uint32_t r360_xenos_status();
 uint32_t r360_xenos_last_fault_word();
+uint32_t r360_xenos_interrupts();
+uint32_t r360_xenos_register(uint32_t index);
+uint32_t r360_xenos_set_register(uint32_t index, uint32_t value);
+uint32_t r360_xenos_stall_ring_offset();
+uint32_t r360_xenos_arm_resume();
+uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
+uint32_t r360_xenos_last_interrupt_mask();
 }
 
 namespace render360::xenia_web {
@@ -47,6 +54,10 @@ uint32_t g_last_vd_swap_buffer = 0;
 uint32_t g_last_vd_swap_frontbuffer = 0;
 uint32_t g_last_vd_swap_width = 0;
 uint32_t g_last_vd_swap_height = 0;
+uint32_t g_seen_xenos_interrupts = 0;
+uint32_t g_pending_interrupts = 0;
+uint32_t g_pending_interrupt_mask = 0;
+bool g_gpu_stalled = false;
 
 bool IsGpuMmio(uint32_t address) {
   return (address & kGpuMmioMask) == kGpuMmioBase;
@@ -176,9 +187,10 @@ bool ReadRingWordInternal(uint32_t index, uint32_t* out_value) {
   if (!capacity || index >= capacity) return false;
   const uint64_t address64 = uint64_t(g_ring_base) + uint64_t(index) * 4u;
   if (address64 > UINT32_MAX) return false;
+  const uint32_t ring_address =
+      r360_kernel_gpu_address_to_virtual(static_cast<uint32_t>(address64));
   uint8_t bytes[4] = {};
-  if (!ReadSparseGuestMemory(static_cast<uint32_t>(address64), bytes,
-                             sizeof(bytes))) {
+  if (!ReadSparseGuestMemory(ring_address, bytes, sizeof(bytes))) {
     return false;
   }
   *out_value = (uint32_t(bytes[0]) << 24) |
@@ -194,7 +206,8 @@ bool PublishReadPointer() {
                             static_cast<uint8_t>(g_read_pointer >> 16),
                             static_cast<uint8_t>(g_read_pointer >> 8),
                             static_cast<uint8_t>(g_read_pointer)};
-  return WriteSparseGuestMemory(g_rptr_writeback, bytes, sizeof(bytes));
+  return WriteSparseGuestMemory(r360_kernel_gpu_address_to_virtual(g_rptr_writeback),
+                                bytes, sizeof(bytes));
 }
 
 bool DrainPendingRingToXenos() {
@@ -227,6 +240,21 @@ bool DrainPendingRingToXenos() {
   }
 
   if (!r360_xenos_submit(pending)) {
+    if (r360_xenos_status() == 4u) {
+      // WAIT_REG_MEM stall: consume up to the stalled packet and resume
+      // there (inside its indirect buffers) on the next pump.
+      const uint32_t consumed = r360_xenos_stall_ring_offset();
+      g_read_pointer = (g_read_pointer + consumed) % capacity;
+      r360_xenos_arm_resume();
+      g_gpu_stalled = true;
+      const uint32_t interrupts = r360_xenos_interrupts();
+      if (interrupts > g_seen_xenos_interrupts) {
+        g_pending_interrupts += interrupts - g_seen_xenos_interrupts;
+        g_pending_interrupt_mask |= r360_xenos_last_interrupt_mask();
+      }
+      g_seen_xenos_interrupts = interrupts;
+      return PublishReadPointer();
+    }
     ++g_xenos_rejections;
     g_last_xenos_status = r360_xenos_status();
     g_last_xenos_fault_word = r360_xenos_last_fault_word();
@@ -234,6 +262,13 @@ bool DrainPendingRingToXenos() {
   }
 
   ++g_xenos_submissions;
+  g_gpu_stalled = false;
+  const uint32_t interrupts = r360_xenos_interrupts();
+  if (interrupts > g_seen_xenos_interrupts) {
+    g_pending_interrupts += interrupts - g_seen_xenos_interrupts;
+    g_pending_interrupt_mask |= r360_xenos_last_interrupt_mask();
+  }
+  g_seen_xenos_interrupts = interrupts;
   g_last_xenos_status = r360_xenos_status();
   g_last_xenos_fault_word = r360_xenos_last_fault_word();
   g_read_pointer = g_write_pointer;
@@ -249,6 +284,8 @@ void CaptureRing(uint32_t base, uint32_t size_log2) {
   g_xenos_rejections = 0;
   g_last_xenos_status = 0;
   g_last_xenos_fault_word = 0;
+  g_seen_xenos_interrupts = 0;
+  g_gpu_stalled = false;
   r360_xenos_reset();
   if (base && size_log2 < 29u) g_status = g_status < 1u ? 1u : g_status;
 }
@@ -257,6 +294,8 @@ void CaptureRing(uint32_t base, uint32_t size_log2) {
 
 void ResetTitleGpuRuntime() {
   g_status = 0;
+  g_seen_xenos_interrupts = g_pending_interrupts = g_pending_interrupt_mask = 0;
+  g_gpu_stalled = false;
   g_ring_base = 0;
   g_ring_size_log2 = 0;
   g_read_pointer = 0;
@@ -333,8 +372,26 @@ bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
     case kRegisterCpRbWptr:
       *value = g_write_pointer;
       return true;
+    // Xenia GraphicsSystem::ReadRegister fixed answers.
+    case 0x0F00u:  // RB_EDRAM_TIMING
+      *value = 0x08100748u;
+      return true;
+    case 0x0F01u:  // RB_BC_CONTROL
+      *value = 0x0000200Eu;
+      return true;
+    case 0x194Cu:  // R500_D1MODE_V_COUNTER
+      *value = 0x000002D0u;
+      return true;
+    case 0x1951u:  // interrupt status: vblank
+      *value = 1u;
+      return true;
+    case 0x1961u:  // AVIVO_D1MODE_VIEWPORT_SIZE: 1280x720
+      *value = 0x050002D0u;
+      return true;
     default:
-      return false;
+      // Everything else reads the shared GPU register file.
+      *value = r360_xenos_register(RegisterIndex(address));
+      return true;
   }
 }
 
@@ -352,10 +409,10 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
       if (g_ring_base) DrainPendingRingToXenos();
       return true;
     default:
-      // Other GPU registers are not claimed as supported here. They must reach
-      // the PM4/register path or become an explicit blocker instead of being
-      // silently swallowed.
-      return false;
+      // Xenia GraphicsSystem::WriteRegister: every MMIO write lands in the
+      // register file the command processor reads.
+      r360_xenos_set_register(RegisterIndex(address), value);
+      return true;
   }
 }
 
@@ -369,6 +426,16 @@ uint32_t TitleGpuReadPointerBlockSizeLog2() {
   return g_rptr_block_size_log2;
 }
 uint32_t TitleGpuMmioWrites() { return g_mmio_writes; }
+void TitleGpuPump() {
+  if (g_gpu_stalled && g_ring_base) DrainPendingRingToXenos();
+}
+uint32_t TitleGpuTakePendingInterrupts(uint32_t* cpu_mask) {
+  const uint32_t count = g_pending_interrupts;
+  if (cpu_mask) *cpu_mask = g_pending_interrupt_mask;
+  g_pending_interrupts = 0;
+  g_pending_interrupt_mask = 0;
+  return count;
+}
 uint32_t TitleGpuStatus() { return g_status; }
 uint32_t TitleGpuVdSwapCalls() { return g_vd_swap_calls; }
 uint32_t TitleGpuVdSwapFailures() { return g_vd_swap_failures; }

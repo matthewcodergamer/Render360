@@ -45,6 +45,7 @@ python3 "$ROOT/prepare-xenia-mmio-overlay.py"
 python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-xenia-hir-value-overlay.py"
 python3 "$ROOT/prepare-xenia-ppc-scanner-overlay.py"
+python3 "$ROOT/prepare-xenia-ppc-translator-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
 # Keep the HIR frame-history overlay last: it instruments the fully patched
@@ -53,6 +54,7 @@ python3 "$ROOT/prepare-hir-call-return-stack-overlay.py"
 python3 "$ROOT/prepare-hir-return-metadata-v3-overlay.py"
 python3 "$ROOT/prepare-hir-stack-history-overlay.py"
 python3 "$ROOT/prepare-hir-tail-frame-overlay.py"
+python3 "$ROOT/prepare-hir-fiber-locals-overlay.py"
 python3 "$ROOT/prepare-xenia-shader-interpreter-overlay.py"
 python3 "$ROOT/prepare-xenia-shader-translator-overlay.py"
 python3 "$ROOT/prepare-xenia-spirv-browser-overlay.py"
@@ -174,6 +176,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/cpu/processor.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/processor.cc" ;;
     "src/xenia/cpu/hir/value.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/hir/value.cc" ;;
     "src/xenia/cpu/ppc/ppc_scanner.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_scanner.cc" ;;
+    "src/xenia/cpu/ppc/ppc_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_translator.cc" ;;
     "src/xenia/gpu/shader_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_translator.cc" ;;
     "src/xenia/gpu/shader_interpreter.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) queue_cpp "$rel" "$XENIA/$rel" ;;
@@ -187,6 +190,7 @@ queue_cpp "render360/browser_threading_sleep.cpp" "$ROOT/src/xenia_web_bootstrap
 queue_cpp "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_correctness_executor_vmx.cpp"
 queue_cpp "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 queue_cpp "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
+queue_cpp "render360/guest_fibers.cpp" "$ROOT/src/xenia_web_bootstrap/guest_fibers.cpp"
 queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 queue_cpp "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
@@ -220,7 +224,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 26 ))
+expected=$(( ${#SOURCES[@]} + 2 + 27 ))
 actual=$(( passed + failed ))
 
 echo

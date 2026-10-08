@@ -47,6 +47,15 @@ void ResetExtendedKernelServices();
 // KeSetCurrentStackPointers moves the calling thread's r1: returns true once
 // with the new stack pointer after such a service call.
 bool TakeKernelServiceStackPointer(uint32_t* value);
+// A title-created guest thread running as a fiber ended: its entry returned
+// (`returned`, exit code from r3) or ExTerminateThread ended it. Marks the
+// thread exited and clears its thread-exit terminal so the rest of the title
+// keeps running. Returns false when the thread stopped for another reason.
+bool FinishGuestThreadFiber(uint32_t native, bool returned, uint32_t exit_code);
+// Xenia GraphicsSystem interrupts: a 60 Hz vblank (source 0) and the PM4
+// INTERRUPT packets the command processor executed (source 1) run the title's
+// VdSetGraphicsInterruptCallback callback. Called at guest call boundaries.
+void MaybeDeliverGuestInterrupts();
 
 }  // namespace render360::xenia_web
 

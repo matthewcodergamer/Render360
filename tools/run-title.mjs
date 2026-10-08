@@ -43,6 +43,7 @@ function parseArgs(argv){
     else if(a==='--verbose'||a==='-v')args.verbose=true;
     else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--license')args.license=String(argv[++i]||'trial');
+    else if(a==='--watch')args.watch=Number(argv[++i])>>>0;
     else if(a==='--dump-guest'){const [addr,len,file]=String(argv[++i]).split(':');(args.dumps??=[]).push({address:Number(addr)>>>0,length:Number(len)>>>0,file});}
     else if(a==='--help'||a==='-h')args.help=true;
     else if(!args.input)args.input=a;
@@ -155,6 +156,7 @@ async function main(){
   const budget=bootstrap.exports.r360_hir_set_instruction_budget?.(args.budget>>>0)>>>0;
   // Per-call/per-function stderr tracing is off by default for speed.
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
+  if(args.watch)bootstrap.exports.r360_debug_watch?.(args.watch);
   // --max-minstr N: stop after N million guest instructions in total.
   bootstrap.exports.r360_hir_set_total_instruction_budget?.(args.maxMillions>>>0||0);
   // XBLA license mask (Xenia license_mask): trial by default, --license full for an owned title.
@@ -183,6 +185,8 @@ async function main(){
       unsupportedKernelCall:result.reachedKernelBlocker,
       hirBlocker:result.executionBlockerKind?{kind:result.executionBlockerKind,opcode:result.executionBlockerOpcode,address:hex(result.executionBlockerAddress)}:null,
       memoryFault:result.memoryFaultCode?{code:result.memoryFaultCode,address:hex(result.memoryFaultAddress)}:null,
+      guestFibers:result.guestFibers??null,
+      framesPresented:(()=>{const x=bootstrap.exports;const f=n=>typeof x[n]==='function'?(x[n]()>>>0):null;return {vdSwapCalls:f('r360_title_gpu_vd_swap_calls'),vblankInterrupts:f('r360_kernel_vblank_interrupts'),cpInterrupts:f('r360_kernel_cp_interrupts'),gpuPackets:f('r360_xenos_packets'),gpuDraws:f('r360_xenos_draws'),gpuIndirect:f('r360_xenos_indirect_buffers'),gpuStatus:f('r360_xenos_status'),gpuInterruptsRaised:f('r360_xenos_interrupts'),gpuLastOpcode:f('r360_xenos_last_opcode'),gpuFaultWord:f('r360_xenos_last_fault_word'),gpuMemoryWrites:f('r360_xenos_memory_writes'),gpuSwaps:f('r360_xenos_swaps'),gpuWaits:f('r360_xenos_waits'),vdSwapFailures:f('r360_title_gpu_vd_swap_failures'),width:f('r360_title_gpu_last_vd_swap_width'),height:f('r360_title_gpu_last_vd_swap_height')};})(),
       mainThread:result.mainThreadContext?{stackBytes:result.mainThreadContext.stackBytes,tlsBytes:result.mainThreadContext.tlsBytes,tlsTemplate:result.mainThreadContext.tlsTemplate}:null,
       kernelVariables:{relocated:result.kernelVariableRegistration?.relocated?.map(v=>v.name),placeholders:result.kernelVariableRegistration?.placeholders?.map(v=>kernelExportName(v.module,v.ordinal))},
       importedKernelFunctions:result.kernelImports?.plan?.filter(i=>i.isKernelModule&&i.kind==='function').length,
@@ -206,7 +210,7 @@ async function main(){
   report.gprsAtStop=Array.from({length:32},(_,i)=>hex(Number(BigInt.asUintN(32,BigInt(bootstrap.exports.r360_ppc_probe_correctness_gpr?.(i)??0)))));
   report.totalInstructionsMillions=bootstrap.exports.r360_hir_total_instructions_millions?.()>>>0;
   report.hostStackHeadroom=bootstrap.exports.r360_trap_stack_headroom?.()>>>0;
-  report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK|HIR_MEMORY)/.test(l)).slice(-12);
+  report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK|HIR_MEMORY|XENOS)/.test(l)).slice(-12);
 
   const statusOf=s=>['?','ok','UNSUPPORTED','INVALID','EXIT','BLOCKED'][s]||String(s);
   console.log(`Render360 title runner · ${report.kind} · ${report.vfs.files} files · ${elapsedMs} ms`);
@@ -214,6 +218,8 @@ async function main(){
   else{
     console.log(`entry ${report.entry} · ${report.instructions} PPC instructions (native HIR) · ${report.kernelCalls} kernel calls`);
     console.log(`stopped at: ${report.runtimeBoundary}`);
+    if(report.framesPresented?.vdSwapCalls)console.log(`  frames presented (VdSwap): ${report.framesPresented.vdSwapCalls} at ${report.framesPresented.width}x${report.framesPresented.height}${report.framesPresented.vdSwapFailures?`, ${report.framesPresented.vdSwapFailures} failed`:''} · ${report.framesPresented.vblankInterrupts} vblank + ${report.framesPresented.cpInterrupts} CP interrupts · ${report.framesPresented.gpuPackets} PM4 packets, ${report.framesPresented.gpuDraws} draws`);
+    if(report.guestFibers)console.log(`  guest threads: ${report.guestFibers.threads} title-created, ${report.guestFibers.switches} switches, stopped on ${report.guestFibers.endedOn?`thread 0x${report.guestFibers.endedOnThread.toString(16)}`:'the primary thread'}`);
     if(report.unsupportedKernelCall)console.log(`  next kernel export to implement: ${report.unsupportedKernelCall.module}!${report.unsupportedKernelCall.name} (ordinal ${hex(report.unsupportedKernelCall.ordinal)})`);
     if(report.kernelBoundary)console.log(`  ${report.kernelBoundary.kind}: ${report.kernelBoundary.reason} via ${report.kernelBoundary.export}${report.kernelBoundary.callerLr?` from LR ${hex(report.kernelBoundary.callerLr)}`:''}`);
     if(report.hirBlocker)console.log(`  HIR blocker kind ${report.hirBlocker.kind} opcode ${report.hirBlocker.opcode} at ${report.hirBlocker.address}`);

@@ -30,9 +30,11 @@
 #include <string>
 #include <vector>
 
+#include "guest_fibers.h"
 #include "kernel_export_ordinals.h"
 #include "kernel_ntstatus_table.h"
 #include "sparse_guest_memory.h"
+#include "title_gpu_runtime.h"
 
 #if defined(__wasm__)
 #include <wasi/api.h>
@@ -54,6 +56,7 @@ uint32_t r360_guest_thread_terminate(uint32_t handle, uint32_t exit_code);
 uint32_t r360_guest_thread_state(uint32_t handle);
 uint32_t r360_guest_thread_stack_base(uint32_t handle);
 uint32_t r360_guest_thread_stack_top(uint32_t handle);
+uint32_t r360_guest_thread_pcr(uint32_t handle);
 uint32_t r360_guest_thread_stack_size(uint32_t handle);
 uint32_t r360_guest_thread_set_guest_objects(uint32_t handle, uint32_t pcr,
                                              uint32_t kthread, uint32_t arg1,
@@ -295,6 +298,13 @@ uint32_t g_timestamp_bundle = 0;
 uint64_t g_uptime_origin_ms = 0;
 uint32_t g_graphics_interrupt_callback = 0;
 uint32_t g_graphics_interrupt_user_data = 0;
+// The guest thread whose stack and KPCR graphics interrupts run on (Xenia's
+// "GPU VSync" host thread), kept suspended so the scheduler never runs it.
+uint32_t g_interrupt_thread = 0;
+uint64_t g_last_vblank_ms = 0;
+uint32_t g_interrupt_poll = 0;
+uint32_t g_vblank_interrupts = 0;
+uint32_t g_cp_interrupts = 0;
 
 struct TerminalInfo {
   uint32_t kind = kTerminalNone;
@@ -569,6 +579,10 @@ std::map<uint32_t, uint32_t>& PhysicalRanges() {  // physical base -> size
   static std::map<uint32_t, uint32_t> ranges;
   return ranges;
 }
+std::map<uint32_t, uint32_t>& PhysicalVirtualBases() {  // physical base -> virtual base
+  static std::map<uint32_t, uint32_t> bases;
+  return bases;
+}
 
 uint32_t PhysicalViewBase(uint32_t page_size) {
   if (page_size <= 4096u) return 0xE0000000u;
@@ -624,6 +638,7 @@ uint32_t AllocatePhysical(uint32_t size, uint32_t protect_bits,
         return 0;
       }
       PhysicalRanges()[physical] = adjusted_size;
+      PhysicalVirtualBases()[physical] = virtual_address;
       PhysicalByVirtual()[virtual_address] = {virtual_address, physical,
                                                 adjusted_size, page_size,
                                                 protect_bits};
@@ -941,6 +956,7 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
                      const std::vector<uint32_t>& handles, bool wait_all,
                      uint32_t timeout_ptr) {
   if (objects.empty() || objects.size() > 64) return X_STATUS_INVALID_PARAMETER;
+  for (uint32_t attempt = 0;; ++attempt) {
   for (uint32_t object : objects) UpdateTimerByGuest(object);
   std::vector<bool> signaled(objects.size());
   for (size_t i = 0; i < objects.size(); ++i) {
@@ -969,6 +985,8 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
   }
   uint64_t timeout = 0;
   if (!Rd64(timeout_ptr, &timeout)) return Invalid();
+  // A bounded wait gives the other guest threads one turn to signal first.
+  if (timeout && attempt == 0 && GuestFiberYield(false)) continue;
   if (timeout) {
     // No other guest thread can signal during this synchronous kernel call, so
     // a bounded wait elapses. Detect a guest spinning on the same unsignalled
@@ -984,6 +1002,7 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
     AdvanceVirtualTime(timeout);
   }
   return X_STATUS_TIMEOUT;
+  }
 }
 
 bool GuestObjectForHandle(uint32_t handle, uint32_t* guest) {
@@ -3089,9 +3108,13 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       uint64_t interval = 0;
       if (!Rd64(r5, &interval)) return Invalid();
       AdvanceVirtualTime(interval);
+      GuestFiberNoteProgress();
+      GuestFiberYield(false);
       return X_STATUS_SUCCESS;
     }
     case kx::NtYieldExecution:
+      GuestFiberNoteProgress();
+      GuestFiberYield(false);
       return X_STATUS_SUCCESS;
 
     // --- Threads -----------------------------------------------------------
@@ -3661,6 +3684,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       auto it = PhysicalByVirtual().find(r4);
       if (it != PhysicalByVirtual().end()) {
         PhysicalRanges().erase(it->second.physical_address);
+        PhysicalVirtualBases().erase(it->second.physical_address);
         PhysicalByVirtual().erase(it);
       }
       return 0;
@@ -5137,19 +5161,102 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
 uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
                                        const uint32_t args[8],
                                        uint32_t* result) {
-  g_status = kKernelServiceSuccess;
-  g_handled = true;
-  uint32_t value = 0;
-  if (module == kModuleXboxkrnl) {
-    value = DispatchXboxkrnl(ordinal, args);
-  } else if (module == kModuleXam) {
-    value = DispatchXam(ordinal, args);
-  } else {
-    g_handled = false;
+  // The caller's registers are per guest thread; another fiber may run (and
+  // make kernel calls) while this one is suspended in a wait.
+  const uint32_t caller_r13 = g_caller_r13, caller_lr = g_caller_lr,
+                 caller_r1 = g_caller_r1;
+  for (;;) {
+    g_status = kKernelServiceSuccess;
+    g_handled = true;
+    uint32_t value = 0;
+    if (module == kModuleXboxkrnl) {
+      value = DispatchXboxkrnl(ordinal, args);
+    } else if (module == kModuleXam) {
+      value = DispatchXam(ordinal, args);
+    } else {
+      g_handled = false;
+    }
+    if (!g_handled) return kKernelServiceIdle;
+    // A wait on an object another guest thread must signal (or a lock it
+    // holds): run that thread, then retry this call. Blocked paths have no
+    // side effects, so the retry sees the same arguments and fresh state.
+    if (g_status == kKernelServiceWouldBlock && g_wait.reason >= 1 &&
+        g_wait.reason <= 3 && GuestFiberYield(true)) {
+      g_caller_r13 = caller_r13;
+      g_caller_lr = caller_lr;
+      g_caller_r1 = caller_r1;
+      continue;
+    }
+    if (g_status == kKernelServiceSuccess) GuestFiberNoteProgress();
+    *result = value;
+    return g_status;
   }
-  if (!g_handled) return kKernelServiceIdle;
-  *result = value;
-  return g_status;
+}
+
+void MaybeDeliverGuestInterrupts() {
+  if (!g_graphics_interrupt_callback || !GuestFibersActive() ||
+      GuestInterruptActive()) {
+    return;
+  }
+  if ((++g_interrupt_poll & 63u) != 0) return;
+  TitleGpuPump();
+  uint32_t cpu_mask = 0;
+  const uint32_t cp_interrupts = TitleGpuTakePendingInterrupts(&cpu_mask);
+  const uint64_t now = MonotonicMillis();
+  const bool vblank = now - g_last_vblank_ms >= 16u;
+  if (!vblank && !cp_interrupts) return;
+  if (!g_interrupt_thread) {
+    const uint32_t native =
+        r360_guest_thread_create(g_graphics_interrupt_callback, 0, 0x10000u, 0);
+    if (!native) return;
+    if (!PrepareThreadObjects(native, g_graphics_interrupt_callback, 0, 0)) {
+      r360_guest_thread_terminate(native, 0);
+      return;
+    }
+    r360_guest_thread_suspend(native);
+    g_interrupt_thread = native;
+  }
+  const uint32_t stack_top = r360_guest_thread_stack_top(g_interrupt_thread);
+  const uint32_t pcr = r360_guest_thread_pcr(g_interrupt_thread);
+  // Processor::ExecuteInterrupt: the KPCR TLS pointer is zero during
+  // interrupts (titles check it).
+  uint32_t tls = 0;
+  Rd32(pcr, &tls);
+  Wr32(pcr, 0);
+  const uint32_t caller_r13 = g_caller_r13, caller_lr = g_caller_lr,
+                 caller_r1 = g_caller_r1;
+  for (uint32_t i = 0; i < cp_interrupts && i < 8u; ++i) {
+    for (uint32_t cpu = 0; cpu < 6; ++cpu) {
+      if (!(cpu_mask & (1u << cpu))) continue;
+      // XThread::SetActiveCpu: KPCR current_cpu (+0x10C).
+      Wr8(pcr + 0x10Cu, uint8_t(cpu));
+      RunGuestInterrupt(g_graphics_interrupt_callback, 1u,
+                        g_graphics_interrupt_user_data, stack_top, pcr);
+      ++g_cp_interrupts;
+    }
+  }
+  if (vblank) {
+    g_last_vblank_ms = now;
+    Wr8(pcr + 0x10Cu, 2u);  // GraphicsSystem::MarkVblank dispatches on CPU 2
+    RunGuestInterrupt(g_graphics_interrupt_callback, 0u,
+                      g_graphics_interrupt_user_data, stack_top, pcr);
+    ++g_vblank_interrupts;
+  }
+  g_caller_r13 = caller_r13;
+  g_caller_lr = caller_lr;
+  g_caller_r1 = caller_r1;
+  Wr32(pcr, tls);
+}
+
+bool FinishGuestThreadFiber(uint32_t native, bool returned, uint32_t exit_code) {
+  if (g_terminal.kind == kTerminalThreadExit) {
+    g_terminal = {};
+    return true;  // ExTerminateThread already marked and terminated it
+  }
+  if (!returned) return false;
+  MarkThreadExited(r360_guest_thread_kthread(native), exit_code);
+  r360_guest_thread_terminate(native, exit_code);
+  return true;
 }
 
 void ResetExtendedKernelServices() {
@@ -5162,6 +5269,9 @@ void ResetExtendedKernelServices() {
   g_timestamp_bundle = 0;
   g_uptime_origin_ms = 0;
   g_graphics_interrupt_callback = g_graphics_interrupt_user_data = 0;
+  g_interrupt_thread = 0;
+  g_last_vblank_ms = 0;
+  g_interrupt_poll = g_vblank_interrupts = g_cp_interrupts = 0;
   g_terminal = {};
   g_wait = {};
   g_timeout_spin = {};
@@ -5174,6 +5284,7 @@ void ResetExtendedKernelServices() {
   g_pool_top = kPoolBase;
   PhysicalByVirtual().clear();
   PhysicalRanges().clear();
+  PhysicalVirtualBases().clear();
   Objects().clear();
   ThreadPriority().clear();
   ThreadAffinity().clear();
@@ -5447,6 +5558,26 @@ uint32_t r360_audio_client_last_samples(uint32_t index) {
   return index < r360k::kMaxAudioClients ? r360k::g_audio_clients[index].last_samples : 0u;
 }
 
+// Xenia Memory::TranslatePhysical for GPU-visible addresses: the command
+// processor receives physical addresses (MmGetPhysicalAddress) for ring
+// write-back, indirect buffers, constants, shaders and fences. Addresses in a
+// CPU view (>= 0x20000000) are already guest virtual addresses.
+R360_WASM_EXPORT("r360_kernel_gpu_address_to_virtual")
+uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
+  if (address >= 0x20000000u) return address;
+  auto& ranges = r360k::PhysicalRanges();
+  auto it = ranges.upper_bound(address);
+  if (it == ranges.begin()) return address;
+  --it;
+  if (address - it->first >= it->second) return address;
+  auto base = r360k::PhysicalVirtualBases().find(it->first);
+  if (base == r360k::PhysicalVirtualBases().end()) return address;
+  return base->second + (address - it->first);
+}
+R360_WASM_EXPORT("r360_kernel_vblank_interrupts")
+uint32_t r360_kernel_vblank_interrupts() { return r360k::g_vblank_interrupts; }
+R360_WASM_EXPORT("r360_kernel_cp_interrupts")
+uint32_t r360_kernel_cp_interrupts() { return r360k::g_cp_interrupts; }
 R360_WASM_EXPORT("r360_kernel_graphics_interrupt_callback")
 uint32_t r360_kernel_graphics_interrupt_callback() {
   return r360k::g_graphics_interrupt_callback;

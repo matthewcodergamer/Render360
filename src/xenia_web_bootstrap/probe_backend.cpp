@@ -5,10 +5,13 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <unordered_map>
 #include <vector>
 
+#include "guest_fibers.h"
 #include "hir_correctness_executor.h"
 #include "kernel_import_probe.h"
+#include "kernel_xboxkrnl_services.h"
 #include "sparse_guest_memory.h"
 #include "xex_pe_guest_loader.h"
 #include "wasm_backend_call_probe.h"
@@ -60,7 +63,7 @@ enum TrapPhase : uint32_t {
 char g_trap_reason[384] = {};
 uint32_t g_trap_phase = kTrapPhaseIdle;
 uint32_t g_trap_address = 0;
-uint32_t g_trap_depth = 0;
+R360_FIBER_LOCAL uint32_t g_trap_depth = 0;
 uint32_t g_trap_stack_low_water = 0;
 uint32_t g_trap_stack_exhausted = 0;
 
@@ -75,7 +78,7 @@ uint32_t CurrentStackPointer() {
 uint32_t StackHeadroom() {
 #if defined(__wasm__)
   const uint32_t sp = CurrentStackPointer();
-  const uint32_t low = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&__stack_low));
+  const uint32_t low = static_cast<uint32_t>(GuestFiberStackLow());
   if (!g_trap_stack_low_water || sp < g_trap_stack_low_water) g_trap_stack_low_water = sp;
   return sp > low ? sp - low : 0;
 #else
@@ -276,6 +279,110 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   return true;
 }
 
+// Translation cache. Xenia translates a guest function once and then calls
+// its machine code; the HIR executor runs the finalized HIRBuilder, so a
+// nested call keeps the builder its first translation produced (the
+// PPCTranslator overlay hands it over) and later calls execute it directly.
+// Entries are keyed by function start, owning .pdata end and fragment mode,
+// dropped when the code pages are rewritten, pinned while executing (guest
+// recursion, suspended fibers) and evicted least-recently-used beyond a byte
+// budget.
+struct CachedTranslation {
+  std::unique_ptr<xe::cpu::hir::HIRBuilder> builder;
+  uint32_t begin = 0;
+  uint32_t end = 0;
+  uint32_t generation_begin = 0;
+  uint32_t generation_end = 0;
+  uint64_t last_use = 0;
+  size_t bytes = 0;
+  uint32_t pins = 0;
+};
+std::unordered_map<uint64_t, CachedTranslation> g_translation_cache;
+size_t g_translation_cache_bytes = 0;
+size_t g_translation_cache_budget = size_t(192) * 1024 * 1024;
+uint64_t g_translation_cache_clock = 0;
+uint64_t g_translation_cache_hits = 0;
+uint64_t g_translation_cache_misses = 0;
+// The key the next retained builder belongs to; per guest thread because a
+// translation can be suspended mid-execution by a fiber switch.
+R360_FIBER_LOCAL bool g_retain_pending = false;
+R360_FIBER_LOCAL uint64_t g_retain_key = 0;
+R360_FIBER_LOCAL uint32_t g_retain_begin = 0;
+R360_FIBER_LOCAL uint32_t g_retain_end = 0;
+
+uint64_t TranslationKey(uint32_t begin, uint32_t end, bool fragment) {
+  return (uint64_t(begin) << 32) | (uint64_t(end) & ~3ull) | (fragment ? 1u : 0u);
+}
+
+void EvictTranslations() {
+  while (g_translation_cache_bytes > g_translation_cache_budget) {
+    auto victim = g_translation_cache.end();
+    for (auto it = g_translation_cache.begin(); it != g_translation_cache.end(); ++it) {
+      if (it->second.pins) continue;
+      if (victim == g_translation_cache.end() ||
+          it->second.last_use < victim->second.last_use) {
+        victim = it;
+      }
+    }
+    if (victim == g_translation_cache.end()) return;
+    g_translation_cache_bytes -= victim->second.bytes;
+    g_translation_cache.erase(victim);
+  }
+}
+
+CachedTranslation* LookupTranslation(uint64_t key) {
+  auto it = g_translation_cache.find(key);
+  if (it == g_translation_cache.end()) return nullptr;
+  CachedTranslation& entry = it->second;
+  if (entry.generation_begin != GetWasmBackendExecutableContentGeneration(entry.begin) ||
+      entry.generation_end != GetWasmBackendExecutableContentGeneration(entry.end)) {
+    if (entry.pins) return nullptr;  // rewritten while running: retranslate
+    g_translation_cache_bytes -= entry.bytes;
+    g_translation_cache.erase(it);
+    return nullptr;
+  }
+  entry.last_use = ++g_translation_cache_clock;
+  return &entry;
+}
+
+// Runs a cached translation as ProbeAssembler::Assemble runs a nested one.
+bool ExecuteCachedTranslation(CachedTranslation& entry) {
+  auto* memory = g_probe_backend && g_probe_backend->processor()
+                     ? g_probe_backend->processor()->memory()
+                     : nullptr;
+  if (!memory) return false;
+  ++g_translation_cache_hits;
+  ++entry.pins;
+  NoteTrapPhase(kTrapPhaseExecute, entry.begin);
+  const HIRCorrectnessResult result =
+      ExecuteHIRCorrectnessProbe(entry.builder.get(), memory);
+  --entry.pins;
+  return result.supported && result.reached_return_boundary;
+}
+
+// DefineFunction (translate + execute), or the cached translation of the same
+// function. The interior entry and provenance mode are applied by the caller.
+bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
+                       xe::cpu::GuestFunction* function, uint64_t key) {
+  if (CachedTranslation* cached = LookupTranslation(key)) {
+    return ExecuteCachedTranslation(*cached);
+  }
+  ++g_translation_cache_misses;
+  const bool saved_pending = g_retain_pending;
+  const uint64_t saved_key = g_retain_key;
+  const uint32_t saved_begin = g_retain_begin, saved_end = g_retain_end;
+  g_retain_pending = true;
+  g_retain_key = key;
+  g_retain_begin = function->address();
+  g_retain_end = function->end_address();
+  const bool ok = frontend->DefineFunction(function, 0);
+  g_retain_pending = saved_pending;
+  g_retain_key = saved_key;
+  g_retain_begin = saved_begin;
+  g_retain_end = saved_end;
+  return ok;
+}
+
 bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                                      uint32_t call_flags);
 
@@ -287,13 +394,15 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
 // function this resolver is running is deferred: that function completes
 // (CALL_TAIL ends its frame), and the target runs here in its place at the
 // same depth, iteratively.
-uint32_t g_tail_frames_active = 0;
-bool g_pending_tail_valid = false;
-uint32_t g_pending_tail_address = 0;
-uint32_t g_pending_tail_flags = 0;
-xe::cpu::Module* g_pending_tail_module = nullptr;
+R360_FIBER_LOCAL uint32_t g_tail_frames_active = 0;
+R360_FIBER_LOCAL bool g_pending_tail_valid = false;
+R360_FIBER_LOCAL uint32_t g_pending_tail_address = 0;
+R360_FIBER_LOCAL uint32_t g_pending_tail_flags = 0;
+R360_FIBER_LOCAL xe::cpu::Module* g_pending_tail_module = nullptr;
 
 bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
+  // Guest call boundaries are where pending graphics interrupts run.
+  MaybeDeliverGuestInterrupts();
   const uint32_t flags = GetHIRCorrectnessCurrentCallFlags();
   if ((flags & xe::cpu::hir::CALL_TAIL) && g_tail_frames_active > 0 &&
       !g_pending_tail_valid) {
@@ -465,7 +574,9 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   SetHIRCorrectnessExecutionEntry(interior_entry);
   NoteTrapPhase(kTrapPhaseTranslate, address);
   ++g_trap_depth;
-  const bool translated = frontend->DefineFunction(&nested_function, 0);
+  const bool translated = DefineOrRunCached(
+      frontend, &nested_function,
+      TranslationKey(fn_begin, use_owner ? fn_end : 0u, false));
   --g_trap_depth;
   SetHIRCorrectnessExecutionEntry(0u);
   const uint32_t missing_entry =
@@ -507,7 +618,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   // entry would recreate the bug this fallback is intended to avoid.
   SetHIRCorrectnessExecutionEntry(0u);
   SetHIRCorrectnessContextProvenanceRecovery(true);
-  const bool fragment_translated = frontend->DefineFunction(&fragment, 0);
+  const bool fragment_translated =
+      DefineOrRunCached(frontend, &fragment, TranslationKey(address, fn_end, true));
   SetHIRCorrectnessContextProvenanceRecovery(false);
   SetHIRCorrectnessExecutionEntry(0u);
   R360_VERBOSE_TRACE(
@@ -528,6 +640,43 @@ bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAd
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
+bool WantsTranslatedBuilder() { return g_retain_pending; }
+void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) {
+  if (!g_retain_pending || !builder) return;
+  g_retain_pending = false;
+  auto it = g_translation_cache.find(g_retain_key);
+  if (it != g_translation_cache.end()) {
+    if (it->second.pins) return;  // a stale entry is still executing
+    g_translation_cache_bytes -= it->second.bytes;
+    g_translation_cache.erase(it);
+  }
+  CachedTranslation entry;
+  entry.begin = g_retain_begin;
+  entry.end = g_retain_end ? g_retain_end : g_retain_begin;
+  entry.generation_begin = GetWasmBackendExecutableContentGeneration(entry.begin);
+  entry.generation_end = GetWasmBackendExecutableContentGeneration(entry.end);
+  // Arena use is private to Xenia; an HIR instruction plus its result value
+  // and operand uses is about 192 bytes, plus the 64 KiB first arena chunk.
+  size_t instructions = 0;
+  for (auto* block = builder->first_block(); block; block = block->next) {
+    for (auto* instr = block->instr_head; instr; instr = instr->next) ++instructions;
+  }
+  entry.bytes = instructions * 192 + 64 * 1024;
+  entry.last_use = ++g_translation_cache_clock;
+  entry.builder = std::move(builder);
+  g_translation_cache_bytes += entry.bytes;
+  g_translation_cache.emplace(g_retain_key, std::move(entry));
+  EvictTranslations();
+}
+void ResetTranslationCache() {
+  for (auto it = g_translation_cache.begin(); it != g_translation_cache.end();) {
+    if (it->second.pins) { ++it; continue; }
+    g_translation_cache_bytes -= it->second.bytes;
+    it = g_translation_cache.erase(it);
+  }
+  g_translation_cache_hits = g_translation_cache_misses = 0;
+  g_retain_pending = false;
+}
 // __restgprlr_N entries found by r360_ppc_probe_register_save_rest
 // (XexModule::FindSaveRest). The PPC scanner overlay consults this so a
 // function ends at `b __restgprlr_N` before that helper was ever resolved.
@@ -735,4 +884,17 @@ R360_WASM_EXPORT("r360_trap_stack_exhausted")
 uint32_t r360_trap_stack_exhausted() { return render360::xenia_web::g_trap_stack_exhausted; }
 R360_WASM_EXPORT("r360_trap_reset")
 void r360_trap_reset() { render360::xenia_web::ResetTrapReport(); }
+}
+
+extern "C" {
+// Translation cache statistics and budget (megabytes; 0 keeps the default).
+uint32_t r360_hir_cache_hits() { return uint32_t(render360::xenia_web::g_translation_cache_hits); }
+uint32_t r360_hir_cache_misses() { return uint32_t(render360::xenia_web::g_translation_cache_misses); }
+uint32_t r360_hir_cache_entries() { return uint32_t(render360::xenia_web::g_translation_cache.size()); }
+uint32_t r360_hir_cache_kilobytes() { return uint32_t(render360::xenia_web::g_translation_cache_bytes / 1024); }
+uint32_t r360_hir_cache_set_budget_mb(uint32_t megabytes) {
+  if (megabytes) render360::xenia_web::g_translation_cache_budget = size_t(megabytes) * 1024 * 1024;
+  render360::xenia_web::EvictTranslations();
+  return uint32_t(render360::xenia_web::g_translation_cache_budget / (1024 * 1024));
+}
 }

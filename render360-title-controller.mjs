@@ -1,3 +1,4 @@
+import {runWithGuestFibers} from './render360-guest-fibers.mjs';
 import { prepareRetailXexImage } from './retail-xex-image-pipeline.mjs';
 import { decodeXexImportLibraries } from './render360-xex-imports.mjs';
 import { buildKernelImportPlan } from './render360-kernel-imports.mjs';
@@ -475,7 +476,10 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   startupGprCount+=applyInitialGprs(bootstrap,initialGprs);
   const scannedEntry=maybe(bootstrap,'r360_title_handoff_translate_scanned_entry');
   if(scanEntryFunction&&!scannedEntry)throw new Error('browser bootstrap is missing scanned title-entry execution');
-  const hir=scanEntryFunction?(scannedEntry()>>>0):(pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0);
+  // Title-created guest threads run as fibers while the primary thread executes.
+  const fiberRun=scanEntryFunction?runWithGuestFibers(bootstrap,()=>scannedEntry()>>>0):{result:pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0,fibers:null};
+  const hir=fiberRun.result>>>0;
+  const guestFibers=fiberRun.fibers;
   const entryExecutionMode=scanEntryFunction?'xenia-scanned-entry-function':'bounded-entry-byte-probe';
   if(!hir){
     const handoffStatus=pick(bootstrap,'r360_title_handoff_status')()>>>0;
@@ -568,5 +572,5 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const browserHleTelemetry=browserHle?readBrowserTitleHleTelemetry({bootstrap,hle:browserHle}):null;
   const browserHleSummary=browserHle?{kind:'relocated-ppc-abi-shims',windowBase:browserHle.windowBase,windowBytes:browserHle.windowBytes,addresses:browserHle.addresses,telemetryAddresses:browserHle.telemetryAddresses}:null;
 
-  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,kernelBoundary,kernelTrace,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry};
+  return {headerSize,preparedBytes:prepared.length,peStagingCapacity:peStage.capacity,peStagingGrew:peStage.stagingGrew,entry,xexEntry,peEntry,entrySource:'xex-optional-header',hir,handoffBytes:pick(bootstrap,'r360_title_handoff_bytes')()>>>0,status:pick(bootstrap,'r360_title_handoff_status')()>>>0,entryExecutionMode,startupGprCount,mainThreadContext,executionStatus,executionInstructions,executionR3Hex,executionBlockerKind,executionBlockerOpcode,executionBlockerAddress,memoryFaultAddress,memoryFaultCode,stackTrace,translatedFunctionCount,firstTranslatedFunction,runtimeBoundary,importedLibraries,kernelImports,kernelImportCount:kernelImports.plan.length,kernelRegistration,kernelVariableRegistration,kernelCalls,kernelLastStatus,reachedKernelBlocker,kernelBoundary,kernelTrace,firstKernelBlocker,titleGpuTelemetry,browserHle:browserHleSummary,browserHleTelemetry,guestFibers};
 }

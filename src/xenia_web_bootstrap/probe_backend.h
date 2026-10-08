@@ -28,6 +28,8 @@ struct ProbeTelemetry {
 void ResetProbeTelemetry();
 void ResetTrapReport();
 void ResetTailTrampoline();
+// Drops every cached nested-call translation (new title or new probe code).
+void ResetTranslationCache();
 void RegisterRestGprLrAddress(uint32_t address);
 bool IsRegisteredRestGprLr(uint32_t address);
 void NoteTopLevelTranslate(uint32_t address);

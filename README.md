@@ -23,11 +23,13 @@ XBOXKRNL / XAM STARTUP SERVICES            PORTED FROM XENIA; CI CRITICS
 GUEST FILE SYSTEM (game:, d:, Cdrom0)      IMPLEMENTED; CI CRITICS
 SAVE DATA (XamContent, save:)              IMPLEMENTED; KEPT PER SESSION
 GUEST THREAD / TLS / KTHREAD / KPCR        IMPLEMENTED; SCHEDULER COOPERATIVE
-THREADS THAT BLOCK AND RESUME              NOT YET (next CPU milestone)
-XENOS PM4 / RING FOUNDATION                IMPLEMENTED; BRAID HAS NOT REACHED IT
+THREADS THAT BLOCK AND RESUME              IMPLEMENTED (Asyncify fibers on the HIR executor)
+NESTED-CALL TRANSLATION CACHE              IMPLEMENTED (about 8x faster startup)
+GPU INTERRUPTS (vblank + CP INTERRUPT)     IMPLEMENTED (Xenia ExecuteInterrupt)
+XENOS PM4 / RING FOUNDATION                BANJO-TOOIE DRIVES IT (WAIT_REG_MEM, fences, IBs)
 VdSwap / XE_SWAP PATH                      CI-PROVEN FOUNDATION
 XENOS SHADER -> SPIR-V -> WGSL / WEBGPU    CI-PROVEN FOUNDATION
-REAL XBOX COMMERCIAL-TITLE FIRST FRAME     NOT YET VERIFIED
+REAL XBOX COMMERCIAL-TITLE FIRST FRAME     BANJO-TOOIE PRESENTS FRAMES HEADLESSLY; PIXELS NOT YET VERIFIED
 XBOX COMMERCIAL GAMEPLAY                   NOT YET VERIFIED
 
 PC SOURCE / PORTAL TRACK                   UNCHANGED SINCE SEPTEMBER 7
@@ -42,6 +44,38 @@ PORTAL GAMEPLAY / RENDERED FRAME           NOT YET VERIFIED
 The last real-device Braid measurement (iPhone, V74) got past the V58 shared-epilog blocker, executed 38 HIR instructions from entry `0x8236EF38`, made five kernel calls and then called `xboxkrnl!HalReturnToFirmware` (ordinal `0x28`). That is the title deliberately giving up, not an emulator crash: Xenia implements the same export as process exit. It almost always means an earlier kernel call returned something the game did not accept.
 
 V75 therefore replaces the placeholder kernel surface with a port of Xenia's own `xboxkrnl`/`xam` behaviour (see below). Braid has **not** been re-measured on a device with V75 yet. The next real-device run is the next authoritative data point; the browser now names the stop reason and lists the kernel calls behind it, so one run tells us exactly what to fix next.
+
+### October 8 (later): Banjo-Tooie reaches its frame loop
+
+In the headless runner, the Banjo-Tooie XBLA package now runs past startup and into the game's
+render loop. In 3.3 billion guest instructions it presented **5,001 frames** (`VdSwap`), and the
+GPU command processor executed **14,870 draw calls** and 4,999 swaps, with vblank and
+command-processor interrupts delivered to the title. What those draws look like on screen is not
+verified yet: no pixels have been checked against Xenia, and it is far from real-time speed.
+
+What got it there:
+
+- **Guest threads that block and resume.** Xenia gives every XThread its own host thread.
+  Render360 now runs each guest thread as a fiber on the HIR executor. Each fiber has its own C
+  stack, its own copy of the per-thread executor state, and a Binaryen Asyncify buffer. A wait
+  on an object another thread must signal switches threads and retries; a real deadlock is
+  still reported as a wait.
+- **Translation cache.** Nested guest calls used to re-scan and re-translate the callee on
+  every call (over 80% of the time). The finalized HIR is now kept per function, invalidated
+  when its code pages change. Startup runs about 8x faster.
+- **GPU interrupts.** The title's graphics interrupt callback runs at 60 Hz (vblank) and for
+  every PM4 `INTERRUPT` packet, as Xenia's `Processor::ExecuteInterrupt` does.
+- **Command processor fixes, ported from Xenia:**
+  - GPU addresses are physical (`TranslatePhysical`).
+  - Indirect buffers of any size.
+  - `WAIT_REG_MEM` stalls and resumes at the exact packet.
+  - Scratch-register write-back (D3D fences) and `COHER_STATUS_HOST` coherency.
+  - The full 0x5003-entry register file.
+  - Xenia's fixed GPU register reads (interrupt status, display size).
+- **XAM app messages.** `XMsgInProcessCall` and related exports, through ports of Xenia's XMP
+  (music player), XGI and XLiveBase apps.
+- **Interior tail entries** now start only at a HIR block head; the mid-block case caused the
+  `sign_extend` stop.
 
 ### October 8: Banjo-Tooie report, and the CPU checked against Xenia's tests
 

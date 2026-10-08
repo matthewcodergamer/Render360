@@ -1,8 +1,14 @@
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "sparse_guest_memory.h"
+
+// Kernel physical-allocation map (Xenia Memory::TranslatePhysical).
+extern "C" uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
+extern "C" uint32_t r360_debug_watch_address();
 
 namespace render360::xenia_web {
 namespace {
@@ -11,7 +17,11 @@ constexpr uint32_t kStatusIdle = 0;
 constexpr uint32_t kStatusSuccess = 1;
 constexpr uint32_t kStatusUnsupported = 2;
 constexpr uint32_t kStatusInvalid = 3;
-constexpr uint32_t kRegisterCount = 0x5000;
+// WAIT_REG_MEM did not match: the command processor stalls at that packet
+// (Xenia's CP thread blocks there) and resumes at it on the next submit.
+constexpr uint32_t kStatusWaiting = 4;
+constexpr uint32_t kPm4WaitRegMem = 0x3C;
+constexpr uint32_t kRegisterCount = 0x5003;  // Xenia RegisterFile::kRegisterCount
 constexpr uint32_t kRingCapacity = 4096;
 constexpr uint32_t kMaxIndirectDepth = 8;
 constexpr uint32_t kShaderWordCapacity = 8192;
@@ -84,6 +94,14 @@ std::array<uint8_t, kFrameBytes> g_frame{};
 ShaderCapture g_vertex_shader{};
 ShaderCapture g_pixel_shader{};
 uint32_t g_status = kStatusIdle;
+// Stall point per indirect-buffer depth (header index of the WAIT_REG_MEM,
+// then of each enclosing INDIRECT_BUFFER) and the armed resume position.
+std::array<uint32_t, 16> g_stall_offset{};
+uint32_t g_stall_levels = 0;
+std::array<uint32_t, 16> g_resume_offset{};
+uint32_t g_resume_levels = 0;
+uint32_t g_resume_next = 0;
+uint32_t g_waits = 0;
 uint32_t g_ring_words = 0;
 uint32_t g_packets = 0;
 uint32_t g_register_writes = 0;
@@ -96,6 +114,7 @@ uint32_t g_memory_writes = 0;
 uint32_t g_interrupts = 0;
 uint32_t g_last_interrupt_mask = 0;
 uint32_t g_last_opcode = 0;
+uint32_t g_current_header = 0, g_current_header_index = 0, g_current_depth = 0;
 uint32_t g_last_fault_word = 0;
 uint32_t g_last_fault_depth = 0;
 uint32_t g_last_invalidate_mask = 0;
@@ -134,6 +153,7 @@ uint32_t HashFrame() {
 }
 bool ReadGuestWordBE(uint32_t address, uint32_t* out) {
   if (!out || address > 0xFFFFFFFCu) return false;
+  address = r360_kernel_gpu_address_to_virtual(address);
   uint8_t b[4] = {};
   if (!ReadSparseGuestMemory(address, b, 4)) return false;
   *out = (uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) |
@@ -142,11 +162,15 @@ bool ReadGuestWordBE(uint32_t address, uint32_t* out) {
 }
 bool WriteGuestGpuWord(uint32_t encoded_address, uint32_t value) {
   const uint32_t endian = encoded_address & 3u;
-  const uint32_t address = encoded_address & ~3u;
+  const uint32_t address =
+      r360_kernel_gpu_address_to_virtual(encoded_address & ~3u);
   if (address > 0xFFFFFFFCu) return false;
   const uint32_t v = GpuSwap32(value, endian);
   const uint8_t b[4] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)};
   if (!WriteSparseGuestMemory(address, b, 4)) return false;
+  if (const uint32_t watch = r360_debug_watch_address(); watch && watch - address < 4u) {
+    std::fprintf(stderr, "R360_WATCH gpu address=0x%08X value=0x%08X header=0x%08X index=%u depth=%u\n", address, value, g_current_header, g_current_header_index, g_current_depth);
+  }
   ++g_memory_writes;
   return true;
 }
@@ -186,9 +210,30 @@ void ResolveEdramToFrame() {
   }
   g_frame_hash = HashFrame(); ++g_frame_generation; ++g_presents;
 }
+bool WriteGuestGpuWord(uint32_t encoded_address, uint32_t value);
+constexpr uint32_t kRegScratchUmsk = 0x01DC, kRegScratchAddr = 0x01DD;
+constexpr uint32_t kRegScratchReg0 = 0x0578, kRegScratchReg7 = 0x057F;
+constexpr uint32_t kRegCoherStatusHost = 0x0A31;
+// Xenia CommandProcessor::WriteRegister side effects.
 bool WriteRegister(uint32_t index, uint32_t value) {
   if (index >= g_regs.size()) { g_status = kStatusInvalid; return false; }
-  g_regs[index] = value; ++g_register_writes; return true;
+  g_regs[index] = value; ++g_register_writes;
+  if (index >= kRegScratchReg0 && index <= kRegScratchReg7) {
+    // Scratch register write-back (D3D fences): copy to memory when enabled.
+    const uint32_t scratch = index - kRegScratchReg0;
+    if ((1u << scratch) & g_regs[kRegScratchUmsk]) {
+      // Big-endian store, as xe::store_and_swap (endian field 2 = 8in32).
+      WriteGuestGpuWord(((g_regs[kRegScratchAddr] + scratch * 4u) & ~3u) | 2u, value);
+    }
+  } else if (index == kRegCoherStatusHost) {
+    // Dirty: the next WAIT_REG_MEM on it synchronizes memory.
+    g_regs[index] |= 0x80000000u;
+  }
+  return true;
+}
+// Xenia CommandProcessor::MakeCoherent.
+void MakeCoherent() {
+  if (g_regs[kRegCoherStatusHost] & 0x80000000u) g_regs[kRegCoherStatusHost] = 0;
 }
 ShaderCapture* ShaderForType(uint32_t type) {
   return type == kShaderVertex ? &g_vertex_shader : type == kShaderPixel ? &g_pixel_shader : nullptr;
@@ -211,10 +256,11 @@ bool CaptureShaderFromGuest(uint32_t type, uint32_t address, uint32_t count) {
     g_status = count > kShaderWordCapacity ? kStatusUnsupported : kStatusInvalid; return false;
   }
   ShaderCapture* s = ShaderForType(type);
-  if (!s) { g_status = kStatusInvalid; return false; }
+  if (!s) { std::fprintf(stderr, "R360_XENOS_IM_LOAD bad type=%u address=0x%08X dwords=%u\n", type, address, count); g_status = kStatusInvalid; return false; }
   for (uint32_t i = 0; i < count; ++i) {
     const uint64_t a = uint64_t(address) + uint64_t(i) * 4u;
     if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &s->words[i])) {
+      std::fprintf(stderr, "R360_XENOS_IM_LOAD unreadable type=%u address=0x%08X (guest 0x%08X) dwords=%u\n", type, address, r360_kernel_gpu_address_to_virtual(uint32_t(a)), count);
       g_status = kStatusInvalid; return false;
     }
   }
@@ -270,14 +316,20 @@ bool WriteConstantGroup(uint32_t offset_type, const uint32_t* values, uint32_t c
 bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
   if (!words || depth > kMaxIndirectDepth) { SetFault(0, depth, kStatusInvalid); return false; }
   uint32_t i = 0;
+  if (g_resume_next < g_resume_levels && depth == g_resume_next) {
+    i = g_resume_offset[depth];
+    if (++g_resume_next >= g_resume_levels) g_resume_levels = g_resume_next = 0;
+  }
   while (i < word_count) {
     const uint32_t header_index = i, header = words[i++];
+    g_current_header = header; g_current_header_index = header_index; g_current_depth = depth;
     if (!header) { ++g_packets; continue; }
     const uint32_t type = header >> 30; ++g_packets;
     if (type == 0) {
       const uint32_t count = ((header >> 16) & 0x3FFFu) + 1u, base = header & 0x7FFFu;
       const bool one = ((header >> 15) & 1u) != 0;
       if (count > word_count - i || base >= kRegisterCount || (!one && count > kRegisterCount - base)) {
+        std::fprintf(stderr, "R360_XENOS_FAULT type0 header=0x%08X base=0x%04X count=%u remaining=%u\n", header, base, count, word_count - i);
         SetFault(header_index, depth, kStatusInvalid); return false;
       }
       for (uint32_t n = 0; n < count; ++n) if (!WriteRegister(one ? base : base + n, words[i + n])) {
@@ -324,6 +376,26 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
           address = (address & 3u) | ((address & ~3u) + 4u);
         }
         if (!handled) g_status = kStatusInvalid; break;
+      }
+      case kPm4WaitRegMem: {
+        // (wait_info, poll address/register, reference, mask, wait)
+        if (count != 5u) { handled = false; g_status = kStatusInvalid; break; }
+        uint32_t value = 0;
+        if (p[0] & 0x10u) handled = ReadGuestGpuWord(p[1], &value);
+        else if (p[1] >= kRegisterCount) handled = false;
+        else {
+          if (p[1] == kRegCoherStatusHost) MakeCoherent();
+          value = g_regs[p[1]];
+        }
+        if (!handled) { g_status = kStatusInvalid; break; }
+        if (!CompareWait(p[0], value, p[2], p[3])) {
+          ++g_waits;
+          g_stall_offset[depth] = header_index;
+          g_stall_levels = depth + 1u;
+          g_status = kStatusWaiting;
+          return false;
+        }
+        break;
       }
       case kPm4CondWrite: {
         if (count != 6u) { handled = false; g_status = kStatusInvalid; break; }
@@ -386,13 +458,22 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
       case kPm4IndirectBuffer: case kPm4IndirectBufferPfd: {
         if (count < 2u || depth >= kMaxIndirectDepth) { handled = false; g_status = kStatusInvalid; break; }
         const uint32_t address = p[0] & ~3u, n = p[1] & 0xFFFFFu;
-        if (!n || n > kRingCapacity) { handled = false; g_status = n > kRingCapacity ? kStatusUnsupported : kStatusInvalid; break; }
-        std::array<uint32_t, kRingCapacity> ib{};
+        // D3D command buffers are far larger than the primary ring copy;
+        // Xenia reads them in place (up to the 20-bit IB size field).
+        if (!n) { handled = false; g_status = kStatusInvalid; break; }
+        std::vector<uint32_t> ib(n);
         for (uint32_t q = 0; q < n; ++q) {
           const uint64_t a = uint64_t(address) + uint64_t(q) * 4u;
           if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &ib[q])) { handled = false; g_status = kStatusInvalid; break; }
         }
-        if (handled) { ++g_indirect_buffers; handled = ExecuteBuffer(ib.data(), n, depth + 1u); }
+        if (handled) {
+          ++g_indirect_buffers;
+          handled = ExecuteBuffer(ib.data(), n, depth + 1u);
+          if (!handled && g_status == kStatusWaiting) {
+            g_stall_offset[depth] = header_index;
+            return false;
+          }
+        }
         break;
       }
       case kPm4InvalidateState:
@@ -414,6 +495,9 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
       default: handled = false; g_status = kStatusUnsupported; break;
     }
     if (!handled) {
+      std::fprintf(stderr, "R360_XENOS_FAULT kind=type3 opcode=0x%02X count=%u word=%u depth=%u status=%u p0=0x%08X p1=0x%08X\n",
+                   (header >> 8) & 0x7Fu, count, header_index, depth, g_status,
+                   count > 0 ? p[0] : 0u, count > 1 ? p[1] : 0u);
       if (g_last_fault_depth < depth || g_status == kStatusIdle) g_last_fault_depth = depth;
       if (g_last_fault_depth == depth) g_last_fault_word = header_index;
       if (g_status == kStatusIdle) g_status = kStatusUnsupported;
@@ -423,7 +507,12 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
   }
   return true;
 }
-bool Execute() { if (!ExecuteBuffer(g_ring.data(), g_ring_words, 0)) return false; g_status = kStatusSuccess; return true; }
+bool Execute() {
+  g_stall_levels = 0;
+  if (!ExecuteBuffer(g_ring.data(), g_ring_words, 0)) return false;
+  g_status = kStatusSuccess;
+  return true;
+}
 void Reset() {
   g_regs.fill(0); g_ring.fill(0); g_frame.fill(0);
   ResetShaderCapture(&g_vertex_shader); ResetShaderCapture(&g_pixel_shader);
@@ -435,6 +524,7 @@ void Reset() {
   g_frame_generation = g_frame_hash = 0;
   g_frontbuffer_ptr = g_frontbuffer_width = g_frontbuffer_height = 0;
   g_bin_mask = g_bin_select = 0xFFFFFFFFull;
+  g_stall_levels = g_resume_levels = g_resume_next = g_waits = 0;
 }
 uint32_t EdramTileAddress(uint32_t base, uint32_t pitch, uint32_t x, uint32_t y) {
   if (!pitch) return 0xFFFFFFFFu;
@@ -452,6 +542,11 @@ uint32_t r360_xenos_ring_buffer(){return uint32_t(reinterpret_cast<uintptr_t>(re
 uint32_t r360_xenos_ring_capacity(){return render360::xenia_web::kRingCapacity;}
 uint32_t r360_xenos_submit(uint32_t n){if(n>render360::xenia_web::kRingCapacity){render360::xenia_web::g_status=render360::xenia_web::kStatusInvalid;return 0;}render360::xenia_web::g_ring_words=n;return render360::xenia_web::Execute()?1u:0u;}
 uint32_t r360_xenos_status(){return render360::xenia_web::g_status;}
+// After a WAIT_REG_MEM stall: ring words consumed before the stalled packet.
+uint32_t r360_xenos_stall_ring_offset(){return render360::xenia_web::g_stall_levels?render360::xenia_web::g_stall_offset[0]:0u;}
+// Arms the next submit to re-enter the stalled indirect buffers where they stopped.
+uint32_t r360_xenos_arm_resume(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 0;rx::g_resume_offset=rx::g_stall_offset;rx::g_resume_offset[0]=0;rx::g_resume_levels=rx::g_stall_levels;rx::g_resume_next=0;return rx::g_resume_levels;}
+uint32_t r360_xenos_waits(){return render360::xenia_web::g_waits;}
 uint32_t r360_xenos_packets(){return render360::xenia_web::g_packets;}
 uint32_t r360_xenos_register_writes(){return render360::xenia_web::g_register_writes;}
 uint32_t r360_xenos_draws(){return render360::xenia_web::g_draws;}
@@ -472,6 +567,7 @@ uint32_t r360_xenos_frontbuffer_height(){return render360::xenia_web::g_frontbuf
 uint32_t r360_xenos_frame_provenance(){return render360::xenia_web::FrameProvenance();}
 uint32_t r360_xenos_real_title_frame_ready(){const uint32_t need=render360::xenia_web::kFrameProvSwap|render360::xenia_web::kFrameProvVertexShader|render360::xenia_web::kFrameProvPixelShader|render360::xenia_web::kFrameProvFetchResources;const uint32_t p=render360::xenia_web::FrameProvenance();return((p&need)==need&&!(p&render360::xenia_web::kFrameProvBoundedRaster))?1u:0u;}
 uint32_t r360_xenos_register(uint32_t i){return i<render360::xenia_web::g_regs.size()?render360::xenia_web::g_regs[i]:0u;}
+uint32_t r360_xenos_set_register(uint32_t i,uint32_t v){if(i>=render360::xenia_web::g_regs.size())return 0;render360::xenia_web::g_regs[i]=v;return 1;}
 uint32_t r360_xenos_shader_buffer(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?uint32_t(reinterpret_cast<uintptr_t>(s->words.data())):0u;}
 uint32_t r360_xenos_shader_dwords(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->dword_count:0u;}
 uint32_t r360_xenos_shader_hash(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->hash:0u;}

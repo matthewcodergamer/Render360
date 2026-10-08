@@ -7,6 +7,11 @@
 namespace render360::xenia_web {
 
 void ResetTitleGpuRuntime();
+// PM4 INTERRUPT packets executed since the last call (Xenia dispatches the
+// graphics interrupt callback with source 1 for each CPU in the mask).
+uint32_t TitleGpuTakePendingInterrupts(uint32_t* cpu_mask);
+// Retries a command stream stalled in WAIT_REG_MEM (the CP thread polling).
+void TitleGpuPump();
 
 // Handles the small xboxkrnl video/HW service surface needed to reach the
 // Xenos command processor. Returns true only for an explicitly implemented

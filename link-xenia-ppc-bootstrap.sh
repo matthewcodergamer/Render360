@@ -173,6 +173,33 @@ if ! "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
   exit 1
 fi
 
+# Guest threads run as fibers on the HIR executor (src/xenia_web_bootstrap/
+# guest_fibers.cpp): Binaryen Asyncify instruments the call paths that can
+# reach a fiber switch so a suspended guest thread's wasm call stack can be
+# saved and later rewound. Only the internal "asyncify" imports switch; no
+# host import ever unwinds.
+WASM_OPT="${WASM_OPT:-}"
+if [ -z "$WASM_OPT" ]; then
+  if [ -n "${EMSDK:-}" ] && [ -x "$EMSDK/upstream/bin/wasm-opt" ]; then
+    WASM_OPT="$EMSDK/upstream/bin/wasm-opt"
+  else
+    WASM_OPT="$(command -v wasm-opt || true)"
+  fi
+fi
+if [ -z "$WASM_OPT" ]; then
+  echo "ERROR: wasm-opt (Binaryen) is required for guest-thread fibers." | tee "$REPORT" >&2
+  exit 1
+fi
+if ! "$WASM_OPT" --enable-bulk-memory --enable-bulk-memory-opt \
+    --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
+    --enable-simd --enable-multivalue --enable-reference-types \
+    "$WASM" --asyncify --pass-arg=asyncify-imports@env.r360_no_host_unwind \
+    "$R360_OPT" -o "$WASM.asyncify" >>"$LOG" 2>&1; then
+  echo "ERROR: Asyncify pass failed; see $LOG" | tee "$REPORT" >&2
+  exit 1
+fi
+mv "$WASM.asyncify" "$WASM"
+
 # Validate the actual module, not merely the linker exit code. This catches the
 # duplicate-export failure class that produced a file on disk but could not be
 # instantiated by Safari/Node. Every critical production export must exist

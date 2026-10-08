@@ -961,6 +961,11 @@ bool StoreGuestValue(xe::Memory* memory, const Value* address,
 
   if (WriteSparseGuestMemory(guest_address, &stored.value,
                              static_cast<uint32_t>(size))) {
+    if (g_debug_watch_address && g_debug_watch_address - guest_address < size) {
+      std::fprintf(stderr, "R360_WATCH cpu pc=0x%08X address=0x%08X size=%u value=0x%llX\n",
+                   g_current_source_address, guest_address, unsigned(size),
+                   static_cast<unsigned long long>(stored.value.u64));
+    }
     return true;
   }
   const uint32_t sparse_fault = SparseGuestLastFaultCode();
@@ -1039,6 +1044,8 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 // Optional cap on guest instructions across every frame of one title run
 // (r360_hir_set_total_instruction_budget; 0 = unlimited). Lets a headless
 // run stop at a chosen point and report where the title is.
+// Debug watchpoint (r360_debug_watch): logs every guest store to it.
+uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
 
@@ -2026,6 +2033,10 @@ void AbandonHIRCorrectnessExecution() {
   ClearPendingNestedFailure();
 }
 
+void ClearHIRCorrectnessInitialRegisterStrings() {
+  g_initial_register_strings.clear();
+}
+
 bool AddHIRCorrectnessInitialRegister(const char* name, const char* value) {
   if (!name || !value || !*name) return false;
   g_initial_register_strings.emplace_back(name, value);
@@ -2191,4 +2202,13 @@ uint32_t r360_hir_set_total_instruction_budget(uint32_t millions) {
 extern "C" __attribute__((used, export_name("r360_hir_total_instructions_millions")))
 uint32_t r360_hir_total_instructions_millions() {
   return uint32_t(render360::xenia_web::g_total_instructions / 1000000ull);
+}
+
+extern "C" __attribute__((used, export_name("r360_debug_watch")))
+uint32_t r360_debug_watch(uint32_t address) {
+  render360::xenia_web::g_debug_watch_address = address;
+  return address;
+}
+extern "C" uint32_t r360_debug_watch_address() {
+  return render360::xenia_web::g_debug_watch_address;
 }

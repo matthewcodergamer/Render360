@@ -1068,6 +1068,22 @@ uint32_t r360_guest_thread_resume(uint32_t handle) {
 uint32_t r360_guest_thread_terminate(uint32_t handle, uint32_t exit_code) {
   return render360::xenia_web::TerminateThread(handle, exit_code) ? 1u : 0u;
 }
+// Handles of title-created guest threads that may run now (not the loader's
+// primary thread, not suspended, not terminated), in registry order. Used by
+// the HIR fiber scheduler (guest_fibers.cpp).
+uint32_t r360_guest_thread_runnable_list(uint32_t* out, uint32_t capacity) {
+  using namespace render360::xenia_web;
+  uint32_t count = 0;
+  for (uint32_t index = 0; index < kMaxThreads && count < capacity; ++index) {
+    const auto& thread = g_threads[index];
+    if (!thread.used || thread.state == kThreadTerminated ||
+        thread.suspend_count || !thread.stack_mapped || thread.external) {
+      continue;
+    }
+    out[count++] = ThreadHandleByIndex(index);
+  }
+  return count;
+}
 uint32_t r360_guest_thread_next_runnable() {
   return render360::xenia_web::NextRunnable();
 }

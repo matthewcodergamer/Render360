@@ -45,11 +45,13 @@ export class Render360Runtime extends EventTarget{
   bindSource(gameId,file){if(gameId&&file)this.sources.set(gameId,file);}
   getSource(gameId){return this.sources.get(gameId)||null;}
   unbindSource(gameId){this.sources.delete(gameId);}
-  setKey(key,pressed){this.inputHost.setKey(key,pressed);}
-  setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);}
+  // The guest controller state (render360-guest-fibers.mjs feeds it to the
+  // native XInput emulation every guest time slice).
+  setKey(key,pressed){this.inputHost.setKey(key,pressed);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});if(pressed)g.keys.add(key);else g.keys.delete(key);}
+  setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});Object.assign(g,{lx,ly,rx,ry});}
   pause(){const titlePaused=pauseActiveTitle();this.inputHost.pause();this.emit('paused',{titlePaused});return titlePaused;}
   resume(){const titleResumed=resumeActiveTitle();this.inputHost.resume();this.emit('resumed',{titleResumed});return titleResumed;}
-  resetInput(){this.inputHost.reset();this.setAnalog(0,0,0,0);}
+  resetInput(){this.inputHost.reset();globalThis.render360GuestInput?.keys?.clear?.();this.setAnalog(0,0,0,0);}
   resetTelemetry(){this.frameTimes.length=0;this.lastGeneration=null;this.lastFrameAt=0;}
   async inspectFile(file){
     if(!this.ready||!this.core)throw new Error('Render360 core is still loading');

@@ -86,6 +86,7 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
   globalThis.render360GuestRun={stop:()=>controller.abort(),signal:controller.signal};
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
+    pushGuestControllerState(bootstrap);
     const t=now();
     if(t-lastReport<500)return;
     lastReport=t;
@@ -95,4 +96,24 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
     const seconds=Math.max(0.001,(t-started)/1000);
     onProgress?.(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
   }};
+}
+
+// XInput gamepad bits (XINPUT_GAMEPAD_*) for the Render360 controller keys.
+const XINPUT_BUTTONS={UP:0x1,DOWN:0x2,LEFT:0x4,RIGHT:0x8,START:0x10,BACK:0x20,LS:0x40,RS:0x80,LB:0x100,RB:0x200,A:0x1000,B:0x2000,X:0x4000,Y:0x8000};
+
+// Writes globalThis.render360GuestInput (page buttons, keyboard, gamepad via
+// the runtime's setKey/setAnalog) into the native XInput state for user 0.
+export function pushGuestControllerState(bootstrap,input=globalThis.render360GuestInput){
+  const set=bootstrap?.exports?.r360_input_set_gamepad;
+  if(typeof set!=='function')return false;
+  const keys=input?.keys??new Set();
+  let buttons=0;
+  for(const key of keys)buttons|=XINPUT_BUTTONS[key]??0;
+  const triggers=(keys.has('LT')?0xFF:0)|(keys.has('RT')?0xFF00:0);
+  const axis=v=>Math.max(-32768,Math.min(32767,Math.round((Number(v)||0)*32767)))&0xFFFF;
+  // Browser gamepad Y points down; XInput Y points up.
+  const left=axis(input?.lx)|(axis(-(input?.ly||0))<<16);
+  const right=axis(input?.rx)|(axis(-(input?.ry||0))<<16);
+  set(0,1,buttons,triggers,left>>>0,right>>>0);
+  return true;
 }

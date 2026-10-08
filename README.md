@@ -6,7 +6,7 @@
 
 This README is the current public project status. Historical percentages and old screenshots are not compatibility ratings.
 
-## Current status — September 26, 2026
+## Current status — October 8, 2026
 
 ```text
 XBOX 360 / XENIA-WEB TRACK
@@ -18,6 +18,7 @@ XENIA PPC SCANNER / HIR FRONTEND           WORKING FOUNDATION
 WASM32 XENIA BOOTSTRAP (-O2)               WORKING FOUNDATION
 SPARSE 32-BIT XBOX GUEST MEMORY            WORKING FOUNDATION (page table)
 PPC CONTEXT / NESTED GUEST CALLS           ACTIVE BRING-UP
+PPC INSTRUCTION SEMANTICS (HIR EXECUTOR)   XENIA TEST SUITE 1398/1398; CI
 XBOXKRNL / XAM STARTUP SERVICES            PORTED FROM XENIA; CI CRITICS
 GUEST FILE SYSTEM (game:, d:, Cdrom0)      IMPLEMENTED; CI CRITICS
 SAVE DATA (XamContent, save:)              IMPLEMENTED; KEPT PER SESSION
@@ -41,6 +42,18 @@ PORTAL GAMEPLAY / RENDERED FRAME           NOT YET VERIFIED
 The last real-device Braid measurement (iPhone, V74) got past the V58 shared-epilog blocker, executed 38 HIR instructions from entry `0x8236EF38`, made five kernel calls and then called `xboxkrnl!HalReturnToFirmware` (ordinal `0x28`). That is the title deliberately giving up, not an emulator crash: Xenia implements the same export as process exit. It almost always means an earlier kernel call returned something the game did not accept.
 
 V75 therefore replaces the placeholder kernel surface with a port of Xenia's own `xboxkrnl`/`xam` behaviour (see below). Braid has **not** been re-measured on a device with V75 yet. The next real-device run is the next authoritative data point; the browser now names the stop reason and lists the kernel calls behind it, so one run tells us exactly what to fix next.
+
+### October 8: Banjo-Tooie report, and the CPU checked against Xenia's tests
+
+A device run of Banjo-Tooie (XBLA) stopped with "Unreachable code should not be executed": a WebAssembly trap inside the core while it ran the title entry. The trap left the cached core with a dangling execution context, so every later launch failed with `define-function-failed`. Now:
+
+- **A crash no longer poisons the next launch.** A trapped core is thrown away and a fresh one is loaded on the next Play, and the executor state is reset at every title handoff.
+- **Crashes say what happened**: the "Game Stopped" sheet reports the assertion text or allocation size, and which guest function was being translated or run. **Diagnostics** adds the last guest and kernel calls.
+- **Xenia's Release assert behaviour**: the core is built with `NDEBUG` as Xenia ships. Xenia's code assumes asserts are compiled out, and in WebAssembly a live assert is a fatal trap.
+- **Global constructors run** (`_initialize`). Xenia's dynamically built tables, such as the `vsldoi` permute table, were all zeros before.
+- **The interpreter is checked against Xenia's own PPC instruction tests** (`src/xenia/cpu/ppc/testing`, run by `test-xenia-ppc-instruction-suite.mjs` in CI). 630 passed before and 1398 of 1398 pass now. The missing pieces were carry arithmetic (`adde`, `addze`, `subfe`…), high multiplies and divides, `select`/`min`/`max`, traps, `mftb`, and essentially all of VMX/VMX128. The VMX work covers permutes, packs/unpacks including the D3D vertex formats, saturating arithmetic, converts, estimates, dot products and whole-vector shifts, transcribed from Xenia's x64 sequences (`hir_vector_semantics.h`). It also fixes an upstream Xenia constant-folding bug in `mulhdu` on non-MSVC builds.
+
+The Banjo-Tooie trap needs a new device run to confirm. If it still stops, the sheet now names the cause.
 
 ### What changed in V75
 

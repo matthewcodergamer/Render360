@@ -2277,6 +2277,286 @@ void BroadcastNotification(uint32_t id, uint32_t data) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Xenia AppManager (xam/app_manager.cc) and its in-process apps: XmpApp (0xFA,
+// the music player), XgiApp (0xFB) and XLiveBaseApp (0xFC). XMsgInProcessCall,
+// XMsgSystemProcessCall and XMsgStartIORequest(Ex) dispatch here synchronously,
+// as Xenia does. No audio is decoded for title playlists; the player state,
+// handles and notifications follow Xenia.
+constexpr uint32_t X_E_FAIL = 0x80004005u;
+constexpr uint32_t X_E_NOTFOUND = 0x80070490u;
+
+std::u16string ReadGuestU16String(uint32_t address) {
+  std::u16string text;
+  for (uint32_t i = 0; address && i < 1024; ++i) {
+    uint16_t c = 0;
+    if (!Rd16(address + i * 2u, &c) || !c) break;
+    text.push_back(char16_t(c));
+  }
+  return text;
+}
+bool WriteGuestU16String(uint32_t address, const std::u16string& text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (!Wr16(address + uint32_t(i) * 2u, uint16_t(text[i]))) return false;
+  }
+  return Wr16(address + uint32_t(text.size()) * 2u, 0);
+}
+
+struct XmpSong {
+  uint32_t handle = 0;
+  std::u16string file_path, name, artist, album, album_artist, genre;
+  uint32_t track_number = 0, duration_ms = 0, format = 0;
+};
+struct XmpPlaylist {
+  uint32_t handle = 0;
+  std::u16string name;
+  uint32_t flags = 0;
+  std::vector<XmpSong> songs;
+};
+struct XmpState {
+  uint32_t state = 0;            // kIdle
+  uint32_t playback_client = 1;  // kTitle
+  uint32_t playback_mode = 0, repeat_mode = 0, unknown_flags = 0;
+  float volume = 1.0f;
+  uint32_t active_playlist = 0;  // playlist handle, 0 = none
+  uint32_t active_song_index = 0;
+  uint32_t next_playlist_handle = 1, next_song_handle = 1;
+  std::map<uint32_t, XmpPlaylist> playlists;
+};
+XmpState& Xmp() {
+  static XmpState state;
+  return state;
+}
+
+constexpr uint32_t kXmpMsgStateChanged = 0x0A000001u;
+constexpr uint32_t kXmpMsgPlaybackBehaviorChanged = 0x0A000002u;
+constexpr uint32_t kXmpMsgPlaybackControllerChanged = 0x0A000003u;
+
+void XmpOnStateChanged() {
+  BroadcastNotification(kXmpMsgStateChanged, Xmp().state);
+}
+XmpPlaylist* XmpActivePlaylist() {
+  auto it = Xmp().playlists.find(Xmp().active_playlist);
+  return it == Xmp().playlists.end() ? nullptr : &it->second;
+}
+uint32_t XmpStop() {
+  Xmp().active_playlist = 0;
+  Xmp().active_song_index = 0;
+  Xmp().state = 0;
+  XmpOnStateChanged();
+  return X_E_SUCCESS;
+}
+
+uint32_t XmpDispatch(uint32_t message, uint32_t buffer, uint32_t /*length*/) {
+  XmpState& x = Xmp();
+  uint32_t w[9] = {};
+  auto args = [&](uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+      if (!Rd32(buffer + i * 4u, &w[i])) return false;
+    }
+    return true;
+  };
+  switch (message) {
+    case 0x00070002: {  // XMPPlayTitlePlaylist(client, storage, song)
+      if (!args(3)) return Invalid();
+      uint32_t playlist_handle = 0;
+      if (!Rd32(w[1], &playlist_handle)) return Invalid();
+      if (!x.playlists.count(playlist_handle)) return X_E_NOTFOUND;
+      if (x.playback_client == 0) return X_E_SUCCESS;  // kSystem
+      x.active_playlist = playlist_handle;
+      x.active_song_index = 0;
+      x.state = 1;  // kPlaying
+      XmpOnStateChanged();
+      BroadcastNotification(kXmpMsgPlaybackBehaviorChanged, 1);
+      return X_E_SUCCESS;
+    }
+    case 0x00070003:  // XMPContinue
+      if (x.state == 2) x.state = 1;
+      XmpOnStateChanged();
+      return X_E_SUCCESS;
+    case 0x00070004:  // XMPStop
+      return XmpStop();
+    case 0x00070005:  // XMPPause
+      if (x.state == 1) x.state = 2;
+      XmpOnStateChanged();
+      return X_E_SUCCESS;
+    case 0x00070006:    // XMPNext
+    case 0x00070007: {  // XMPPrevious
+      XmpPlaylist* playlist = XmpActivePlaylist();
+      if (!playlist || playlist->songs.empty()) return X_E_NOTFOUND;
+      x.state = 1;
+      const uint32_t count = uint32_t(playlist->songs.size());
+      x.active_song_index = message == 0x00070006
+                                ? (x.active_song_index + 1) % count
+                                : (x.active_song_index ? x.active_song_index - 1
+                                                       : count - 1);
+      XmpOnStateChanged();
+      return X_E_SUCCESS;
+    }
+    case 0x00070008:  // XMPSetPlaybackBehavior
+      if (!args(4)) return Invalid();
+      x.playback_mode = w[1];
+      x.repeat_mode = w[2];
+      x.unknown_flags = w[3];
+      BroadcastNotification(kXmpMsgPlaybackBehaviorChanged, 0);
+      return X_E_SUCCESS;
+    case 0x00070009:  // XMPGetStatus
+      if (!args(2)) return Invalid();
+      return Wr32(w[1], x.state) ? X_E_SUCCESS : Invalid();
+    case 0x0007000B:  // XMPGetVolume
+      if (!args(2)) return Invalid();
+      return WrF32(w[1], x.volume) ? X_E_SUCCESS : Invalid();
+    case 0x0007000C: {  // XMPSetVolume
+      if (!args(2)) return Invalid();
+      std::memcpy(&x.volume, &w[1], sizeof(float));
+      return X_E_SUCCESS;
+    }
+    case 0x0007000D: {  // XMPCreateTitlePlaylist
+      if (!args(9)) return Invalid();
+      const uint32_t storage = w[1], songs = w[3], song_count = w[4],
+                     name_ptr = w[5], flags = w[6], song_handles = w[7],
+                     playlist_handle_ptr = w[8];
+      if (!Wr32(playlist_handle_ptr, storage)) return Invalid();
+      XmpPlaylist playlist;
+      playlist.handle = ++x.next_playlist_handle;
+      playlist.name = ReadGuestU16String(name_ptr);
+      playlist.flags = flags;
+      if (songs) {
+        for (uint32_t i = 0; i < song_count && i < 4096; ++i) {
+          const uint32_t base = songs + i * 36u;
+          uint32_t f[9] = {};
+          for (uint32_t k = 0; k < 9; ++k) {
+            if (!Rd32(base + k * 4u, &f[k])) return Invalid();
+          }
+          XmpSong song;
+          song.handle = ++x.next_song_handle;
+          song.file_path = ReadGuestU16String(f[0]);
+          song.name = ReadGuestU16String(f[1]);
+          song.artist = ReadGuestU16String(f[2]);
+          song.album = ReadGuestU16String(f[3]);
+          song.album_artist = ReadGuestU16String(f[4]);
+          song.genre = ReadGuestU16String(f[5]);
+          song.track_number = f[6];
+          song.duration_ms = f[7];
+          song.format = f[8];
+          if (song_handles && !Wr32(song_handles + i * 4u, song.handle)) {
+            return Invalid();
+          }
+          playlist.songs.push_back(std::move(song));
+        }
+      }
+      // Xenia stores the playlist handle over the storage pointer it wrote
+      // above (out_playlist_handle is the storage block).
+      if (storage && !Wr32(storage, playlist.handle)) return Invalid();
+      x.playlists[playlist.handle] = std::move(playlist);
+      return X_E_SUCCESS;
+    }
+    case 0x0007000E: {  // XMPGetCurrentSong
+      if (!args(3)) return Invalid();
+      XmpPlaylist* playlist = XmpActivePlaylist();
+      if (!playlist || x.active_song_index >= playlist->songs.size()) {
+        return X_E_FAIL;
+      }
+      const XmpSong& song = playlist->songs[x.active_song_index];
+      const uint32_t info = w[2], meta = info + 4u + 572u;
+      if (!Wr32(info, song.handle) || !WriteGuestU16String(meta, song.name) ||
+          !WriteGuestU16String(meta + 40u, song.artist) ||
+          !WriteGuestU16String(meta + 80u, song.album) ||
+          !WriteGuestU16String(meta + 120u, song.album_artist) ||
+          !WriteGuestU16String(meta + 160u, song.genre) ||
+          !Wr32(meta + 200u, song.track_number) ||
+          !Wr32(meta + 204u, song.duration_ms) ||
+          !Wr32(meta + 208u, song.format)) {
+        return Invalid();
+      }
+      return X_E_SUCCESS;
+    }
+    case 0x00070013: {  // XMPDeleteTitlePlaylist
+      if (!args(2)) return Invalid();
+      uint32_t playlist_handle = 0;
+      if (!Rd32(w[1], &playlist_handle)) return Invalid();
+      auto it = x.playlists.find(playlist_handle);
+      if (it == x.playlists.end()) return X_E_NOTFOUND;
+      if (x.active_playlist == playlist_handle) XmpStop();
+      x.playlists.erase(it);
+      return X_E_SUCCESS;
+    }
+    case 0x0007001A:  // XMPSetPlaybackController
+      if (!args(3)) return Invalid();
+      x.playback_client = w[2];
+      BroadcastNotification(kXmpMsgPlaybackControllerChanged, w[2] ? 0u : 1u);
+      return X_E_SUCCESS;
+    case 0x0007001B:  // XMPGetPlaybackController
+      if (!args(3)) return Invalid();
+      return Wr32(w[1], 0) && Wr32(w[2], 0) ? X_E_SUCCESS : Invalid();
+    case 0x00070029:  // XMPGetPlaybackBehavior
+      if (!args(4)) return Invalid();
+      if ((w[1] && !Wr32(w[1], x.playback_mode)) ||
+          (w[2] && !Wr32(w[2], x.repeat_mode)) ||
+          (w[3] && !Wr32(w[3], x.unknown_flags))) {
+        return Invalid();
+      }
+      return X_E_SUCCESS;
+    case 0x0007002E:  // size query for the XamAlloc passed to 0x0007000D
+      if (!args(3)) return Invalid();
+      return Wr32(w[2], 4u + w[1] * 128u) ? X_E_SUCCESS : Invalid();
+    case 0x0007003D:  // XMPCaptureOutput: unimplemented in Xenia too.
+    default:
+      return X_E_FAIL;
+  }
+}
+
+uint32_t XgiDispatch(uint32_t message, uint32_t buffer, uint32_t /*length*/) {
+  switch (message) {
+    case 0x000B0006:  // XGIUserSetContextEx
+    case 0x000B0007:  // XGIUserSetPropertyEx
+    case 0x000B0008:  // XGIUserWriteAchievements
+    case 0x000B0010:  // XGISessionCreateImpl
+    case 0x000B0011:  // XGISessionDelete
+    case 0x000B0012:  // XGISessionJoinLocal
+    case 0x000B0014:
+    case 0x000B0015:
+    case 0x000B0071:
+      return X_E_SUCCESS;
+    case 0x000B0041: {  // XGIUserGetContext
+      uint32_t context = 0;
+      if (!Rd32(buffer + 16u, &context)) return Invalid();
+      if (context && !Wr32(context + 4u, 0)) return Invalid();
+      return X_E_FAIL;
+    }
+    default:
+      return X_E_FAIL;
+  }
+}
+
+uint32_t XLiveBaseDispatch(uint32_t message, uint32_t buffer,
+                           uint32_t /*length*/) {
+  switch (message) {
+    case 0x00058004:  // XLiveBaseGetLogonId
+    case 0x00058006:  // XLiveBaseGetNatType (XONLINE_NAT_OPEN)
+      return Wr32(buffer, 1) ? X_E_SUCCESS : Invalid();
+    case 0x00058007:  // GetServiceInfo
+      return 0x80151802u;  // ERROR_CONNECTION_INVALID
+    case 0x00058046:
+      return X_E_SUCCESS;
+    case 0x00058020:  // CXLiveFriends::Enumerate
+    case 0x00058023:  // XMessageGameInviteGetAcceptedInfo
+    default:
+      return X_E_FAIL;
+  }
+}
+
+// AppManager::DispatchMessageSync / DispatchMessageAsync (both synchronous).
+uint32_t DispatchAppMessage(uint32_t app, uint32_t message, uint32_t buffer,
+                            uint32_t length) {
+  switch (app) {
+    case 0xFAu: return XmpDispatch(message, buffer, length);
+    case 0xFBu: return XgiDispatch(message, buffer, length);
+    case 0xFCu: return XLiveBaseDispatch(message, buffer, length);
+    default: return X_E_NOTFOUND;
+  }
+}
+
 uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
   const uint32_t r3 = a[0], r4 = a[1], r5 = a[2], r6 = a[3], r7 = a[4],
                  r8 = a[5], r9 = a[6];
@@ -4275,6 +4555,27 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return X_ERROR_SUCCESS;
     case xam::XamResetInactivity:
       return 0;
+    // --- App messages (Xenia xam_msg.cc -> AppManager) -------------------------
+    case xam::XMsgInProcessCall:
+    case xam::XMsgSystemProcessCall:
+      return DispatchAppMessage(r3, r4, r5, a[3]);
+    case xam::XMsgStartIORequest:
+    case xam::XMsgStartIORequestEx: {
+      // (app, message, overlapped, buffer, buffer_length[, unknown])
+      uint32_t result = DispatchAppMessage(r3, r4, a[3], a[4]);
+      if (result == X_E_NOTFOUND) result = X_E_INVALIDARG;
+      if (r5) {
+        if (!CompleteOverlappedImmediate(r5, result)) return Invalid();
+        result = X_ERROR_IO_PENDING;
+      }
+      return result;
+    }
+    case xam::XMsgCancelIORequest:
+      return 0;
+    case xam::XMsgCompleteIORequest:
+      // (overlapped, result, extended_error, length)
+      if (!CompleteOverlappedEx(r3, r4, r5, a[3])) return Invalid();
+      return X_ERROR_SUCCESS;
     case xam::XamAlloc: {
       const uint32_t block = PoolAlloc(r4);
       if (!block) return X_ERROR_NOT_FOUND;
@@ -4889,6 +5190,7 @@ void ResetExtendedKernelServices() {
   g_xma_context_used = {};
   XmaEnabledContexts().clear();
   NotifyListeners().clear();
+  Xmp() = XmpState();
   g_notified_startup = false;
   for (const auto& package : ContentPackages()) {
     DeleteContentFiles(package.device);

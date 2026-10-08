@@ -431,6 +431,18 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   maybe(bootstrap,'r360_xam_set_license_mask')?.(Number(globalThis.render360XamLicenseMask||0)>>>0);
   maybe(bootstrap,'r360_kernel_service_reset')?.();
   const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry,xex);
+  // XexModule::FindSaveRest: declare the save/restore helpers in each XEX code
+  // range so the PPC scanner ends functions where Xenia does.
+  const registerSaveRest=maybe(bootstrap,'r360_ppc_probe_register_save_rest');
+  const xexPages=registerSaveRest?readXexPageDescriptors(xex):null;
+  if(xexPages){
+    let address=xexPages.loadAddress>>>0;
+    for(const word of xexPages.words){
+      const size=(word>>>4)*xexPages.pageSize;
+      if((word&0xF)===1&&(registerSaveRest(address>>>0,(address+size)>>>0)>>>0)===3)break;
+      address+=size;
+    }
+  }
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
   const peEntry=pick(bootstrap,'r360_pe_guest_pe_entry_address')()>>>0;
   if(entry!==xexEntry)throw new Error(`XEX entry selection mismatch 0x${entry.toString(16)}/0x${xexEntry.toString(16)}`);

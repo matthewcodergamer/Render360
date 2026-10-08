@@ -68,6 +68,14 @@ function rawOffsetForRva(pe,rva,size){
   return null;
 }
 
+function isMappedImageLayout(pe){
+  if(pe.bytes.length>=pe.sizeOfImage)return true;
+  // Longer than the whole on-disk layout could be: it is a memory image.
+  const diskEnd=Math.max(pe.sizeOfHeaders,...pe.sections.map(s=>s.rawPointer+s.rawSize));
+  if(pe.bytes.length>diskEnd)return true;
+  return pe.sections.length>0&&pe.sections.every(s=>s.virtualAddress+Math.min(s.rawSize,s.virtualSpan)<=pe.bytes.length);
+}
+
 function resolveImportDescriptor(pe,rva){
   if(!Number.isInteger(rva)||rva<0||rva>0xffffffff)throw new Error('kernel import PE RVA invalid');
   const candidates=[];
@@ -88,7 +96,11 @@ function resolveImportDescriptor(pe,rva){
     // may still provide a compact disk-layout PE. Prefer mapped RVA semantics
     // when the prepared buffer spans SizeOfImage. Otherwise retain the raw PE
     // interpretation if both locations happen to resemble valid descriptors.
-    const preferred=pe.bytes.length>=pe.sizeOfImage
+    // A prepared XEX image may stop before SizeOfImage (trailing zero-fill is
+    // not stored), so also treat it as mapped when every section's initialized
+    // bytes sit at their virtual addresses. Xenia always reads import records
+    // from the loaded image.
+    const preferred=isMappedImageLayout(pe)
       ?valid.find(x=>x.layout==='mapped-image')
       :valid.find(x=>x.layout==='raw-pe');
     return preferred??valid[0];

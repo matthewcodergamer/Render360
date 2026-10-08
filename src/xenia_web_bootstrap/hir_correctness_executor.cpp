@@ -1036,6 +1036,22 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
   return true;
 }
 
+// PPC FPSCR[RN] as set through SET_ROUNDING_MODE (Xenia loads the matching
+// MXCSR: 0 nearest, 1 toward zero, 2 toward +inf, 3 toward -inf; bit 2 is
+// FPSCR[NI] flush-to-zero). WebAssembly arithmetic always rounds to nearest,
+// so the mode is applied where Xenia's x64 code reads MXCSR explicitly:
+// non-truncating float -> integer conversion.
+thread_local uint32_t g_ppc_rounding_mode = 0;
+
+double RoundWithPpcMode(double v) {
+  switch (g_ppc_rounding_mode & 3u) {
+    case 1: return std::trunc(v);
+    case 2: return std::ceil(v);
+    case 3: return std::floor(v);
+    default: return std::nearbyint(v);
+  }
+}
+
 // Vector (VMX/VMX128) and floating-point HIR operations, ported from Xenia's
 // x64 sequences via hir_vector_semantics.h. Returns false when the opcode is
 // not handled here; *supported reports the outcome when it is.
@@ -1285,7 +1301,7 @@ bool ExecuteVectorOperation(const xe::cpu::hir::Instr* instr,
       auto cvt = [&](double v, double lo, double hi, int64_t indefinite) -> int64_t {
         // cvt(t)sd2si: NaN or out of range gives the "integer indefinite".
         if (std::isnan(v)) return indefinite;
-        const double r = trunc ? std::trunc(v) : std::nearbyint(v);
+        const double r = trunc ? std::trunc(v) : RoundWithPpcMode(v);
         if (r < lo || r > hi) return indefinite;
         return int64_t(r);
       };
@@ -1342,6 +1358,67 @@ bool ExecuteFlaggedOperation(const xe::cpu::hir::Instr* instr,
     case OPCODE_NOP:
       *supported = true;
       return true;
+    case OPCODE_ATOMIC_EXCHANGE:
+    case OPCODE_ATOMIC_COMPARE_EXCHANGE: {
+      // stwcx./stdcx. (and kernel interlocked helpers): the HIR values are
+      // already byte-swapped, so like Xenia's x64 lock cmpxchg/xchg this
+      // compares and stores the raw guest bytes. Single host thread: atomic.
+      *supported = false;
+      const bool cas = opcode == OPCODE_ATOMIC_COMPARE_EXCHANGE;
+      const Value* value_operand = cas ? instr->src3.value : instr->src2.value;
+      uint64_t address = 0;
+      RuntimeValue compare{}, store{};
+      if (!value_operand || !ResolveUint64(instr->src1.value, values, &address) ||
+          !ResolveRuntimeValue(value_operand, values, &store) ||
+          (cas && !ResolveRuntimeValue(instr->src2.value, values, &compare))) {
+        return true;
+      }
+      const uint32_t size = uint32_t(xe::cpu::hir::GetTypeSize(value_operand->type));
+      if (size != 1 && size != 2 && size != 4 && size != 8) return true;
+      uint64_t current = 0;
+      const uint32_t guest = static_cast<uint32_t>(address);
+      if (!ReadSparseGuestMemory(guest, &current, size)) return true;
+      uint64_t expected = 0, desired = 0;
+      std::memcpy(&desired, &store.value, size);
+      if (cas) std::memcpy(&expected, &compare.value, size);
+      const bool swap = !cas || current == expected;
+      if (swap && !WriteSparseGuestMemory(guest, &desired, size)) return true;
+      if (dest) {
+        RuntimeValue out;
+        if (cas) {
+          SetUnsigned(&out, dest->type, swap ? 1u : 0u);
+        } else {
+          out.type = dest->type;
+          out.value = {};
+          std::memcpy(&out.value, &current, size);
+        }
+        values[dest] = out;
+      }
+      *supported = true;
+      return true;
+    }
+    case OPCODE_SET_ROUNDING_MODE: {
+      uint64_t mode = 0;
+      *supported = ResolveUint64(instr->src1.value, values, &mode);
+      if (*supported) g_ppc_rounding_mode = uint32_t(mode) & 7u;
+      return true;
+    }
+    case OPCODE_CALL_EXTERN: {
+      // Xenia builtins (PPCFrontend::Initialize): the mfmsr/mtmsr global lock
+      // helpers and the sc syscall handler. Call the same host handler the
+      // x64 backend calls, on the live guest context.
+      auto* symbol = instr->src1.symbol;
+      *supported = false;
+      if (symbol && symbol->behavior() == xe::cpu::Function::Behavior::kBuiltin &&
+          g_active_context) {
+        auto* builtin = static_cast<xe::cpu::BuiltinFunction*>(symbol);
+        if (builtin->handler()) {
+          builtin->handler()(g_active_context, builtin->arg0(), builtin->arg1());
+          *supported = true;
+        }
+      }
+      return true;
+    }
     case OPCODE_LOAD_LOCAL:
     case OPCODE_STORE_LOCAL: {
       // HIR locals (HIRBuilder::AllocLocal) are ordinary Values used as
@@ -1892,6 +1969,7 @@ void ApplyInitialRegisterStrings(xe::cpu::ppc::PPCContext& context) {
 // stays raised, so the next title would run as a "nested" call. Every title
 // handoff starts a fresh outermost run.
 void AbandonHIRCorrectnessExecution() {
+  g_ppc_rounding_mode = 0;
   g_initial_register_strings.clear();
   g_last_context = {};
   g_active_context = nullptr;

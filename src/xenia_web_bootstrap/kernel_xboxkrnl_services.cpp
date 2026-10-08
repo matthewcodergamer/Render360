@@ -2293,6 +2293,9 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       // Xenia breaks into an attached host debugger only; retail flow resumes.
       DebugLog("DbgBreakPoint");
       return 0;
+    case kx::KiApcNormalRoutineNop:
+      // Xenia: kStub returning 0 (unk1 is 0x13 in titles that call it).
+      return 0;
     case kx::KeBugCheck:
       return Terminal(kTerminalBugCheck, r3, kModuleXboxkrnl, ordinal, a);
     case kx::KeBugCheckEx:

@@ -275,7 +275,48 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   return true;
 }
 
+bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
+                                     uint32_t call_flags);
+
+// Tail-call trampoline. Xenia's x64 backend runs a cross-function `b` (HIR
+// CALL with CALL_TAIL) as a real tail jump; the HIR executor would otherwise
+// run it as one more nested call. Titles loop through tail branches (state
+// machines, jump tables), which then grew the host and guest frame depth by
+// one per iteration until return matching broke. A tail call made from a
+// function this resolver is running is deferred: that function completes
+// (CALL_TAIL ends its frame), and the target runs here in its place at the
+// same depth, iteratively.
+uint32_t g_tail_frames_active = 0;
+bool g_pending_tail_valid = false;
+uint32_t g_pending_tail_address = 0;
+uint32_t g_pending_tail_flags = 0;
+xe::cpu::Module* g_pending_tail_module = nullptr;
+
 bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
+  const uint32_t flags = GetHIRCorrectnessCurrentCallFlags();
+  if ((flags & xe::cpu::hir::CALL_TAIL) && g_tail_frames_active > 0 &&
+      !g_pending_tail_valid) {
+    g_pending_tail_valid = true;
+    g_pending_tail_address = address;
+    g_pending_tail_flags = flags;
+    g_pending_tail_module = module;
+    return true;
+  }
+  ++g_tail_frames_active;
+  bool ok = TranslateNestedGuestAddressOnce(address, module, flags);
+  while (ok && g_pending_tail_valid) {
+    g_pending_tail_valid = false;
+    ok = TranslateNestedGuestAddressOnce(g_pending_tail_address,
+                                         g_pending_tail_module,
+                                         g_pending_tail_flags);
+  }
+  --g_tail_frames_active;
+  g_pending_tail_valid = false;
+  return ok;
+}
+
+bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
+                                     uint32_t call_flags) {
   // Registered kernel/XAM import thunks are resolved before the bounded probe
   // memory check. Real XEX thunks may live outside the entry's 64 KiB staging
   // window, but a known HLE import is an external call boundary, not guest code
@@ -293,7 +334,7 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
       // the same active PPCContext as the caller. It can consume r3..r10,
       // touch validated guest memory through the normal HIR load/store path,
       // write the return value into r3, return, and let the caller continue.
-      const bool abi_ok = TranslateNestedGuestAddress(abi_target, module);
+      const bool abi_ok = TranslateNestedGuestAddressOnce(abi_target, module, 0u);
       if (!abi_ok) MarkKernelImportProbeAbiFailure();
       return abi_ok;
     }
@@ -313,7 +354,6 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   }
   auto* frontend = g_probe_backend->processor()->frontend();
   if (!frontend) { std::fprintf(stderr, "R360_CALL_RESOLVE rejected: frontend missing\n"); return false; }
-  const uint32_t call_flags = GetHIRCorrectnessCurrentCallFlags();
   const bool is_tail = (call_flags & xe::cpu::hir::CALL_TAIL) != 0;
 
   // Xenia explicitly registers the Microsoft shared __restgprlr_* entries as
@@ -487,6 +527,10 @@ bool ResolveNestedGuestAddress(uint32_t address) { return TranslateNestedGuestAd
 }  // namespace
 
 void ResetProbeTelemetry() { g_probe_telemetry = {}; }
+void ResetTailTrampoline() {
+  g_tail_frames_active = 0;
+  g_pending_tail_valid = false;
+}
 void ResetTrapReport() {
   g_trap_reason[0] = 0;
   g_trap_phase = kTrapPhaseIdle;

@@ -12,7 +12,7 @@
 //   node tools/run-title.mjs <game.iso | package (LIVE/PIRS/CON) | default.xex | extracted folder>
 //        [--bootstrap build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm]
 //        [--trace 64] [--json report.json] [--budget N] [--verbose] [--trace-calls]
-//        [--license trial|full]
+//        [--license trial|full] [--dump-guest ADDR:LEN:FILE]
 //
 // Nothing here uploads or copies game data anywhere; files are read in place.
 
@@ -42,6 +42,7 @@ function parseArgs(argv){
     else if(a==='--verbose'||a==='-v')args.verbose=true;
     else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--license')args.license=String(argv[++i]||'trial');
+    else if(a==='--dump-guest'){const [addr,len,file]=String(argv[++i]).split(':');(args.dumps??=[]).push({address:Number(addr)>>>0,length:Number(len)>>>0,file});}
     else if(a==='--help'||a==='-h')args.help=true;
     else if(!args.input)args.input=a;
     else throw new Error(`unexpected argument ${a}`);
@@ -182,12 +183,24 @@ async function main(){
       mainThread:result.mainThreadContext?{stackBytes:result.mainThreadContext.stackBytes,tlsBytes:result.mainThreadContext.tlsBytes,tlsTemplate:result.mainThreadContext.tlsTemplate}:null,
       kernelVariables:{relocated:result.kernelVariableRegistration?.relocated?.map(v=>v.name),placeholders:result.kernelVariableRegistration?.placeholders?.map(v=>kernelExportName(v.module,v.ordinal))},
       importedKernelFunctions:result.kernelImports?.plan?.filter(i=>i.isKernelModule&&i.kind==='function').length,
+      kernelVariableImports:result.kernelImports?.plan?.filter(i=>i.kind!=='function').map(i=>({module:i.module,ordinal:i.ordinal,name:kernelExportName(i.module,i.ordinal),valueAddress:hex(i.valueAddress),layout:i.descriptorLayout})),
       kernelTrace:(result.kernelTrace||[]).slice(-args.trace),
       titleGpu:result.titleGpuTelemetry,
       debugLog:readDebugLog(bootstrap),
       guestVfsFetched:result.guestVfsFetched,
     });
   }
+  // --dump-guest ADDR:LEN:FILE writes raw big-endian guest memory (for
+  // powerpc objdump -b binary -EB) after the run.
+  for(const dump of args.dumps||[]){
+    const out=Buffer.alloc(dump.length);
+    const scratch=bootstrap.exports.r360_xex_guest_mapper_input_buffer()>>>0;
+    for(let o=0;o<dump.length;o+=4){
+      if((bootstrap.exports.r360_sparse_guest_memory_read_u32_be((dump.address+o)>>>0,scratch)>>>0)===1)out.writeUInt32BE(new DataView(bootstrap.exports.memory.buffer).getUint32(scratch,true),o);
+    }
+    fs.writeFileSync(dump.file,out);
+  }
+  report.gprsAtStop=Array.from({length:32},(_,i)=>hex(Number(BigInt.asUintN(32,BigInt(bootstrap.exports.r360_ppc_probe_correctness_gpr?.(i)??0)))));
   report.hostStackHeadroom=bootstrap.exports.r360_trap_stack_headroom?.()>>>0;
   report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK)/.test(l)).slice(-12);
 

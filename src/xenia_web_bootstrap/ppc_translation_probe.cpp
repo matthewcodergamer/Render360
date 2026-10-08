@@ -2,6 +2,8 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 #include "hir_correctness_executor.h"
 #include "ppc_translation_probe_runtime.h"
@@ -225,6 +227,7 @@ extern "C" {
 void r360_ppc_probe_reset() {
   render360::xenia_web::ResetProbeTelemetry();
   render360::xenia_web::ResetTrapReport();
+  render360::xenia_web::ResetTailTrampoline();
   render360::xenia_web::AbandonHIRCorrectnessExecution();
   render360::xenia_web::ResetHIRCorrectnessInitialState();
   render360::xenia_web::ResetWasmBackendCallProbe();
@@ -378,6 +381,109 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   NoteTopLevelTranslate(address);SetHIRCorrectnessExecutionEntry(address!=fn_begin?address:0u);const bool defined=g_processor->frontend()->DefineFunction(&function,0);SetHIRCorrectnessExecutionEntry(0u);if(!defined){g_scan_diagnostic=kProbeScanDefineFailed;g_status=kProbeErrorTranslate;return 0;}
   const uint32_t hir=GetProbeTelemetry().hir_instructions;g_scan_hir_instructions=hir;if(!hir){g_scan_diagnostic=kProbeScanZeroHIR;g_status=kProbeErrorTranslate;return 0;}
   std::fprintf(stderr,"R360_SCAN_RANGE entry=0x%08X function=0x%08X end=0x%08X pdata=%u prolog=%u\n",address,fn_begin,g_scan_function_end,pdata?1u:0u,prolog);g_scan_diagnostic=kProbeScanTranslated;g_status=kProbeTranslated;return hir;
+}
+
+uint32_t r360_ppc_probe_execute_on_translate();
+uint32_t r360_ppc_probe_set_execute_on_translate(uint32_t enabled);
+
+// Port of XexModule::FindSaveRest (gpr and fpr helpers): locate the shared
+// __savegprlr_N/__restgprlr_N and __savefpr_N/__restfpr_N sequences in a code
+// range of the loaded title and declare them on the probe module with Xenia's
+// behaviours. PPCScanner::IsRestGprLr ends a function at `b __restgprlr_N`
+// only when that function is declared kEpilogReturn; without these
+// declarations the scanner ran through epilogues into the next function and
+// turned its `bl` into an internal jump. Returns a bitmask of what was found
+// (1 = gprlr, 2 = fpr). Instruction words are big-endian guest words.
+uint32_t r360_ppc_probe_register_save_rest(uint32_t start, uint32_t end) {
+  using namespace render360::xenia_web;
+  if (!EnsureRuntime() || !g_probe_module || end <= start) return 0;
+  static const uint32_t kGprlr[] = {
+      0xF9C1FF68, 0xF9E1FF70, 0xFA01FF78, 0xFA21FF80, 0xFA41FF88, 0xFA61FF90,
+      0xFA81FF98, 0xFAA1FFA0, 0xFAC1FFA8, 0xFAE1FFB0, 0xFB01FFB8, 0xFB21FFC0,
+      0xFB41FFC8, 0xFB61FFD0, 0xFB81FFD8, 0xFBA1FFE0, 0xFBC1FFE8, 0xFBE1FFF0,
+      0x9181FFF8, 0x4E800020,
+      0xE9C1FF68, 0xE9E1FF70, 0xEA01FF78, 0xEA21FF80, 0xEA41FF88, 0xEA61FF90,
+      0xEA81FF98, 0xEAA1FFA0, 0xEAC1FFA8, 0xEAE1FFB0, 0xEB01FFB8, 0xEB21FFC0,
+      0xEB41FFC8, 0xEB61FFD0, 0xEB81FFD8, 0xEBA1FFE0, 0xEBC1FFE8, 0xEBE1FFF0,
+      0x8181FFF8, 0x7D8803A6, 0x4E800020};
+  static const uint32_t kFpr[] = {
+      0xD9CCFF70, 0xD9ECFF78, 0xDA0CFF80, 0xDA2CFF88, 0xDA4CFF90, 0xDA6CFF98,
+      0xDA8CFFA0, 0xDAACFFA8, 0xDACCFFB0, 0xDAECFFB8, 0xDB0CFFC0, 0xDB2CFFC8,
+      0xDB4CFFD0, 0xDB6CFFD8, 0xDB8CFFE0, 0xDBACFFE8, 0xDBCCFFF0, 0xDBECFFF8,
+      0x4E800020,
+      0xC9CCFF70, 0xC9ECFF78, 0xCA0CFF80, 0xCA2CFF88, 0xCA4CFF90, 0xCA6CFF98,
+      0xCA8CFFA0, 0xCAACFFA8, 0xCACCFFB0, 0xCAECFFB8, 0xCB0CFFC0, 0xCB2CFFC8,
+      0xCB4CFFD0, 0xCB6CFFD8, 0xCB8CFFE0, 0xCBACFFE8, 0xCBCCFFF0, 0xCBECFFF8,
+      0x4E800020};
+  // Read the range once (unmapped pages read as zero and never match).
+  const uint32_t words = (end - start) / 4u;
+  std::vector<uint32_t> code(words, 0);
+  constexpr uint32_t kChunk = 4096;
+  for (uint32_t offset = 0; offset < words * 4u; offset += kChunk) {
+    const uint32_t bytes = std::min(kChunk, words * 4u - offset);
+    std::vector<uint8_t> raw(bytes);
+    if (!ReadSparseGuestMemory(start + offset, raw.data(), bytes)) continue;
+    for (uint32_t i = 0; i + 4 <= bytes; i += 4) {
+      code[(offset + i) / 4u] = (uint32_t(raw[i]) << 24) |
+                                (uint32_t(raw[i + 1]) << 16) |
+                                (uint32_t(raw[i + 2]) << 8) | raw[i + 3];
+    }
+  }
+  auto search = [&](const uint32_t* pattern, size_t count) -> uint32_t {
+    if (words < count) return 0;
+    for (uint32_t i = 0; i + count <= words; ++i) {
+      if (code[i] != pattern[0]) continue;
+      if (std::equal(pattern, pattern + count, code.begin() + i)) {
+        return start + i * 4u;
+      }
+    }
+    return 0;
+  };
+  auto declare = [&](uint32_t address, uint32_t end_address,
+                     xe::cpu::Function::Behavior behavior) {
+    xe::cpu::Function* function = nullptr;
+    g_probe_module->DeclareFunction(address, &function);
+    if (!function) return;
+    function->set_end_address(end_address);
+    function->set_behavior(behavior);
+  };
+  uint32_t found = 0;
+  if (const uint32_t gplr = search(kGprlr, sizeof(kGprlr) / 4)) {
+    for (uint32_t n = 14; n <= 31; ++n) {
+      const uint32_t a = gplr + (n - 14) * 4u;
+      declare(a, a + (31 - n) * 4u + 2 * 4u, xe::cpu::Function::Behavior::kProlog);
+    }
+    for (uint32_t n = 14; n <= 31; ++n) {
+      const uint32_t a = gplr + 20 * 4u + (n - 14) * 4u;
+      declare(a, a + (31 - n) * 4u + 3 * 4u,
+              xe::cpu::Function::Behavior::kEpilogReturn);
+    }
+    // PPCScanner::IsRestGprLr asks Processor::QueryFunction, which only sees
+    // resolved entries; Xenia resolves these on their first call. Resolve
+    // them now, translation-only (no guest execution).
+    const uint32_t execute = r360_ppc_probe_execute_on_translate();
+    r360_ppc_probe_set_execute_on_translate(0);
+    for (uint32_t n = 14; n <= 31; ++n) {
+      const uint32_t a = gplr + 20 * 4u + (n - 14) * 4u;
+      if (PageSparseCodeWindow(a)) g_processor->ResolveFunction(a);
+    }
+    r360_ppc_probe_set_execute_on_translate(execute);
+    found |= 1u;
+  }
+  if (const uint32_t fpr = search(kFpr, sizeof(kFpr) / 4)) {
+    for (uint32_t n = 14; n <= 31; ++n) {
+      const uint32_t a = fpr + (n - 14) * 4u;
+      declare(a, a + (31 - n) * 4u + 1 * 4u, xe::cpu::Function::Behavior::kProlog);
+    }
+    for (uint32_t n = 14; n <= 31; ++n) {
+      const uint32_t a = fpr + 19 * 4u + (n - 14) * 4u;
+      declare(a, a + (31 - n) * 4u + 1 * 4u, xe::cpu::Function::Behavior::kEpilog);
+    }
+    found |= 2u;
+  }
+  std::fprintf(stderr, "R360_SAVE_REST range=0x%08X-0x%08X found=%u\n", start,
+               end, found);
+  return found;
 }
 
 uint32_t r360_ppc_probe_status() {

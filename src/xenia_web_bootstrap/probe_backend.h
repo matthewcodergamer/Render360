@@ -27,6 +27,7 @@ struct ProbeTelemetry {
 
 void ResetProbeTelemetry();
 void ResetTrapReport();
+void ResetTailTrampoline();
 void NoteTopLevelTranslate(uint32_t address);
 const ProbeTelemetry& GetProbeTelemetry();
 

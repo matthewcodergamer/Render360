@@ -32,6 +32,20 @@
 
 #include "guest_fibers.h"
 #include "kernel_export_ordinals.h"
+
+// Weak defaults for builds that link the kernel services without the HIR
+// fiber scheduler or the title GPU runtime (standalone kernel critics): no
+// other guest thread, no interrupts, no GPU. The full core overrides them.
+namespace render360::xenia_web {
+__attribute__((weak)) bool GuestFiberYield(bool) { return false; }
+__attribute__((weak)) void GuestFiberNoteProgress() {}
+__attribute__((weak)) bool GuestFibersActive() { return false; }
+__attribute__((weak)) bool GuestInterruptActive() { return false; }
+__attribute__((weak)) void GuestFiberHostYieldIfDue() {}
+__attribute__((weak)) bool RunGuestInterrupt(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
+__attribute__((weak)) void TitleGpuPump() {}
+__attribute__((weak)) uint32_t TitleGpuTakePendingInterrupts(uint32_t* mask) { if (mask) *mask = 0; return 0; }
+}  // namespace render360::xenia_web
 #include "kernel_ntstatus_table.h"
 #include "sparse_guest_memory.h"
 #include "title_gpu_runtime.h"
@@ -5194,11 +5208,10 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
 }
 
 void MaybeDeliverGuestInterrupts() {
-  if (!g_graphics_interrupt_callback || !GuestFibersActive() ||
-      GuestInterruptActive()) {
-    return;
-  }
+  if (!GuestFibersActive() || GuestInterruptActive()) return;
   if ((++g_interrupt_poll & 63u) != 0) return;
+  GuestFiberHostYieldIfDue();
+  if (!g_graphics_interrupt_callback) return;
   TitleGpuPump();
   uint32_t cpu_mask = 0;
   const uint32_t cp_interrupts = TitleGpuTakePendingInterrupts(&cpu_mask);

@@ -413,7 +413,7 @@ function stagePreparedPeImage(bootstrap,prepared,xexEntry,xex=null){
   return {input,capacity:cap,stagingGrew};
 }
 
-export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true,prepareMainThreadContext=false}){
+export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},installDefaultBrowserHle=true,prepareMainThreadContext=false,guestSliceMs=0,onGuestSlice=null,signal=null}){
   const xex=Buffer.from(defaultXex);
   if(xex.length<0x18||xex.toString('ascii',0,4)!=='XEX2')throw new Error('default.xex is not XEX2');
   const headerSize=be32(xex,8);
@@ -476,9 +476,14 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   startupGprCount+=applyInitialGprs(bootstrap,initialGprs);
   const scannedEntry=maybe(bootstrap,'r360_title_handoff_translate_scanned_entry');
   if(scanEntryFunction&&!scannedEntry)throw new Error('browser bootstrap is missing scanned title-entry execution');
+  // A time-sliced run keeps the page responsive, so the per-function HIR
+  // instruction guard (there to stop a runaway synchronous run) is lifted.
+  if(guestSliceMs>0)maybe(bootstrap,'r360_hir_set_instruction_budget')?.(0xFFFFFFFF);
   // Title-created guest threads run as fibers while the primary thread executes.
-  const fiberRun=scanEntryFunction?runWithGuestFibers(bootstrap,()=>scannedEntry()>>>0):{result:pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0,fibers:null};
-  const hir=fiberRun.result>>>0;
+  const fiberRun=scanEntryFunction?await runWithGuestFibers(bootstrap,()=>scannedEntry()>>>0,{sliceMs:guestSliceMs,onSlice:onGuestSlice,signal}):{result:pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0,fibers:null};
+  // A sliced run the user stopped is not a translation failure.
+  const stoppedByUser=fiberRun.fibers?.stopped==='aborted';
+  const hir=stoppedByUser?1:fiberRun.result>>>0;
   const guestFibers=fiberRun.fibers;
   const entryExecutionMode=scanEntryFunction?'xenia-scanned-entry-function':'bounded-entry-byte-probe';
   if(!hir){
@@ -563,7 +568,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   const kernelLastOrdinal=kernelLastOrdinalFn?(kernelLastOrdinalFn()>>>0):0;
   const kernelLastStatus=kernelLastStatusFn?(kernelLastStatusFn()>>>0):0;
   const reachedKernelModule=kernelLastModuleId===1?'xboxkrnl.exe':kernelLastModuleId===2?'xam.xex':null;
-  const runtimeBoundary=executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':kernelLastStatus===4?'title-requested-exit':kernelLastStatus===5?'guest-wait-blocked':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
+  const runtimeBoundary=stoppedByUser?'stopped-by-user':executionStatus===3?'guest-return':kernelLastStatus===2?'kernel-import-unimplemented':kernelLastStatus===3?'kernel-import-abi-failed':kernelLastStatus===4?'title-requested-exit':kernelLastStatus===5?'guest-wait-blocked':executionStatus===2?'no-return-boundary':executionStatus===1?(executionBlockerKind===2?'unresolved-guest-call':executionBlockerKind===3?'instruction-limit':executionBlockerKind===5?'guest-memory-dependency':'unsupported-hir'):'execution-not-observed';
   const firstKernelBlocker=kernelImports.firstKernelBlocker?{module:kernelImports.firstKernelBlocker.module,ordinal:kernelImports.firstKernelBlocker.ordinal,kind:kernelImports.firstKernelBlocker.kind,valueAddress:kernelImports.firstKernelBlocker.valueAddress,thunkAddress:kernelImports.firstKernelBlocker.thunkAddress}:null;
   const reachedKernelBlocker=kernelLastStatus===2?{module:reachedKernelModule,ordinal:kernelLastOrdinal,name:kernelExportName(reachedKernelModule??kernelLastModuleId,kernelLastOrdinal),thunkAddress:kernelLastThunk}:null;
   const kernelBoundary=readKernelBoundaryTelemetry(bootstrap,kernelLastStatus);

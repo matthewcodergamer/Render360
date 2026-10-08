@@ -1,6 +1,7 @@
 #include "guest_fibers.h"
 
 #include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <vector>
 
@@ -75,6 +76,15 @@ uint64_t g_progress = 0;
 uint32_t g_switches = 0;
 uintptr_t g_stack_low = 0;
 bool g_in_interrupt = false;
+uint64_t g_host_slice_deadline_ms = 0;  // 0 = no browser time slicing
+bool g_host_yield = false;
+uint32_t g_host_yields = 0;
+
+uint64_t HostMillis() {
+  struct timespec ts {};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000ull + uint64_t(ts.tv_nsec) / 1000000ull;
+}
 
 size_t LocalsSize() {
 #if defined(__wasm__)
@@ -249,6 +259,25 @@ bool GuestFiberYield(bool blocked) {
 
 bool GuestInterruptActive() { return g_in_interrupt; }
 
+void GuestFiberHostYieldIfDue() {
+#if defined(__wasm__)
+  if (g_rewinding) {
+    // Resumed after the page got its turn.
+    g_rewinding = false;
+    r360_asyncify_stop_rewind();
+    return;
+  }
+  if (!g_enabled || g_in_interrupt || !g_host_slice_deadline_ms ||
+      g_current >= g_fibers.size() || HostMillis() < g_host_slice_deadline_ms) {
+    return;
+  }
+  if (!EnsureFiberMemory(g_fibers[g_current], false)) return;
+  g_host_yield = true;
+  ++g_host_yields;
+  SwitchTo(g_current, kFiberReady);
+#endif
+}
+
 bool RunGuestInterrupt(uint32_t address, uint32_t r3, uint32_t r4,
                        uint32_t stack_top, uint32_t pcr) {
 #if defined(__wasm__)
@@ -298,6 +327,9 @@ uint32_t r360_fiber_reset(uint32_t enable) {
   rx::g_progress = 0;
   rx::g_switches = 0;
   rx::g_stack_low = 0;
+  rx::g_host_slice_deadline_ms = 0;
+  rx::g_host_yield = false;
+  rx::g_host_yields = 0;
   rx::g_enabled = enable != 0;
   if (!rx::g_enabled) return 0;
 #if defined(__wasm__)
@@ -314,6 +346,19 @@ uint32_t r360_fiber_current() { return rx::g_current; }
 uint32_t r360_fiber_count() { return uint32_t(rx::g_fibers.size()); }
 uint32_t r360_fiber_switches() { return rx::g_switches; }
 uint32_t r360_fiber_switch_pending() { return rx::g_switch_pending ? 1u : 0u; }
+// Browser time slice: the running guest thread unwinds to the driver after
+// `milliseconds` of host time (0 disables slicing).
+uint32_t r360_fiber_set_host_slice(uint32_t milliseconds) {
+  rx::g_host_slice_deadline_ms = milliseconds ? rx::HostMillis() + milliseconds : 0;
+  return milliseconds;
+}
+// 1 when the last unwind was a host time-slice yield (consumed by this call).
+uint32_t r360_fiber_take_host_yield() {
+  const bool yielded = rx::g_host_yield;
+  rx::g_host_yield = false;
+  return yielded ? 1u : 0u;
+}
+uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
 uint32_t r360_fiber_thread(uint32_t index) {
   return index < rx::g_fibers.size() ? rx::g_fibers[index].thread : 0u;
 }

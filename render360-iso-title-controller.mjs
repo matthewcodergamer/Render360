@@ -12,7 +12,7 @@ export function extractXex2EncryptedImageKey(xex){
   return xex.slice(securityOffset+0x150,securityOffset+0x160);
 }
 
-export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},maxDefaultXexBytes=256*1024*1024,vfsHost=null,executeDuringTranslation=true,executeHirCompatibilityFallback=true}){
+export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurityKey=null,useDevkitKey=false,entryBytes=8,scanEntryFunction=false,implementedKernelExports={},initialGprs={},maxDefaultXexBytes=256*1024*1024,vfsHost=null,executeDuringTranslation=true,executeHirCompatibilityFallback=true,guestRun={}}){
   const volume=await mountXdvdfs(isoSource);
   const defaultNode=await volume.stat('/default.xex');
   if(defaultNode.isDirectory)throw new Error('XDVDFS default.xex is a directory');
@@ -37,7 +37,8 @@ export async function handoffXboxIso({core,bootstrap,isoSource,encryptedSecurity
     translationOnly=true;
   }
 
-  const handoffArgs={core,bootstrap,defaultXex,encryptedSecurityKey:securityKey,useDevkitKey,entryBytes,scanEntryFunction,implementedKernelExports,initialGprs};
+  // guestRun: browser time slicing for the continuous run (render360-guest-fibers.mjs).
+  const handoffArgs={core,bootstrap,defaultXex,encryptedSecurityKey:securityKey,useDevkitKey,entryBytes,scanEntryFunction,implementedKernelExports,initialGprs,...guestRun};
   let handoff;
   try{
     handoff=await handoffDefaultXex(handoffArgs);

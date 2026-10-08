@@ -76,6 +76,13 @@ What got it there:
   (music player), XGI and XLiveBase apps.
 - **Interior tail entries** now start only at a HIR block head; the mid-block case caused the
   `sign_extend` stop.
+- **The browser runs titles continuously.** Execution is cut into ~25 ms host slices: the core
+  unwinds to the page between slices, so the page stays responsive, the progress line shows
+  frames presented, and **Stop** works. The swapped frontbuffer is captured from the fetch
+  constant recorded at swap time. The image is still black: the command processor executes
+  draws but has no Xenos renderer for EDRAM and resolves yet. That renderer is the next GPU
+  milestone.
+
 
 ### October 8: Banjo-Tooie report, and the CPU checked against Xenia's tests
 

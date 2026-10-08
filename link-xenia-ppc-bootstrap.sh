@@ -149,8 +149,16 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 # wasm32 an explicit 2 MiB stack so those frames cannot overwrite the sparse
 # guest-memory allocator while the source is being moved to static scratch.
 R360_OPT="${R360_OPT:--O2}"
+# Link without Binaryen optimization: Asyncify (below) must instrument the
+# module before any wasm-level inlining. A function that calls
+# asyncify.start_unwind is not instrumented itself, so inlining the fiber
+# switch into a caller would leave that caller running mid-unwind. The
+# objects are already compiled at $R360_OPT; the Asyncify step runs
+# Binaryen's $R360_OPT afterwards.
 LINK_ARGS=(
-  "$R360_OPT"
+  -O0
+  -sASSERTIONS=0
+  -sSTACK_OVERFLOW_CHECK=0
   -sSTANDALONE_WASM=1
   -sERROR_ON_UNDEFINED_SYMBOLS=1
   -Wl,--no-entry

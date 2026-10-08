@@ -43,6 +43,8 @@ function parseArgs(argv){
     else if(a==='--verbose'||a==='-v')args.verbose=true;
     else if(a==='--trace-calls')args.traceCalls=true;
     else if(a==='--license')args.license=String(argv[++i]||'trial');
+    else if(a==='--frame')args.frame=argv[++i];
+    else if(a==='--slice-ms')args.sliceMs=Number(argv[++i])>>>0;
     else if(a==='--watch')args.watch=Number(argv[++i])>>>0;
     else if(a==='--dump-guest'){const [addr,len,file]=String(argv[++i]).split(':');(args.dumps??=[]).push({address:Number(addr)>>>0,length:Number(len)>>>0,file});}
     else if(a==='--help'||a==='-h')args.help=true;
@@ -166,10 +168,10 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||0,onGuestSlice:args.sliceMs?(s=>{if(s.slices<5||s.slices%50===0)process.stderr.write(`slice ${s.slices}: ${bootstrap.exports.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
-  }catch(caught){error=wrapCoreTrap(caught,bootstrap,{context:'run-title'});}
+  }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}
   const elapsedMs=Date.now()-started;
 
   const report={
@@ -196,6 +198,26 @@ async function main(){
       debugLog:readDebugLog(bootstrap),
       guestVfsFetched:result.guestVfsFetched,
     });
+  }
+  // --frame FILE.png saves the last swapped frontbuffer (Xenos decode of the
+  // VdSwap fetch constant from guest memory).
+  if(args.frame){
+    const {captureTitleFrontbuffer}=await import(rel('render360-title-frontbuffer.mjs'));
+    const zlib=await import('node:zlib');
+    let frame=null;
+    try{frame=captureTitleFrontbuffer({bootstrap});}catch(e){frame={captured:false,reason:e.message};}
+    if(frame?.captured){
+      const {width,height,rgba}=frame;
+      const raw=Buffer.alloc((width*4+1)*height);
+      for(let y=0;y<height;y++){raw[y*(width*4+1)]=0;Buffer.from(rgba.buffer,rgba.byteOffset+y*width*4,width*4).copy(raw,y*(width*4+1)+1);}
+      const crcTable=Array.from({length:256},(_,n)=>{let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;return c>>>0;});
+      const crc=b=>{let c=0xFFFFFFFF;for(const x of b)c=crcTable[(c^x)&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;};
+      const chunk=(type,data)=>{const len=Buffer.alloc(4);len.writeUInt32BE(data.length);const td=Buffer.concat([Buffer.from(type),data]);const c=Buffer.alloc(4);c.writeUInt32BE(crc(td));return Buffer.concat([len,td,c]);};
+      const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(width,0);ihdr.writeUInt32BE(height,4);ihdr[8]=8;ihdr[9]=6;
+      fs.writeFileSync(args.frame,Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
+      let nonBlack=0;for(let i=0;i<rgba.length;i+=4)if(rgba[i]|rgba[i+1]|rgba[i+2])nonBlack++;
+      report.frame={file:args.frame,width,height,hash:frame.hash,format:frame.format,tiled:frame.tiled,nonBlackPixels:nonBlack};
+    }else report.frame={captured:false,reason:frame?.reason};
   }
   // --dump-guest ADDR:LEN:FILE writes raw big-endian guest memory (for
   // powerpc objdump -b binary -EB) after the run.

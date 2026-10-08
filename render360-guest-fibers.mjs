@@ -12,23 +12,40 @@ export function hasGuestFibers(bootstrap){
 }
 
 // Runs `callPrimary` (the export that enters the title's primary thread) with
-// guest-thread scheduling. Returns the primary thread's result. When a
+// guest-thread scheduling. Resolves to the primary thread's result. When a
 // title-created thread stops on a blocker, the run ends with that thread's
 // state current (so diagnostics name it) and its root result is returned.
-export function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e7}={}){
+//
+// sliceMs > 0 time-slices the run for the browser: after sliceMs of host time
+// the core unwinds back here, `onSlice(stats)` runs and the page gets a turn
+// (frames, input, UI) before the guest is rewound. `signal` (AbortSignal)
+// stops a sliced run at the next slice; the result is then
+// {stopped:'aborted'}.
+export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,sliceMs=0,onSlice=null,signal=null,yieldToHost=null}={}){
   if(!hasGuestFibers(bootstrap))return {result:callPrimary(),fibers:null};
   const e=bootstrap.exports;
   const restoreStack=e._emscripten_stack_restore;
   const baseStack=typeof e.emscripten_stack_get_current==='function'?(e.emscripten_stack_get_current()>>>0):0;
+  const slicing=sliceMs>0&&typeof e.r360_fiber_set_host_slice==='function';
+  const hostTurn=yieldToHost||(()=>new Promise(resolve=>setTimeout(resolve,0)));
   e.r360_fiber_reset(1);
-  const stats={switches:0,threads:0,endedOn:0};
+  const stats={switches:0,threads:0,endedOn:0,slices:0,stopped:null};
   let result;
   try{
+    if(slicing)e.r360_fiber_set_host_slice(sliceMs);
     result=callPrimary();
     for(;;){
       const state=e.asyncify_get_state();
       if(state===1){
         e.asyncify_stop_unwind();
+        if(slicing&&(e.r360_fiber_take_host_yield()>>>0)){
+          ++stats.slices;
+          stats.threads=Math.max(0,(e.r360_fiber_count()>>>0)-1);
+          if(onSlice)await onSlice(stats);
+          await hostTurn();
+          if(signal?.aborted){stats.stopped='aborted';result=0;break;}
+          e.r360_fiber_set_host_slice(sliceMs);
+        }
       }else if(state!==0){
         throw new Error(`guest fiber driver: unexpected Asyncify state ${state}`);
       }else{
@@ -50,7 +67,29 @@ export function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e7}={}){
     // Leave a clean core for the next title even after a trap mid-switch.
     try{if(e.asyncify_get_state()!==0){e.asyncify_stop_unwind();e.asyncify_stop_rewind?.();}}catch{}
     if(baseStack)restoreStack(baseStack);
+    if(slicing)e.r360_fiber_set_host_slice(0);
     e.r360_fiber_reset(0);
   }
   return {result,fibers:stats};
+}
+
+// Browser options for a continuous title run: ~25 ms host slices, Stop through
+// globalThis.render360GuestRun.stop() (aborts at the next slice), and a
+// progress line about twice a second.
+export function browserGuestRunOptions({bootstrap,onProgress=null,sliceMs=25}={}){
+  globalThis.render360GuestRun?.stop?.();
+  const controller=new AbortController();
+  const now=()=>globalThis.performance?.now?.()??Date.now();
+  const started=now();
+  let lastReport=0;
+  globalThis.render360GuestRun={stop:()=>controller.abort(),signal:controller.signal};
+  const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
+  return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
+    const t=now();
+    if(!onProgress||t-lastReport<500)return;
+    lastReport=t;
+    const frames=read('r360_title_gpu_vd_swap_calls'),draws=read('r360_xenos_draws');
+    const seconds=Math.max(0.001,(t-started)/1000);
+    onProgress(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
+  }};
 }

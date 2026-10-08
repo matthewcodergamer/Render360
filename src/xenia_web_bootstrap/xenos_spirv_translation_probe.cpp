@@ -43,6 +43,8 @@ uint32_t r360_xenos_shader_buffer(uint32_t shader_type);
 uint32_t r360_xenos_shader_dwords(uint32_t shader_type);
 uint32_t r360_xenos_shader_hash(uint32_t shader_type);
 uint32_t r360_xenos_fetch_constant_word(uint32_t group, uint32_t word);
+uint32_t r360_xenos_swap_fetch_word(uint32_t word);
+uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
 uint32_t r360_xenos_frontbuffer_ptr();
 uint32_t r360_xenos_frontbuffer_width();
 uint32_t r360_xenos_frontbuffer_height();
@@ -303,7 +305,7 @@ uint32_t CaptureFrontbufferSnapshot() {
 
   uint32_t words[6] = {};
   for (uint32_t i = 0; i < 6u; ++i) {
-    words[i] = r360_xenos_fetch_constant_word(0u, i);
+    words[i] = r360_xenos_swap_fetch_word(i);
   }
   const uint32_t type = words[0] & 3u;
   const uint32_t pitch = ((words[0] >> 22u) & 0x1FFu) << 5u;
@@ -347,8 +349,9 @@ uint32_t CaptureFrontbufferSnapshot() {
   }
 
   std::vector<uint8_t> source(static_cast<size_t>(source_bytes));
-  if (!ReadSparseGuestMemory(base_address, source.data(),
-                             static_cast<uint32_t>(source_bytes))) {
+  // The fetch base is a GPU (physical) address (Xenia TranslatePhysical).
+  if (!ReadSparseGuestMemory(r360_kernel_gpu_address_to_virtual(base_address),
+                             source.data(), static_cast<uint32_t>(source_bytes))) {
     g_frontbuffer_snapshot_status = kFrontbufferSnapshotUnmapped;
     return 0u;
   }

@@ -38,4 +38,10 @@ bool RunGuestInterrupt(uint32_t address, uint32_t r3, uint32_t r4,
                        uint32_t stack_top, uint32_t pcr);
 bool GuestInterruptActive();
 
+// Browser time slicing: when the host slice set by the driver
+// (r360_fiber_set_host_slice) has run out, unwinds the running guest thread
+// to the JS driver, which yields to the page and then rewinds it. Called at
+// guest call boundaries.
+void GuestFiberHostYieldIfDue();
+
 }  // namespace render360::xenia_web

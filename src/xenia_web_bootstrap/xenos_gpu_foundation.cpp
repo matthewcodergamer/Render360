@@ -6,9 +6,11 @@
 
 #include "sparse_guest_memory.h"
 
-// Kernel physical-allocation map (Xenia Memory::TranslatePhysical).
-extern "C" uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
-extern "C" uint32_t r360_debug_watch_address();
+// Kernel physical-allocation map (Xenia Memory::TranslatePhysical) and the
+// debug watchpoint. Weak identity/no-op defaults keep the standalone Xenos
+// build linkable; the full core's kernel and executor define them.
+extern "C" __attribute__((weak)) uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) { return address; }
+extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0; }
 
 namespace render360::xenia_web {
 namespace {
@@ -102,6 +104,9 @@ std::array<uint32_t, 16> g_resume_offset{};
 uint32_t g_resume_levels = 0;
 uint32_t g_resume_next = 0;
 uint32_t g_waits = 0;
+// Fetch constant 0 as it was at the last XE_SWAP (Xenia IssueSwap reads the
+// frontbuffer fetch when the swap executes; later draws reuse the slot).
+std::array<uint32_t, 6> g_swap_fetch{};
 uint32_t g_ring_words = 0;
 uint32_t g_packets = 0;
 uint32_t g_register_writes = 0;
@@ -352,7 +357,9 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
     switch (opcode) {
       case kPm4Nop: case kPm4MeInit: case kPm4WaitForIdle: break;
       case kPm4DrawIndx: case kPm4DrawIndx2: handled = ExecuteDraw(opcode, p, count); break;
-      case kPm4XeSwap: handled = ExecuteSwap(p, count); break;
+      case kPm4XeSwap:
+        for (uint32_t w = 0; w < 6u; ++w) g_swap_fetch[w] = g_regs[0x4800u + w];
+        handled = ExecuteSwap(p, count); break;
       case kPm4RegRmw: {
         if (count != 3u) { handled = false; g_status = kStatusInvalid; break; }
         const uint32_t info = p[0], target = info & 0x1FFFu;
@@ -525,6 +532,7 @@ void Reset() {
   g_frontbuffer_ptr = g_frontbuffer_width = g_frontbuffer_height = 0;
   g_bin_mask = g_bin_select = 0xFFFFFFFFull;
   g_stall_levels = g_resume_levels = g_resume_next = g_waits = 0;
+  g_swap_fetch.fill(0);
 }
 uint32_t EdramTileAddress(uint32_t base, uint32_t pitch, uint32_t x, uint32_t y) {
   if (!pitch) return 0xFFFFFFFFu;
@@ -573,6 +581,7 @@ uint32_t r360_xenos_shader_dwords(uint32_t t){const auto*s=render360::xenia_web:
 uint32_t r360_xenos_shader_hash(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->hash:0u;}
 uint32_t r360_xenos_shader_guest_address(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->guest_address:0u;}
 uint32_t r360_xenos_shader_source(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->source:0u;}
+uint32_t r360_xenos_swap_fetch_word(uint32_t w){return w<6u?render360::xenia_web::g_swap_fetch[w]:0u;}
 uint32_t r360_xenos_fetch_constant_word(uint32_t g,uint32_t w){if(w>=6u)return 0u;const uint64_t i=0x4800ull+uint64_t(g)*6u+w;return i<render360::xenia_web::g_regs.size()?render360::xenia_web::g_regs[uint32_t(i)]:0u;}
 uint32_t r360_xenos_edram_tile_address(uint32_t b,uint32_t p,uint32_t x,uint32_t y){return render360::xenia_web::EdramTileAddress(b,p,x,y);}
 uint32_t r360_xenos_frame_buffer(){return uint32_t(reinterpret_cast<uintptr_t>(render360::xenia_web::g_frame.data()));}

@@ -1,3 +1,4 @@
+import {browserGuestRunOptions} from './render360-guest-fibers.mjs';
 import {installRender360Buffer} from './render360-byte-buffer.mjs';
 import {createBrowserTitlePpcSession,createBrowserTitleThreadScheduler,discardRender360Bootstrap,loadRender360Bootstrap} from './render360-browser-title-runtime.mjs';
 import {wrapCoreTrap} from './render360-trap-report.mjs';
@@ -20,6 +21,9 @@ let activeScheduler=null;
 let activePresenter=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
+function guestRunOptions(bootstrap,onStage){
+  return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra)});
+}
 async function getBootstrap(onStage=null){
   const wasCached=Boolean(globalThis.render360PpcRuntimeIdentity?.verified);
   stage(onStage,'runtime',wasCached?'Checking generated WASM CPU runtime…':'Loading generated WASM CPU runtime…');
@@ -108,7 +112,7 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=n
   let result;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true,...guestRunOptions(bootstrap,onStage)}),
       {bootstrap,fetchPending:vfs?.fetchPending??(async()=>false),onRetry:(pending,attempt)=>stage(onStage,'extract',`Loading ${pending.path} for the title (${attempt})…`)},
     );
   }finally{

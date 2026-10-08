@@ -116,8 +116,9 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=n
   }
   const status=result.executionStatus>>>0;
   const exact=result.executionBlockerOpcode?` · opcode ${result.executionBlockerOpcode} @ 0x${(result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
+  const fault=memoryFaultText(result);
   result.compatibilityExecution={used:true,reason:'generated-wasm-entry-not-callable',entry:result.entry>>>0,executionStatus:status,executionInstructions:result.executionInstructions>>>0,runtimeBoundary:result.runtimeBoundary,blockerKind:result.executionBlockerKind>>>0,blockerOpcode:result.executionBlockerOpcode>>>0,blockerAddress:result.executionBlockerAddress>>>0,reachedKernelBlocker:result.reachedKernelBlocker??null};
-  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}${exact}`);
+  stage(onStage,'execute',`Native HIR compatibility execution · ${Number(result.executionInstructions||0).toLocaleString()} instructions · ${result.runtimeBoundary}${exact}${fault}`);
   return result;
 }
 
@@ -135,11 +136,19 @@ async function attachScheduler({bootstrap,result,onStage,config={},preparedSessi
   return {ppcSession,scheduler,primaryThread,schedulerReport};
 }
 
+const MEMORY_FAULTS=['','unmapped address','read-protected address','write-protected address','invalid access'];
+function memoryFaultText(result){
+  const code=result?.memoryFaultCode>>>0;
+  if(!code)return '';
+  return ` · ${MEMORY_FAULTS[code]||`fault ${code}`} 0x${(result.memoryFaultAddress>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
+}
+
 function updatePersistentCpu(state){
   if(state.result?.compatibilityExecution?.used){
     const status=state.result.executionStatus>>>0;
     const exact=state.result.executionBlockerOpcode?` · HIR opcode ${state.result.executionBlockerOpcode} @ 0x${(state.result.executionBlockerAddress>>>0).toString(16).toUpperCase()}`:'';
-    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`,kernelBoundary:state.result.kernelBoundary??null}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`,kernelBoundary:state.result.kernelBoundary??null}:null));
+    const fault=memoryFaultText(state.result);
+    const compatibilityBlocker=state.result.reachedKernelBlocker??(status===1?{kind:state.result.runtimeBoundary==='unresolved-guest-call'?'native-hir-unresolved-call':'native-hir-unsupported-boundary',entry:state.result.entry>>>0,hirBlockerKind:state.result.executionBlockerKind>>>0,hirOpcode:state.result.executionBlockerOpcode>>>0,guestAddress:state.result.executionBlockerAddress>>>0,memoryFault:state.result.memoryFaultCode?{code:state.result.memoryFaultCode>>>0,address:state.result.memoryFaultAddress>>>0}:null,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}${fault}`,kernelBoundary:state.result.kernelBoundary??null}:(status===2?{kind:'native-hir-no-return-boundary',entry:state.result.entry>>>0,message:describeKernelBoundary(state.result.kernelBoundary)||`Native HIR compatibility execution reached ${state.result.runtimeBoundary}${exact}`,kernelBoundary:state.result.kernelBoundary??null}:null));
     state.schedulerBlocker=compatibilityBlocker;
     state.persistentCpu={ready:status===3||Boolean(state.result.executionInstructions),schedulerReady:false,functionCount:0,pumpCount:1,totalSlices:Number(state.result.executionInstructions||0),completedThreads:status===3?1:0,paused:false,blocker:compatibilityBlocker,mode:'native-hir-compatibility-fallback'};
     return state.persistentCpu;

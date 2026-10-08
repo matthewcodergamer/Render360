@@ -27,6 +27,14 @@ uint32_t g_raw_bytes = 0;
 
 struct PeRuntimeFunction { uint32_t begin=0,end=0,prolog_bytes=0; };
 std::vector<PeRuntimeFunction> g_runtime_functions;
+// XEX security-info page descriptors (byte-swapped words: low 4 bits section
+// info, upper 28 bits page count) supplied before the next load. Xenia's
+// XexModule allocates the whole image read/write and then protects each
+// descriptor range: CODE and READONLY_DATA read-only, DATA read/write.
+std::vector<uint32_t> g_xex_page_words;
+uint32_t g_xex_page_size = 0;
+constexpr uint32_t kXexSectionCode = 1, kXexSectionData = 2,
+                   kXexSectionReadOnlyData = 3;
 uint32_t ReadBe32(const uint8_t* p){return (uint32_t(p[0])<<24)|(uint32_t(p[1])<<16)|(uint32_t(p[2])<<8)|p[3];}
 bool ExecutableAddress(const render360::xex::PEImageMetadata& m,uint32_t a){
   for(uint32_t i=0;i<m.section_count;++i){const auto& q=m.sections[i];if(!(q.characteristics&kPeMemExecute))continue;const uint32_t n=q.virtual_size>q.raw_size?q.virtual_size:q.raw_size;const uint64_t b=uint64_t(m.image_base)+q.virtual_address,e=b+n;if(uint64_t(a)>=b&&uint64_t(a)<e)return true;}return false;
@@ -162,7 +170,56 @@ bool LoadPreparedPeImageToGuestAtEntry(const uint8_t* image, uint32_t length,
     }
   }
 
+  // Prefer Xenia's XEX page layout when the XEX descriptors were supplied:
+  // headers, inter-section gaps and the rounding up to the image page size
+  // are mapped exactly as Xenia maps them, with the descriptor's protection.
+  // PE execute flags are kept so the PPC frontend may still page code.
+  const std::vector<uint32_t> xex_pages = std::move(g_xex_page_words);
+  const uint32_t xex_page_size = g_xex_page_size;
+  g_xex_page_words.clear();
+  g_xex_page_size = 0;
+  uint32_t xex_image_span = 0;
+  if (!xex_pages.empty() && (xex_page_size == 0x1000u || xex_page_size == 0x10000u)) {
+    std::map<uint32_t, uint32_t> executable;
+    for (const auto& entry : page_protections) {
+      if (entry.second & kGuestExecute) executable[entry.first] = kGuestExecute;
+    }
+    std::map<uint32_t, uint32_t> xex_protections;
+    uint64_t address = metadata.image_base;
+    bool valid = true;
+    for (const uint32_t word : xex_pages) {
+      const uint32_t info = word & 0xFu, count = word >> 4;
+      const uint64_t size = uint64_t(count) * xex_page_size;
+      if (!count || address + size > (uint64_t{1} << 32)) { valid = false; break; }
+      uint32_t protection = kGuestRead;
+      if (info == kXexSectionCode) protection = kGuestRead | kGuestExecute;
+      else if (info == kXexSectionData) protection = kGuestRead | kGuestWrite;
+      else if (info != kXexSectionReadOnlyData) protection = kGuestRead | kGuestWrite;
+      if (!AddPagesForSpan(&xex_protections, uint32_t(address), uint32_t(size), protection)) {
+        valid = false;
+        break;
+      }
+      address += size;
+    }
+    if (valid) {
+      xex_image_span = uint32_t(address - metadata.image_base);
+      for (const auto& entry : executable) xex_protections[entry.first] |= kGuestExecute;
+      // Any PE page the descriptors missed keeps its section protection.
+      for (const auto& entry : page_protections) xex_protections.emplace(entry);
+      page_protections.swap(xex_protections);
+    }
+  }
+
   if (!MapPreparedPePages(page_protections)) return Fail(kPeGuestMapFailed);
+
+  // Xenia writes the whole decompressed image (PE headers included) at the
+  // image base; titles read their own headers through RtlImageNtHeader.
+  if (xex_image_span) {
+    const uint32_t bytes = length < xex_image_span ? length : xex_image_span;
+    if (!LoadXexGuestSectionData(metadata.image_base, image, bytes)) {
+      return Fail(kPeGuestLoadFailed);
+    }
+  }
 
   // Xenia's XEX image readers write the decrypted/decompressed payload directly
   // into image-base memory. Therefore a prepared XEX image is already a memory
@@ -231,7 +288,28 @@ bool PreparedPeGuestFindRuntimeFunction(uint32_t address,uint32_t* begin,uint32_
 }  // namespace render360::xenia_web
 
 extern "C" {
-void r360_pe_guest_reset() { render360::xenia_web::ResetPreparedPeGuestLoad(); }
+void r360_pe_guest_reset() {
+  render360::xenia_web::ResetPreparedPeGuestLoad();
+  render360::xenia_web::g_xex_page_words.clear();
+  render360::xenia_web::g_xex_page_size = 0;
+}
+// Supplies the XEX page descriptors for the next r360_pe_guest_load*: count
+// big-endian-decoded words at words_ptr and the image page size.
+uint32_t r360_pe_guest_set_xex_pages(uint32_t words_ptr, uint32_t count,
+                                     uint32_t page_size) {
+  auto& words = render360::xenia_web::g_xex_page_words;
+  words.clear();
+  render360::xenia_web::g_xex_page_size = 0;
+  if (!words_ptr || !count || count > 4096 ||
+      (page_size != 0x1000u && page_size != 0x10000u)) {
+    return 0;
+  }
+  const auto* source =
+      reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(words_ptr));
+  words.assign(source, source + count);
+  render360::xenia_web::g_xex_page_size = page_size;
+  return 1;
+}
 uint32_t r360_pe_guest_load(uint32_t source_ptr, uint32_t length) {
   const auto* source =
       reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(source_ptr));

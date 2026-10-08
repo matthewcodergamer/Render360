@@ -14,6 +14,7 @@ on:
       - 'prepare-xenia-hir-value-overlay.py'
       - 'test-xenia-ppc-instruction-suite.mjs'
       - 'test-core-trap-recovery.mjs'
+      - 'test-xex-page-protection.mjs'
       - 'render360-trap-report.mjs'
       - 'tools/apply-xenia-entry-abi-v51.py'
       - 'tools/apply-xenia-epilog-tail-v57.py'
@@ -226,6 +227,9 @@ jobs:
         with:
           name: xenia-browser-bootstrap-fastlane
           path: build/xenia-ppc-bootstrap
+
+      - name: Verify Xenia XEX page layout and protection
+        run: timeout 90s node ./test-xex-page-protection.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify a trapped run does not poison the next title run
         run: timeout 90s node ./test-core-trap-recovery.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

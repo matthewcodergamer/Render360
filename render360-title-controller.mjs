@@ -352,7 +352,25 @@ function prepareBrowserMainThreadContext(bootstrap,entry,{xex=null,headerSize=0}
   return {kind:'xenia-main-thread-context',stackSlotBase,stackBase:stackBasePointer,stackLimit,stackBasePointer,stackTop,stackGuardBytes,xeniaCallFrameBytes,xeniaInitialLr,pcrAddress,tlsAddress:tlsBlock,tlsBytes,tlsTemplate:tlsInfo,threadAddress,registryHandle,startAddress:entry>>>0,stackBytes:stackPages*pageSize,xexStackBytes,zeroPageCompat:false,lowMemoryCompatBytes:0,lowMemoryPolicy:'xenia-protected'};
 }
 
-function stagePreparedPeImage(bootstrap,prepared,xexEntry){
+// XEX security info page descriptors, as Xenia's XexModule reads them: each
+// 0x18-byte record starts with a big-endian word (low 4 bits section info,
+// upper 28 bits page count). Pages are 64 KiB for images at or below
+// 0x90000000, else 4 KiB.
+export function readXexPageDescriptors(xex){
+  const bytes=xex instanceof Uint8Array?xex:new Uint8Array(xex);
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  if(bytes.byteLength<0x18)return null;
+  const sec=view.getUint32(0x10,false);
+  if(sec+0x184>bytes.byteLength)return null;
+  const loadAddress=view.getUint32(sec+0x110,false);
+  const count=view.getUint32(sec+0x180,false);
+  if(!count||count>4096||sec+0x184+count*0x18>bytes.byteLength)return null;
+  const words=new Uint32Array(count);
+  for(let i=0;i<count;i++)words[i]=view.getUint32(sec+0x184+i*0x18,false);
+  return {words,pageSize:loadAddress<=0x90000000?0x10000:0x1000,loadAddress};
+}
+
+function stagePreparedPeImage(bootstrap,prepared,xexEntry,xex=null){
   const inputBuffer=pick(bootstrap,'r360_xex_guest_mapper_input_buffer');
   const inputCapacity=pick(bootstrap,'r360_xex_guest_mapper_input_capacity');
   let input=inputBuffer()>>>0;
@@ -381,6 +399,14 @@ function stagePreparedPeImage(bootstrap,prepared,xexEntry){
   }
 
   if(!input||prepared.length>cap)throw new Error(`prepared image exceeds current PE staging capacity ${prepared.length}/${cap}`);
+  // Hand Xenia's page layout to the loader first (it copies the words), then
+  // reuse the staging buffer for the image itself.
+  const setXexPages=maybe(bootstrap,'r360_pe_guest_set_xex_pages');
+  const pages=xex&&setXexPages?readXexPageDescriptors(xex):null;
+  if(pages&&pages.words.byteLength<=cap){
+    new Uint32Array(bootstrap.exports.memory.buffer,input,pages.words.length).set(pages.words);
+    setXexPages(input,pages.words.length,pages.pageSize);
+  }
   new Uint8Array(bootstrap.exports.memory.buffer,input,prepared.length).set(prepared);
   if((pick(bootstrap,'r360_pe_guest_load_at_entry')(input,prepared.length,xexEntry>>>0)>>>0)!==1)throw new Error(`prepared PE guest load failed 0x${(pick(bootstrap,'r360_pe_guest_status')()>>>0).toString(16)}`);
   return {input,capacity:cap,stagingGrew};
@@ -404,7 +430,7 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   // Xenia cvars::license_mask: 0 = trial unless the player marked the title owned.
   maybe(bootstrap,'r360_xam_set_license_mask')?.(Number(globalThis.render360XamLicenseMask||0)>>>0);
   maybe(bootstrap,'r360_kernel_service_reset')?.();
-  const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry);
+  const peStage=stagePreparedPeImage(bootstrap,prepared,xexEntry,xex);
   const entry=pick(bootstrap,'r360_pe_guest_entry_address')()>>>0;
   const peEntry=pick(bootstrap,'r360_pe_guest_pe_entry_address')()>>>0;
   if(entry!==xexEntry)throw new Error(`XEX entry selection mismatch 0x${entry.toString(16)}/0x${xexEntry.toString(16)}`);

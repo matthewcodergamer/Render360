@@ -18,11 +18,8 @@
 // texture-cache / UI / trace dependencies that are unrelated to shader
 // translation. Keep the exact upstream table values here as the browser link
 // closure for the two extern symbols declared by draw_util.h.
-namespace xe::gpu::draw_util {
-const int8_t kD3D10StandardSamplePositions2x[2][2] = {{4, 4}, {-4, -4}};
-const int8_t kD3D10StandardSamplePositions4x[4][2] = {
-    {-2, -6}, {6, -2}, {-6, 2}, {2, 6}};
-}  // namespace xe::gpu::draw_util
+// The sample-position tables now come from the linked upstream draw_util.cc
+// (software Xenos backend).
 
 // Xenia's SPIR-V translator is intentionally split across implementation units
 // for ALU, fetch, memory-export and render-backend/EDRAM lowering. The desktop

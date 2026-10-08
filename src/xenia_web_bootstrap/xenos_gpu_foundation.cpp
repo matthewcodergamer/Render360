@@ -5,12 +5,18 @@
 #include <vector>
 
 #include "sparse_guest_memory.h"
+#include "xenos_soft_renderer.h"
 
 // Kernel physical-allocation map (Xenia Memory::TranslatePhysical) and the
 // debug watchpoint. Weak identity/no-op defaults keep the standalone Xenos
 // build linkable; the full core's kernel and executor define them.
 extern "C" __attribute__((weak)) uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) { return address; }
 extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0; }
+// The software renderer lives in the full core (xenos_soft_renderer.cpp); the
+// standalone Xenos foundation keeps its bounded bring-up raster.
+namespace render360::xenia_web {
+__attribute__((weak)) bool RenderXenosDraw(const XenosSoftDraw&) { return false; }
+}
 
 namespace render360::xenia_web {
 namespace {
@@ -285,10 +291,55 @@ uint32_t FrameProvenance() {
   if (g_draws) p |= kFrameProvBoundedRaster;
   return p;
 }
+uint32_t g_draw_log_remaining = 0;
+bool g_frame_provenance_rendered = false;
 bool ExecuteDraw(uint32_t opcode, const uint32_t* payload, uint32_t count) {
   if (!count) { g_status = kStatusInvalid; return false; }
-  const uint32_t initiator = payload[count - 1], primitive = initiator & 0x3Fu;
-  if (!primitive || primitive > 0x0Fu) { g_status = kStatusUnsupported; return false; }
+  if (g_draw_log_remaining) {
+    --g_draw_log_remaining;
+    const auto r = [](uint32_t i) { return g_regs[i]; };
+    std::fprintf(stderr, "R360_DRAW op=0x%02X n=%u p0=0x%08X p1=0x%08X p2=0x%08X mode=0x%X surf=0x%X color=0x%X depth=0x%X\n",
+                 opcode, count, payload[0], count > 1 ? payload[1] : 0u, count > 2 ? payload[2] : 0u,
+                 r(0x2208), r(0x2000), r(0x2001), r(0x2002));
+    std::fprintf(stderr, "R360_DRAW2 copyctl=0x%X dest=0x%X pitch=0x%X info=0x%X cclear=0x%X dclear=0x%X mask=0x%X vte=0x%X\n",
+                 r(0x2318), r(0x2319), r(0x231A), r(0x231B), r(0x231E), r(0x231D), r(0x2104), r(0x2206));
+    std::fprintf(stderr, "R360_DRAW3 vs=%u/0x%X ps=%u/0x%X fetch0=0x%X,0x%X win_off=0x%X scissor=0x%X-0x%X sc_mode=0x%X\n",
+                 g_vertex_shader.dword_count, g_vertex_shader.hash, g_pixel_shader.dword_count, g_pixel_shader.hash,
+                 r(0x4800), r(0x4801), r(0x2080), r(0x2081), r(0x2082), r(0x2205));
+  }
+  // Xenia CommandProcessor::ExecutePacketType3Draw: DRAW_INDX carries a viz
+  // query token first; then VGT_DRAW_INITIATOR and, for DMA indices,
+  // VGT_DMA_BASE and VGT_DMA_SIZE, all written to the register file.
+  uint32_t at = opcode == kPm4DrawIndx ? 1u : 0u;
+  if (at >= count) { g_status = kStatusInvalid; return false; }
+  const uint32_t initiator = payload[at++];
+  const uint32_t primitive = initiator & 0x3Fu;
+  if (!primitive || primitive > 0x16u) { g_status = kStatusUnsupported; return false; }
+  WriteRegister(0x21FCu, initiator);  // VGT_DRAW_INITIATOR
+  uint32_t index_base = 0, index_count = 0;
+  if (((initiator >> 6) & 3u) == 0u) {  // SourceSelect::kDMA
+    if (at + 2u > count) { g_status = kStatusInvalid; return false; }
+    WriteRegister(0x21FAu, payload[at]);      // VGT_DMA_BASE
+    WriteRegister(0x21FBu, payload[at + 1]);  // VGT_DMA_SIZE
+    const uint32_t index_bytes = (initiator & (1u << 11)) ? 4u : 2u;
+    index_base = payload[at] & ~(index_bytes - 1u);
+    index_count = payload[at + 1] & 0xFFFFFFu;
+  }
+  XenosSoftDraw draw;
+  draw.registers = g_regs.data();
+  draw.register_count = kRegisterCount;
+  draw.draw_initiator = initiator;
+  draw.index_base = index_base;
+  draw.index_size = index_count;
+  draw.vertex_shader = g_vertex_shader.words.data();
+  draw.vertex_shader_dwords = g_vertex_shader.dword_count;
+  draw.vertex_shader_hash = g_vertex_shader.hash;
+  draw.pixel_shader = g_pixel_shader.words.data();
+  draw.pixel_shader_dwords = g_pixel_shader.dword_count;
+  draw.pixel_shader_hash = g_pixel_shader.hash;
+  if (RenderXenosDraw(draw)) {
+    ++g_draws; g_last_opcode = opcode; g_frame_provenance_rendered = true; return true;
+  }
   const uint32_t seed = g_regs[kRegRbColorInfo] ^
       (g_regs[kRegRbColorMask] ? g_regs[kRegRbColorMask] : 0xFu) ^ initiator;
   const uint32_t rgba = ((0x40u + (seed & 0x7Fu)) << 24) |
@@ -581,6 +632,7 @@ uint32_t r360_xenos_shader_dwords(uint32_t t){const auto*s=render360::xenia_web:
 uint32_t r360_xenos_shader_hash(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->hash:0u;}
 uint32_t r360_xenos_shader_guest_address(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->guest_address:0u;}
 uint32_t r360_xenos_shader_source(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->source:0u;}
+uint32_t r360_xenos_debug_draws(uint32_t n){render360::xenia_web::g_draw_log_remaining=n;return n;}
 uint32_t r360_xenos_swap_fetch_word(uint32_t w){return w<6u?render360::xenia_web::g_swap_fetch[w]:0u;}
 uint32_t r360_xenos_fetch_constant_word(uint32_t g,uint32_t w){if(w>=6u)return 0u;const uint64_t i=0x4800ull+uint64_t(g)*6u+w;return i<render360::xenia_web::g_regs.size()?render360::xenia_web::g_regs[uint32_t(i)]:0u;}
 uint32_t r360_xenos_edram_tile_address(uint32_t b,uint32_t p,uint32_t x,uint32_t y){return render360::xenia_web::EdramTileAddress(b,p,x,y);}

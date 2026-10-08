@@ -94,7 +94,7 @@ if include_anchor not in text:
     raise SystemExit("Upstream shader interpreter include anchor drifted")
 text = text.replace(
     include_anchor,
-    include_anchor + '\n#include "sparse_guest_memory.h"\n',
+    include_anchor + '\n#include "sparse_guest_memory.h"\n#include "xenos_soft_renderer.h"\nextern "C" uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);\n',
     1,
 )
 
@@ -251,7 +251,8 @@ text = text.replace(
         const uint32_t render360_vertex_address =
             dword_address_dwords * uint32_t(sizeof(uint32_t));
         if (render360::xenia_web::ReadSparseGuestMemory(
-                render360_vertex_address, render360_vertex_bytes,
+                r360_kernel_gpu_address_to_virtual(render360_vertex_address),
+                render360_vertex_bytes,
                 sizeof(render360_vertex_bytes))) {
           uint32_t render360_vertex_raw = 0;
           std::memcpy(&render360_vertex_raw, render360_vertex_bytes,
@@ -270,132 +271,26 @@ if texture_method_anchor not in text:
     raise SystemExit("Upstream ExecuteVertexFetchInstruction definition drifted")
 texture_method = r'''void ShaderInterpreter::ExecuteTextureFetchInstruction(
     ucode::TextureFetchInstruction instr) {
-  if (texture_fetch_failed_) return;
-  if (instr.opcode() != ucode::FetchOpcode::kTextureFetch ||
-      instr.dimension() != xenos::FetchOpDimension::k2D ||
-      instr.use_register_lod() || instr.use_register_gradients() ||
-      instr.lod_bias() != 0.0f) {
-    texture_fetch_failed_ = true;
+  // Render360: sampling is done by the software Xenos backend
+  // (xenos_soft_renderer.cpp) - formats, tiling, filtering and clamping.
+  if (instr.opcode() != ucode::FetchOpcode::kTextureFetch) {
+    // getCompTexLOD / gradients / set-LOD: not sampled; results stay as-is.
     return;
   }
-
   const xenos::xe_gpu_texture_fetch_t fetch_constant =
       register_file_.GetTextureFetch(instr.fetch_constant_index());
-  if (fetch_constant.type != xenos::FetchConstantType::kTexture ||
-      fetch_constant.dimension != xenos::DataDimension::k2DOrStacked ||
-      fetch_constant.stacked ||
-      fetch_constant.format != xenos::TextureFormat::k_8_8_8_8 ||
-      fetch_constant.sign_x != xenos::TextureSign::kUnsigned ||
-      fetch_constant.sign_y != xenos::TextureSign::kUnsigned ||
-      fetch_constant.sign_z != xenos::TextureSign::kUnsigned ||
-      fetch_constant.sign_w != xenos::TextureSign::kUnsigned ||
-      fetch_constant.mip_min_level != 0u ||
-      fetch_constant.mip_max_level != 0u || fetch_constant.lod_bias != 0) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-
-  const xenos::TextureFilter mag_filter =
-      instr.has_mag_filter() ? instr.mag_filter() : fetch_constant.mag_filter;
-  const xenos::TextureFilter min_filter =
-      instr.has_min_filter() ? instr.min_filter() : fetch_constant.min_filter;
-  const xenos::TextureFilter mip_filter =
-      instr.has_mip_filter() ? instr.mip_filter() : fetch_constant.mip_filter;
-  const xenos::AnisoFilter aniso_filter =
-      instr.has_aniso_filter() ? instr.aniso_filter()
-                               : fetch_constant.aniso_filter;
-  if (mag_filter != xenos::TextureFilter::kPoint ||
-      min_filter != xenos::TextureFilter::kPoint ||
-      (mip_filter != xenos::TextureFilter::kPoint &&
-       mip_filter != xenos::TextureFilter::kBaseMap) ||
-      (aniso_filter != xenos::AnisoFilter::kDisabled &&
-       aniso_filter != xenos::AnisoFilter::kMax_1_1)) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-
-  const uint32_t width = fetch_constant.size_2d.width + 1u;
-  const uint32_t height = fetch_constant.size_2d.height + 1u;
-  const uint32_t pitch = fetch_constant.pitch << 5u;
-  if (!width || !height || !pitch || width > pitch) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-
   const float* source = GetTempRegister(instr.src(), instr.is_src_relative());
   const uint32_t source_swizzle = instr.src_swizzle();
-  const float u = source[(source_swizzle >> 0u) & 3u];
-  const float v = source[(source_swizzle >> 2u) & 3u];
-  if (!std::isfinite(u) || !std::isfinite(v)) {
+  const float coords[3] = {source[(source_swizzle >> 0u) & 3u],
+                           source[(source_swizzle >> 2u) & 3u],
+                           source[(source_swizzle >> 4u) & 3u]};
+  float result[4] = {};
+  if (!render360::xenia_web::SampleXenosTexture(fetch_constant, instr, coords,
+                                                result)) {
     texture_fetch_failed_ = true;
-    return;
-  }
-  const double texel_x = instr.unnormalized_coordinates()
-                             ? double(u)
-                             : double(u) * double(width);
-  const double texel_y = instr.unnormalized_coordinates()
-                             ? double(v)
-                             : double(v) * double(height);
-  const int64_t x_unclamped =
-      int64_t(std::floor(texel_x + double(instr.offset_x())));
-  const int64_t y_unclamped =
-      int64_t(std::floor(texel_y + double(instr.offset_y())));
-  uint32_t x = 0, y = 0;
-  if (!Render360ResolveTextureCoordinate(x_unclamped, width,
-                                         fetch_constant.clamp_x, &x) ||
-      !Render360ResolveTextureCoordinate(y_unclamped, height,
-                                         fetch_constant.clamp_y, &y)) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-
-  uint64_t texel_index = 0;
-  if (fetch_constant.tiled) {
-    const uint32_t tiled_index = Render360TiledOffset2D(x, y, pitch, 2u);
-    if (tiled_index == UINT32_MAX) {
-      texture_fetch_failed_ = true;
-      return;
-    }
-    texel_index = tiled_index;
-  } else {
-    texel_index = uint64_t(y) * pitch + x;
-  }
-  const uint64_t address64 =
-      (uint64_t(fetch_constant.base_address) <<
-       xenos::kTextureSubresourceAlignmentBytesLog2) +
-      texel_index * 4u;
-  if (address64 > UINT32_MAX - 3u) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-
-  uint8_t texture_bytes[4] = {};
-  if (!render360::xenia_web::ReadSparseGuestMemory(
-          uint32_t(address64), texture_bytes, sizeof(texture_bytes))) {
-    texture_fetch_failed_ = true;
-    return;
-  }
-  uint32_t packed = 0;
-  std::memcpy(&packed, texture_bytes, sizeof(packed));
-  packed = xenos::GpuSwap(packed, fetch_constant.endianness);
-
-  float components[4];
-  for (uint32_t i = 0; i < 4; ++i) {
-    const uint32_t component = (packed >> (i * 8u)) & 0xFFu;
-    components[i] = fetch_constant.num_format
-                        ? float(component)
-                        : float(component) * (1.0f / 255.0f);
-    if (fetch_constant.exp_adjust) {
-      components[i] = std::ldexp(components[i], fetch_constant.exp_adjust);
-    }
-  }
-  float swizzled[4] = {};
-  if (!Render360TextureSwizzle(components, fetch_constant.swizzle, swizzled)) {
-    texture_fetch_failed_ = true;
-    return;
   }
   StoreFetchResult(instr.dest(), instr.is_dest_relative(), instr.dest_swizzle(),
-                   swizzled);
+                   result);
   ++texture_fetch_count_;
 }
 

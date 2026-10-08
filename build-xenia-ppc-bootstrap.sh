@@ -46,6 +46,7 @@ python3 "$ROOT/prepare-xenia-compiler-overlay.py"
 python3 "$ROOT/prepare-xenia-hir-value-overlay.py"
 python3 "$ROOT/prepare-xenia-ppc-scanner-overlay.py"
 python3 "$ROOT/prepare-xenia-ppc-translator-overlay.py"
+python3 "$ROOT/prepare-xenia-draw-util-overlay.py"
 python3 "$ROOT/prepare-vmx-executor-overlay.py"
 python3 "$ROOT/prepare-title-runtime-memory-overlay.py"
 # Keep the HIR frame-history overlay last: it instruments the fully patched
@@ -86,7 +87,7 @@ SOURCES=(
   "src/xenia/cpu/compiler/compiler.cc" "src/xenia/cpu/compiler/compiler_pass.cc"
   "src/xenia/cpu/compiler/passes/conditional_group_pass.cc" "src/xenia/cpu/compiler/passes/conditional_group_subpass.cc" "src/xenia/cpu/compiler/passes/constant_propagation_pass.cc" "src/xenia/cpu/compiler/passes/context_promotion_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/control_flow_simplification_pass.cc" "src/xenia/cpu/compiler/passes/data_flow_analysis_pass.cc" "src/xenia/cpu/compiler/passes/dead_code_elimination_pass.cc" "src/xenia/cpu/compiler/passes/finalization_pass.cc" "src/xenia/cpu/compiler/passes/memory_sequence_combination_pass.cc" "src/xenia/cpu/compiler/passes/register_allocation_pass.cc" "src/xenia/cpu/compiler/passes/simplification_pass.cc" "src/xenia/cpu/compiler/passes/validation_pass.cc" "src/xenia/cpu/compiler/passes/value_reduction_pass.cc"
   "src/xenia/cpu/ppc/ppc_context.cc" "src/xenia/cpu/ppc/ppc_opcode_table_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_lookup_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm_gen.cc" "src/xenia/cpu/ppc/ppc_opcode_disasm.cc" "src/xenia/cpu/ppc/ppc_opcode_info.cc" "src/xenia/cpu/ppc/ppc_emit_alu.cc" "src/xenia/cpu/ppc/ppc_emit_control.cc" "src/xenia/cpu/ppc/ppc_emit_memory.cc" "src/xenia/cpu/ppc/ppc_emit_fpu.cc" "src/xenia/cpu/ppc/ppc_emit_altivec.cc" "src/xenia/cpu/ppc/ppc_scanner.cc" "src/xenia/cpu/ppc/ppc_hir_builder.cc" "src/xenia/cpu/ppc/ppc_translator.cc" "src/xenia/cpu/ppc/ppc_frontend.cc"
-  "src/xenia/gpu/gpu_flags.cc" "src/xenia/gpu/register_file.cc" "src/xenia/gpu/ucode.cc" "src/xenia/gpu/shader.cc" "src/xenia/gpu/shader_translator.cc" "src/xenia/gpu/shader_translator_disasm.cc" "src/xenia/gpu/shader_interpreter.cc" "src/xenia/gpu/spirv_builder.cc" "src/xenia/gpu/spirv_shader.cc" "src/xenia/gpu/spirv_shader_translator.cc"
+  "src/xenia/gpu/gpu_flags.cc" "src/xenia/gpu/register_file.cc" "src/xenia/gpu/ucode.cc" "src/xenia/gpu/shader.cc" "src/xenia/gpu/shader_translator.cc" "src/xenia/gpu/shader_translator_disasm.cc" "src/xenia/gpu/shader_interpreter.cc" "src/xenia/gpu/draw_util.cc" "src/xenia/gpu/registers.cc" "src/xenia/gpu/xenos.cc" "src/xenia/gpu/texture_util.cc" "src/xenia/gpu/texture_info.cc" "src/xenia/gpu/texture_info_formats.cc" "src/xenia/ui/graphics_util.cc" "src/xenia/gpu/spirv_builder.cc" "src/xenia/gpu/spirv_shader.cc" "src/xenia/gpu/spirv_shader_translator.cc"
   "third_party/glslang/SPIRV/SpvBuilder.cpp"
 )
 
@@ -177,6 +178,7 @@ for rel in "${SOURCES[@]}"; do
     "src/xenia/cpu/hir/value.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/hir/value.cc" ;;
     "src/xenia/cpu/ppc/ppc_scanner.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_scanner.cc" ;;
     "src/xenia/cpu/ppc/ppc_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/cpu/ppc/ppc_translator.cc" ;;
+    "src/xenia/gpu/draw_util.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/draw_util.cc" ;;
     "src/xenia/gpu/shader_translator.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_translator.cc" ;;
     "src/xenia/gpu/shader_interpreter.cc") queue_cpp "$rel" "$OVERLAY/xenia/gpu/shader_interpreter.cc" ;;
     *) queue_cpp "$rel" "$XENIA/$rel" ;;
@@ -191,6 +193,7 @@ queue_cpp "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_corre
 queue_cpp "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 queue_cpp "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
 queue_cpp "render360/guest_fibers.cpp" "$ROOT/src/xenia_web_bootstrap/guest_fibers.cpp"
+queue_cpp "render360/xenos_soft_renderer.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_soft_renderer.cpp"
 queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 queue_cpp "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
@@ -224,7 +227,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 27 ))
+expected=$(( ${#SOURCES[@]} + 2 + 28 ))
 actual=$(( passed + failed ))
 
 echo

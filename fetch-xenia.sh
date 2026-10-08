@@ -23,7 +23,8 @@ git -C "$DEST" submodule update --init --depth=1 \
   third_party/cpptoml \
   third_party/cxxopts \
   third_party/date \
-  third_party/glslang
+  third_party/glslang \
+  third_party/xxhash
 
 actual="$(git -C "$DEST" rev-parse HEAD)"
 if [ "$actual" != "$XENIA_REV" ]; then

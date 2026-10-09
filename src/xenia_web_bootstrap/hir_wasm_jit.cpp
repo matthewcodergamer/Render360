@@ -20,6 +20,7 @@ namespace render360::xenia_web {
 uint32_t JitInstructionCounterAddress();
 uint32_t JitFaultAddress();
 uint32_t JitScratchAddress();
+uint32_t SparseGuestPageDirectoryAddress();
 // Fiber-local expected-return token (SET_RETURN_ADDRESS) the executor keeps.
 uint32_t JitReturnAddressSlot();
 uint32_t JitReturnValidSlot();
@@ -232,7 +233,8 @@ constexpr uint32_t kPollBudget = 20000;  // backward branches between polls
 // Fixed locals after the context parameter (index 0).
 constexpr uint32_t kLocPc = 1, kLocBudget = 2, kLocResume = 3, kLocPending = 4,
                    kLocSp = 5, kLocTmp = 6, kLocTmpB = 7, kLocTmp64 = 8,
-                   kLocTmp64B = 9, kLocTmpF64 = 10, kLocTmpV = 11, kFixedLocals = 12;
+                   kLocTmp64B = 9, kLocTmpF64 = 10, kLocTmpV = 11, kLocAddr = 12,
+                   kLocPage = 13, kLocHost = 14, kLocVal = 15, kFixedLocals = 16;
 
 class Emitter {
  public:
@@ -339,6 +341,30 @@ class Emitter {
   uint32_t extra_ = 0;
   uint32_t reject_opcode_ = 0;
   uint32_t counter_ = 0, fault_ = 0, return_slot_ = 0, return_valid_ = 0, scratch_ = 0;
+  uint32_t page_directory_ = 0;
+  // Inline sparse page walk for an access of `size` bytes at kLocAddr: falls
+  // through with the host address in kLocHost, or branches to the enclosing
+  // slow-path block (depth 0) for unmapped/protected/cross-page/MMIO/code
+  // pages, which the executor helpers handle.
+  void PageWalk(uint32_t size, bool store, bool int32) {
+    Get(kLocAddr); I32(22); Op(oI32ShrU); I32(2); Op(oI32Shl);
+    Mem(oI32Load, 2, page_directory_); Tee(kLocPage); Op(oI32Eqz); code_.u8(0x0D); code_.u32(0);
+    Get(kLocPage); Get(kLocAddr); I32(12); Op(oI32ShrU); I32(1023); Op(oI32And); I32(20); Op(oI32Mul);
+    Op(oI32Add); Tee(kLocPage);
+    Mem(oI32Load, 2, 0); Tee(kLocHost); Op(oI32Eqz); code_.u8(0x0D); code_.u32(0);
+    Get(kLocPage); Mem(oI32Load, 2, 16); I32(store ? 2 : 1); Op(oI32And); Op(oI32Eqz);
+    code_.u8(0x0D); code_.u32(0);
+    if (store) {  // executable aliases: the helper invalidates translations
+      Get(kLocPage); Mem(oI32Load, 2, 4); Mem(oI32Load, 2, 0); code_.u8(0x0D); code_.u32(0);
+    }
+    if (int32) {  // Xenos MMIO window
+      Get(kLocAddr); I32(int32_t(0xFFFF0000u)); Op(oI32And); I32(int32_t(0x7FC80000u)); Op(oI32Eq);
+      code_.u8(0x0D); code_.u32(0);
+    }
+    Get(kLocAddr); I32(0xFFF); Op(oI32And); I32(int32_t(4096 - size)); Op(oI32GtU);
+    code_.u8(0x0D); code_.u32(0);
+    Get(kLocHost); Get(kLocAddr); I32(0xFFF); Op(oI32And); Op(oI32Add); Set(kLocHost);
+  }
   // Executor: intra-function control flow drops a pending expected-return
   // token (DiscardPendingGuestReturnMetadata).
   void DiscardReturnToken() { I32(int32_t(return_valid_)); I32(0); Mem(oI32Store8, 0, 0); }
@@ -595,25 +621,43 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
       if (!is_vec(d) || (instr->flags & ~LOAD_STORE_BYTE_SWAP)) return Reject(instr);
       if (!PushAs(a, Cls::kI32)) return Reject(instr);
       if (op == OPCODE_LOAD_OFFSET) { if (!PushAs(b, Cls::kI32)) return Reject(instr); Op(oI32Add); }
+      Set(kLocAddr);
+      code_.u8(oBlock); code_.u8(kV128); ++extra_;
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;
+      PageWalk(16, false, false);
+      Get(kLocHost); V128Load(0);
+      BrTo(1);
+      code_.u8(oEnd); --extra_;
+      Get(kLocAddr);
       I32(int32_t(source));
       Call(kHLd128);
       FaultCheck();
       I32(int32_t(scratch_)); V128Load(48);
+      code_.u8(oEnd); --extra_;
       if (instr->flags & LOAD_STORE_BYTE_SWAP) { Set(kLocTmpV); Get(kLocTmpV); Get(kLocTmpV); ByteSwap32x4(); }
       return SetDest(instr);
     }
     case OPCODE_STORE: case OPCODE_STORE_OFFSET: {
       Value* value = op == OPCODE_STORE ? b : c3;
       if (!is_vec(value) || (instr->flags & ~LOAD_STORE_BYTE_SWAP)) return Reject(instr);
-      I32(int32_t(scratch_));
       Push(value);
       if (instr->flags & LOAD_STORE_BYTE_SWAP) { Push(value); ByteSwap32x4(); }
-      V128Store(48);
+      Set(kLocTmpV);
       if (!PushAs(a, Cls::kI32)) return Reject(instr);
       if (op == OPCODE_STORE_OFFSET) { if (!PushAs(b, Cls::kI32)) return Reject(instr); Op(oI32Add); }
+      Set(kLocAddr);
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;
+      PageWalk(16, true, false);
+      Get(kLocHost); Get(kLocTmpV); V128Store(0);
+      BrTo(1);
+      code_.u8(oEnd); --extra_;
+      I32(int32_t(scratch_)); Get(kLocTmpV); V128Store(48);
+      Get(kLocAddr);
       I32(int32_t(source));
       Call(kHSt128);
       FaultCheck();
+      code_.u8(oEnd); --extra_;
       return true;
     }
     case OPCODE_PERMUTE: {
@@ -978,34 +1022,72 @@ bool Emitter::EmitNative(Instr* instr, uint32_t k, uint32_t source) {
         if (!PushAs(b, Cls::kI32)) return Reject(instr);
         Op(oI32Add);
       }
+      Set(kLocAddr);
+      const uint32_t size = d->type == INT8_TYPE ? 1 : d->type == INT16_TYPE ? 2
+                          : (d->type == INT64_TYPE || d->type == FLOAT64_TYPE) ? 8 : 4;
+      const bool wide = size == 8;
+      code_.u8(oBlock); code_.u8(wide ? kI64 : kI32); ++extra_;  // done
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;                // slow
+      PageWalk(size, false, d->type == INT32_TYPE);
+      Get(kLocHost);
+      switch (size) {
+        case 1: Mem(oI32Load8U, 0, 0); break;
+        case 2: Mem(oI32Load16U, 0, 0); break;
+        case 4: Mem(oI32Load, 0, 0); break;
+        default: Mem(oI64Load, 0, 0); break;
+      }
+      BrTo(1);
+      code_.u8(oEnd); --extra_;
+      Get(kLocAddr);
       I32(int32_t(source));
       switch (d->type) {
         case INT8_TYPE: Call(kHLd8); break;
         case INT16_TYPE: Call(kHLd16); break;
         case INT32_TYPE: I32(1); Call(kHLd32); break;
-        case FLOAT32_TYPE: I32(0); Call(kHLd32); Op(oF32ReinterpretI32); break;
-        case INT64_TYPE: Call(kHLd64); break;
-        case FLOAT64_TYPE: Call(kHLd64); Op(oF64ReinterpretI64); break;
+        case FLOAT32_TYPE: I32(0); Call(kHLd32); break;
+        case INT64_TYPE: case FLOAT64_TYPE: Call(kHLd64); break;
         default: return Reject(instr);
       }
-      if (instr->flags & LOAD_STORE_BYTE_SWAP) ByteSwap(c, d->type);
-      SetDest(instr);
       FaultCheck();
-      return true;
+      code_.u8(oEnd); --extra_;
+      if (d->type == FLOAT32_TYPE) Op(oF32ReinterpretI32);
+      if (d->type == FLOAT64_TYPE) Op(oF64ReinterpretI64);
+      if (instr->flags & LOAD_STORE_BYTE_SWAP) ByteSwap(c, d->type);
+      return SetDest(instr);
     }
     case OPCODE_STORE: case OPCODE_STORE_OFFSET: {
       Value* value = op == OPCODE_STORE ? b : c3;
       if (!value || (instr->flags & ~LOAD_STORE_BYTE_SWAP)) return Reject(instr);
       const Cls c = ClassOf(value->type);
-      if (c == Cls::kNone || !PushAs(a, Cls::kI32)) return Reject(instr);
-      if (op == OPCODE_STORE_OFFSET) {
-        if (!PushAs(b, Cls::kI32)) return Reject(instr);
-        Op(oI32Add);
-      }
+      if (c == Cls::kNone) return Reject(instr);
+      const uint32_t size = value->type == INT8_TYPE ? 1 : value->type == INT16_TYPE ? 2
+                          : (value->type == INT64_TYPE || value->type == FLOAT64_TYPE) ? 8 : 4;
+      const bool wide = size == 8;
+      // Raw stored bits (after the optional byte swap) in kLocVal/kLocTmp64B.
       Push(value);
       if (instr->flags & LOAD_STORE_BYTE_SWAP) ByteSwap(c, value->type);
       if (c == Cls::kF32) Op(oI32ReinterpretF32);
       if (c == Cls::kF64) Op(oI64ReinterpretF64);
+      Set(wide ? kLocTmp64B : kLocVal);
+      if (!PushAs(a, Cls::kI32)) return Reject(instr);
+      if (op == OPCODE_STORE_OFFSET) {
+        if (!PushAs(b, Cls::kI32)) return Reject(instr);
+        Op(oI32Add);
+      }
+      Set(kLocAddr);
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;  // done
+      code_.u8(oBlock); code_.u8(kVoid); ++extra_;  // slow
+      PageWalk(size, true, value->type == INT32_TYPE);
+      Get(kLocHost); Get(wide ? kLocTmp64B : kLocVal);
+      switch (size) {
+        case 1: Mem(oI32Store8, 0, 0); break;
+        case 2: Mem(oI32Store16, 0, 0); break;
+        case 4: Mem(oI32Store, 0, 0); break;
+        default: Mem(oI64Store, 0, 0); break;
+      }
+      BrTo(1);
+      code_.u8(oEnd); --extra_;
+      Get(kLocAddr); Get(wide ? kLocTmp64B : kLocVal);
       I32(int32_t(source));
       switch (value->type) {
         case INT8_TYPE: Call(kHSt8); break;
@@ -1016,6 +1098,7 @@ bool Emitter::EmitNative(Instr* instr, uint32_t k, uint32_t source) {
         default: return Reject(instr);
       }
       FaultCheck();
+      code_.u8(oEnd); --extra_;
       return true;
     }
     case OPCODE_MEMSET:
@@ -1568,6 +1651,7 @@ bool Emitter::EmitSegment(uint32_t k) {
     if (i < kLocTmpF64) return kI64;
     if (i == kLocTmpF64) return kF64;
     if (i == kLocTmpV) return kV128;
+    if (i >= kLocAddr && i < kFixedLocals) return kI32;
     return local_types_[i - kFixedLocals];
   };
   if (k == spill_) {
@@ -1610,6 +1694,7 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   fault_ = JitFaultAddress();
   return_slot_ = JitReturnAddressSlot();
   scratch_ = JitScratchAddress();
+  page_directory_ = SparseGuestPageDirectoryAddress();
   return_valid_ = JitReturnValidSlot();
   if (!Plan()) return false;
   AllocateTemporaries();
@@ -1682,6 +1767,7 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   };
   for (uint32_t i = 1; i < kLocTmp64; ++i) add_local(kI32);
   add_local(kI64); add_local(kI64); add_local(kF64); add_local(kV128);
+  for (int i = 0; i < 4; ++i) add_local(kI32);
   for (uint8_t t : local_types_) add_local(t);
   body.u32(uint32_t(runs.size()));
   for (const auto& r : runs) { body.u32(r.first); body.u8(r.second); }

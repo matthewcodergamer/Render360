@@ -547,7 +547,14 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                is_epilog_return ? 1u : 0u, pdata ? 1u : 0u,
                use_owner ? 1u : 0u, prolog);
 
-  if (!loaded()) {
+  // Pages the function's code into the decoder window; only a translation
+  // (scan + PPCFrontend) reads code through it, so a cached translation
+  // runs without it. The window always starts at the function's own page:
+  // a call's scan is bounded by the window end, so a window that merely
+  // contains fn_begin would cut a large function short depending on where
+  // an earlier call left it, and the truncated HIR would be cached.
+  auto page_code = [&]() -> bool {
+    if (loaded() && r360_ppc_probe_guest_base() == (fn_begin & ~0xFFFu)) return true;
     const uint32_t paged = r360_ppc_probe_page_sparse_code(fn_begin);
     if (!paged || !loaded()) {
       std::fprintf(stderr,
@@ -556,7 +563,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                    address, fn_begin, use_owner ? 1u : 0u);
       return false;
     }
-  }
+    return true;
+  };
 
   if (StackHeadroom() < kMinNestedStackHeadroom) {
     g_trap_stack_exhausted = address;
@@ -566,12 +574,16 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     return false;
   }
   ProbeGuestFunction nested_function(module, fn_begin);
-  const uint32_t loaded_base = r360_ppc_probe_guest_base();
-  const uint32_t loaded_size = r360_ppc_probe_loaded_size();
-  if (loaded_size < 4) return false;
-  const uint32_t scan_end =
-      use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
-  nested_function.set_end_address(scan_end);
+  uint32_t scan_end = use_owner ? fn_end - 4 : 0u;
+  // Decoder-window-relative scan bound, valid once the code is paged.
+  auto set_scan_end = [&]() -> bool {
+    const uint32_t loaded_base = r360_ppc_probe_guest_base();
+    const uint32_t loaded_size = r360_ppc_probe_loaded_size();
+    if (loaded_size < 4) return false;
+    scan_end = use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
+    nested_function.set_end_address(scan_end);
+    return true;
+  };
 
   const uint32_t interior_entry =
       use_owner && address != fn_begin ? address : 0u;
@@ -585,6 +597,7 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   // key does not depend on the scan).
   CachedTranslation* const cached_owner = known_missing ? nullptr : LookupTranslation(owner_key);
   if (!cached_owner && !known_missing) {
+    if (!page_code() || !set_scan_end()) return false;
     xe::cpu::ppc::PPCScanner scanner(frontend);
     if (!scanner.Scan(&nested_function, nullptr)) {
       std::fprintf(stderr,
@@ -640,7 +653,6 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                address, fn_begin, fn_end);
 
   ProbeGuestFunction fragment(module, address);
-  fragment.set_end_address(scan_end);
   if (CachedTranslation* cached_fragment =
           LookupTranslation(TranslationKey(address, fn_end, true))) {
     SetHIRCorrectnessExecutionEntry(0u);
@@ -649,6 +661,9 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     SetHIRCorrectnessContextProvenanceRecovery(false);
     return ok;
   }
+  // The owner may have run from the cache without paging its code.
+  if (!page_code() || !set_scan_end()) return false;
+  fragment.set_end_address(scan_end);
   xe::cpu::ppc::PPCScanner fragment_scanner(frontend);
   const bool fragment_scanned = fragment_scanner.Scan(&fragment, nullptr);
   if (!fragment_scanned) {

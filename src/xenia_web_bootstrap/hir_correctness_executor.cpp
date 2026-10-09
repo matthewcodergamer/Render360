@@ -1048,7 +1048,7 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
-uint64_t g_opcode_histogram[256] = {};  // TEMP diagnostics
+uint64_t g_opcode_histogram[256] = {};  // executed HIR opcodes (run-title R360_OPHIST)
 // Guest address of the last SOURCE_OFFSET executed (diagnostics).
 uint32_t g_last_source_address = 0;
 

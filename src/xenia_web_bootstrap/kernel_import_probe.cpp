@@ -98,10 +98,10 @@ void FinishKernelServiceTrace(KernelServiceTraceEntry* trace, uint32_t result,
     for (uint32_t i = 0; i < 6; ++i) hit |= trace->args[i] == watched;
     if (!hit) continue;
     std::fprintf(stderr,
-                 "R360_KWATCH seq=%u thread=0x%08X mod=%u ord=0x%X args=%08X,%08X,%08X,%08X,%08X,%08X -> %08X status=%u\n",
+                 "R360_KWATCH seq=%u thread=0x%08X mod=%u ord=0x%X args=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X -> %08X status=%u\n",
                  trace->sequence, r360_guest_thread_current(), trace->module_id,
                  trace->ordinal, trace->args[0], trace->args[1], trace->args[2],
-                 trace->args[3], trace->args[4], trace->args[5], result,
+                 trace->args[3], trace->args[4], trace->args[5], trace->args[6], trace->args[7], result,
                  service_status);
     break;
   }

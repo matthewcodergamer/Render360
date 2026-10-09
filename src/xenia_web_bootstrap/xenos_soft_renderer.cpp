@@ -1209,6 +1209,9 @@ bool SampleXenosTexture(const xenos::xe_gpu_texture_fetch_t& fetch,
 }
 
 bool RenderXenosDraw(const XenosSoftDraw& draw) {
+  // Headless fast-forward (r360_xenos_soft_set_rasterize(0)): no EDRAM
+  // work at all; the command processor still executes every packet.
+  if (!g_rasterize) return true;
   RegisterFile& regs = Registers();
   const uint32_t count = std::min<uint32_t>(draw.register_count, RegisterFile::kRegisterCount);
   std::memcpy(regs.values, draw.registers, count * sizeof(uint32_t));

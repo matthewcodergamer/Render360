@@ -66,7 +66,8 @@ V75 therefore replaces the placeholder kernel surface with a port of Xenia's own
   partner runs at once, as it would on its own hardware thread in Xenia. The loader threads now
   run and decompress, so loading progresses, but slowly. The HIR executor runs about 5M guest
   instructions per second, far below the console, so Banjo-Tooie is still on its loading screen
-  after 2.5 billion instructions. The next performance milestone is executor speed.
+  after 9 billion instructions (26,567 frames). Loading does advance: between 1 and 9 billion
+  instructions, file reads rose from 53 to 130, and the loader wrote about 60 MB in 32 KB blocks. The next performance milestone is executor speed.
 - **Audio render-driver clients.** `XAudioRegisterRenderDriverClient` callbacks are now called
   the way Xenia's `AudioSystem` worker calls them: one per 256-sample frame played at 48 kHz,
   with up to 64 frames queued. Banjo-Tooie has not registered a client yet at this point.

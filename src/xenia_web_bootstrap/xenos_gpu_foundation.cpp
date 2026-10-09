@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "sparse_guest_memory.h"
-#include "xenos_soft_renderer.h"
+#include "xenos_soft_draw.h"
 
 // Kernel physical-allocation map (Xenia Memory::TranslatePhysical) and the
 // debug watchpoint. Weak identity/no-op defaults keep the standalone Xenos

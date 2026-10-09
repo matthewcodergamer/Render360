@@ -34,6 +34,8 @@ uint32_t r360_guest_thread_arg1(uint32_t handle);
 uint32_t r360_ppc_probe_page_sparse_code(uint32_t target_address);
 uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address);
 uint32_t r360_ppc_probe_correctness_status();
+uint32_t r360_kernel_import_last_module();
+uint32_t r360_kernel_import_last_ordinal();
 }
 
 namespace render360::xenia_web {
@@ -45,6 +47,12 @@ constexpr uint64_t kThreadReturnSentinel = 0xBCBCBCBCull;
 constexpr uint32_t kFiberCStackBytes = 2u * 1024u * 1024u;
 constexpr uint32_t kFiberAsyncifyBytes = 4u * 1024u * 1024u;
 constexpr uint32_t kMaxFibers = 32;
+// Xenia runs every guest thread on its own host thread, so they all advance
+// together. The fibers share one host thread: a guest thread that never
+// blocks (a frame loop polling a loader thread's progress) is preempted at a
+// guest call boundary after this many HIR instructions when another guest
+// thread can run.
+constexpr uint64_t kPreemptQuantum = 2000000ull;
 
 enum FiberState : uint32_t {
   kFiberNew = 0,      // created by the title, never run
@@ -62,6 +70,13 @@ struct Fiber {
   uint8_t* c_stack = nullptr;    // null for the title's primary thread
   uint8_t* asyncify = nullptr;   // {current, end} header followed by data
   uintptr_t sp = 0;
+  uint32_t resumes = 0;       // diagnostics: times scheduled
+  uint32_t leave_kind = 0;    // diagnostics: 1 blocked, 2 yield, 3 preempt, 4 host
+  uint32_t leave_call = 0;    // diagnostics: module<<16|ordinal of the last kernel call
+  uint32_t leave_counts[5] = {};
+  uint32_t leave_pc = 0;      // diagnostics: guest address when it left
+  uint64_t instructions = 0;  // diagnostics: HIR instructions run
+  uint64_t vruntime = 0;      // fair-share clock (instructions, clamped on wake)
 };
 
 std::vector<Fiber> g_fibers;  // [0] = the title's primary thread
@@ -79,6 +94,9 @@ bool g_in_interrupt = false;
 uint64_t g_host_slice_deadline_ms = 0;  // 0 = no browser time slicing
 bool g_host_yield = false;
 uint32_t g_host_yields = 0;
+uint64_t g_quantum_start = 0;
+uint64_t g_run_start = 0;
+uint32_t g_preemptions = 0;
 
 uint64_t HostMillis() {
   struct timespec ts {};
@@ -161,20 +179,41 @@ bool ThreadRunnable(uint32_t handle) {
   return false;
 }
 
-// Round-robin choice of the next fiber after `from` that can make progress.
-bool PickTarget(uint32_t from, uint32_t* target) {
+// Fair-share choice of the next fiber that can make progress: the one that
+// has run the fewest instructions (ties in round-robin order after `from`).
+// Xenia gives every guest thread its own host thread, so a thread that wakes
+// from a wait runs at once instead of after every other runnable thread's
+// quantum; least-run-first approximates that on one host thread. A fiber's
+// count is raised to within one quantum of the leaving fiber's when it is
+// picked, so a long sleeper does not monopolise the host afterwards.
+bool PickTarget(uint32_t from, uint32_t* target, bool preempting = false) {
   SyncFibersWithThreads();
   const uint32_t n = uint32_t(g_fibers.size());
+  // The running fiber's count includes its current run.
+  const uint64_t from_count =
+      from >= n ? 0
+                : g_fibers[from].vruntime +
+                      (from == g_current ? HIRTotalInstructions() - g_run_start : 0);
+  bool found = false;
+  uint32_t best = 0;
   for (uint32_t step = 1; step <= n; ++step) {
     const uint32_t index = (from + step) % n;
     if (index == from) continue;
     const Fiber& fiber = g_fibers[index];
     if (!Eligible(fiber)) continue;
     if (index != 0 && !ThreadRunnable(fiber.thread)) continue;
-    *target = index;
-    return true;
+    if (!found || fiber.vruntime < g_fibers[best].vruntime) best = index;
+    found = true;
   }
-  return false;
+  if (!found) return false;
+  // A preempted fiber keeps running while it is still the least-run one.
+  if (preempting && g_fibers[best].vruntime >= from_count) return false;
+  if (from < n) {
+    const uint64_t floor = from_count > kPreemptQuantum ? from_count - kPreemptQuantum : 0;
+    if (g_fibers[best].vruntime < floor) g_fibers[best].vruntime = floor;
+  }
+  *target = best;
+  return true;
 }
 
 bool EnsureFiberMemory(Fiber& fiber, bool needs_stack) {
@@ -197,9 +236,16 @@ void ArmAsyncifyBuffer(Fiber& fiber) {
 
 // Leaves the current fiber for `target`: snapshot its state and unwind the
 // wasm stack back to the JS driver, which then starts or rewinds the target.
-void SwitchTo(uint32_t target, FiberState leaving_state) {
+void SwitchTo(uint32_t target, FiberState leaving_state, uint32_t kind) {
 #if defined(__wasm__)
   Fiber& current = g_fibers[g_current];
+  current.leave_kind = kind;
+  if (kind < 5) ++current.leave_counts[kind];
+  current.leave_pc = HIRLastSourceAddress();
+  current.leave_call = (r360_kernel_import_last_module() << 16) |
+                       (r360_kernel_import_last_ordinal() & 0xFFFFu);
+  current.instructions += HIRTotalInstructions() - g_run_start;
+  current.vruntime += HIRTotalInstructions() - g_run_start;
   current.state = leaving_state;
   current.progress_mark = g_progress;
   SaveLocals(current);
@@ -212,6 +258,7 @@ void SwitchTo(uint32_t target, FiberState leaving_state) {
 #else
   (void)target;
   (void)leaving_state;
+  (void)kind;
 #endif
 }
 
@@ -249,7 +296,7 @@ bool GuestFiberYield(bool blocked) {
       !EnsureFiberMemory(next, target != 0)) {
     return false;
   }
-  SwitchTo(target, blocked ? kFiberBlocked : kFiberReady);
+  SwitchTo(target, blocked ? kFiberBlocked : kFiberReady, blocked ? 1u : 2u);
   return false;  // unwinding; the value is not observed
 #else
   (void)blocked;
@@ -264,8 +311,22 @@ void GuestFiberHostYieldIfDue() {
   if (g_rewinding) {
     // Resumed after the page got its turn.
     g_rewinding = false;
+    g_force_fail = false;
     r360_asyncify_stop_rewind();
     return;
+  }
+  if (g_enabled && !g_in_interrupt && g_fibers.size() > 1 &&
+      g_current < g_fibers.size() &&
+      HIRTotalInstructions() - g_quantum_start >= kPreemptQuantum) {
+    g_quantum_start = HIRTotalInstructions();
+    uint32_t target = 0;
+    if (PickTarget(g_current, &target, true) &&
+        EnsureFiberMemory(g_fibers[g_current], false) &&
+        EnsureFiberMemory(g_fibers[target], target != 0)) {
+      ++g_preemptions;
+      SwitchTo(target, kFiberReady, 3u);
+      return;
+    }
   }
   if (!g_enabled || g_in_interrupt || !g_host_slice_deadline_ms ||
       g_current >= g_fibers.size() || HostMillis() < g_host_slice_deadline_ms) {
@@ -274,7 +335,7 @@ void GuestFiberHostYieldIfDue() {
   if (!EnsureFiberMemory(g_fibers[g_current], false)) return;
   g_host_yield = true;
   ++g_host_yields;
-  SwitchTo(g_current, kFiberReady);
+  SwitchTo(g_current, kFiberReady, 4u);
 #endif
 }
 
@@ -330,6 +391,8 @@ uint32_t r360_fiber_reset(uint32_t enable) {
   rx::g_host_slice_deadline_ms = 0;
   rx::g_host_yield = false;
   rx::g_host_yields = 0;
+  rx::g_quantum_start = rx::g_run_start = rx::HIRTotalInstructions();
+  rx::g_preemptions = 0;
   rx::g_enabled = enable != 0;
   if (!rx::g_enabled) return 0;
 #if defined(__wasm__)
@@ -359,6 +422,20 @@ uint32_t r360_fiber_take_host_yield() {
   return yielded ? 1u : 0u;
 }
 uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
+uint32_t r360_fiber_preemptions() { return rx::g_preemptions; }
+uint32_t r360_fiber_leave(uint32_t index, uint32_t field) {
+  if (index >= rx::g_fibers.size()) return 0;
+  if (field >= 2 && field < 7) return rx::g_fibers[index].leave_counts[field - 2];
+  if (field == 7) return rx::g_fibers[index].leave_pc;
+  return field ? rx::g_fibers[index].leave_call : rx::g_fibers[index].leave_kind;
+}
+uint32_t r360_fiber_resumes(uint32_t index) {
+  return index < rx::g_fibers.size() ? rx::g_fibers[index].resumes : 0u;
+}
+// Millions of HIR instructions the fiber has run (excluding its current run).
+uint32_t r360_fiber_instructions_millions(uint32_t index) {
+  return index < rx::g_fibers.size() ? uint32_t(rx::g_fibers[index].instructions / 1000000ull) : 0u;
+}
 uint32_t r360_fiber_thread(uint32_t index) {
   return index < rx::g_fibers.size() ? rx::g_fibers[index].thread : 0u;
 }
@@ -373,6 +450,10 @@ uint32_t r360_fiber_state(uint32_t index) {
 uint32_t r360_fiber_prepare() {
   if (!rx::g_switch_pending || rx::g_target >= rx::g_fibers.size()) return 0;
   rx::g_switch_pending = false;
+  // A host time-slice yield resumes the same fiber: its preemption quantum
+  // keeps running (otherwise browser slices shorter than the quantum would
+  // stop it from ever being preempted).
+  const bool same_fiber = rx::g_current == rx::g_target;
   rx::g_current = rx::g_target;
   rx::Fiber& fiber = rx::g_fibers[rx::g_current];
   const bool fresh = fiber.state == rx::kFiberNew;
@@ -380,6 +461,9 @@ uint32_t r360_fiber_prepare() {
   if (fiber.thread) r360_guest_thread_set_current(fiber.thread);
   rx::g_stack_low = fiber.c_stack ? reinterpret_cast<uintptr_t>(fiber.c_stack) : 0;
   fiber.state = rx::kFiberRunning;
+  ++fiber.resumes;
+  rx::g_run_start = rx::HIRTotalInstructions();
+  if (!same_fiber) rx::g_quantum_start = rx::g_run_start;
   rx::g_rewinding = !fresh;
   return fresh ? 1u : 2u;
 }

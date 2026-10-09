@@ -1048,6 +1048,8 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
+// Guest address of the last SOURCE_OFFSET executed (diagnostics).
+uint32_t g_last_source_address = 0;
 
 // PPC FPSCR[RN] as set through SET_ROUNDING_MODE (Xenia loads the matching
 // MXCSR: 0 nearest, 1 toward zero, 2 toward +inf, 3 toward -inf; bit 2 is
@@ -1629,8 +1631,8 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         break;
       }
 
-      if (g_total_instruction_budget &&
-          ++g_total_instructions > g_total_instruction_budget) {
+      if (++g_total_instructions > g_total_instruction_budget &&
+          g_total_instruction_budget) {
         result.blocker_kind = kHIRBlockerInstructionLimit;
         result.blocker_address = current_source_address;
         supported = false;
@@ -2087,6 +2089,9 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
   if (outermost) g_active_context = nullptr;
   return result;
 }
+
+uint64_t HIRTotalInstructions() { return g_total_instructions; }
+uint32_t HIRLastSourceAddress() { return g_last_source_address; }
 
 }  // namespace render360::xenia_web
 

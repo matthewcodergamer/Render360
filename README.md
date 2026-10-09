@@ -6,7 +6,7 @@
 
 This README is the current public project status. Historical percentages and old screenshots are not compatibility ratings.
 
-## Current status — October 8, 2026
+## Current status — October 9, 2026
 
 ```text
 XBOX 360 / XENIA-WEB TRACK
@@ -22,14 +22,16 @@ PPC INSTRUCTION SEMANTICS (HIR EXECUTOR)   XENIA TEST SUITE 1398/1398; CI
 XBOXKRNL / XAM STARTUP SERVICES            PORTED FROM XENIA; CI CRITICS
 GUEST FILE SYSTEM (game:, d:, Cdrom0)      IMPLEMENTED; CI CRITICS
 SAVE DATA (XamContent, save:)              IMPLEMENTED; KEPT PER SESSION
-GUEST THREAD / TLS / KTHREAD / KPCR        IMPLEMENTED; SCHEDULER COOPERATIVE
+GUEST THREAD / TLS / KTHREAD / KPCR        IMPLEMENTED; PREEMPTIVE FAIR-SHARE SCHEDULER
 THREADS THAT BLOCK AND RESUME              IMPLEMENTED (Asyncify fibers on the HIR executor)
 NESTED-CALL TRANSLATION CACHE              IMPLEMENTED (about 8x faster startup)
 GPU INTERRUPTS (vblank + CP INTERRUPT)     IMPLEMENTED (Xenia ExecuteInterrupt)
 XENOS PM4 / RING FOUNDATION                BANJO-TOOIE DRIVES IT (WAIT_REG_MEM, fences, IBs)
 VdSwap / XE_SWAP PATH                      CI-PROVEN FOUNDATION
+XENOS SOFTWARE RENDERER (EDRAM, RESOLVES)  BANJO-TOOIE "LOADING..." SCREEN RENDERED; NOT REAL-TIME
+CONTROLLER -> XINPUT                       WIRED (KEYBOARD, PAGE PAD, GAMEPAD)
 XENOS SHADER -> SPIR-V -> WGSL / WEBGPU    CI-PROVEN FOUNDATION
-REAL XBOX COMMERCIAL-TITLE FIRST FRAME     BANJO-TOOIE PRESENTS FRAMES HEADLESSLY; PIXELS NOT YET VERIFIED
+REAL XBOX COMMERCIAL-TITLE FIRST FRAME     BANJO-TOOIE LOADING SCREEN (TITLE-RENDERED PIXELS)
 XBOX COMMERCIAL GAMEPLAY                   NOT YET VERIFIED
 
 PC SOURCE / PORTAL TRACK                   UNCHANGED SINCE SEPTEMBER 7
@@ -44,6 +46,36 @@ PORTAL GAMEPLAY / RENDERED FRAME           NOT YET VERIFIED
 The last real-device Braid measurement (iPhone, V74) got past the V58 shared-epilog blocker, executed 38 HIR instructions from entry `0x8236EF38`, made five kernel calls and then called `xboxkrnl!HalReturnToFirmware` (ordinal `0x28`). That is the title deliberately giving up, not an emulator crash: Xenia implements the same export as process exit. It almost always means an earlier kernel call returned something the game did not accept.
 
 V75 therefore replaces the placeholder kernel surface with a port of Xenia's own `xboxkrnl`/`xam` behaviour (see below). Braid has **not** been re-measured on a device with V75 yet. The next real-device run is the next authoritative data point; the browser now names the stop reason and lists the kernel calls behind it, so one run tells us exactly what to fix next.
+
+### October 9: Banjo-Tooie draws its loading screen; loader threads now run
+
+- **Software Xenos backend.** Banjo-Tooie's first real frame is its "Loading..." screen, rendered
+  from the title's own draws. The renderer models the 10 MiB EDRAM and runs the vertex and pixel
+  shaders through Xenia's `ShaderInterpreter`. Resolves to guest memory go through Xenia's
+  `draw_util::GetResolveInfo`, and tiled textures, DXT included, are sampled with filtering.
+  It is a correctness reference, about 600 ns per pixel, not a real-time path. Real-time
+  rendering needs the WebGPU backend.
+- **Frames in the browser.** During a run, the page shows the newest swapped frontbuffer, and
+  the controller (keyboard, on-page pad, Gamepad API) is written into the guest's XInput state
+  every slice.
+- **Preemptive, fair-share guest threads.** The fiber scheduler was cooperative. Banjo-Tooie's
+  main thread presents "Loading..." frames without ever blocking, so the loader threads never
+  ran and the loading screen never ended. Guest threads are now preempted at call boundaries
+  after a 2M-instruction quantum. The browser's host time slices no longer reset that quantum.
+  The next thread to run is the one that has run least, so a loader thread woken by its
+  partner runs at once, as it would on its own hardware thread in Xenia. The loader threads now
+  run and decompress, so loading progresses, but slowly. The HIR executor runs about 5M guest
+  instructions per second, far below the console, so Banjo-Tooie is still on its loading screen
+  after 2.5 billion instructions. The next performance milestone is executor speed.
+- **Audio render-driver clients.** `XAudioRegisterRenderDriverClient` callbacks are now called
+  the way Xenia's `AudioSystem` worker calls them: one per 256-sample frame played at 48 kHz,
+  with up to 64 frames queued. Banjo-Tooie has not registered a client yet at this point.
+- **Runner diagnostics.** `tools/run-title.mjs` gained these options:
+  - `--progress`
+  - `--frame out.png`
+  - `--render-from-minstr N` (fast-forward without rasterizing)
+  - `--watch-kernel-arg V` (log kernel calls by argument, thread or export)
+  - A per-thread report of what each guest thread is waiting on.
 
 ### October 8 (later): Banjo-Tooie reaches its frame loop
 

@@ -339,6 +339,17 @@ struct WaitInfo {
   uint32_t reason = 0;  // 1 infinite wait, 2 spinning bounded wait, 3 lock.
 };
 WaitInfo g_wait;
+// Last blocking wait of each guest thread suspended in a fiber yield, with
+// the guest return address (diagnostics: r360_kernel_thread_wait).
+struct ThreadWait {
+  WaitInfo wait;
+  uint32_t caller_lr = 0;
+  uint32_t count = 0;
+};
+std::map<uint32_t, ThreadWait> g_thread_waits;
+// Last bounded (timed) wait of each guest thread: a thread that polls with
+// timeouts shows up as ready, not blocked (r360_kernel_thread_poll).
+std::map<uint32_t, ThreadWait> g_thread_polls;
 
 struct TimeoutSpin {
   uint32_t object = 0;
@@ -1000,6 +1011,19 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
   uint64_t timeout = 0;
   if (!Rd64(timeout_ptr, &timeout)) return Invalid();
   // A bounded wait gives the other guest threads one turn to signal first.
+  if (timeout && attempt == 0 && GuestFibersActive()) {
+    ThreadWait& poll = g_thread_polls[r360_guest_thread_current()];
+    poll.wait.module = module;
+    poll.wait.ordinal = ordinal;
+    poll.wait.object = first_blocked;
+    poll.wait.handle = first_handle;
+    uint8_t type = 0xFF;
+    Rd8(first_blocked, &type);
+    poll.wait.object_type = type;
+    poll.wait.reason = uint32_t(timeout & 0xFFFFFFFFu);
+    poll.caller_lr = g_caller_lr;
+    ++poll.count;
+  }
   if (timeout && attempt == 0 && GuestFiberYield(false)) continue;
   if (timeout) {
     // No other guest thread can signal during this synchronous kernel call, so
@@ -1159,9 +1183,23 @@ struct AudioClient {
   uint32_t callback_arg = 0;
   uint32_t frames_submitted = 0;
   uint32_t last_samples = 0;
+  // Xenia AudioSystem: the guest pointer to the callback argument passed to
+  // the callback (wrapped_callback_arg), the client semaphore count (frames
+  // the title may still render) and frames submitted but not yet played.
+  uint32_t wrapped_arg = 0;
+  uint32_t available = 0;
+  uint32_t queued = 0;
 };
 constexpr uint32_t kMaxAudioClients = 8;
+// Xenia AudioSystem::kMaximumQueuedFrames.
+constexpr uint32_t kAudioMaxQueuedFrames = 64;
 std::array<AudioClient, kMaxAudioClients> g_audio_clients{};
+// The audio "driver" plays one 256-sample frame per 16/3 ms (48 kHz), like
+// Xenia's SDL driver releasing the client semaphore per consumed frame.
+uint64_t g_audio_origin_ms = 0;
+uint64_t g_audio_frames_played = 0;
+uint32_t g_audio_thread = 0;
+uint32_t g_audio_callbacks = 0;
 // XMA hardware contexts (Xenia XmaDecoder: 320 x 64-byte contexts in
 // physical memory). Decoding is not implemented yet; allocation is.
 constexpr uint32_t kXmaContextCount = 320;
@@ -4201,7 +4239,13 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       if (!Rd32(r3, &callback) || !Rd32(r3 + 4u, &callback_arg)) return Invalid();
       for (uint32_t i = 0; i < kMaxAudioClients; ++i) {
         if (g_audio_clients[i].used) continue;
-        g_audio_clients[i] = {true, callback, callback_arg, 0, 0};
+        // Xenia RegisterClient: the callback receives a pointer to a copy
+        // of its argument; the client semaphore starts with
+        // kMaximumQueuedFrames.
+        const uint32_t wrapped = PoolAlloc(4);
+        if (!wrapped || !Wr32(wrapped, callback_arg)) return X_STATUS_NO_MEMORY;
+        g_audio_clients[i] = {true, callback, callback_arg, 0, 0, wrapped,
+                              kAudioMaxQueuedFrames, 0};
         if (!Wr32(r4, 0x41550000u | i)) return Invalid();
         return X_ERROR_SUCCESS;
       }
@@ -4217,6 +4261,9 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
         return Invalid();
       }
       ++g_audio_clients[r3 & 0xFFFFu].frames_submitted;
+      if (g_audio_clients[r3 & 0xFFFFu].queued < kAudioMaxQueuedFrames) {
+        ++g_audio_clients[r3 & 0xFFFFu].queued;
+      }
       g_audio_clients[r3 & 0xFFFFu].last_samples = r4;
       return X_ERROR_SUCCESS;
     case kx::XMACreateContext: {
@@ -5195,22 +5242,87 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
     // holds): run that thread, then retry this call. Blocked paths have no
     // side effects, so the retry sees the same arguments and fresh state.
     if (g_status == kKernelServiceWouldBlock && g_wait.reason >= 1 &&
+        g_wait.reason <= 3 && GuestFibersActive()) {
+      ThreadWait& record = g_thread_waits[r360_guest_thread_current()];
+      record.wait = g_wait;
+      record.caller_lr = caller_lr;
+      ++record.count;
+    }
+    if (g_status == kKernelServiceWouldBlock && g_wait.reason >= 1 &&
         g_wait.reason <= 3 && GuestFiberYield(true)) {
       g_caller_r13 = caller_r13;
       g_caller_lr = caller_lr;
       g_caller_r1 = caller_r1;
       continue;
     }
-    if (g_status == kKernelServiceSuccess) GuestFiberNoteProgress();
+    if (g_status == kKernelServiceSuccess) {
+      GuestFiberNoteProgress();
+      if (!g_thread_waits.empty()) g_thread_waits.erase(r360_guest_thread_current());
+    }
     *result = value;
     return g_status;
   }
+}
+
+// Xenia AudioSystem::WorkerThreadMain: calls each registered render-driver
+// client's callback while its semaphore has frames available, on the audio
+// worker thread. The worker is a suspended guest thread whose stack and KPCR
+// the callback runs on, nested like an interrupt (it cannot block).
+void PumpAudioClients() {
+  bool any = false;
+  for (const auto& client : g_audio_clients) any |= client.used && client.callback;
+  if (!any) return;
+  const uint64_t now = MonotonicMillis();
+  if (!g_audio_origin_ms) g_audio_origin_ms = now;
+  const uint64_t played = (now - g_audio_origin_ms) * 3u / 16u;
+  for (; g_audio_frames_played < played; ++g_audio_frames_played) {
+    for (auto& client : g_audio_clients) {
+      if (!client.used || !client.queued) continue;
+      --client.queued;
+      if (client.available < kAudioMaxQueuedFrames) ++client.available;
+    }
+  }
+  if (!g_audio_thread) {
+    uint32_t entry = 0;
+    for (const auto& client : g_audio_clients) {
+      if (client.used && client.callback) { entry = client.callback; break; }
+    }
+    const uint32_t native = r360_guest_thread_create(entry, 0, 0x10000u, 0);
+    if (!native) return;
+    if (!PrepareThreadObjects(native, entry, 0, 0)) {
+      r360_guest_thread_terminate(native, 0);
+      return;
+    }
+    r360_guest_thread_suspend(native);
+    g_audio_thread = native;
+  }
+  const uint32_t stack_top = r360_guest_thread_stack_top(g_audio_thread);
+  const uint32_t pcr = r360_guest_thread_pcr(g_audio_thread);
+  const uint32_t caller_r13 = g_caller_r13, caller_lr = g_caller_lr,
+                 caller_r1 = g_caller_r1;
+  // A few callbacks per poll keep the initial 64-frame burst from stalling
+  // the interrupted thread.
+  for (uint32_t round = 0; round < 4u; ++round) {
+    bool pumped = false;
+    for (auto& client : g_audio_clients) {
+      if (!client.used || !client.callback || !client.available) continue;
+      --client.available;
+      RunGuestInterrupt(client.callback, client.wrapped_arg, 0, stack_top, pcr);
+      ++g_audio_callbacks;
+      pumped = true;
+    }
+    if (!pumped) break;
+  }
+  g_caller_r13 = caller_r13;
+  g_caller_lr = caller_lr;
+  g_caller_r1 = caller_r1;
 }
 
 void MaybeDeliverGuestInterrupts() {
   if (!GuestFibersActive() || GuestInterruptActive()) return;
   if ((++g_interrupt_poll & 63u) != 0) return;
   GuestFiberHostYieldIfDue();
+  PumpAudioClients();
   if (!g_graphics_interrupt_callback) return;
   TitleGpuPump();
   uint32_t cpu_mask = 0;
@@ -5285,6 +5397,8 @@ void ResetExtendedKernelServices() {
   g_interrupt_thread = 0;
   g_last_vblank_ms = 0;
   g_interrupt_poll = g_vblank_interrupts = g_cp_interrupts = 0;
+  g_thread_waits.clear();
+  g_thread_polls.clear();
   g_terminal = {};
   g_wait = {};
   g_timeout_spin = {};
@@ -5303,6 +5417,8 @@ void ResetExtendedKernelServices() {
   ThreadAffinity().clear();
   g_kernel_module_handles = {};
   g_audio_clients = {};
+  g_audio_origin_ms = g_audio_frames_played = 0;
+  g_audio_thread = g_audio_callbacks = 0;
   TitleProfileSettings().clear();
   LaunchData().clear();
   g_launch_data_present = false;
@@ -5589,6 +5705,44 @@ uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
 }
 R360_WASM_EXPORT("r360_kernel_vblank_interrupts")
 uint32_t r360_kernel_vblank_interrupts() { return r360k::g_vblank_interrupts; }
+// Field of the blocking wait a guest thread is suspended in (0 when it is
+// not waiting): 0 module<<16|ordinal, 1 object, 2 handle, 3 object type,
+// 4 reason, 5 guest return address, 6 blocked retries.
+R360_WASM_EXPORT("r360_kernel_thread_wait")
+uint32_t r360_kernel_thread_wait(uint32_t thread, uint32_t field) {
+  const auto it = r360k::g_thread_waits.find(thread);
+  if (it == r360k::g_thread_waits.end()) return 0;
+  const auto& w = it->second;
+  switch (field) {
+    case 0: return (w.wait.module << 16) | (w.wait.ordinal & 0xFFFFu);
+    case 1: return w.wait.object;
+    case 2: return w.wait.handle;
+    case 3: return w.wait.object_type;
+    case 4: return w.wait.reason;
+    case 5: return w.caller_lr;
+    case 6: return w.count;
+    default: return 0;
+  }
+}
+// Same fields for the thread's last bounded wait (4 = low timeout word).
+R360_WASM_EXPORT("r360_kernel_thread_poll")
+uint32_t r360_kernel_thread_poll(uint32_t thread, uint32_t field) {
+  const auto it = r360k::g_thread_polls.find(thread);
+  if (it == r360k::g_thread_polls.end()) return 0;
+  const auto& w = it->second;
+  switch (field) {
+    case 0: return (w.wait.module << 16) | (w.wait.ordinal & 0xFFFFu);
+    case 1: return w.wait.object;
+    case 2: return w.wait.handle;
+    case 3: return w.wait.object_type;
+    case 4: return w.wait.reason;
+    case 5: return w.caller_lr;
+    case 6: return w.count;
+    default: return 0;
+  }
+}
+R360_WASM_EXPORT("r360_kernel_audio_callbacks")
+uint32_t r360_kernel_audio_callbacks() { return r360k::g_audio_callbacks; }
 R360_WASM_EXPORT("r360_kernel_cp_interrupts")
 uint32_t r360_kernel_cp_interrupts() { return r360k::g_cp_interrupts; }
 R360_WASM_EXPORT("r360_kernel_graphics_interrupt_callback")

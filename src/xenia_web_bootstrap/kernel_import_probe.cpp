@@ -2,11 +2,14 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 
 #include "hir_correctness_executor.h"
 #include "kernel_xboxkrnl_services.h"
 #include "title_gpu_runtime.h"
 #include "xenia/cpu/ppc/ppc_context.h"
+
+extern "C" uint32_t r360_guest_thread_current();
 
 extern "C" {
 uint32_t r360_kernel_service_call(uint32_t module, uint32_t ordinal,
@@ -75,12 +78,33 @@ KernelServiceTraceEntry* BeginKernelServiceTrace(
   return &trace;
 }
 
+// Debug: kernel calls with a watched value among their arguments or result
+// are logged to stderr (r360_kernel_watch_arg; tools/run-title.mjs
+// --watch-kernel-arg).
+std::array<uint32_t, 4> g_kernel_arg_watch{};
+
 void FinishKernelServiceTrace(KernelServiceTraceEntry* trace, uint32_t result,
                               uint32_t service_status, bool handled) {
   if (!trace) return;
   trace->result = result;
   trace->service_status = service_status;
   trace->handled = handled ? 1u : 0u;
+  if (!g_kernel_arg_watch[0]) return;
+  for (uint32_t watched : g_kernel_arg_watch) {
+    if (!watched) continue;
+    // 0xC0MMOOOO watches every call of module MM ordinal OOOO.
+    bool hit = result == watched || r360_guest_thread_current() == watched ||
+               watched == (0xC0000000u | (trace->module_id << 16) | trace->ordinal);
+    for (uint32_t i = 0; i < 6; ++i) hit |= trace->args[i] == watched;
+    if (!hit) continue;
+    std::fprintf(stderr,
+                 "R360_KWATCH seq=%u thread=0x%08X mod=%u ord=0x%X args=%08X,%08X,%08X,%08X,%08X,%08X -> %08X status=%u\n",
+                 trace->sequence, r360_guest_thread_current(), trace->module_id,
+                 trace->ordinal, trace->args[0], trace->args[1], trace->args[2],
+                 trace->args[3], trace->args[4], trace->args[5], result,
+                 service_status);
+    break;
+  }
 }
 
 bool TryBuiltInKernelService(const KernelImportEntry& entry,
@@ -154,8 +178,14 @@ const KernelImportEntry* FindKernelImport(uint32_t thunk_address) {
   return nullptr;
 }
 
+// Calls per export (module 1 xboxkrnl, 2 xam; ordinals below 0x1000).
+std::array<std::array<uint32_t, 0x1000>, 2> g_export_calls{};
+
 void RecordKernelImportCall(const KernelImportEntry& entry) {
   ++g_calls;
+  if (entry.module_id >= 1 && entry.module_id <= 2 && entry.ordinal < 0x1000u) {
+    ++g_export_calls[entry.module_id - 1][entry.ordinal];
+  }
   g_last_thunk = entry.thunk_address;
   g_last_module = entry.module_id;
   g_last_ordinal = entry.ordinal;
@@ -178,6 +208,7 @@ const KernelServiceTraceEntry* KernelServiceTraceAt(uint32_t index) {
 void ResetKernelImportProbe() {
   g_entries = {};
   g_service_trace = {};
+  g_export_calls = {};
   g_count = g_calls = g_last_thunk = g_last_module = g_last_ordinal =
       g_last_status = g_last_abi_target = g_service_trace_count = 0;
   ResetTitleGpuRuntime();
@@ -339,6 +370,17 @@ uint32_t r360_kernel_import_last_ordinal() {
 }
 uint32_t r360_kernel_import_last_status() {
   return render360::xenia_web::KernelImportProbeLastStatus();
+}
+__attribute__((used, export_name("r360_kernel_export_calls")))
+uint32_t r360_kernel_export_calls(uint32_t module, uint32_t ordinal) {
+  if (module < 1 || module > 2 || ordinal >= 0x1000u) return 0;
+  return render360::xenia_web::g_export_calls[module - 1][ordinal];
+}
+__attribute__((used, export_name("r360_kernel_watch_arg")))
+uint32_t r360_kernel_watch_arg(uint32_t slot, uint32_t value) {
+  if (slot >= render360::xenia_web::g_kernel_arg_watch.size()) return 0;
+  render360::xenia_web::g_kernel_arg_watch[slot] = value;
+  return 1;
 }
 uint32_t r360_kernel_import_trace_count() {
   return render360::xenia_web::KernelImportServiceTraceCount();

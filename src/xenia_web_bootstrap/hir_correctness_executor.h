@@ -71,6 +71,9 @@ using HIRCorrectnessCallResolver = bool (*)(xe::cpu::Function* function);
 using HIRCorrectnessAddressResolver = bool (*)(uint32_t guest_address);
 
 void ResetHIRCorrectnessInitialState();
+// HIR instructions executed since the last r360_hir reset (all threads).
+uint64_t HIRTotalInstructions();
+uint32_t HIRLastSourceAddress();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 bool SetHIRCorrectnessInitialLR(uint64_t value);
 uint64_t GetHIRCorrectnessInitialLR();

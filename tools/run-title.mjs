@@ -45,6 +45,7 @@ function parseArgs(argv){
     else if(a==='--license')args.license=String(argv[++i]||'trial');
     else if(a==='--log-draws')args.logDraws=Number(argv[++i])>>>0;
     else if(a==='--progress')args.progress=true;
+    else if(a==='--watch-kernel-arg')(args.kernelWatch||=[]).push(Number(argv[++i])>>>0);
     else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
     else if(a==='--slice-ms')args.sliceMs=Number(argv[++i])>>>0;
@@ -64,7 +65,7 @@ async function loadBootstrap(file,verbose){
   let pending='';
   const bytes=fs.readFileSync(file);
   const stderr=[];
-  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose)process.stderr.write(line+'\n');}}});
+  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH'))process.stderr.write(line+'\n');}}});
   const module=await WebAssembly.compile(bytes);
   const instance=attachRender360BrowserInstance(host,await WebAssembly.instantiate(module,host.imports));
   return {instance,host,stderr};
@@ -165,6 +166,7 @@ async function main(){
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
   if(args.watch)bootstrap.exports.r360_debug_watch?.(args.watch);
   if(args.logDraws)bootstrap.exports.r360_xenos_debug_draws?.(args.logDraws);
+  (args.kernelWatch||[]).slice(0,4).forEach((v,k)=>bootstrap.exports.r360_kernel_watch_arg?.(k,v));
   if(args.renderFrom!==undefined)bootstrap.exports.r360_xenos_soft_set_rasterize?.(args.renderFrom===0?1:0);
   // --max-minstr N: stop after N million guest instructions in total.
   bootstrap.exports.r360_hir_set_total_instruction_budget?.(args.maxMillions>>>0||0);
@@ -175,7 +177,7 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress)?(s=>{const x=bootstrap.exports;if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress)?(s=>{const x=bootstrap.exports;if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}
@@ -195,10 +197,13 @@ async function main(){
       hirBlocker:result.executionBlockerKind?{kind:result.executionBlockerKind,opcode:result.executionBlockerOpcode,address:hex(result.executionBlockerAddress)}:null,
       memoryFault:result.memoryFaultCode?{code:result.memoryFaultCode,address:hex(result.memoryFaultAddress)}:null,
       guestFibers:result.guestFibers??null,
+      guestThreadWaits:globalThis.__r360Threads??null,
       framesPresented:(()=>{const x=bootstrap.exports;const f=n=>typeof x[n]==='function'?(x[n]()>>>0):null;return {vdSwapCalls:f('r360_title_gpu_vd_swap_calls'),vblankInterrupts:f('r360_kernel_vblank_interrupts'),cpInterrupts:f('r360_kernel_cp_interrupts'),gpuPackets:f('r360_xenos_packets'),gpuDraws:f('r360_xenos_draws'),gpuIndirect:f('r360_xenos_indirect_buffers'),gpuStatus:f('r360_xenos_status'),gpuInterruptsRaised:f('r360_xenos_interrupts'),gpuLastOpcode:f('r360_xenos_last_opcode'),gpuFaultWord:f('r360_xenos_last_fault_word'),gpuMemoryWrites:f('r360_xenos_memory_writes'),gpuSwaps:f('r360_xenos_swaps'),gpuWaits:f('r360_xenos_waits'),softDraws:f('r360_xenos_soft_draws'),cacheHits:f('r360_hir_cache_hits'),cacheMisses:f('r360_hir_cache_misses'),cacheEntries:f('r360_hir_cache_entries'),cacheKB:f('r360_hir_cache_kilobytes'),softSkipped:f('r360_xenos_soft_skipped'),softLastSkip:f('r360_xenos_soft_last_skip'),softResolves:f('r360_xenos_soft_resolves'),softPixels:f('r360_xenos_soft_pixels'),softTextureFailures:f('r360_xenos_soft_texture_failures'),softLastTextureFormat:f('r360_xenos_soft_last_texture_format'),vdSwapFailures:f('r360_title_gpu_vd_swap_failures'),width:f('r360_title_gpu_last_vd_swap_width'),height:f('r360_title_gpu_last_vd_swap_height')};})(),
       mainThread:result.mainThreadContext?{stackBytes:result.mainThreadContext.stackBytes,tlsBytes:result.mainThreadContext.tlsBytes,tlsTemplate:result.mainThreadContext.tlsTemplate}:null,
       kernelVariables:{relocated:result.kernelVariableRegistration?.relocated?.map(v=>v.name),placeholders:result.kernelVariableRegistration?.placeholders?.map(v=>kernelExportName(v.module,v.ordinal))},
       importedKernelFunctions:result.kernelImports?.plan?.filter(i=>i.isKernelModule&&i.kind==='function').length,
+      kernelFunctionImports:result.kernelImports?.plan?.filter(i=>i.kind==='function').map(i=>kernelExportName(i.module,i.ordinal)),
+      kernelExportCalls:Object.fromEntries((result.kernelImports?.plan||[]).filter(i=>i.kind==='function').map(i=>[kernelExportName(i.module,i.ordinal),bootstrap.exports.r360_kernel_export_calls?.(typeof i.module==='number'?i.module:(String(i.module).toLowerCase().startsWith('xam')?2:1),i.ordinal)>>>0]).sort((a,b)=>b[1]-a[1])),
       kernelVariableImports:result.kernelImports?.plan?.filter(i=>i.kind!=='function').map(i=>({module:i.module,ordinal:i.ordinal,name:kernelExportName(i.module,i.ordinal),valueAddress:hex(i.valueAddress),layout:i.descriptorLayout})),
       kernelTrace:(result.kernelTrace||[]).slice(-args.trace),
       titleGpu:result.titleGpuTelemetry,
@@ -249,6 +254,7 @@ async function main(){
     console.log(`stopped at: ${report.runtimeBoundary}`);
     if(report.framesPresented?.vdSwapCalls)console.log(`  frames presented (VdSwap): ${report.framesPresented.vdSwapCalls} at ${report.framesPresented.width}x${report.framesPresented.height}${report.framesPresented.vdSwapFailures?`, ${report.framesPresented.vdSwapFailures} failed`:''} · ${report.framesPresented.vblankInterrupts} vblank + ${report.framesPresented.cpInterrupts} CP interrupts · ${report.framesPresented.gpuPackets} PM4 packets, ${report.framesPresented.gpuDraws} draws`);
     if(report.guestFibers)console.log(`  guest threads: ${report.guestFibers.threads} title-created, ${report.guestFibers.switches} switches, stopped on ${report.guestFibers.endedOn?`thread 0x${report.guestFibers.endedOnThread.toString(16)}`:'the primary thread'}`);
+    for(const t of report.guestThreadWaits??[])console.log(`    fiber ${t.fiber} thread ${t.thread} ${t.state} (${t.resumes} runs, ${t.minstr}M instr, left by ${t.left} after ${t.leftAfter}; blocked/yield/preempt/host ${t.leaves})${t.wait&&t.state==='blocked'?` in ${t.wait}(${t.object}, handle ${t.handle}, type ${t.objectType}, reason ${t.reason}) from ${t.callerLr} ×${t.retries}`:''}${t.poll?` · polls ${t.poll}(${t.pollObject}, handle ${t.pollHandle}, type ${t.pollType}, timeout ${t.pollTimeout}) from ${t.pollLr} ×${t.polls}`:''}`);
     if(report.unsupportedKernelCall)console.log(`  next kernel export to implement: ${report.unsupportedKernelCall.module}!${report.unsupportedKernelCall.name} (ordinal ${hex(report.unsupportedKernelCall.ordinal)})`);
     if(report.kernelBoundary)console.log(`  ${report.kernelBoundary.kind}: ${report.kernelBoundary.reason} via ${report.kernelBoundary.export}${report.kernelBoundary.callerLr?` from LR ${hex(report.kernelBoundary.callerLr)}`:''}`);
     if(report.hirBlocker)console.log(`  HIR blocker kind ${report.hirBlocker.kind} opcode ${report.hirBlocker.opcode} at ${report.hirBlocker.address}`);

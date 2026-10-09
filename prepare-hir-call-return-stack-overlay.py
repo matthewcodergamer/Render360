@@ -85,7 +85,7 @@ set_return_new = '''        case xe::cpu::hir::OPCODE_SET_RETURN_ADDRESS: {\n   
 replace_once(set_return_old, set_return_new, 'SET_RETURN_ADDRESS persistence')
 
 source_old = '''        case xe::cpu::hir::OPCODE_SOURCE_OFFSET:\n          current_source_address = static_cast<uint32_t>(instr->src1.offset);\n          break;\n'''
-source_new = '''        case xe::cpu::hir::OPCODE_SOURCE_OFFSET:\n          current_source_address = static_cast<uint32_t>(instr->src1.offset);\n          g_current_source_address = current_source_address;\n          break;\n'''
+source_new = '''        case xe::cpu::hir::OPCODE_SOURCE_OFFSET:\n          current_source_address = static_cast<uint32_t>(instr->src1.offset);\n          g_current_source_address = current_source_address;\n          g_last_source_address = current_source_address;\n          break;\n'''
 replace_once(source_old, source_new, 'source address tracing')
 
 # R360_V60_STORE_CONTEXT_STACK_COMPAT

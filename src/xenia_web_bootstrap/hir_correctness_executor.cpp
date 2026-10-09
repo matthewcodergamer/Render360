@@ -1048,6 +1048,7 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
+uint64_t g_opcode_histogram[256] = {};  // TEMP diagnostics
 // Guest address of the last SOURCE_OFFSET executed (diagnostics).
 uint32_t g_last_source_address = 0;
 
@@ -1638,6 +1639,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         supported = false;
         break;
       }
+      ++g_opcode_histogram[instr->opcode->num & 0xFFu];
       if (ExecuteFlaggedOperation(instr, values, &supported)) {
         if (!supported) {
           result.blocker_kind = kHIRBlockerUnsupportedOpcode;
@@ -2217,3 +2219,6 @@ uint32_t r360_debug_watch(uint32_t address) {
 extern "C" uint32_t r360_debug_watch_address() {
   return render360::xenia_web::g_debug_watch_address;
 }
+
+extern "C" __attribute__((used, export_name("r360_hir_opcode_histogram_k")))
+uint32_t r360_hir_opcode_histogram_k(uint32_t op) { return uint32_t(render360::xenia_web::g_opcode_histogram[op & 0xFF] / 1000u); }

@@ -1,4 +1,5 @@
 import {runWithGuestFibers} from './render360-guest-fibers.mjs';
+import {installGuestJit} from './render360-guest-jit.mjs';
 import { prepareRetailXexImage } from './retail-xex-image-pipeline.mjs';
 import { decodeXexImportLibraries } from './render360-xex-imports.mjs';
 import { buildKernelImportPlan } from './render360-kernel-imports.mjs';
@@ -480,6 +481,9 @@ export async function handoffDefaultXex({core,bootstrap,defaultXex,encryptedSecu
   // instruction guard (there to stop a runaway synchronous run) is lifted.
   if(guestSliceMs>0)maybe(bootstrap,'r360_hir_set_instruction_budget')?.(0xFFFFFFFF);
   // Title-created guest threads run as fibers while the primary thread executes.
+  // Hot guest functions run as generated WebAssembly (render360-guest-jit.mjs);
+  // globalThis.render360GuestJitMode = 0 keeps everything on the HIR executor.
+  if(globalThis.render360GuestJitMode!==0)installGuestJit(bootstrap,{mode:globalThis.render360GuestJitMode||1});
   const fiberRun=scanEntryFunction?await runWithGuestFibers(bootstrap,()=>scannedEntry()>>>0,{sliceMs:guestSliceMs,onSlice:onGuestSlice,signal}):{result:pick(bootstrap,'r360_title_handoff_translate_entry')(entryBytes)>>>0,fibers:null};
   // A sliced run the user stopped is not a translation failure.
   const stoppedByUser=fiberRun.fibers?.stopped==='aborted';

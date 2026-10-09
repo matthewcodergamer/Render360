@@ -5319,8 +5319,12 @@ void PumpAudioClients() {
 }
 
 void MaybeDeliverGuestInterrupts() {
-  if (!GuestFibersActive() || GuestInterruptActive()) return;
   if ((++g_interrupt_poll & 63u) != 0) return;
+  DeliverGuestInterruptsNow();
+}
+
+void DeliverGuestInterruptsNow() {
+  if (!GuestFibersActive() || GuestInterruptActive()) return;
   GuestFiberHostYieldIfDue();
   PumpAudioClients();
   if (!g_graphics_interrupt_callback) return;

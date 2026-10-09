@@ -9,6 +9,10 @@
 #include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/function.h"
 
+namespace xe::cpu::ppc {
+class PPCFrontend;
+}
+
 namespace render360::xenia_web {
 
 // Commercial-title diagnostics preserve the first exact finalized-HIR blocker.
@@ -33,6 +37,12 @@ void ResetTranslationCache();
 void RegisterRestGprLrAddress(uint32_t address);
 bool IsRegisteredRestGprLr(uint32_t address);
 void NoteTopLevelTranslate(uint32_t address);
+// Top-level translate+execute (title entry, guest thread entries, interrupt
+// handlers) through the translation cache: a cached translation runs directly
+// (telemetry set as ProbeAssembler::Assemble sets it), otherwise `function` is
+// defined and its finalized HIR retained under (begin, key_end).
+bool DefineTopLevelCached(xe::cpu::ppc::PPCFrontend* frontend,
+                          xe::cpu::GuestFunction* function, uint32_t key_end);
 const ProbeTelemetry& GetProbeTelemetry();
 
 class ProbeGuestFunction final : public xe::cpu::GuestFunction {

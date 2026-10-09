@@ -39,6 +39,8 @@ async function instantiate(){
   imports.env.emscripten_notify_memory_growth=()=>{};
   const instance=await WebAssembly.instantiate(module,imports);
   wasi.initialize(instance);
+  // R360_JIT=2 runs every test function through the guest JIT instead.
+  if(process.env.R360_JIT){const {installGuestJit}=await import('./render360-guest-jit.mjs');globalThis.__r360Jit=installGuestJit({exports:instance.exports},{mode:Number(process.env.R360_JIT),onError:(err,bytes)=>{if(!globalThis.__r360JitErr){globalThis.__r360JitErr=1;console.error('JIT module error:',err.message);fs.writeFileSync('/tmp/claude-0/-home-user-Render360/9a9e1890-8481-5fb1-b9b3-fbc77c0219cd/scratchpad/bad-jit.wasm',bytes);}}});}
   return instance.exports;
 }
 let e=await instantiate();
@@ -135,6 +137,7 @@ for(const file of files){
 fs.rmSync(work,{recursive:true,force:true});
 
 console.log(`Xenia PPC instruction suite: ${passed} passed, ${failures.length} failed, ${skipped} memory tests skipped, ${unassembled} VMX128 files not assemblable`);
+if(globalThis.__r360Jit)console.log('JIT', JSON.stringify(globalThis.__r360Jit.telemetry()));
 for(const failure of failures)console.log(`FAIL ${failure}`);
 if(failures.length)process.exit(1);
 if(!filter&&passed<MIN_PASSING){console.error(`expected at least ${MIN_PASSING} passing tests`);process.exit(1);}

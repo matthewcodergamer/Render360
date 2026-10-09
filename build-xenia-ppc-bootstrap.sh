@@ -56,6 +56,7 @@ python3 "$ROOT/prepare-hir-return-metadata-v3-overlay.py"
 python3 "$ROOT/prepare-hir-stack-history-overlay.py"
 python3 "$ROOT/prepare-hir-tail-frame-overlay.py"
 python3 "$ROOT/prepare-hir-fiber-locals-overlay.py"
+python3 "$ROOT/prepare-hir-jit-overlay.py"
 python3 "$ROOT/prepare-xenia-shader-interpreter-overlay.py"
 python3 "$ROOT/prepare-xenia-shader-translator-overlay.py"
 python3 "$ROOT/prepare-xenia-spirv-browser-overlay.py"
@@ -193,6 +194,7 @@ queue_cpp "render360/hir_correctness_executor.cpp" "$OVERLAY/render360/hir_corre
 queue_cpp "render360/kernel_import_probe.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_import_probe.cpp"
 queue_cpp "render360/kernel_runtime_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_runtime_foundation.cpp"
 queue_cpp "render360/guest_fibers.cpp" "$ROOT/src/xenia_web_bootstrap/guest_fibers.cpp"
+queue_cpp "render360/hir_wasm_jit.cpp" "$ROOT/src/xenia_web_bootstrap/hir_wasm_jit.cpp"
 queue_cpp "render360/xenos_soft_renderer.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_soft_renderer.cpp"
 queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
@@ -227,7 +229,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 28 ))
+expected=$(( ${#SOURCES[@]} + 2 + 29 ))
 actual=$(( passed + failed ))
 
 echo

@@ -423,6 +423,25 @@ uint32_t r360_fiber_take_host_yield() {
 }
 uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
 uint32_t r360_fiber_preemptions() { return rx::g_preemptions; }
+// Guest JIT frames (hir_wasm_jit.cpp) save their locals in the current
+// fiber's Asyncify buffer like Binaryen-instrumented functions: pushed on
+// unwind (after their callees), popped on rewind (before them).
+__attribute__((used, export_name("r360_jit_h_spill_alloc")))
+uint32_t r360_jit_h_spill_alloc(uint32_t bytes) {
+  if (rx::g_current >= rx::g_fibers.size() || !rx::g_fibers[rx::g_current].asyncify) abort();
+  auto* header = reinterpret_cast<uint32_t*>(rx::g_fibers[rx::g_current].asyncify);
+  const uint32_t at = header[0];
+  if (uint64_t(at) + bytes > header[1]) abort();
+  header[0] = at + bytes;
+  return at;
+}
+__attribute__((used, export_name("r360_jit_h_spill_pop")))
+uint32_t r360_jit_h_spill_pop(uint32_t bytes) {
+  if (rx::g_current >= rx::g_fibers.size() || !rx::g_fibers[rx::g_current].asyncify) abort();
+  auto* header = reinterpret_cast<uint32_t*>(rx::g_fibers[rx::g_current].asyncify);
+  header[0] -= bytes;
+  return header[0];
+}
 uint32_t r360_fiber_leave(uint32_t index, uint32_t field) {
   if (index >= rx::g_fibers.size()) return 0;
   if (field >= 2 && field < 7) return rx::g_fibers[index].leave_counts[field - 2];

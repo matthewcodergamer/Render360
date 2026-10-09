@@ -185,12 +185,36 @@ bool WriteGuestGpuWord(uint32_t encoded_address, uint32_t value) {
   ++g_memory_writes;
   return true;
 }
+// Reads `count` big-endian words starting at GPU address `address`. One
+// physical range maps to one contiguous virtual span, so the translation is
+// done once and the words are copied in bulk (indirect buffers are read on
+// every command-processor pass).
+bool ReadGuestWordsBE(uint32_t address, uint32_t* out, uint32_t count) {
+  if (!count) return true;
+  const uint64_t last = uint64_t(address) + uint64_t(count - 1u) * 4u;
+  if (!out || last > 0xFFFFFFFCull) return false;
+  const uint32_t first_virtual = r360_kernel_gpu_address_to_virtual(address);
+  const uint32_t last_virtual = r360_kernel_gpu_address_to_virtual(uint32_t(last));
+  if (uint64_t(last_virtual) != uint64_t(first_virtual) + uint64_t(count - 1u) * 4u) {
+    for (uint32_t q = 0; q < count; ++q) {
+      if (!ReadGuestWordBE(address + q * 4u, &out[q])) return false;
+    }
+    return true;
+  }
+  if (!ReadSparseGuestMemory(first_virtual, out, count * 4u)) return false;
+  for (uint32_t q = 0; q < count; ++q) out[q] = __builtin_bswap32(out[q]);
+  return true;
+}
 bool ReadGuestGpuWord(uint32_t encoded_address, uint32_t* out) {
   uint32_t be = 0;
   if (!out || !ReadGuestWordBE(encoded_address & ~3u, &be)) return false;
   *out = GpuSwap32(ByteSwap32(be), encoded_address & 3u);
   return true;
 }
+// The WAIT_REG_MEM packet the command processor is stalled on
+// (wait_info, address/register, reference, mask).
+std::array<uint32_t, 4> g_stall_wait{};
+bool CompareWait(uint32_t info, uint32_t value, uint32_t ref, uint32_t mask);
 bool CompareWait(uint32_t info, uint32_t value, uint32_t ref, uint32_t mask) {
   value &= mask;
   switch (info & 7u) {
@@ -452,6 +476,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         if (!handled) { g_status = kStatusInvalid; break; }
         if (!CompareWait(p[0], value, p[2], p[3])) {
           ++g_waits;
+          for (uint32_t q = 0; q < 4u; ++q) g_stall_wait[q] = p[q];
           g_stall_offset[depth] = header_index;
           g_stall_levels = depth + 1u;
           g_status = kStatusWaiting;
@@ -499,10 +524,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         const uint32_t address = p[0] & 0x3FFFFFFFu, offset_type = p[1], n = p[2] & 0xFFFu;
         if (!n || n > kRegisterCount) { handled = false; g_status = kStatusInvalid; break; }
         std::array<uint32_t, kRegisterCount> loaded{};
-        for (uint32_t q = 0; q < n; ++q) {
-          const uint64_t a = uint64_t(address) + uint64_t(q) * 4u;
-          if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &loaded[q])) { handled = false; g_status = kStatusInvalid; break; }
-        }
+        if (!ReadGuestWordsBE(address, loaded.data(), n)) { handled = false; g_status = kStatusInvalid; }
         if (handled) handled = WriteConstantGroup(offset_type, loaded.data(), n); break;
       }
       case kPm4ImLoad: {
@@ -524,10 +546,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         // Xenia reads them in place (up to the 20-bit IB size field).
         if (!n) { handled = false; g_status = kStatusInvalid; break; }
         std::vector<uint32_t> ib(n);
-        for (uint32_t q = 0; q < n; ++q) {
-          const uint64_t a = uint64_t(address) + uint64_t(q) * 4u;
-          if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &ib[q])) { handled = false; g_status = kStatusInvalid; break; }
-        }
+        if (!ReadGuestWordsBE(address, ib.data(), n)) { handled = false; g_status = kStatusInvalid; }
         if (handled) {
           ++g_indirect_buffers;
           handled = ExecuteBuffer(ib.data(), n, depth + 1u);
@@ -606,6 +625,10 @@ uint32_t r360_xenos_ring_capacity(){return render360::xenia_web::kRingCapacity;}
 uint32_t r360_xenos_submit(uint32_t n){if(n>render360::xenia_web::kRingCapacity){render360::xenia_web::g_status=render360::xenia_web::kStatusInvalid;return 0;}render360::xenia_web::g_ring_words=n;return render360::xenia_web::Execute()?1u:0u;}
 uint32_t r360_xenos_status(){return render360::xenia_web::g_status;}
 // After a WAIT_REG_MEM stall: ring words consumed before the stalled packet.
+// 1 when the WAIT_REG_MEM the command processor stalled on would now pass:
+// resuming before that only re-reads the same packets (Xenia's
+// command-processor thread polls the same condition).
+uint32_t r360_xenos_stall_ready(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 1;const auto& w=rx::g_stall_wait;uint32_t value=0;if(w[0]&0x10u){if(!rx::ReadGuestGpuWord(w[1],&value))return 1;}else{if(w[1]>=rx::kRegisterCount)return 1;if(w[1]==rx::kRegCoherStatusHost)rx::MakeCoherent();value=rx::g_regs[w[1]];}return rx::CompareWait(w[0],value,w[2],w[3])?1u:0u;}
 uint32_t r360_xenos_stall_ring_offset(){return render360::xenia_web::g_stall_levels?render360::xenia_web::g_stall_offset[0]:0u;}
 // Arms the next submit to re-enter the stalled indirect buffers where they stopped.
 uint32_t r360_xenos_arm_resume(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 0;rx::g_resume_offset=rx::g_stall_offset;rx::g_resume_offset[0]=0;rx::g_resume_levels=rx::g_stall_levels;rx::g_resume_next=0;return rx::g_resume_levels;}

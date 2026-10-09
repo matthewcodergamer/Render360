@@ -69,6 +69,28 @@ uint32_t EdramWord(const Surface& s, uint32_t sx, uint32_t sy) {
   return tile * kTileWords + (y_in_tile * tile_w + x_in_tile) * (s.is_64bpp ? 2u : 1u);
 }
 
+// Calls f(first_word, sample_count) for the maximal runs of consecutive EDRAM
+// words holding samples [sx0, sx1) of sample row sy (the EdramWord layout:
+// runs end at tile edges and, for depth, at the half-tile swap).
+template <typename F>
+void ForEachEdramRun(const Surface& s, uint32_t sy, uint32_t sx0, uint32_t sx1, F&& f) {
+  const uint32_t tile_w = s.is_64bpp ? kTileWidth / 2 : kTileWidth;
+  const uint32_t words = s.is_64bpp ? 2u : 1u;
+  const uint32_t row_tile = s.base_tiles + (sy / kTileHeight) * s.pitch_tiles;
+  const uint32_t y_in_tile = sy % kTileHeight;
+  for (uint32_t sx = sx0; sx < sx1;) {
+    const uint32_t tile = (row_tile + sx / tile_w) % kEdramTiles;
+    uint32_t x_in_tile = sx % tile_w;
+    uint32_t run = std::min(tile_w - x_in_tile, sx1 - sx);
+    if (s.is_depth) {
+      x_in_tile = (x_in_tile + kTileWidth / 2) % kTileWidth;
+      run = std::min(run, kTileWidth - x_in_tile);
+    }
+    f(tile * kTileWords + (y_in_tile * tile_w + x_in_tile) * words, run);
+    sx += run;
+  }
+}
+
 Surface MakeSurface(uint32_t base_tiles, uint32_t surface_pitch, xenos::MsaaSamples msaa,
                     bool is_64bpp, bool is_depth) {
   Surface s;
@@ -193,6 +215,9 @@ uint32_t g_draws_rendered = 0;
 uint32_t g_rasterize = 1;
 uint32_t g_draws_skipped = 0;
 uint32_t g_resolves = 0;
+uint64_t g_resolve_pixels = 0;   // pixels copied by resolves
+uint64_t g_clear_samples = 0;    // EDRAM samples written by clears
+uint32_t g_last_resolve_info = 0; // msaa<<28 | 64bpp<<27 | depth<<26 | format
 uint32_t g_pixels_shaded = 0;
 uint32_t g_last_skip_reason = 0;
 uint32_t g_texture_fetch_failures = 0;
@@ -810,11 +835,70 @@ bool Resolve() {
     const uint32_t dest_x0 = info.copy_dest_coordinate_info.offset_x_div_8 * 8u;
     const uint32_t dest_y0 = info.copy_dest_coordinate_info.offset_y_div_8 * 8u;
     const float exp_scale = std::ldexp(1.0f, dest_info.copy_dest_exp_bias);
-    for (uint32_t y = 0; y < height; ++y) {
+    // Stage the destination extent (Xenia's copy_dest_extent) in host memory:
+    // one physical-to-virtual translation and one bulk read and write instead
+    // of a guest-memory round trip per pixel.
+    static std::vector<uint8_t> stage;
+    const uint32_t extent = info.copy_dest_extent_start;
+    const uint32_t extent_length = info.copy_dest_extent_length;
+    uint32_t extent_virtual = 0;
+    bool staged = false;
+    if (extent_length && extent_length <= (64u << 20)) {
+      extent_virtual = r360_kernel_gpu_address_to_virtual(extent);
+      const uint32_t end_virtual = r360_kernel_gpu_address_to_virtual(extent + extent_length - 1u);
+      stage.resize(extent_length);
+      staged = end_virtual == extent_virtual + extent_length - 1u &&
+               ReadSparseGuestMemory(extent_virtual, stage.data(), extent_length);
+    }
+    // 8888 render target to 8888 texture without exponent bias is a byte
+    // copy (decode then encode reproduces the stored bytes).
+    const bool raw_8888 =
+        !copying_depth && !source.is_64bpp &&
+        (color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8 ||
+         color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA) &&
+        uint32_t(dest_info.copy_dest_format) == uint32_t(xenos::TextureFormat::k_8_8_8_8) &&
+        dest_info.copy_dest_exp_bias == 0;
+    g_resolve_pixels += uint64_t(width) * height;
+    g_last_resolve_info = (uint32_t(edram_info.msaa_samples) << 28) | (uint32_t(source.is_64bpp) << 27) |
+                          (uint32_t(copying_depth) << 26) | (uint32_t(dest_info.copy_dest_format) << 8) |
+                          uint32_t(edram_info.format);
+    const auto dest_endian = xenos::Endian(uint32_t(dest_info.copy_dest_endian) & 3u);
+    const bool fast = raw_8888 && staged && source.samples_x == 1;
+    for (uint32_t y = 0; fast && y < height; ++y) {
+      // Whole 32-bit texels: no read-modify-write of the destination.
+      const uint32_t sy = (origin_y + y) * source.samples_y;
+      uint32_t x = 0;
+      ForEachEdramRun(source, sy, origin_x, origin_x + width, [&](uint32_t w, uint32_t run) {
+        for (uint32_t k = 0; k < run; ++k, ++x) {
+          uint32_t value = Edram()[w + k];
+          if (dest_info.copy_dest_swap) {
+            value = (value & 0xFF00FF00u) | ((value & 0xFFu) << 16) | ((value >> 16) & 0xFFu);
+          }
+          const uint32_t address = info.copy_dest_base + uint32_t(xe::gpu::texture_address::Tiled2D(
+              int32_t(dest_x0 + x), int32_t(dest_y0 + y), dest_pitch, 2));
+          const uint32_t aligned = address & ~3u;
+          if (aligned >= extent && aligned - extent + 4u <= extent_length) {
+            const uint32_t raw = xenos::GpuSwap(value, dest_endian);
+            std::memcpy(stage.data() + (aligned - extent), &raw, 4);
+          } else {
+            WriteGpu32(aligned, xenos::GpuSwap(value, dest_endian));
+          }
+        }
+      });
+    }
+    for (uint32_t y = 0; !fast && y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
         const uint32_t sx = (origin_x + x) * source.samples_x;
         const uint32_t sy = (origin_y + y) * source.samples_y;
         const uint32_t w = EdramWord(source, sx, sy);
+        uint32_t bytes = 4;
+        uint32_t value = 0;
+        if (raw_8888) {
+          value = Edram()[w];
+          if (dest_info.copy_dest_swap) {
+            value = (value & 0xFF00FF00u) | ((value & 0xFFu) << 16) | ((value >> 16) & 0xFFu);
+          }
+        } else {
         float c[4];
         if (copying_depth) {
           const uint32_t d = Edram()[w];
@@ -827,24 +911,36 @@ bool Resolve() {
         }
         for (uint32_t k = 0; k < 4; ++k) c[k] *= exp_scale;
         if (dest_info.copy_dest_swap) std::swap(c[0], c[2]);
-        uint32_t bytes = 4;
-        uint32_t value = EncodeDest(dest_info.copy_dest_format, c, &bytes);
+        value = EncodeDest(dest_info.copy_dest_format, c, &bytes);
+        }
         const uint32_t bpp_log2 = bytes == 1 ? 0u : bytes == 2 ? 1u : 2u;
         const int32_t offset = xe::gpu::texture_address::Tiled2D(
             int32_t(dest_x0 + x), int32_t(dest_y0 + y), dest_pitch, bpp_log2);
         const uint32_t address = info.copy_dest_base + uint32_t(offset);
         // Byte-insert into the containing word, then apply the Endian128 swap
         // (for 32bpp and smaller only 8in16/8in32/16in32 matter).
+        const uint32_t aligned = address & ~3u;
+        const bool in_stage = staged && aligned >= extent && aligned - extent + 4u <= extent_length;
         uint32_t word = 0;
-        ReadGpu32(address & ~3u, &word);
+        if (in_stage) {
+          std::memcpy(&word, stage.data() + (aligned - extent), 4);  // raw, as ReadGpu32
+        } else {
+          ReadGpu32(aligned, &word);
+        }
         const auto endian = xenos::Endian(uint32_t(dest_info.copy_dest_endian) & 3u);
         uint32_t host = xenos::GpuSwap(word, endian);
         const uint32_t shift = (address & 3u) * 8u;
         const uint32_t mask = bytes == 4 ? 0xFFFFFFFFu : (((1u << (bytes * 8u)) - 1u) << shift);
         host = (host & ~mask) | ((value << shift) & mask);
-        WriteGpu32(address & ~3u, xenos::GpuSwap(host, endian));
+        if (in_stage) {
+          const uint32_t raw = xenos::GpuSwap(host, endian);
+          std::memcpy(stage.data() + (aligned - extent), &raw, 4);
+        } else {
+          WriteGpu32(aligned, xenos::GpuSwap(host, endian));
+        }
       }
     }
+    if (staged) WriteSparseGuestMemory(extent_virtual, stage.data(), extent_length);
   }
 
   // Clears (Xenia: color and/or depth for the resolve rectangle).
@@ -855,12 +951,17 @@ bool Resolve() {
       rt.pitch_tiles = info.color_edram_info.pitch_tiles;
       rt.is_64bpp = info.color_edram_info.format_is_64bpp;
       rt.is_depth = false;
+      g_clear_samples += uint64_t(width) * height * rt.samples_x * rt.samples_y;
       for (uint32_t y = 0; y < height * rt.samples_y; ++y)
-        for (uint32_t x = 0; x < width * rt.samples_x; ++x) {
-          const uint32_t w = EdramWord(rt, origin_x * rt.samples_x + x, origin_y * rt.samples_y + y);
-          if (rt.is_64bpp) { Edram()[w] = info.rb_color_clear_lo; Edram()[w + 1] = info.rb_color_clear; }
-          else Edram()[w] = info.rb_color_clear;
-        }
+        ForEachEdramRun(rt, origin_y * rt.samples_y + y, origin_x * rt.samples_x,
+                        (origin_x + width) * rt.samples_x, [&](uint32_t w, uint32_t run) {
+          uint32_t* p = Edram().data() + w;
+          if (rt.is_64bpp) {
+            for (uint32_t k = 0; k < run; ++k) { p[2 * k] = info.rb_color_clear_lo; p[2 * k + 1] = info.rb_color_clear; }
+          } else {
+            std::fill(p, p + run, info.rb_color_clear);
+          }
+        });
     }
     if (info.IsClearingDepth()) {
       Surface ds = source;
@@ -868,9 +969,12 @@ bool Resolve() {
       ds.pitch_tiles = info.depth_edram_info.pitch_tiles;
       ds.is_64bpp = false;
       ds.is_depth = true;
+      g_clear_samples += uint64_t(width) * height * ds.samples_x * ds.samples_y;
       for (uint32_t y = 0; y < height * ds.samples_y; ++y)
-        for (uint32_t x = 0; x < width * ds.samples_x; ++x)
-          Edram()[EdramWord(ds, origin_x * ds.samples_x + x, origin_y * ds.samples_y + y)] = info.rb_depth_clear;
+        ForEachEdramRun(ds, origin_y * ds.samples_y + y, origin_x * ds.samples_x,
+                        (origin_x + width) * ds.samples_x, [&](uint32_t w, uint32_t run) {
+          std::fill(Edram().data() + w, Edram().data() + w + run, info.rb_depth_clear);
+        });
     }
   }
   ++g_resolves;
@@ -1137,6 +1241,9 @@ uint32_t r360_xenos_soft_draws() { return rx::g_draws_rendered; }
 uint32_t r360_xenos_soft_set_rasterize(uint32_t on) { rx::g_rasterize = on ? 1u : 0u; return rx::g_rasterize; }
 uint32_t r360_xenos_soft_skipped() { return rx::g_draws_skipped; }
 uint32_t r360_xenos_soft_resolves() { return rx::g_resolves; }
+uint32_t r360_xenos_soft_resolve_kpixels() { return uint32_t(rx::g_resolve_pixels / 1000u); }
+uint32_t r360_xenos_soft_clear_ksamples() { return uint32_t(rx::g_clear_samples / 1000u); }
+uint32_t r360_xenos_soft_last_resolve_info() { return rx::g_last_resolve_info; }
 uint32_t r360_xenos_soft_pixels() { return rx::g_pixels_shaded; }
 uint32_t r360_xenos_soft_last_skip() { return rx::g_last_skip_reason; }
 uint32_t r360_xenos_soft_texture_failures() { return rx::g_texture_fetch_failures; }

@@ -16,6 +16,7 @@ uint32_t r360_xenos_register(uint32_t index);
 uint32_t r360_xenos_set_register(uint32_t index, uint32_t value);
 uint32_t r360_xenos_stall_ring_offset();
 uint32_t r360_xenos_arm_resume();
+uint32_t r360_xenos_stall_ready();
 uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
 uint32_t r360_xenos_last_interrupt_mask();
 }
@@ -427,7 +428,7 @@ uint32_t TitleGpuReadPointerBlockSizeLog2() {
 }
 uint32_t TitleGpuMmioWrites() { return g_mmio_writes; }
 void TitleGpuPump() {
-  if (g_gpu_stalled && g_ring_base) DrainPendingRingToXenos();
+  if (g_gpu_stalled && g_ring_base && r360_xenos_stall_ready()) DrainPendingRingToXenos();
 }
 uint32_t TitleGpuTakePendingInterrupts(uint32_t* cpu_mask) {
   const uint32_t count = g_pending_interrupts;

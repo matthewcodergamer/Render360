@@ -26,6 +26,9 @@ bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
 // helpers intentionally recognize only that aperture and explicit registers.
 bool ReadTitleGpuMmio(uint32_t address, uint32_t* value);
 bool WriteTitleGpuMmio(uint32_t address, uint32_t value);
+// XMA decoder registers (0x7FEA0000, Xenia XmaDecoder::Read/WriteRegister).
+bool ReadXmaMmio(uint32_t address, uint32_t* value);
+bool WriteXmaMmio(uint32_t address, uint32_t value);
 
 uint32_t TitleGpuRingBase();
 uint32_t TitleGpuRingSizeLog2();

@@ -84,6 +84,7 @@ void JitStore(uint32_t address, uint64_t value, uint32_t size, bool int32, uint3
 uint32_t JitInstructionCounterAddress() {
   return uint32_t(reinterpret_cast<uintptr_t>(&g_total_instructions));
 }
+uint32_t JitDebugWatchAddress() { return g_debug_watch_address; }
 uint32_t JitFaultAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_fault)); }
 uint32_t JitScratchAddress() { return uint32_t(reinterpret_cast<uintptr_t>(g_jit_scratch)); }
 uint32_t JitReturnAddressSlot() {
@@ -219,9 +220,7 @@ R360_JIT_HELPER(poll) uint32_t r360_jit_h_poll() {
   return 1;
 }
 R360_JIT_HELPER(clock) uint64_t r360_jit_h_clock() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec)) / 20u;
+  return rxj::GuestClockNanoseconds() / 20u;
 }
 R360_JIT_HELPER(memset) void r360_jit_h_memset(uint32_t address, uint32_t byte, uint32_t length, uint32_t source) {
   if (length > 4096) {

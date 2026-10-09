@@ -21,6 +21,8 @@ uint32_t JitInstructionCounterAddress();
 uint32_t JitFaultAddress();
 uint32_t JitScratchAddress();
 uint32_t SparseGuestPageDirectoryAddress();
+// Nonzero while a debug store watch (r360_debug_watch) is armed.
+uint32_t JitDebugWatchAddress();
 // Fiber-local expected-return token (SET_RETURN_ADDRESS) the executor keeps.
 uint32_t JitReturnAddressSlot();
 uint32_t JitReturnValidSlot();
@@ -347,6 +349,8 @@ class Emitter {
   // slow-path block (depth 0) for unmapped/protected/cross-page/MMIO/code
   // pages, which the executor helpers handle.
   void PageWalk(uint32_t size, bool store, bool int32) {
+    // A debug store watch is reported by the helper: no inline stores.
+    if (store && JitDebugWatchAddress()) { code_.u8(0x0C); code_.u32(0); return; }
     Get(kLocAddr); I32(22); Op(oI32ShrU); I32(2); Op(oI32Shl);
     Mem(oI32Load, 2, page_directory_); Tee(kLocPage); Op(oI32Eqz); code_.u8(0x0D); code_.u32(0);
     Get(kLocPage); Get(kLocAddr); I32(12); Op(oI32ShrU); I32(1023); Op(oI32And); I32(20); Op(oI32Mul);

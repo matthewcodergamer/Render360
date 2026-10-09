@@ -629,6 +629,7 @@ uint32_t r360_xenos_status(){return render360::xenia_web::g_status;}
 // resuming before that only re-reads the same packets (Xenia's
 // command-processor thread polls the same condition).
 uint32_t r360_xenos_stall_ready(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 1;const auto& w=rx::g_stall_wait;uint32_t value=0;if(w[0]&0x10u){if(!rx::ReadGuestGpuWord(w[1],&value))return 1;}else{if(w[1]>=rx::kRegisterCount)return 1;if(w[1]==rx::kRegCoherStatusHost)rx::MakeCoherent();value=rx::g_regs[w[1]];}return rx::CompareWait(w[0],value,w[2],w[3])?1u:0u;}
+uint32_t r360_xenos_stall_wait(uint32_t i){return i<4u?render360::xenia_web::g_stall_wait[i]:render360::xenia_web::g_stall_levels;}
 uint32_t r360_xenos_stall_ring_offset(){return render360::xenia_web::g_stall_levels?render360::xenia_web::g_stall_offset[0]:0u;}
 // Arms the next submit to re-enter the stalled indirect buffers where they stopped.
 uint32_t r360_xenos_arm_resume(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 0;rx::g_resume_offset=rx::g_stall_offset;rx::g_resume_offset[0]=0;rx::g_resume_levels=rx::g_stall_levels;rx::g_resume_next=0;return rx::g_resume_levels;}

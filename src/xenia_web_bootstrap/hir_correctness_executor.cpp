@@ -1469,9 +1469,7 @@ bool ExecuteFlaggedOperation(const xe::cpu::hir::Instr* instr,
     case OPCODE_LOAD_CLOCK: {
       // mftb: Xenia's guest timebase runs at 50 MHz (Clock::guest_tick_frequency,
       // and KeQueryPerformanceFrequency here).
-      timespec ts{};
-      clock_gettime(CLOCK_MONOTONIC, &ts);
-      const uint64_t ns = uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+      const uint64_t ns = GuestClockNanoseconds();
       RuntimeValue v;
       SetUnsigned(&v, xe::cpu::hir::INT64_TYPE, ns / 20u);
       *supported = dest != nullptr;
@@ -2093,6 +2091,19 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
 }
 
 uint64_t HIRTotalInstructions() { return g_total_instructions; }
+
+// Guest clock. Normally host monotonic time; with a deterministic clock
+// (r360_set_deterministic_clock) it advances with executed HIR instructions,
+// so headless runs replay identically (timers, vblank, mftb, system time).
+uint64_t g_clock_ps_per_instruction = 0;
+uint64_t GuestClockNanoseconds() {
+  if (g_clock_ps_per_instruction) {
+    return g_total_instructions * g_clock_ps_per_instruction / 1000ull;
+  }
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
 uint32_t HIRLastSourceAddress() { return g_last_source_address; }
 
 }  // namespace render360::xenia_web
@@ -2215,6 +2226,17 @@ extern "C" __attribute__((used, export_name("r360_debug_watch")))
 uint32_t r360_debug_watch(uint32_t address) {
   render360::xenia_web::g_debug_watch_address = address;
   return address;
+}
+extern "C" uint64_t r360_guest_clock_ns() {
+  return render360::xenia_web::GuestClockNanoseconds();
+}
+extern "C" uint32_t r360_guest_clock_deterministic() {
+  return render360::xenia_web::g_clock_ps_per_instruction ? 1u : 0u;
+}
+// 0 = host time; otherwise picoseconds of guest time per HIR instruction.
+extern "C" uint32_t r360_set_deterministic_clock(uint32_t ps_per_instruction) {
+  render360::xenia_web::g_clock_ps_per_instruction = ps_per_instruction;
+  return ps_per_instruction;
 }
 extern "C" uint32_t r360_debug_watch_address() {
   return render360::xenia_web::g_debug_watch_address;

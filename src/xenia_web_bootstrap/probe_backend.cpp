@@ -1,6 +1,7 @@
 #include "probe_backend.h"
 
 #include <algorithm>
+#include <array>
 #include <unordered_set>
 
 #include <cstdio>
@@ -405,6 +406,8 @@ bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
 
 bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                                      uint32_t call_flags);
+// Bumped when a new image / function set is loaded (ResetProbe paths).
+uint32_t g_call_class_generation = 1, g_call_class_seen_generation = 0;
 
 // Tail-call trampoline. Xenia's x64 backend runs a cross-function `b` (HIR
 // CALL with CALL_TAIL) as a real tail jump; the HIR executor would otherwise
@@ -494,10 +497,28 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   // the owner's HIR. Doing that skips HIR value definitions emitted before the
   // SOURCE_OFFSET marker and turns a valid stack load into a fake
   // guest-memory-dependency with faultAddress == 0.
-  auto* target_function = g_probe_backend->processor()->QueryFunction(address);
-  const bool epilog_by_metadata =
-      target_function &&
-      target_function->behavior() == xe::cpu::Function::Behavior::kEpilogReturn;
+  // The image's .pdata entry and Xenia's registered function behavior are
+  // static per address; every guest call needs them.
+  struct CallTargetClass {
+    uint32_t address = 0, fn_begin = 0, fn_end = 0, prolog = 0;
+    bool valid = false, pdata = false, epilog_meta = false;
+  };
+  static std::array<CallTargetClass, 8192> call_classes;
+  if (g_call_class_generation != g_call_class_seen_generation) {
+    call_classes.fill({});
+    g_call_class_seen_generation = g_call_class_generation;
+  }
+  CallTargetClass& cls = call_classes[(address >> 2) & 8191u];
+  if (!cls.valid || cls.address != address) {
+    auto* queried = g_probe_backend->processor()->QueryFunction(address);
+    cls = {};
+    cls.address = address;
+    cls.epilog_meta = queried && queried->behavior() == xe::cpu::Function::Behavior::kEpilogReturn;
+    cls.fn_begin = address;
+    cls.pdata = PreparedPeGuestFindRuntimeFunction(address, &cls.fn_begin, &cls.fn_end, &cls.prolog);
+    cls.valid = true;
+  }
+  const bool epilog_by_metadata = cls.epilog_meta;
   uint32_t signature_first_gpr = 0;
   const bool epilog_by_signature =
       is_tail && MatchSharedEpilogReturnSignature(address, &signature_first_gpr);
@@ -513,9 +534,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     return helper_ok;
   }
 
-  uint32_t fn_begin = address, fn_end = 0, prolog = 0;
-  bool pdata = PreparedPeGuestFindRuntimeFunction(address, &fn_begin, &fn_end,
-                                                  &prolog);
+  uint32_t fn_begin = cls.fn_begin, fn_end = cls.fn_end, prolog = cls.prolog;
+  bool pdata = cls.pdata;
   if (pdata &&
       (fn_end <= fn_begin || uint64_t(fn_end) - fn_begin > kProbeGuestSize)) {
     pdata = false;
@@ -740,6 +760,7 @@ void ResetTranslationCache() {
   }
   g_translation_cache_hits = g_translation_cache_misses = 0;
   g_missing_interior_entries.clear();
+  ++g_call_class_generation;
   g_retain_pending = false;
 }
 // __restgprlr_N entries found by r360_ppc_probe_register_save_rest

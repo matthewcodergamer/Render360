@@ -19,6 +19,17 @@
 
 #include "kernel_xboxkrnl_services.h"
 
+#include <time.h>
+#include <cstdint>
+// The guest clock lives in the HIR executor (hir_correctness_executor.cpp);
+// these fallbacks serve standalone kernel builds.
+extern "C" __attribute__((weak)) uint64_t r360_guest_clock_ns() {
+  struct timespec ts {};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+extern "C" __attribute__((weak)) uint32_t r360_guest_clock_deterministic() { return 0; }
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -401,18 +412,19 @@ std::array<InputPad, 4>& Input() {
 constexpr uint64_t kUnixEpochAsFileTime = 116444736000000000ull;
 
 uint64_t QueryGuestSystemTime() {
-  struct timespec ts {};
-  clock_gettime(CLOCK_REALTIME, &ts);
-  const uint64_t unix_100ns =
-      uint64_t(ts.tv_sec) * 10000000ull + uint64_t(ts.tv_nsec) / 100ull;
+  uint64_t unix_100ns = 0;
+  if (r360_guest_clock_deterministic()) {
+    // A fixed wall-clock origin (2026-01-01) keeps replays identical.
+    unix_100ns = 1767225600ull * 10000000ull + r360_guest_clock_ns() / 100ull;
+  } else {
+    struct timespec ts {};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    unix_100ns = uint64_t(ts.tv_sec) * 10000000ull + uint64_t(ts.tv_nsec) / 100ull;
+  }
   return kUnixEpochAsFileTime + unix_100ns + g_virtual_time_100ns;
 }
 
-uint64_t MonotonicMillis() {
-  struct timespec ts {};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return uint64_t(ts.tv_sec) * 1000ull + uint64_t(ts.tv_nsec) / 1000000ull;
-}
+uint64_t MonotonicMillis() { return r360_guest_clock_ns() / 1000000ull; }
 
 // KeTimeStampBundle.tick_count (+0x10) is a millisecond uptime counter that
 // Xenia refreshes from a 1 ms host timer. Refresh it on every kernel entry.
@@ -619,6 +631,47 @@ uint32_t PhysicalViewOffset(uint32_t page_size) {
   return page_size <= 4096u ? 0x1000u : 0u;
 }
 
+// Xenia's three physical heaps (v A0000000 64 KiB pages, v C0000000 16 MiB
+// pages, v E0000000 4 KiB pages at physical + 0x1000) are views of the same
+// physical memory: a page allocated through one view is also reachable
+// through the others (titles hand GPU buffers between views). Each physical
+// page gets one backing, mapped at all three addresses.
+bool EnsurePhysicalViews(uint32_t physical, uint32_t size) {
+  auto view = [](uint32_t index, uint32_t page) -> uint64_t {
+    if (index == 0) return 0xA0000000ull + page;
+    if (index == 1) return 0xC0000000ull + page;
+    return page >= 0x1000u ? 0xE0000000ull + page - 0x1000u : 0ull;
+  };
+  const uint32_t first = physical & ~(kPageSize - 1u);
+  const uint64_t end = uint64_t(physical) + size;
+  for (uint32_t page = first; uint64_t(page) < end;) {
+    if (SparseGuestMemoryPageMapped(0xA0000000u + page)) {
+      page += kPageSize;
+      continue;
+    }
+    uint32_t run = 0;
+    for (uint32_t cursor = page; uint64_t(cursor) < end &&
+                                 !SparseGuestMemoryPageMapped(0xA0000000u + cursor);
+         cursor += kPageSize) {
+      ++run;
+    }
+    const uint32_t backing = AllocateSparseGuestBacking(run);
+    if (!backing) return false;
+    for (uint32_t index = 0; index < 3; ++index) {
+      // The E0 view starts at physical 0x1000: map the part of the run it has.
+      uint32_t skip = 0;
+      while (skip < run && !view(index, page + skip * kPageSize)) ++skip;
+      if (skip == run) continue;
+      if (!MapSparseGuestMemory(uint32_t(view(index, page + skip * kPageSize)), run - skip,
+                                backing, skip, kGuestRead | kGuestWrite)) {
+        return false;
+      }
+    }
+    page += run * kPageSize;
+  }
+  return true;
+}
+
 bool PhysicalRangeFree(uint32_t base, uint32_t size) {
   const uint64_t end = uint64_t(base) + size;
   for (const auto& [b, s] : PhysicalRanges()) {
@@ -658,7 +711,7 @@ uint32_t AllocatePhysical(uint32_t size, uint32_t protect_bits,
     if (PhysicalRangeFree(uint32_t(candidate), adjusted_size)) {
       const uint32_t physical = uint32_t(candidate);
       const uint32_t virtual_address = view_base + physical - view_offset;
-      if (!EnsureMapped(virtual_address, adjusted_size) ||
+      if (!EnsurePhysicalViews(physical, adjusted_size) ||
           !ZeroGuest(virtual_address, adjusted_size)) {
         return 0;
       }
@@ -2119,6 +2172,27 @@ uint32_t GuestPhysicalAddress(uint32_t address) {
 std::set<uint32_t>& XmaEnabledContexts() {
   static std::set<uint32_t> contexts;
   return contexts;
+}
+// XmaDecoder::Setup allocates the context array once, in physical memory.
+bool EnsureXmaContextArray() {
+  if (!g_xma_context_base) {
+    g_xma_context_base = AllocatePhysical(kXmaContextCount * kXmaContextBytes,
+                                          0x20000004u, 0, 0x1FFFFFFFu, 256);
+  }
+  return g_xma_context_base != 0;
+}
+// XmaDecoder register file (xma_register_table.inc): 0x4000 dwords.
+constexpr uint32_t kXmaRegisterCount = 0x4000u;
+constexpr uint32_t kXmaContextArrayAddress = 0x0600u, kXmaCurrentContextIndex = 0x0606u,
+                   kXmaNextContextIndex = 0x0607u, kXmaContext0Kick = 0x0650u,
+                   kXmaContext0Lock = 0x0690u, kXmaContext0Clear = 0x06A0u;
+std::vector<uint32_t>& XmaRegisters() {
+  static std::vector<uint32_t> registers;
+  if (registers.empty()) {
+    registers.assign(kXmaRegisterCount, 0u);
+    registers[kXmaNextContextIndex] = 1u;
+  }
+  return registers;
 }
 
 // ---------------------------------------------------------------------------
@@ -4267,11 +4341,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       g_audio_clients[r3 & 0xFFFFu].last_samples = r4;
       return X_ERROR_SUCCESS;
     case kx::XMACreateContext: {
-      if (!g_xma_context_base) {
-        g_xma_context_base = AllocatePhysical(kXmaContextCount * kXmaContextBytes,
-                                              0x20000004u, 0, 0x1FFFFFFFu, 256);
-        if (!g_xma_context_base) return X_STATUS_NO_MEMORY;
-      }
+      if (!EnsureXmaContextArray()) return X_STATUS_NO_MEMORY;
       for (uint32_t i = 0; i < kXmaContextCount; ++i) {
         if (g_xma_context_used[i]) continue;
         g_xma_context_used[i] = true;
@@ -5323,6 +5393,54 @@ void MaybeDeliverGuestInterrupts() {
   DeliverGuestInterruptsNow();
 }
 
+// Port of XmaDecoder::ReadRegister / WriteRegister (apu/xma_decoder.cc): the
+// title's XMA library programs the decoder through this MMIO window. Values
+// are the logical (host-order) register values.
+bool ReadXmaMmio(uint32_t address, uint32_t* value) {
+  if ((address & 0xFFFF0000u) != 0x7FEA0000u || !value) return false;
+  auto& r = XmaRegisters();
+  const uint32_t index = (address & 0xFFFFu) / 4u;
+  if (index == kXmaContextArrayAddress) {
+    if (EnsureXmaContextArray()) r[index] = GuestPhysicalAddress(g_xma_context_base);
+  } else if (index == kXmaCurrentContextIndex) {
+    // A rotating index keeps titles from seeing a stuck context.
+    r[kXmaCurrentContextIndex] = r[kXmaNextContextIndex];
+    r[kXmaNextContextIndex] = (r[kXmaNextContextIndex] + 1u) % kXmaContextCount;
+  }
+  *value = r[index];
+  return true;
+}
+
+bool WriteXmaMmio(uint32_t address, uint32_t value) {
+  if ((address & 0xFFFF0000u) != 0x7FEA0000u) return false;
+  auto& r = XmaRegisters();
+  const uint32_t index = (address & 0xFFFFu) / 4u;
+  r[index] = value;
+  auto for_each_context = [&](uint32_t group_base, auto&& action) {
+    if (!EnsureXmaContextArray()) return;
+    const uint32_t first = (index - group_base) * 32u;
+    for (uint32_t i = 0; value && i < 32u; ++i, value >>= 1) {
+      if ((value & 1u) && first + i < kXmaContextCount) {
+        action(g_xma_context_base + (first + i) * kXmaContextBytes);
+      }
+    }
+  };
+  if (index >= kXmaContext0Kick && index < kXmaContext0Kick + 10u) {
+    for_each_context(kXmaContext0Kick, [](uint32_t c) { XmaEnabledContexts().insert(c); });
+  } else if (index >= kXmaContext0Lock && index < kXmaContext0Lock + 10u) {
+    for_each_context(kXmaContext0Lock, [](uint32_t c) { XmaEnabledContexts().erase(c); });
+  } else if (index >= kXmaContext0Clear && index < kXmaContext0Clear + 10u) {
+    for_each_context(kXmaContext0Clear, [](uint32_t c) {
+      XmaSet(c, kXmaInput0Valid, 0);
+      XmaSet(c, kXmaInput1Valid, 0);
+      XmaSet(c, kXmaOutputValid, 0);
+      XmaSet(c, kXmaOutputReadOffset, 0);
+      XmaSet(c, kXmaOutputWriteOffset, 0);
+    });
+  }
+  return true;
+}
+
 void DeliverGuestInterruptsNow() {
   if (!GuestFibersActive() || GuestInterruptActive()) return;
   GuestFiberHostYieldIfDue();
@@ -5433,6 +5551,8 @@ void ResetExtendedKernelServices() {
   g_xma_context_base = 0;
   g_xma_context_used = {};
   XmaEnabledContexts().clear();
+  XmaRegisters().assign(kXmaRegisterCount, 0u);
+  XmaRegisters()[kXmaNextContextIndex] = 1u;
   NotifyListeners().clear();
   Xmp() = XmpState();
   g_notified_startup = false;

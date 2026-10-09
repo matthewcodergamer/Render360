@@ -364,7 +364,13 @@ bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
   }
 }
 
+// The XMA decoder's register window (kernel_xboxkrnl_services.cpp); the other
+// guest MMIO device the executor's MMIO path reaches.
+__attribute__((weak)) bool ReadXmaMmio(uint32_t, uint32_t*) { return false; }
+__attribute__((weak)) bool WriteXmaMmio(uint32_t, uint32_t) { return false; }
+
 bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
+  if (value && ReadXmaMmio(address, value)) return true;
   if (!value || !IsGpuMmio(address)) return false;
   switch (RegisterIndex(address)) {
     case kRegisterCpRbRptr:
@@ -397,6 +403,7 @@ bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
 }
 
 bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
+  if (WriteXmaMmio(address, value)) return true;
   if (!IsGpuMmio(address)) return false;
   ++g_mmio_writes;
   switch (RegisterIndex(address)) {

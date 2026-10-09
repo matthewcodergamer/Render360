@@ -73,6 +73,8 @@ using HIRCorrectnessAddressResolver = bool (*)(uint32_t guest_address);
 void ResetHIRCorrectnessInitialState();
 // HIR instructions executed since the last r360_hir reset (all threads).
 uint64_t HIRTotalInstructions();
+// Guest monotonic clock (host time, or deterministic: see the .cpp).
+uint64_t GuestClockNanoseconds();
 uint32_t HIRLastSourceAddress();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 bool SetHIRCorrectnessInitialLR(uint64_t value);

@@ -10,6 +10,10 @@
 #include <vector>
 
 #include "wasm_backend_call_probe.h"
+#include <cstdio>
+
+extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0; }
+extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
 
 namespace render360::xenia_web {
 namespace {
@@ -359,6 +363,12 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
   ClearFault();
   if (!size) return true;
   if (!data) return Fault(virtual_address, kFaultInvalidArgument);
+  if (const uint32_t watch = r360_debug_watch_address(); watch && watch - virtual_address < size) {
+    uint32_t v = 0;
+    std::memcpy(&v, data, size < 4 ? size : 4);
+    std::fprintf(stderr, "R360_WATCH sparse address=0x%08X size=%u bytes=0x%08X thread=0x%08X\n",
+                 virtual_address, size, __builtin_bswap32(v), r360_guest_thread_current());
+  }
   const uint32_t offset = virtual_address & kPageMask;
   if (size <= kPageSize - offset) {
     // Single-page access: the common case for every emulated store.

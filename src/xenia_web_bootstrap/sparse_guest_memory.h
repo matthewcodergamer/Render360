@@ -34,6 +34,13 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
 // decoded as guest instructions.
 uint32_t SparseGuestExecutableSpan(uint32_t virtual_address,
                                    uint32_t max_size);
+// GPU shared-memory write watch (Xenia SharedMemory). Arms the watch on the
+// page and returns its write generation (0: unmapped); the first guest write
+// after arming bumps the generation. Aliases of one backing page share it.
+uint32_t SparseGuestGpuWatch(uint32_t virtual_address);
+uint32_t SparseGuestGpuGeneration(uint32_t virtual_address);
+// Host bytes of the 4 KiB page containing virtual_address (read-only use).
+const uint8_t* SparseGuestPageHost(uint32_t virtual_address);
 uint32_t SparseGuestMappedPageCount();
 uint32_t SparseGuestBackingPageCount();
 uint32_t SparseGuestLastFaultAddress();

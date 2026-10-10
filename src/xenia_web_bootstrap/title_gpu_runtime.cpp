@@ -201,6 +201,7 @@ bool ReadRingWordInternal(uint32_t index, uint32_t* out_value) {
   return true;
 }
 
+uint32_t g_pumps = 0;
 bool PublishReadPointer() {
   if (!g_rptr_writeback) return true;
   const uint8_t bytes[4] = {static_cast<uint8_t>(g_read_pointer >> 24),
@@ -435,6 +436,7 @@ uint32_t TitleGpuReadPointerBlockSizeLog2() {
 }
 uint32_t TitleGpuMmioWrites() { return g_mmio_writes; }
 void TitleGpuPump() {
+  ++g_pumps;
   if (g_gpu_stalled && g_ring_base && r360_xenos_stall_ready()) DrainPendingRingToXenos();
 }
 uint32_t TitleGpuTakePendingInterrupts(uint32_t* cpu_mask) {
@@ -463,6 +465,8 @@ uint32_t TitleGpuRingWord(uint32_t index, bool* ok) {
 }  // namespace render360::xenia_web
 
 extern "C" {
+uint32_t r360_title_gpu_stalled() { return render360::xenia_web::g_gpu_stalled ? 1u : 0u; }
+uint32_t r360_title_gpu_pumps() { return render360::xenia_web::g_pumps; }
 void r360_title_gpu_reset() {
   render360::xenia_web::ResetTitleGpuRuntime();
 }

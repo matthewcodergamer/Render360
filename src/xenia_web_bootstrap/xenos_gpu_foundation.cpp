@@ -30,7 +30,10 @@ constexpr uint32_t kStatusInvalid = 3;
 constexpr uint32_t kStatusWaiting = 4;
 constexpr uint32_t kPm4WaitRegMem = 0x3C;
 constexpr uint32_t kRegisterCount = 0x5003;  // Xenia RegisterFile::kRegisterCount
-constexpr uint32_t kRingCapacity = 4096;
+// Holds a whole pending primary-ring backlog: while the command processor
+// waits (WAIT_REG_MEM on a vblank-released swap), D3D keeps filling its
+// ring (8192 words for Banjo-Tooie), and the drain resubmits all of it.
+constexpr uint32_t kRingCapacity = 65536;
 constexpr uint32_t kMaxIndirectDepth = 8;
 constexpr uint32_t kShaderWordCapacity = 8192;
 constexpr uint32_t kFrameWidth = 64;
@@ -68,6 +71,9 @@ constexpr uint32_t kPm4Interrupt = 0x54;
 constexpr uint32_t kPm4SetConstant2 = 0x55;
 constexpr uint32_t kPm4SetShaderConstants = 0x56;
 constexpr uint32_t kPm4EventWriteShd = 0x58;
+constexpr uint32_t kPm4EventWriteExt = 0x5A;
+constexpr uint32_t kPm4EventWriteZpd = 0x5B;
+constexpr uint32_t kPm4VizQuery = 0x23;
 constexpr uint32_t kPm4ContextUpdate = 0x5E;
 constexpr uint32_t kPm4SetBinMaskLo = 0x60;
 constexpr uint32_t kPm4SetBinMaskHi = 0x61;
@@ -499,13 +505,60 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
       }
       case kPm4EventWrite:
         if (!count) { handled = false; g_status = kStatusInvalid; }
-        else { handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu); if (handled && count > 1u) { handled = false; g_status = kStatusUnsupported; } }
+        else handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);  // extra dwords skipped, as Xenia does
         break;
       case kPm4EventWriteShd:
         if (count != 3u) { handled = false; g_status = kStatusInvalid; }
         else { handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu) &&
                          WriteGuestGpuWord(p[1], (p[0] >> 31) ? g_presents : p[2]); if (!handled) g_status = kStatusInvalid; }
         break;
+      case kPm4EventWriteExt: {
+        // CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT: screen extents
+        // of the preceding draws, reported as the whole 8192x8192 surface
+        // (six 16-bit values, 8-in-16 swapped).
+        if (count < 2u) { handled = false; g_status = kStatusInvalid; break; }
+        handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);
+        const uint32_t address = p[1] & ~3u;
+        const uint16_t extents[6] = {0, 8192u >> 3, 0, 8192u >> 3, 0, 1};
+        for (uint32_t n = 0; n < 3 && handled; ++n) {
+          handled = WriteGuestGpuWord(address + n * 4u | 1u,
+                                      (uint32_t(extents[n * 2 + 1]) << 16) | extents[n * 2]);
+        }
+        if (!handled) g_status = kStatusInvalid;
+        break;
+      }
+      case kPm4EventWriteZpd: {
+        // ExecutePacketType3_EVENT_WRITE_ZPD: occlusion queries. D3D marks a
+        // finished query with 0xFFFFFEED in both halves of the ZPass (or older
+        // ZFail) counts; Xenia then reports query_occlusion_fake_sample_count
+        // (default 1000) passed samples.
+        if (count != 1u) { handled = false; g_status = kStatusInvalid; break; }
+        handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);
+        const uint32_t counts = g_regs[0x2325u];  // RB_SAMPLE_COUNT_ADDR
+        uint32_t c[8] = {};
+        for (uint32_t n = 0; n < 8 && handled; ++n) handled = ReadGuestGpuWord(counts + n * 4u, &c[n]);
+        if (!handled) { g_status = kStatusInvalid; break; }
+        constexpr uint32_t kQueryFinished = 0xEDFEFFFFu;  // byte_swap(0xFFFFFEED), LE fields
+        const bool finished = (c[4] == kQueryFinished && c[5] == kQueryFinished) ||
+                              (c[2] == kQueryFinished && c[3] == kQueryFinished);
+        for (uint32_t n = 0; n < 8 && handled; ++n) {
+          const uint32_t value = finished && (n == 0 || n == 4) ? 1000u : 0u;
+          handled = WriteGuestGpuWord(counts + n * 4u, value);
+        }
+        if (!handled) g_status = kStatusInvalid;
+        break;
+      }
+      case kPm4VizQuery: {
+        // ExecutePacketType3_VIZ_QUERY: every query reports visible.
+        if (count != 1u) { handled = false; g_status = kStatusInvalid; break; }
+        const uint32_t id = p[0] & 0x3Fu;
+        handled = WriteRegister(kRegVgtEventInitiator, (p[0] & 0x100u) ? 8u : 7u);
+        if (handled && (p[0] & 0x100u)) {
+          const uint32_t reg = id < 32u ? 0x0C44u : 0x0C45u;  // PA_SC_VIZ_QUERY_STATUS_0/1
+          handled = WriteRegister(reg, g_regs[reg] | (1u << (id & 31u)));
+        }
+        break;
+      }
       case kPm4Interrupt:
         if (count != 1u) { handled = false; g_status = kStatusInvalid; }
         else { ++g_interrupts; g_last_interrupt_mask = p[0] & 0x3Fu; }

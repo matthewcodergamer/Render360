@@ -37,7 +37,14 @@ struct Backing {
   // Number of executable virtual aliases of each backing page. Sized once at
   // allocation so page-table entries can hold stable pointers into it.
   std::vector<uint32_t> executable_aliases;
+  // GPU shared-memory watch (Xenia SharedMemory invalidation): bumped by the
+  // first guest write after SparseGuestGpuWatch armed the page.
+  std::vector<uint32_t> gpu_generation;
 };
+// Bit 31 of a backing page's alias word arms the GPU write watch. Generated
+// code takes the helper path for any store to a page whose word is non-zero,
+// so a watched page costs one slow store, as a Xenia write-watch fault does.
+constexpr uint32_t kGpuWatchBit = 0x80000000u;
 
 // One guest virtual page. `host` is null for unmapped pages. Every emulated
 // load/store resolves through this entry, so it holds the host byte pointer
@@ -129,18 +136,26 @@ PageEntry* EnsurePageSlot(uint32_t page) {
 }
 
 void AddExecutableAlias(const PageEntry& entry, uint32_t virtual_page) {
-  ++*entry.executable_aliases;
+  ++*entry.executable_aliases;  // count in bits 0..30
   g_executable_aliases[std::make_pair(entry.backing_id, entry.backing_page)]
       .insert(virtual_page);
 }
 
 void RemoveExecutableAlias(const PageEntry& entry, uint32_t virtual_page) {
-  if (*entry.executable_aliases) --*entry.executable_aliases;
+  if (*entry.executable_aliases & ~kGpuWatchBit) --*entry.executable_aliases;
   auto it = g_executable_aliases.find(
       std::make_pair(entry.backing_id, entry.backing_page));
   if (it == g_executable_aliases.end()) return;
   it->second.erase(virtual_page);
   if (it->second.empty()) g_executable_aliases.erase(it);
+}
+
+void GpuWatchHit(const PageEntry& entry) {
+  *entry.executable_aliases &= ~kGpuWatchBit;
+  if (Backing* backing = GetBacking(entry.backing_id)) {
+    uint32_t& generation = backing->gpu_generation[entry.backing_page];
+    if (++generation == 0) generation = 1;
+  }
 }
 
 void InvalidateExecutableAliases(uint32_t backing_id, uint32_t backing_page) {
@@ -178,6 +193,26 @@ bool ValidateSpan(uint32_t address, uint32_t size, uint32_t protection,
 }
 
 }  // namespace
+
+uint32_t SparseGuestGpuWatch(uint32_t virtual_address) {
+  const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+  if (!entry) return 0;
+  *entry->executable_aliases |= kGpuWatchBit;
+  const Backing* backing = GetBacking(entry->backing_id);
+  return backing ? backing->gpu_generation[entry->backing_page] : 0u;
+}
+
+uint32_t SparseGuestGpuGeneration(uint32_t virtual_address) {
+  const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+  if (!entry) return 0;
+  const Backing* backing = GetBacking(entry->backing_id);
+  return backing ? backing->gpu_generation[entry->backing_page] : 0u;
+}
+
+const uint8_t* SparseGuestPageHost(uint32_t virtual_address) {
+  const PageEntry* entry = LookupPage(virtual_address >> kPageShift);
+  return entry ? entry->host : nullptr;
+}
 
 void MarkWasmBackendExecutableContentChangedRange(uint32_t address,
                                                   uint32_t size) {
@@ -220,6 +255,7 @@ uint32_t AllocateSparseGuestBacking(uint32_t page_count) {
   // resize() value-initializes: every page starts zero-filled.
   backing.pages.resize(page_count);
   backing.executable_aliases.resize(page_count);
+  backing.gpu_generation.assign(page_count, 1u);
   g_backings.push_back(std::move(backing));
   return static_cast<uint32_t>(g_backings.size());
 }
@@ -378,8 +414,11 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
       return Fault(virtual_address, kFaultWriteProtection);
     }
     std::memcpy(entry->host + offset, data, size);
-    if (*entry->executable_aliases) {
-      InvalidateExecutableAliases(entry->backing_id, entry->backing_page);
+    if (const uint32_t aliases = *entry->executable_aliases) {
+      if (aliases & kGpuWatchBit) GpuWatchHit(*entry);
+      if (aliases & ~kGpuWatchBit) {
+        InvalidateExecutableAliases(entry->backing_id, entry->backing_page);
+      }
     }
     return true;
   }
@@ -397,7 +436,8 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
                                : kPageSize - page_offset;
     const PageEntry* entry = LookupPage(address >> kPageShift);
     std::memcpy(entry->host + page_offset, src, chunk);
-    if (*entry->executable_aliases) {
+    if (*entry->executable_aliases & kGpuWatchBit) GpuWatchHit(*entry);
+    if (*entry->executable_aliases & ~kGpuWatchBit) {
       const std::pair<uint32_t, uint32_t> key{entry->backing_id,
                                               entry->backing_page};
       bool seen = false;

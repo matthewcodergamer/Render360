@@ -375,7 +375,10 @@ uint32_t r360_ppc_probe_translate_scanned_at(uint32_t address) {
   uint32_t fn_begin=address,fn_end=0,prolog=0;bool pdata=PreparedPeGuestFindRuntimeFunction(address,&fn_begin,&fn_end,&prolog);
   if(pdata&&(fn_end<=fn_begin||uint64_t(fn_end)-fn_begin>kProbeMaxBytes)){pdata=false;fn_begin=address;fn_end=0;prolog=0;}
   auto loaded=[&](){return IsProbeGuestRange(fn_begin,4)&&(!pdata||(fn_end>=fn_begin+4&&IsProbeGuestRange(fn_end-4,4)));};
-  if(!loaded()&&(!PageSparseCodeWindow(fn_begin)||!loaded())){g_scan_diagnostic=kProbeScanGuardRejected;if(g_status<0xE000)g_status=kProbeErrorInput;return 0;}
+  // The window always starts at the function's page: a non-.pdata scan is
+  // bounded by the window end, so reusing a window that merely contains the
+  // entry would make the translation depend on earlier paging.
+  if((!loaded()||g_active_guest_base!=(fn_begin&~(kSparsePageBytes-1u)))&&(!PageSparseCodeWindow(fn_begin)||!loaded())){g_scan_diagnostic=kProbeScanGuardRejected;if(g_status<0xE000)g_status=kProbeErrorInput;return 0;}
   g_scan_window_end=g_loaded_size>=4?g_active_guest_base+g_loaded_size-4:0;if(!EnsureRuntime()||!g_probe_module||(address&3u)){g_scan_diagnostic=kProbeScanGuardRejected;return 0;}
   ResetProbeTelemetry();ProbeGuestFunction function(g_probe_module,fn_begin);const uint32_t scan_end=pdata?fn_end-4:g_active_guest_base+g_loaded_size-4;function.set_end_address(scan_end);
   xe::cpu::ppc::PPCScanner scanner(g_processor->frontend());if(!scanner.Scan(&function,nullptr)){g_scan_diagnostic=kProbeScanScannerFailed;g_status=kProbeErrorTranslate;return 0;}if(pdata&&function.end_address()<address)function.set_end_address(scan_end);g_scan_function_end=function.end_address();

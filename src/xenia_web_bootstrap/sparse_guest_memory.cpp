@@ -14,6 +14,7 @@
 
 extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0; }
 extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
+extern "C" __attribute__((weak)) uint32_t r360_hir_last_source() { return 0; }
 
 namespace render360::xenia_web {
 namespace {
@@ -399,11 +400,20 @@ bool WriteSparseGuestMemory(uint32_t virtual_address, const void* data,
   ClearFault();
   if (!size) return true;
   if (!data) return Fault(virtual_address, kFaultInvalidArgument);
-  if (const uint32_t watch = r360_debug_watch_address(); watch && watch - virtual_address < size) {
-    uint32_t v = 0;
-    std::memcpy(&v, data, size < 4 ? size : 4);
-    std::fprintf(stderr, "R360_WATCH sparse address=0x%08X size=%u bytes=0x%08X thread=0x%08X\n",
-                 virtual_address, size, __builtin_bswap32(v), r360_guest_thread_current());
+  if (const uint32_t watch = r360_debug_watch_address()) {
+    // Matches any alias of the watched byte's backing page (views of
+    // physical memory), not only the watched virtual address.
+    const PageEntry* watched = LookupPage(watch >> kPageShift);
+    const PageEntry* written = LookupPage(virtual_address >> kPageShift);
+    const bool same_page = watched && written && watched->backing_id == written->backing_id &&
+                           watched->backing_page == written->backing_page;
+    const uint32_t alias = same_page ? (virtual_address & ~kPageMask) | (watch & kPageMask) : watch;
+    if (alias - virtual_address < size) {
+      uint32_t v = 0;
+      std::memcpy(&v, data, size < 4 ? size : 4);
+      std::fprintf(stderr, "R360_WATCH sparse address=0x%08X size=%u bytes=0x%08X thread=0x%08X pc=0x%08X\n",
+                   virtual_address, size, __builtin_bswap32(v), r360_guest_thread_current(), r360_hir_last_source());
+    }
   }
   const uint32_t offset = virtual_address & kPageMask;
   if (size <= kPageSize - offset) {

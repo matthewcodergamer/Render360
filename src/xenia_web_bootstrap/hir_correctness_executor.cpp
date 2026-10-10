@@ -2244,6 +2244,7 @@ uint32_t r360_debug_watch(uint32_t address) {
   render360::xenia_web::g_debug_watch_address = address;
   return address;
 }
+extern "C" uint32_t r360_hir_last_source() { return render360::xenia_web::g_current_source_address; }
 extern "C" uint64_t r360_guest_clock_ns() {
   return render360::xenia_web::GuestClockNanoseconds();
 }

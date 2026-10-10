@@ -75,6 +75,7 @@ void ResetHIRCorrectnessInitialState();
 uint64_t HIRTotalInstructions();
 // Guest monotonic clock (host time, or deterministic: see the .cpp).
 uint64_t GuestClockNanoseconds();
+bool GuestClockIdleUntil(uint64_t deadline_ns);
 uint32_t HIRLastSourceAddress();
 bool SetHIRCorrectnessInitialGPR(uint32_t index, uint64_t value);
 bool SetHIRCorrectnessInitialLR(uint64_t value);

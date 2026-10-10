@@ -1,15 +1,18 @@
 #include "title_gpu_runtime.h"
 
 #include <cstdint>
+#include <cstdio>
 
 #include "sparse_guest_memory.h"
 
+extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
 extern "C" {
 void r360_xenos_reset();
 uint32_t r360_xenos_ring_buffer();
 uint32_t r360_xenos_ring_capacity();
 uint32_t r360_xenos_submit(uint32_t words);
 uint32_t r360_xenos_status();
+uint32_t r360_xenos_trace_ibs(uint32_t on);
 uint32_t r360_xenos_last_fault_word();
 uint32_t r360_xenos_interrupts();
 uint32_t r360_xenos_register(uint32_t index);
@@ -232,6 +235,10 @@ bool DrainPendingRingToXenos() {
     return false;
   }
 
+  if (r360_xenos_trace_ibs(2) & 1u) {
+    std::fprintf(stderr, "R360_XENOS_DRAIN rptr=%u wptr=%u pending=%u stalled=%u\n",
+                 g_read_pointer, g_write_pointer, pending, g_gpu_stalled ? 1u : 0u);
+  }
   auto* decoder = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(decoder_ptr));
   for (uint32_t i = 0; i < pending; ++i) {
     const uint32_t ring_index = (g_read_pointer + i) % capacity;
@@ -409,6 +416,10 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
   ++g_mmio_writes;
   switch (RegisterIndex(address)) {
     case kRegisterCpRbWptr:
+      if (r360_xenos_trace_ibs(2) & 1u) {
+        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X\n",
+                     g_write_pointer, value, g_read_pointer, r360_guest_thread_current());
+      }
       g_write_pointer = value;
       if (g_ring_base) g_status = g_status < 2u ? 2u : g_status;
       // GPU consumption is coupled to the real producer MMIO write so guest

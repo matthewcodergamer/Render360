@@ -2096,13 +2096,30 @@ uint64_t HIRTotalInstructions() { return g_total_instructions; }
 // (r360_set_deterministic_clock) it advances with executed HIR instructions,
 // so headless runs replay identically (timers, vblank, mftb, system time).
 uint64_t g_clock_ps_per_instruction = 0;
+uint64_t g_clock_idle_ns = 0;  // deterministic clock: time all fibers idled
 uint64_t GuestClockNanoseconds() {
   if (g_clock_ps_per_instruction) {
-    return g_total_instructions * g_clock_ps_per_instruction / 1000ull;
+    return g_total_instructions * g_clock_ps_per_instruction / 1000ull + g_clock_idle_ns;
   }
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+// The guest CPU idles until `deadline_ns`: the deterministic clock skips
+// ahead; the host clock is waited out.
+bool GuestClockIdleUntil(uint64_t deadline_ns) {
+  const uint64_t now = GuestClockNanoseconds();
+  if (now >= deadline_ns) return true;
+  if (g_clock_ps_per_instruction) {
+    g_clock_idle_ns += deadline_ns - now;
+    return true;
+  }
+  timespec ts{};
+  const uint64_t wait = deadline_ns - now;
+  ts.tv_sec = time_t(wait / 1000000000ull);
+  ts.tv_nsec = long(wait % 1000000000ull);
+  nanosleep(&ts, nullptr);
+  return true;
 }
 uint32_t HIRLastSourceAddress() { return g_last_source_address; }
 
@@ -2236,6 +2253,7 @@ extern "C" uint32_t r360_guest_clock_deterministic() {
 // 0 = host time; otherwise picoseconds of guest time per HIR instruction.
 extern "C" uint32_t r360_set_deterministic_clock(uint32_t ps_per_instruction) {
   render360::xenia_web::g_clock_ps_per_instruction = ps_per_instruction;
+  render360::xenia_web::g_clock_idle_ns = 0;
   return ps_per_instruction;
 }
 extern "C" uint32_t r360_debug_watch_address() {

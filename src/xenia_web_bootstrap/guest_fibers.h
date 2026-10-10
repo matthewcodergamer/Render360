@@ -44,4 +44,8 @@ bool GuestInterruptActive();
 // guest call boundaries.
 void GuestFiberHostYieldIfDue();
 
+// Timed blocking (KeDelayExecutionThread, bounded waits): see guest_fibers.cpp.
+bool GuestFiberSleepUntil(uint64_t deadline_ns);
+bool GuestFiberIdle(uint64_t deadline_ns);
+
 }  // namespace render360::xenia_web

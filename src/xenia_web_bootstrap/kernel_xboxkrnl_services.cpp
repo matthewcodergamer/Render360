@@ -436,6 +436,17 @@ void RefreshTimeStampBundle() {
   Wr32(g_timestamp_bundle + 0x10u, uint32_t(uptime));
 }
 
+// Guest-clock deadline of a kernel timeout (negative: relative 100 ns units,
+// positive: absolute FILETIME, 0: now).
+uint64_t TimeoutDeadlineNs(uint64_t timeout_value) {
+  const uint64_t now = r360_guest_clock_ns();
+  const int64_t signed_value = int64_t(timeout_value);
+  if (signed_value < 0) return now + uint64_t(-signed_value) * 100ull;
+  if (signed_value == 0) return now;
+  const uint64_t system_time = QueryGuestSystemTime();
+  return timeout_value > system_time ? now + (timeout_value - system_time) * 100ull : now;
+}
+
 void AdvanceVirtualTime(uint64_t timeout_value) {
   // Negative intervals are relative; positive values are absolute FILETIMEs.
   const int64_t signed_value = int64_t(timeout_value);
@@ -1034,6 +1045,7 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
                      const std::vector<uint32_t>& handles, bool wait_all,
                      uint32_t timeout_ptr) {
   if (objects.empty() || objects.size() > 64) return X_STATUS_INVALID_PARAMETER;
+  uint64_t deadline_ns = 0;
   for (uint32_t attempt = 0;; ++attempt) {
   for (uint32_t object : objects) UpdateTimerByGuest(object);
   std::vector<bool> signaled(objects.size());
@@ -1063,7 +1075,31 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
   }
   uint64_t timeout = 0;
   if (!Rd64(timeout_ptr, &timeout)) return Invalid();
-  // A bounded wait gives the other guest threads one turn to signal first.
+  // Xenia: a bounded wait blocks the thread until a signal or its deadline.
+  // The fiber sleeps on the guest clock; other threads run, or the CPU idles.
+  if (timeout && GuestFibersActive() && !GuestInterruptActive()) {
+    if (attempt == 0) {
+      deadline_ns = TimeoutDeadlineNs(timeout);
+      ThreadWait& poll = g_thread_polls[r360_guest_thread_current()];
+      poll.wait.module = module;
+      poll.wait.ordinal = ordinal;
+      poll.wait.object = first_blocked;
+      poll.wait.handle = first_handle;
+      uint8_t type = 0xFF;
+      Rd8(first_blocked, &type);
+      poll.wait.object_type = type;
+      poll.wait.reason = uint32_t(timeout & 0xFFFFFFFFu);
+      poll.caller_lr = g_caller_lr;
+      ++poll.count;
+    }
+    if (r360_guest_clock_ns() >= deadline_ns) {
+      g_timeout_spin = {};
+      return X_STATUS_TIMEOUT;
+    }
+    if (GuestFiberSleepUntil(deadline_ns)) continue;
+    if (GuestFiberIdle(deadline_ns)) continue;
+  }
+  // Without guest fibers: the old synchronous model (one turn, then elapse).
   if (timeout && attempt == 0 && GuestFibersActive()) {
     ThreadWait& poll = g_thread_polls[r360_guest_thread_current()];
     poll.wait.module = module;
@@ -3230,11 +3266,24 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       return WaitObjects(kModuleXboxkrnl, ordinal, {wait_guest}, {r4}, false, r7);
     }
     case kx::KeDelayExecutionThread: {
-      // (processor_mode, alertable, interval_ptr)
+      // (processor_mode, alertable, interval_ptr). Xenia sleeps the thread
+      // for the interval: the fiber sleeps until its guest-clock deadline.
       uint64_t interval = 0;
       if (!Rd64(r5, &interval)) return Invalid();
-      AdvanceVirtualTime(interval);
       GuestFiberNoteProgress();
+      if (GuestFibersActive() && !GuestInterruptActive()) {
+        const uint64_t deadline = TimeoutDeadlineNs(interval);
+        if (deadline <= r360_guest_clock_ns()) {
+          GuestFiberYield(false);
+          return X_STATUS_SUCCESS;
+        }
+        while (r360_guest_clock_ns() < deadline) {
+          if (GuestFiberSleepUntil(deadline)) continue;
+          if (!GuestFiberIdle(deadline)) break;
+        }
+        if (r360_guest_clock_ns() >= deadline) return X_STATUS_SUCCESS;
+      }
+      AdvanceVirtualTime(interval);
       GuestFiberYield(false);
       return X_STATUS_SUCCESS;
     }

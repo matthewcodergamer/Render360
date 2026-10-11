@@ -167,8 +167,16 @@ LINK_ARGS=(
   -sINITIAL_MEMORY=33554432
   -sSTACK_SIZE=2097152
   -sALLOW_MEMORY_GROWTH=1
+  -sALLOW_TABLE_GROWTH=1
   "-sEXPORTED_FUNCTIONS=$EXPORT_LIST"
 )
+# R360_PROFILE=1 keeps function names for host CPU profiles.
+WASM_OPT_NAMES=()
+if [ "${R360_PROFILE:-0}" = "1" ]; then
+  LINK_ARGS+=(--profiling-funcs)
+  WASM_OPT_NAMES=(-g)
+  [ "${R360_PROFILE_NOINLINE:-0}" = "1" ] && WASM_OPT_NAMES+=("--no-inline=*")
+fi
 
 rm -f "$WASM" "$LOG" "$REPORT"
 if ! "$CXX" "${LINK_ARGS[@]}" "${OBJECTS[@]}" -o "$WASM" >"$LOG" 2>&1; then
@@ -201,7 +209,7 @@ fi
 if ! "$WASM_OPT" --enable-bulk-memory --enable-bulk-memory-opt \
     --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
     --enable-simd --enable-multivalue --enable-reference-types \
-    "$WASM" --asyncify --pass-arg=asyncify-imports@env.r360_no_host_unwind \
+    "$WASM" "${WASM_OPT_NAMES[@]}" --asyncify --pass-arg=asyncify-imports@env.r360_no_host_unwind \
     "$R360_OPT" -o "$WASM.asyncify" >>"$LOG" 2>&1; then
   echo "ERROR: Asyncify pass failed; see $LOG" | tee "$REPORT" >&2
   exit 1

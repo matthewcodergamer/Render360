@@ -45,6 +45,12 @@ function parseArgs(argv){
     else if(a==='--license')args.license=String(argv[++i]||'trial');
     else if(a==='--log-draws')args.logDraws=Number(argv[++i])>>>0;
     else if(a==='--progress')args.progress=true;
+    else if(a==='--no-jit')args.jit=0;
+    else if(a==='--list-files'){}
+    else if(a==='--xenos-trace-from')args.xenosTraceFrom=Number(argv[++i])>>>0;
+    else if(a==='--dump-shaders')args.dumpShaders=argv[++i];
+    else if(a==='--deterministic')args.deterministicPs=Number(argv[++i])>>>0;
+    else if(a==='--jit')args.jit=Number(argv[++i]);
     else if(a==='--watch-kernel-arg')(args.kernelWatch||=[]).push(Number(argv[++i])>>>0);
     else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
@@ -60,12 +66,29 @@ function parseArgs(argv){
 
 const hex=v=>`0x${(Number(v)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
 
+// --dump-shaders DIR: each distinct current Xenos shader as ucode and as
+// Xenia SpirvShaderTranslator SPIR-V (default modification), for the WebGPU
+// backend's shader pipeline tests.
+const dumpedShaders=new Set();
+function dumpCurrentShaders(x,dir){
+  fs.mkdirSync(dir,{recursive:true});
+  for(const type of [0,1]){
+    const dwords=x.r360_xenos_shader_dwords?.(type)>>>0;if(!dwords)continue;
+    const key=`${type?'ps':'vs'}_${(x.r360_xenos_shader_hash(type)>>>0).toString(16).padStart(8,'0')}`;
+    if(dumpedShaders.has(key))continue;dumpedShaders.add(key);
+    const ptr=x.r360_xenos_shader_buffer(type)>>>0;
+    fs.writeFileSync(path.join(dir,key+'.ucode'),Buffer.from(new Uint8Array(x.memory.buffer,ptr,dwords*4)));
+    x.r360_xenos_spirv_reset?.();
+    if((x.r360_xenos_spirv_translate(type)>>>0)===1){const p=x.r360_xenos_spirv_buffer()>>>0,n=x.r360_xenos_spirv_size()>>>0;fs.writeFileSync(path.join(dir,key+'.spv'),Buffer.from(new Uint8Array(x.memory.buffer,p,n)));}
+    else fs.writeFileSync(path.join(dir,key+'.fail'),`status 0x${(x.r360_xenos_spirv_status()>>>0).toString(16)}`);
+  }
+}
 async function loadBootstrap(file,verbose){
   // The WASI shim delivers fd_write chunks; reassemble whole lines.
   let pending='';
   const bytes=fs.readFileSync(file);
   const stderr=[];
-  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH'))process.stderr.write(line+'\n');}}});
+  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF'))process.stderr.write(line+'\n');}}});
   const module=await WebAssembly.compile(bytes);
   const instance=attachRender360BrowserInstance(host,await WebAssembly.instantiate(module,host.imports));
   return {instance,host,stderr};
@@ -119,6 +142,7 @@ async function openTitle(input,{core,host}){
     const mount=await core.mountStfs(blob,{extractDefaultXex:false});
     if(!mount.mounted)throw new Error(`STFS package did not mount (${mount.stfs?.statusName})`);
     const listed=listStfsVfsFiles(mount);
+    if(process.argv.includes('--list-files'))for(const f of listed)console.log(`file ${f.path} ${f.size??''}`);
     const files=[];let defaultXex=null;
     for(const file of listed){
       if(file.directory){files.push(file);continue;}
@@ -165,7 +189,15 @@ async function main(){
   // Per-call/per-function stderr tracing is off by default for speed.
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
   if(args.watch)bootstrap.exports.r360_debug_watch?.(args.watch);
+  // Guest time from executed instructions (ps per HIR instruction): replayable runs.
+  if(args.deterministicPs)bootstrap.exports.r360_set_deterministic_clock?.(args.deterministicPs);
   if(args.logDraws)bootstrap.exports.r360_xenos_debug_draws?.(args.logDraws);
+  // Guest JIT (render360-guest-jit.mjs): hot guest functions run as
+  // generated WebAssembly. --no-jit keeps everything on the HIR executor.
+  const {installGuestJit}=await import(rel('render360-guest-jit.mjs'));
+  const jit=args.jit===0?null:installGuestJit(bootstrap,{mode:args.jit||1,onError:(err)=>{if(!globalThis.__r360JitErrShown){globalThis.__r360JitErrShown=1;console.error('JIT module error:',err.message);}}});
+  globalThis.__r360Jit=jit;
+  if(process.env.R360_JITPROF)bootstrap.exports.r360_jit_profile?.(1);
   (args.kernelWatch||[]).slice(0,4).forEach((v,k)=>bootstrap.exports.r360_kernel_watch_arg?.(k,v));
   if(args.renderFrom!==undefined)bootstrap.exports.r360_xenos_soft_set_rasterize?.(args.renderFrom===0?1:0);
   // --max-minstr N: stop after N million guest instructions in total.
@@ -177,10 +209,13 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress)?(s=>{const x=bootstrap.exports;if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress||args.dumpShaders||args.xenosTraceFrom!==undefined)?(s=>{const x=bootstrap.exports;if(args.dumpShaders)dumpCurrentShaders(x,args.dumpShaders);if(args.xenosTraceFrom!==undefined&&!globalThis.__r360XenosTrace&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.xenosTraceFrom){globalThis.__r360XenosTrace=1;x.r360_xenos_trace_ibs?.(1);}if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · jit ${globalThis.__r360Jit?(()=>{const t=globalThis.__r360Jit.telemetry();return `${t.functions}fn/${t.rejected}rej/${Math.round(t.calls/1000)}kcalls`;})():'off'} · resolve ${g('r360_xenos_soft_resolves')}/${g('r360_xenos_soft_resolve_kpixels')}kpx clear ${g('r360_xenos_soft_clear_ksamples')}ks info 0x${g('r360_xenos_soft_last_resolve_info').toString(16)} · cp ${g('r360_xenos_status').toString(16)} stalled ${g('r360_title_gpu_stalled')} ready ${g('r360_xenos_stall_ready')} pumps ${g('r360_title_gpu_pumps')}/${g('r360_title_gpu_status')} waits ${g('r360_xenos_waits')} stall ${[0,1,2,3,4].map(i=>hex(x.r360_xenos_stall_wait?.(i)??0)).join(',')} wptr ${g('r360_title_gpu_write_pointer')} lastop 0x${g('r360_xenos_last_opcode').toString(16)} · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}
+  if(process.env.R360_OPHIST&&bootstrap.exports.r360_hir_opcode_histogram_k){const x=bootstrap.exports,mem=()=>new Uint8Array(x.memory.buffer);const name=op=>{const p=x.r360_hir_opcode_name(op)>>>0;if(!p)return 'op'+op;const m=mem();let e=p;while(m[e])e++;return new TextDecoder().decode(m.subarray(p,e));};const rows=[];for(let op=0;op<256;op++){const k=x.r360_hir_opcode_histogram_k(op)>>>0;if(k)rows.push([name(op),k]);}rows.sort((a,b)=>b[1]-a[1]);const tot=rows.reduce((a,r)=>a+r[1],0);console.log('OPHIST total '+tot+'k');for(const [n,k] of rows)console.log('  '+(100*k/tot).toFixed(2).padStart(6)+'% '+n);}
+  if(process.env.R360_JITPROF){bootstrap.exports.r360_jit_profile?.(2);bootstrap.exports.r360_hir_cache_miss_dump?.();}
+  if(process.env.R360_JITSTAT&&bootstrap.exports.r360_jit_reject_count){const x=bootstrap.exports,mem=()=>new Uint8Array(x.memory.buffer);const name=op=>{const p=x.r360_hir_opcode_name(op)>>>0;if(!p)return 'op'+op;const m=mem();let e=p;while(m[e])e++;return new TextDecoder().decode(m.subarray(p,e));};const rows=[];for(let op=0;op<256;op++){const k=x.r360_jit_reject_count(op)>>>0;if(k)rows.push([name(op),k]);}rows.sort((a,b)=>b[1]-a[1]);console.log('JIT rejects by first unsupported opcode:');for(const [n,k] of rows.slice(0,30))console.log('  '+String(k).padStart(6)+' '+n);}
   const elapsedMs=Date.now()-started;
 
   const report={
@@ -213,6 +248,9 @@ async function main(){
   }
   // --frame FILE.png saves the last swapped frontbuffer (Xenos decode of the
   // VdSwap fetch constant from guest memory).
+  // R360_DUMP=address,bytes,file: guest bytes (sparse memory) after the run.
+  for(const spec of (process.env.R360_DUMP||'').split(';').filter(Boolean)){const [a0,n0,file]=spec.split(',');const a=Number(a0)>>>0,n=Number(n0)>>>0,x=bootstrap.exports,out=Buffer.alloc(n);
+    const tmp=x.r360_ppc_probe_input_buffer()>>>0;for(let i=0;i<n;i+=4){x.r360_sparse_guest_memory_read_u32_be(a+i,tmp);out.writeUInt32BE(new DataView(x.memory.buffer).getUint32(tmp,true),i);}fs.writeFileSync(file,out);}
   if(args.frame){
     const {captureTitleFrontbuffer}=await import(rel('render360-title-frontbuffer.mjs'));
     const zlib=await import('node:zlib');
@@ -242,6 +280,12 @@ async function main(){
     fs.writeFileSync(dump.file,out);
   }
   report.gprsAtStop=Array.from({length:32},(_,i)=>hex(Number(BigInt.asUintN(32,BigInt(bootstrap.exports.r360_ppc_probe_correctness_gpr?.(i)??0)))));
+  // Guest call stack of the stopped thread: walk the r1 back chain; each
+  // frame's caller saved LR at back_chain - 8 (Xbox 360 prologue).
+  {const x=bootstrap.exports,tmp=x.r360_ppc_probe_input_buffer?.()>>>0,rd=a=>{if(!tmp||!x.r360_sparse_guest_memory_read_u32_be?.(a>>>0,tmp))return null;return new DataView(x.memory.buffer).getUint32(tmp,true);};
+   const frames=[];let fp=Number(BigInt.asUintN(32,BigInt(x.r360_ppc_probe_correctness_gpr?.(1)??0)));
+   for(let n=0;n<48&&fp;n++){const back=rd(fp);if(!back||back<=fp)break;const lr=rd(back-8);if(lr!==null)frames.push(hex(lr));fp=back;}
+   report.backtraceAtStop=frames;}
   report.totalInstructionsMillions=bootstrap.exports.r360_hir_total_instructions_millions?.()>>>0;
   report.hostStackHeadroom=bootstrap.exports.r360_trap_stack_headroom?.()>>>0;
   report.lastRuntimeLog=stderr.filter(l=>/R360_(KERNEL|EXEC|STACK_BLOCKER|CALL_RESOLVE|HIR_BLOCK|HIR_MEMORY|XENOS)/.test(l)).slice(-12);
@@ -265,7 +309,8 @@ async function main(){
     for(const call of report.kernelTrace){
       console.log(`  #${String(call.sequence).padStart(5)} ${call.name.padEnd(36)} (${call.args.slice(0,4).map(hex).join(', ')}) -> ${hex(call.result)} ${statusOf(call.status)}`);
     }
-    if(report.debugLog.length){console.log('DbgPrint output:');for(const line of report.debugLog.slice(-16))console.log(`  ${line}`);}
+    if(report.backtraceAtStop?.length)console.log(`backtrace (stopped thread): ${report.backtraceAtStop.join(' ')}`);
+  if(report.debugLog.length){console.log('DbgPrint output:');for(const line of report.debugLog.slice(-16))console.log(`  ${line}`);}
   }
   if(args.json){fs.writeFileSync(args.json,JSON.stringify(report,(k,v)=>typeof v==='bigint'?v.toString():v,2));console.log(`report written to ${args.json}`);}
   process.exitCode=error?1:0;

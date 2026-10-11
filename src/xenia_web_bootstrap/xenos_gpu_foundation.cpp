@@ -30,7 +30,10 @@ constexpr uint32_t kStatusInvalid = 3;
 constexpr uint32_t kStatusWaiting = 4;
 constexpr uint32_t kPm4WaitRegMem = 0x3C;
 constexpr uint32_t kRegisterCount = 0x5003;  // Xenia RegisterFile::kRegisterCount
-constexpr uint32_t kRingCapacity = 4096;
+// Holds a whole pending primary-ring backlog: while the command processor
+// waits (WAIT_REG_MEM on a vblank-released swap), D3D keeps filling its
+// ring (8192 words for Banjo-Tooie), and the drain resubmits all of it.
+constexpr uint32_t kRingCapacity = 65536;
 constexpr uint32_t kMaxIndirectDepth = 8;
 constexpr uint32_t kShaderWordCapacity = 8192;
 constexpr uint32_t kFrameWidth = 64;
@@ -68,6 +71,9 @@ constexpr uint32_t kPm4Interrupt = 0x54;
 constexpr uint32_t kPm4SetConstant2 = 0x55;
 constexpr uint32_t kPm4SetShaderConstants = 0x56;
 constexpr uint32_t kPm4EventWriteShd = 0x58;
+constexpr uint32_t kPm4EventWriteExt = 0x5A;
+constexpr uint32_t kPm4EventWriteZpd = 0x5B;
+constexpr uint32_t kPm4VizQuery = 0x23;
 constexpr uint32_t kPm4ContextUpdate = 0x5E;
 constexpr uint32_t kPm4SetBinMaskLo = 0x60;
 constexpr uint32_t kPm4SetBinMaskHi = 0x61;
@@ -185,12 +191,36 @@ bool WriteGuestGpuWord(uint32_t encoded_address, uint32_t value) {
   ++g_memory_writes;
   return true;
 }
+// Reads `count` big-endian words starting at GPU address `address`. One
+// physical range maps to one contiguous virtual span, so the translation is
+// done once and the words are copied in bulk (indirect buffers are read on
+// every command-processor pass).
+bool ReadGuestWordsBE(uint32_t address, uint32_t* out, uint32_t count) {
+  if (!count) return true;
+  const uint64_t last = uint64_t(address) + uint64_t(count - 1u) * 4u;
+  if (!out || last > 0xFFFFFFFCull) return false;
+  const uint32_t first_virtual = r360_kernel_gpu_address_to_virtual(address);
+  const uint32_t last_virtual = r360_kernel_gpu_address_to_virtual(uint32_t(last));
+  if (uint64_t(last_virtual) != uint64_t(first_virtual) + uint64_t(count - 1u) * 4u) {
+    for (uint32_t q = 0; q < count; ++q) {
+      if (!ReadGuestWordBE(address + q * 4u, &out[q])) return false;
+    }
+    return true;
+  }
+  if (!ReadSparseGuestMemory(first_virtual, out, count * 4u)) return false;
+  for (uint32_t q = 0; q < count; ++q) out[q] = __builtin_bswap32(out[q]);
+  return true;
+}
 bool ReadGuestGpuWord(uint32_t encoded_address, uint32_t* out) {
   uint32_t be = 0;
   if (!out || !ReadGuestWordBE(encoded_address & ~3u, &be)) return false;
   *out = GpuSwap32(ByteSwap32(be), encoded_address & 3u);
   return true;
 }
+// The WAIT_REG_MEM packet the command processor is stalled on
+// (wait_info, address/register, reference, mask).
+std::array<uint32_t, 4> g_stall_wait{};
+bool CompareWait(uint32_t info, uint32_t value, uint32_t ref, uint32_t mask);
 bool CompareWait(uint32_t info, uint32_t value, uint32_t ref, uint32_t mask) {
   value &= mask;
   switch (info & 7u) {
@@ -292,6 +322,7 @@ uint32_t FrameProvenance() {
   return p;
 }
 uint32_t g_draw_log_remaining = 0;
+uint32_t g_trace_ibs = 0;
 bool g_frame_provenance_rendered = false;
 bool ExecuteDraw(uint32_t opcode, const uint32_t* payload, uint32_t count) {
   if (!count) { g_status = kStatusInvalid; return false; }
@@ -432,6 +463,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         break;
       case kPm4MemWrite: {
         if (count < 2u) { handled = false; g_status = kStatusInvalid; break; }
+        if (g_trace_ibs) std::fprintf(stderr, "R360_XENOS_MEMWRITE depth=%u at=%u addr=0x%08X value=0x%X n=%u\n", depth, header_index, p[0], p[1], count - 1u);
         uint32_t address = p[0];
         for (uint32_t n = 1; n < count && handled; ++n) {
           handled = WriteGuestGpuWord(address, p[n]);
@@ -440,6 +472,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         if (!handled) g_status = kStatusInvalid; break;
       }
       case kPm4WaitRegMem: {
+        if (g_trace_ibs) std::fprintf(stderr, "R360_XENOS_WAIT depth=%u at=%u addr=0x%08X ref=0x%X\n", depth, header_index, p[1], p[2]);
         // (wait_info, poll address/register, reference, mask, wait)
         if (count != 5u) { handled = false; g_status = kStatusInvalid; break; }
         uint32_t value = 0;
@@ -452,6 +485,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         if (!handled) { g_status = kStatusInvalid; break; }
         if (!CompareWait(p[0], value, p[2], p[3])) {
           ++g_waits;
+          for (uint32_t q = 0; q < 4u; ++q) g_stall_wait[q] = p[q];
           g_stall_offset[depth] = header_index;
           g_stall_levels = depth + 1u;
           g_status = kStatusWaiting;
@@ -474,13 +508,61 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
       }
       case kPm4EventWrite:
         if (!count) { handled = false; g_status = kStatusInvalid; }
-        else { handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu); if (handled && count > 1u) { handled = false; g_status = kStatusUnsupported; } }
+        else handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);  // extra dwords skipped, as Xenia does
         break;
       case kPm4EventWriteShd:
+        if (g_trace_ibs && count == 3u) std::fprintf(stderr, "R360_XENOS_SHD depth=%u at=%u addr=0x%08X value=0x%X counter=%u\n", depth, header_index, p[1], p[2], p[0] >> 31);
         if (count != 3u) { handled = false; g_status = kStatusInvalid; }
         else { handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu) &&
                          WriteGuestGpuWord(p[1], (p[0] >> 31) ? g_presents : p[2]); if (!handled) g_status = kStatusInvalid; }
         break;
+      case kPm4EventWriteExt: {
+        // CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT: screen extents
+        // of the preceding draws, reported as the whole 8192x8192 surface
+        // (six 16-bit values, 8-in-16 swapped).
+        if (count < 2u) { handled = false; g_status = kStatusInvalid; break; }
+        handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);
+        const uint32_t address = p[1] & ~3u;
+        const uint16_t extents[6] = {0, 8192u >> 3, 0, 8192u >> 3, 0, 1};
+        for (uint32_t n = 0; n < 3 && handled; ++n) {
+          handled = WriteGuestGpuWord(address + n * 4u | 1u,
+                                      (uint32_t(extents[n * 2 + 1]) << 16) | extents[n * 2]);
+        }
+        if (!handled) g_status = kStatusInvalid;
+        break;
+      }
+      case kPm4EventWriteZpd: {
+        // ExecutePacketType3_EVENT_WRITE_ZPD: occlusion queries. D3D marks a
+        // finished query with 0xFFFFFEED in both halves of the ZPass (or older
+        // ZFail) counts; Xenia then reports query_occlusion_fake_sample_count
+        // (default 1000) passed samples.
+        if (count != 1u) { handled = false; g_status = kStatusInvalid; break; }
+        handled = WriteRegister(kRegVgtEventInitiator, p[0] & 0x3Fu);
+        const uint32_t counts = g_regs[0x2325u];  // RB_SAMPLE_COUNT_ADDR
+        uint32_t c[8] = {};
+        for (uint32_t n = 0; n < 8 && handled; ++n) handled = ReadGuestGpuWord(counts + n * 4u, &c[n]);
+        if (!handled) { g_status = kStatusInvalid; break; }
+        constexpr uint32_t kQueryFinished = 0xEDFEFFFFu;  // byte_swap(0xFFFFFEED), LE fields
+        const bool finished = (c[4] == kQueryFinished && c[5] == kQueryFinished) ||
+                              (c[2] == kQueryFinished && c[3] == kQueryFinished);
+        for (uint32_t n = 0; n < 8 && handled; ++n) {
+          const uint32_t value = finished && (n == 0 || n == 4) ? 1000u : 0u;
+          handled = WriteGuestGpuWord(counts + n * 4u, value);
+        }
+        if (!handled) g_status = kStatusInvalid;
+        break;
+      }
+      case kPm4VizQuery: {
+        // ExecutePacketType3_VIZ_QUERY: every query reports visible.
+        if (count != 1u) { handled = false; g_status = kStatusInvalid; break; }
+        const uint32_t id = p[0] & 0x3Fu;
+        handled = WriteRegister(kRegVgtEventInitiator, (p[0] & 0x100u) ? 8u : 7u);
+        if (handled && (p[0] & 0x100u)) {
+          const uint32_t reg = id < 32u ? 0x0C44u : 0x0C45u;  // PA_SC_VIZ_QUERY_STATUS_0/1
+          handled = WriteRegister(reg, g_regs[reg] | (1u << (id & 31u)));
+        }
+        break;
+      }
       case kPm4Interrupt:
         if (count != 1u) { handled = false; g_status = kStatusInvalid; }
         else { ++g_interrupts; g_last_interrupt_mask = p[0] & 0x3Fu; }
@@ -499,10 +581,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         const uint32_t address = p[0] & 0x3FFFFFFFu, offset_type = p[1], n = p[2] & 0xFFFu;
         if (!n || n > kRegisterCount) { handled = false; g_status = kStatusInvalid; break; }
         std::array<uint32_t, kRegisterCount> loaded{};
-        for (uint32_t q = 0; q < n; ++q) {
-          const uint64_t a = uint64_t(address) + uint64_t(q) * 4u;
-          if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &loaded[q])) { handled = false; g_status = kStatusInvalid; break; }
-        }
+        if (!ReadGuestWordsBE(address, loaded.data(), n)) { handled = false; g_status = kStatusInvalid; }
         if (handled) handled = WriteConstantGroup(offset_type, loaded.data(), n); break;
       }
       case kPm4ImLoad: {
@@ -524,12 +603,14 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
         // Xenia reads them in place (up to the 20-bit IB size field).
         if (!n) { handled = false; g_status = kStatusInvalid; break; }
         std::vector<uint32_t> ib(n);
-        for (uint32_t q = 0; q < n; ++q) {
-          const uint64_t a = uint64_t(address) + uint64_t(q) * 4u;
-          if (a > 0xFFFFFFFCull || !ReadGuestWordBE(uint32_t(a), &ib[q])) { handled = false; g_status = kStatusInvalid; break; }
-        }
+        if (!ReadGuestWordsBE(address, ib.data(), n)) { handled = false; g_status = kStatusInvalid; }
         if (handled) {
           ++g_indirect_buffers;
+          if (g_trace_ibs) {
+            std::fprintf(stderr, "R360_XENOS_IB depth=%u at=%u address=0x%08X words=%u resume=%u/%u virtual=0x%08X\n",
+                         depth, header_index, address, n, g_resume_next, g_resume_levels,
+                         r360_kernel_gpu_address_to_virtual(address));
+          }
           handled = ExecuteBuffer(ib.data(), n, depth + 1u);
           if (!handled && g_status == kStatusWaiting) {
             g_stall_offset[depth] = header_index;
@@ -606,6 +687,13 @@ uint32_t r360_xenos_ring_capacity(){return render360::xenia_web::kRingCapacity;}
 uint32_t r360_xenos_submit(uint32_t n){if(n>render360::xenia_web::kRingCapacity){render360::xenia_web::g_status=render360::xenia_web::kStatusInvalid;return 0;}render360::xenia_web::g_ring_words=n;return render360::xenia_web::Execute()?1u:0u;}
 uint32_t r360_xenos_status(){return render360::xenia_web::g_status;}
 // After a WAIT_REG_MEM stall: ring words consumed before the stalled packet.
+// 1 when the WAIT_REG_MEM the command processor stalled on would now pass:
+// resuming before that only re-reads the same packets (Xenia's
+// command-processor thread polls the same condition).
+uint32_t r360_xenos_stall_ready(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 1;const auto& w=rx::g_stall_wait;uint32_t value=0;if(w[0]&0x10u){if(!rx::ReadGuestGpuWord(w[1],&value))return 1;}else{if(w[1]>=rx::kRegisterCount)return 1;if(w[1]==rx::kRegCoherStatusHost)rx::MakeCoherent();value=rx::g_regs[w[1]];}return rx::CompareWait(w[0],value,w[2],w[3])?1u:0u;}
+// 0/1 set the CP trace; 2 queries it.
+uint32_t r360_xenos_trace_ibs(uint32_t on){if(on<2)render360::xenia_web::g_trace_ibs=on;return render360::xenia_web::g_trace_ibs;}
+uint32_t r360_xenos_stall_wait(uint32_t i){return i<4u?render360::xenia_web::g_stall_wait[i]:render360::xenia_web::g_stall_levels;}
 uint32_t r360_xenos_stall_ring_offset(){return render360::xenia_web::g_stall_levels?render360::xenia_web::g_stall_offset[0]:0u;}
 // Arms the next submit to re-enter the stalled indirect buffers where they stopped.
 uint32_t r360_xenos_arm_resume(){namespace rx=render360::xenia_web;if(!rx::g_stall_levels)return 0;rx::g_resume_offset=rx::g_stall_offset;rx::g_resume_offset[0]=0;rx::g_resume_levels=rx::g_stall_levels;rx::g_resume_next=0;return rx::g_resume_levels;}

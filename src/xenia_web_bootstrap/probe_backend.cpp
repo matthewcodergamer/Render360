@@ -1,5 +1,9 @@
 #include "probe_backend.h"
 
+#include <algorithm>
+#include <array>
+#include <unordered_set>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +14,7 @@
 
 #include "guest_fibers.h"
 #include "hir_correctness_executor.h"
+#include "hir_wasm_jit.h"
 #include "kernel_import_probe.h"
 #include "kernel_xboxkrnl_services.h"
 #include "sparse_guest_memory.h"
@@ -296,12 +301,17 @@ struct CachedTranslation {
   uint64_t last_use = 0;
   size_t bytes = 0;
   uint32_t pins = 0;
+  JitSlot jit;  // compiled code for this translation (hir_wasm_jit.h)
+  uint32_t hir_blocks = 0, hir_instructions = 0;
 };
 std::unordered_map<uint64_t, CachedTranslation> g_translation_cache;
 size_t g_translation_cache_bytes = 0;
 size_t g_translation_cache_budget = size_t(192) * 1024 * 1024;
 uint64_t g_translation_cache_clock = 0;
 uint64_t g_translation_cache_hits = 0;
+// (owner translation key, interior address) pairs whose owner HIR has no
+// entry marker for the address (see TranslateNestedGuestAddressOnce).
+std::unordered_set<uint64_t> g_missing_interior_entries;
 uint64_t g_translation_cache_misses = 0;
 // The key the next retained builder belongs to; per guest thread because a
 // translation can be suspended mid-execution by a fiber switch.
@@ -326,18 +336,27 @@ void EvictTranslations() {
     }
     if (victim == g_translation_cache.end()) return;
     g_translation_cache_bytes -= victim->second.bytes;
+    JitReleaseSlot(&victim->second.jit);
     g_translation_cache.erase(victim);
   }
 }
 
+// Diagnostics: cache misses per function start and reason
+// (0 absent, 1 code rewritten, 2 rewritten while pinned, 3 retain refused).
+std::unordered_map<uint64_t, uint32_t> g_cache_miss_debug;
+void NoteCacheMiss(uint64_t key, uint32_t reason) {
+  ++g_cache_miss_debug[(uint64_t(reason) << 32) | (key >> 32)];
+}
 CachedTranslation* LookupTranslation(uint64_t key) {
   auto it = g_translation_cache.find(key);
-  if (it == g_translation_cache.end()) return nullptr;
+  if (it == g_translation_cache.end()) { NoteCacheMiss(key, 0); return nullptr; }
   CachedTranslation& entry = it->second;
   if (entry.generation_begin != GetWasmBackendExecutableContentGeneration(entry.begin) ||
       entry.generation_end != GetWasmBackendExecutableContentGeneration(entry.end)) {
-    if (entry.pins) return nullptr;  // rewritten while running: retranslate
+    if (entry.pins) { NoteCacheMiss(key, 2); return nullptr; }  // rewritten while running: retranslate
+    NoteCacheMiss(key, 1);
     g_translation_cache_bytes -= entry.bytes;
+    JitReleaseSlot(&entry.jit);
     g_translation_cache.erase(it);
     return nullptr;
   }
@@ -354,6 +373,7 @@ bool ExecuteCachedTranslation(CachedTranslation& entry) {
   ++g_translation_cache_hits;
   ++entry.pins;
   NoteTrapPhase(kTrapPhaseExecute, entry.begin);
+  JitSetCandidate(entry.builder.get(), &entry.jit);
   const HIRCorrectnessResult result =
       ExecuteHIRCorrectnessProbe(entry.builder.get(), memory);
   --entry.pins;
@@ -376,6 +396,7 @@ bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
   g_retain_begin = function->address();
   g_retain_end = function->end_address();
   const bool ok = frontend->DefineFunction(function, 0);
+  if (g_retain_pending) NoteCacheMiss(key, ok ? 4u : 5u);  // not retained
   g_retain_pending = saved_pending;
   g_retain_key = saved_key;
   g_retain_begin = saved_begin;
@@ -385,6 +406,8 @@ bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
 
 bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                                      uint32_t call_flags);
+// Bumped when a new image / function set is loaded (ResetProbe paths).
+uint32_t g_call_class_generation = 1, g_call_class_seen_generation = 0;
 
 // Tail-call trampoline. Xenia's x64 backend runs a cross-function `b` (HIR
 // CALL with CALL_TAIL) as a real tail jump; the HIR executor would otherwise
@@ -474,10 +497,28 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   // the owner's HIR. Doing that skips HIR value definitions emitted before the
   // SOURCE_OFFSET marker and turns a valid stack load into a fake
   // guest-memory-dependency with faultAddress == 0.
-  auto* target_function = g_probe_backend->processor()->QueryFunction(address);
-  const bool epilog_by_metadata =
-      target_function &&
-      target_function->behavior() == xe::cpu::Function::Behavior::kEpilogReturn;
+  // The image's .pdata entry and Xenia's registered function behavior are
+  // static per address; every guest call needs them.
+  struct CallTargetClass {
+    uint32_t address = 0, fn_begin = 0, fn_end = 0, prolog = 0;
+    bool valid = false, pdata = false, epilog_meta = false;
+  };
+  static std::array<CallTargetClass, 8192> call_classes;
+  if (g_call_class_generation != g_call_class_seen_generation) {
+    call_classes.fill({});
+    g_call_class_seen_generation = g_call_class_generation;
+  }
+  CallTargetClass& cls = call_classes[(address >> 2) & 8191u];
+  if (!cls.valid || cls.address != address) {
+    auto* queried = g_probe_backend->processor()->QueryFunction(address);
+    cls = {};
+    cls.address = address;
+    cls.epilog_meta = queried && queried->behavior() == xe::cpu::Function::Behavior::kEpilogReturn;
+    cls.fn_begin = address;
+    cls.pdata = PreparedPeGuestFindRuntimeFunction(address, &cls.fn_begin, &cls.fn_end, &cls.prolog);
+    cls.valid = true;
+  }
+  const bool epilog_by_metadata = cls.epilog_meta;
   uint32_t signature_first_gpr = 0;
   const bool epilog_by_signature =
       is_tail && MatchSharedEpilogReturnSignature(address, &signature_first_gpr);
@@ -493,9 +534,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     return helper_ok;
   }
 
-  uint32_t fn_begin = address, fn_end = 0, prolog = 0;
-  bool pdata = PreparedPeGuestFindRuntimeFunction(address, &fn_begin, &fn_end,
-                                                  &prolog);
+  uint32_t fn_begin = cls.fn_begin, fn_end = cls.fn_end, prolog = cls.prolog;
+  bool pdata = cls.pdata;
   if (pdata &&
       (fn_end <= fn_begin || uint64_t(fn_end) - fn_begin > kProbeGuestSize)) {
     pdata = false;
@@ -527,7 +567,14 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                is_epilog_return ? 1u : 0u, pdata ? 1u : 0u,
                use_owner ? 1u : 0u, prolog);
 
-  if (!loaded()) {
+  // Pages the function's code into the decoder window; only a translation
+  // (scan + PPCFrontend) reads code through it, so a cached translation
+  // runs without it. The window always starts at the function's own page:
+  // a call's scan is bounded by the window end, so a window that merely
+  // contains fn_begin would cut a large function short depending on where
+  // an earlier call left it, and the truncated HIR would be cached.
+  auto page_code = [&]() -> bool {
+    if (loaded() && r360_ppc_probe_guest_base() == (fn_begin & ~0xFFFu)) return true;
     const uint32_t paged = r360_ppc_probe_page_sparse_code(fn_begin);
     if (!paged || !loaded()) {
       std::fprintf(stderr,
@@ -536,7 +583,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                    address, fn_begin, use_owner ? 1u : 0u);
       return false;
     }
-  }
+    return true;
+  };
 
   if (StackHeadroom() < kMinNestedStackHeadroom) {
     g_trap_stack_exhausted = address;
@@ -546,41 +594,63 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     return false;
   }
   ProbeGuestFunction nested_function(module, fn_begin);
-  const uint32_t loaded_base = r360_ppc_probe_guest_base();
-  const uint32_t loaded_size = r360_ppc_probe_loaded_size();
-  if (loaded_size < 4) return false;
-  const uint32_t scan_end =
-      use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
-  nested_function.set_end_address(scan_end);
-
-  xe::cpu::ppc::PPCScanner scanner(frontend);
-  if (!scanner.Scan(&nested_function, nullptr)) {
-    std::fprintf(stderr,
-                 "R360_CALL_RESOLVE scan failed target=0x%08X function=0x%08X "
-                 "owner=%u\n",
-                 address, fn_begin, use_owner ? 1u : 0u);
-    return false;
-  }
-  if (use_owner && nested_function.end_address() < address) {
+  uint32_t scan_end = use_owner ? fn_end - 4 : 0u;
+  // Decoder-window-relative scan bound, valid once the code is paged.
+  auto set_scan_end = [&]() -> bool {
+    const uint32_t loaded_base = r360_ppc_probe_guest_base();
+    const uint32_t loaded_size = r360_ppc_probe_loaded_size();
+    if (loaded_size < 4) return false;
+    scan_end = use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
     nested_function.set_end_address(scan_end);
-  }
+    return true;
+  };
 
   const uint32_t interior_entry =
       use_owner && address != fn_begin ? address : 0u;
+  // An interior tail target already known to have no HIR entry marker in its
+  // owner goes straight to the exact-target fragment below; retranslating the
+  // owner only to fail again cost a full scan and translation per call.
+  const uint64_t owner_key = TranslationKey(fn_begin, use_owner ? fn_end : 0u, false);
+  const bool known_missing = interior_entry &&
+      g_missing_interior_entries.count((owner_key << 0) ^ (uint64_t(interior_entry) * 0x9E3779B97F4A7C15ull));
+  // The PPC scan only feeds a new translation: a cached one runs as is (its
+  // key does not depend on the scan).
+  CachedTranslation* const cached_owner = known_missing ? nullptr : LookupTranslation(owner_key);
+  if (!cached_owner && !known_missing) {
+    if (!page_code() || !set_scan_end()) return false;
+    xe::cpu::ppc::PPCScanner scanner(frontend);
+    if (!scanner.Scan(&nested_function, nullptr)) {
+      std::fprintf(stderr,
+                   "R360_CALL_RESOLVE scan failed target=0x%08X function=0x%08X "
+                   "owner=%u\n",
+                   address, fn_begin, use_owner ? 1u : 0u);
+      return false;
+    }
+    if (use_owner && nested_function.end_address() < address) {
+      nested_function.set_end_address(scan_end);
+    }
+  }
   if (interior_entry) {
     // Clear any stale marker before this one exact owner/interior attempt.
     (void)ConsumeHIRCorrectnessInteriorEntryMissing();
   }
-  SetHIRCorrectnessExecutionEntry(interior_entry);
-  NoteTrapPhase(kTrapPhaseTranslate, address);
-  ++g_trap_depth;
-  const bool translated = DefineOrRunCached(
-      frontend, &nested_function,
-      TranslationKey(fn_begin, use_owner ? fn_end : 0u, false));
-  --g_trap_depth;
-  SetHIRCorrectnessExecutionEntry(0u);
-  const uint32_t missing_entry =
-      interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
+  bool translated = false;
+  uint32_t missing_entry = 0;
+  if (known_missing) {
+    missing_entry = interior_entry;
+  } else {
+    SetHIRCorrectnessExecutionEntry(interior_entry);
+    NoteTrapPhase(kTrapPhaseTranslate, address);
+    ++g_trap_depth;
+    translated = cached_owner ? ExecuteCachedTranslation(*cached_owner)
+                              : DefineOrRunCached(frontend, &nested_function, owner_key);
+    --g_trap_depth;
+    SetHIRCorrectnessExecutionEntry(0u);
+    missing_entry = interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
+    if (!translated && interior_entry && missing_entry == interior_entry) {
+      g_missing_interior_entries.insert(owner_key ^ (uint64_t(interior_entry) * 0x9E3779B97F4A7C15ull));
+    }
+  }
   R360_VERBOSE_TRACE(
                "R360_CALL_RESOLVE translated target=0x%08X function=0x%08X "
                "end=0x%08X flags=0x%X owner=%u interior=0x%08X result=%u\n",
@@ -603,6 +673,16 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                address, fn_begin, fn_end);
 
   ProbeGuestFunction fragment(module, address);
+  if (CachedTranslation* cached_fragment =
+          LookupTranslation(TranslationKey(address, fn_end, true))) {
+    SetHIRCorrectnessExecutionEntry(0u);
+    SetHIRCorrectnessContextProvenanceRecovery(true);
+    const bool ok = ExecuteCachedTranslation(*cached_fragment);
+    SetHIRCorrectnessContextProvenanceRecovery(false);
+    return ok;
+  }
+  // The owner may have run from the cache without paging its code.
+  if (!page_code() || !set_scan_end()) return false;
   fragment.set_end_address(scan_end);
   xe::cpu::ppc::PPCScanner fragment_scanner(frontend);
   const bool fragment_scanned = fragment_scanner.Scan(&fragment, nullptr);
@@ -646,8 +726,9 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
   g_retain_pending = false;
   auto it = g_translation_cache.find(g_retain_key);
   if (it != g_translation_cache.end()) {
-    if (it->second.pins) return;  // a stale entry is still executing
+    if (it->second.pins) { NoteCacheMiss(g_retain_key, 3); return; }  // a stale entry is still executing
     g_translation_cache_bytes -= it->second.bytes;
+    JitReleaseSlot(&it->second.jit);
     g_translation_cache.erase(it);
   }
   CachedTranslation entry;
@@ -662,6 +743,8 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
     for (auto* instr = block->instr_head; instr; instr = instr->next) ++instructions;
   }
   entry.bytes = instructions * 192 + 64 * 1024;
+  entry.hir_instructions = uint32_t(instructions);
+  for (auto* block = builder->first_block(); block; block = block->next) ++entry.hir_blocks;
   entry.last_use = ++g_translation_cache_clock;
   entry.builder = std::move(builder);
   g_translation_cache_bytes += entry.bytes;
@@ -672,9 +755,12 @@ void ResetTranslationCache() {
   for (auto it = g_translation_cache.begin(); it != g_translation_cache.end();) {
     if (it->second.pins) { ++it; continue; }
     g_translation_cache_bytes -= it->second.bytes;
+    JitReleaseSlot(&it->second.jit);
     it = g_translation_cache.erase(it);
   }
   g_translation_cache_hits = g_translation_cache_misses = 0;
+  g_missing_interior_entries.clear();
+  ++g_call_class_generation;
   g_retain_pending = false;
 }
 // __restgprlr_N entries found by r360_ppc_probe_register_save_rest
@@ -691,6 +777,39 @@ bool IsRegisteredRestGprLr(uint32_t address) {
     if (a == address) return true;
   }
   return false;
+}
+
+bool GetProbeExecuteCorrectnessOnAssemble();
+bool DefineTopLevelCached(xe::cpu::ppc::PPCFrontend* frontend,
+                          xe::cpu::GuestFunction* function, uint32_t key_end) {
+  const uint64_t key = TranslationKey(function->address(), key_end, false);
+  auto* memory = g_probe_backend && g_probe_backend->processor()
+                     ? g_probe_backend->processor()->memory()
+                     : nullptr;
+  if (memory && GetProbeExecuteCorrectnessOnAssemble() && !IsHIRCorrectnessExecutionActive()) {
+    if (CachedTranslation* cached = LookupTranslation(key)) {
+      ++g_translation_cache_hits;
+      ++cached->pins;
+      NoteTrapPhase(kTrapPhaseExecute, cached->begin);
+      JitSetCandidate(cached->builder.get(), &cached->jit);
+      const HIRCorrectnessResult correctness =
+          ExecuteHIRCorrectnessProbe(cached->builder.get(), memory);
+      --cached->pins;
+      ++g_probe_telemetry.assembled_functions;
+      g_probe_telemetry.hir_blocks = cached->hir_blocks;
+      g_probe_telemetry.hir_instructions = cached->hir_instructions;
+      g_probe_telemetry.last_guest_address = function->address();
+      g_probe_telemetry.correctness_instructions = correctness.instructions_executed;
+      g_probe_telemetry.correctness_r3 = correctness.r3;
+      g_probe_telemetry.correctness_status =
+          !correctness.supported ? 1u : (!correctness.reached_return_boundary ? 2u : 3u);
+      g_probe_telemetry.correctness_blocker_kind = correctness.blocker_kind;
+      g_probe_telemetry.correctness_blocker_opcode = correctness.blocker_opcode;
+      g_probe_telemetry.correctness_blocker_address = correctness.blocker_address;
+      return true;
+    }
+  }
+  return DefineOrRunCached(frontend, function, key);
 }
 
 void ResetTailTrampoline() {
@@ -819,6 +938,17 @@ uint64_t ProbeBackend::CalculateNextHostInstruction(xe::cpu::ThreadDebugInfo*,ui
 }  // namespace render360::xenia_web
 
 extern "C" {
+__attribute__((used, export_name("r360_hir_cache_miss_dump")))
+uint32_t r360_hir_cache_miss_dump() {
+  std::vector<std::pair<uint64_t, uint32_t>> rows(render360::xenia_web::g_cache_miss_debug.begin(),
+                                                  render360::xenia_web::g_cache_miss_debug.end());
+  std::sort(rows.begin(), rows.end(), [](auto& a, auto& b) { return a.second > b.second; });
+  for (size_t i = 0; i < rows.size() && i < 20; ++i) {
+    std::fprintf(stderr, "R360_JITPROF miss %08X reason=%u count=%u\n", uint32_t(rows[i].first),
+                 uint32_t(rows[i].first >> 32), rows[i].second);
+  }
+  return uint32_t(rows.size());
+}
 uint32_t r360_ppc_probe_assembled_functions(){return render360::xenia_web::GetProbeTelemetry().assembled_functions;}
 uint32_t r360_ppc_probe_hir_block_count(){return render360::xenia_web::GetProbeTelemetry().hir_blocks;}
 uint32_t r360_ppc_probe_hir_instruction_count(){return render360::xenia_web::GetProbeTelemetry().hir_instructions;}

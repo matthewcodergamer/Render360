@@ -33,6 +33,7 @@ on:
       - 'test-wasm-backend-calls.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'test-direct-call-sparse-window.mjs'
+      - 'test-translation-window-consistency.mjs'
       - 'test-hir-load-offset-addressing.mjs'
       - 'test-hir-cache-control.mjs'
       - 'test-hir-rotate-left.mjs'
@@ -263,6 +264,9 @@ jobs:
 
       - name: Verify direct calls page executable sparse subwindows
         run: timeout 90s node ./test-direct-call-sparse-window.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+
+      - name: Verify translations do not depend on decoder-window history
+        run: timeout 90s node ./test-translation-window-consistency.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
 
       - name: Verify signed PPC LOAD_OFFSET effective addresses
         run: timeout 90s node ./test-hir-load-offset-addressing.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

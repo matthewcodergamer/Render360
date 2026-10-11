@@ -56,6 +56,8 @@ bool FinishGuestThreadFiber(uint32_t native, bool returned, uint32_t exit_code);
 // INTERRUPT packets the command processor executed (source 1) run the title's
 // VdSetGraphicsInterruptCallback callback. Called at guest call boundaries.
 void MaybeDeliverGuestInterrupts();
+// The same without the call-count gate (polls from compiled guest loops).
+void DeliverGuestInterruptsNow();
 
 }  // namespace render360::xenia_web
 

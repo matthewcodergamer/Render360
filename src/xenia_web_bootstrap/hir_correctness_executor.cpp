@@ -1048,6 +1048,7 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
+uint64_t g_opcode_histogram[256] = {};  // executed HIR opcodes (run-title R360_OPHIST)
 // Guest address of the last SOURCE_OFFSET executed (diagnostics).
 uint32_t g_last_source_address = 0;
 
@@ -1468,9 +1469,7 @@ bool ExecuteFlaggedOperation(const xe::cpu::hir::Instr* instr,
     case OPCODE_LOAD_CLOCK: {
       // mftb: Xenia's guest timebase runs at 50 MHz (Clock::guest_tick_frequency,
       // and KeQueryPerformanceFrequency here).
-      timespec ts{};
-      clock_gettime(CLOCK_MONOTONIC, &ts);
-      const uint64_t ns = uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+      const uint64_t ns = GuestClockNanoseconds();
       RuntimeValue v;
       SetUnsigned(&v, xe::cpu::hir::INT64_TYPE, ns / 20u);
       *supported = dest != nullptr;
@@ -1638,6 +1637,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         supported = false;
         break;
       }
+      ++g_opcode_histogram[instr->opcode->num & 0xFFu];
       if (ExecuteFlaggedOperation(instr, values, &supported)) {
         if (!supported) {
           result.blocker_kind = kHIRBlockerUnsupportedOpcode;
@@ -2091,6 +2091,36 @@ HIRCorrectnessResult ExecuteHIRCorrectnessProbe(
 }
 
 uint64_t HIRTotalInstructions() { return g_total_instructions; }
+
+// Guest clock. Normally host monotonic time; with a deterministic clock
+// (r360_set_deterministic_clock) it advances with executed HIR instructions,
+// so headless runs replay identically (timers, vblank, mftb, system time).
+uint64_t g_clock_ps_per_instruction = 0;
+uint64_t g_clock_idle_ns = 0;  // deterministic clock: time all fibers idled
+uint64_t GuestClockNanoseconds() {
+  if (g_clock_ps_per_instruction) {
+    return g_total_instructions * g_clock_ps_per_instruction / 1000ull + g_clock_idle_ns;
+  }
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+// The guest CPU idles until `deadline_ns`: the deterministic clock skips
+// ahead; the host clock is waited out.
+bool GuestClockIdleUntil(uint64_t deadline_ns) {
+  const uint64_t now = GuestClockNanoseconds();
+  if (now >= deadline_ns) return true;
+  if (g_clock_ps_per_instruction) {
+    g_clock_idle_ns += deadline_ns - now;
+    return true;
+  }
+  timespec ts{};
+  const uint64_t wait = deadline_ns - now;
+  ts.tv_sec = time_t(wait / 1000000000ull);
+  ts.tv_nsec = long(wait % 1000000000ull);
+  nanosleep(&ts, nullptr);
+  return true;
+}
 uint32_t HIRLastSourceAddress() { return g_last_source_address; }
 
 }  // namespace render360::xenia_web
@@ -2214,6 +2244,22 @@ uint32_t r360_debug_watch(uint32_t address) {
   render360::xenia_web::g_debug_watch_address = address;
   return address;
 }
+extern "C" uint32_t r360_hir_last_source() { return render360::xenia_web::g_current_source_address; }
+extern "C" uint64_t r360_guest_clock_ns() {
+  return render360::xenia_web::GuestClockNanoseconds();
+}
+extern "C" uint32_t r360_guest_clock_deterministic() {
+  return render360::xenia_web::g_clock_ps_per_instruction ? 1u : 0u;
+}
+// 0 = host time; otherwise picoseconds of guest time per HIR instruction.
+extern "C" uint32_t r360_set_deterministic_clock(uint32_t ps_per_instruction) {
+  render360::xenia_web::g_clock_ps_per_instruction = ps_per_instruction;
+  render360::xenia_web::g_clock_idle_ns = 0;
+  return ps_per_instruction;
+}
 extern "C" uint32_t r360_debug_watch_address() {
   return render360::xenia_web::g_debug_watch_address;
 }
+
+extern "C" __attribute__((used, export_name("r360_hir_opcode_histogram_k")))
+uint32_t r360_hir_opcode_histogram_k(uint32_t op) { return uint32_t(render360::xenia_web::g_opcode_histogram[op & 0xFF] / 1000u); }

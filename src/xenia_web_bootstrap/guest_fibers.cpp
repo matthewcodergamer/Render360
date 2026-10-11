@@ -77,6 +77,9 @@ struct Fiber {
   uint32_t leave_pc = 0;      // diagnostics: guest address when it left
   uint64_t instructions = 0;  // diagnostics: HIR instructions run
   uint64_t vruntime = 0;      // fair-share clock (instructions, clamped on wake)
+  // Guest-clock deadline (GuestClockNanoseconds) of a timed wait or sleep;
+  // 0 = none. A blocked fiber is runnable again once it passes.
+  uint64_t wake_ns = 0;
 };
 
 std::vector<Fiber> g_fibers;  // [0] = the title's primary thread
@@ -139,7 +142,8 @@ bool Eligible(const Fiber& fiber) {
     case kFiberReady:
       return true;
     case kFiberBlocked:
-      return fiber.progress_mark != g_progress;
+      return fiber.progress_mark != g_progress ||
+             (fiber.wake_ns && GuestClockNanoseconds() >= fiber.wake_ns);
     default:
       return false;
   }
@@ -306,6 +310,59 @@ bool GuestFiberYield(bool blocked) {
 
 bool GuestInterruptActive() { return g_in_interrupt; }
 
+// Xenia blocks a sleeping or timed-waiting XThread on a host wait until its
+// deadline; here the fiber blocks with a guest-clock deadline and another
+// fiber runs. Returns true when resumed (the caller re-checks its condition),
+// false when no other fiber can run now (the caller idles: GuestFiberIdle).
+bool GuestFiberSleepUntil(uint64_t deadline_ns) {
+#if defined(__wasm__)
+  if (g_rewinding) {
+    g_rewinding = false;
+    r360_asyncify_stop_rewind();
+    if (g_force_fail) {
+      g_force_fail = false;
+      return false;
+    }
+    if (g_current < g_fibers.size()) g_fibers[g_current].wake_ns = 0;
+    return true;
+  }
+  if (!g_enabled || g_in_interrupt || g_current >= g_fibers.size()) return false;
+  g_fibers[g_current].wake_ns = deadline_ns;
+  uint32_t target = 0;
+  if (!PickTarget(g_current, &target) || !EnsureFiberMemory(g_fibers[g_current], false) ||
+      !EnsureFiberMemory(g_fibers[target], target != 0)) {
+    g_fibers[g_current].wake_ns = 0;
+    return false;
+  }
+  SwitchTo(target, kFiberBlocked, 1u);
+  return false;  // unwinding; the value is not observed
+#else
+  (void)deadline_ns;
+  return false;
+#endif
+}
+
+// Nothing else can run before `deadline_ns`: the CPU idles. The guest clock
+// moves on (deterministic clock: skipped ahead; host clock: waited out) in
+// steps no longer than a vblank period, delivering the interrupts that fall
+// in between (their handlers may wake a thread). Returns false if idling is
+// not possible here.
+bool GuestFiberIdle(uint64_t deadline_ns) {
+  if (!g_enabled || g_in_interrupt) return false;
+  const uint64_t now = GuestClockNanoseconds();
+  if (now >= deadline_ns) return true;
+  uint64_t until = deadline_ns;
+  // Another sleeper may be due earlier.
+  for (const auto& fiber : g_fibers) {
+    if (fiber.state == kFiberBlocked && fiber.wake_ns && fiber.wake_ns < until) until = fiber.wake_ns;
+  }
+  constexpr uint64_t kMaxIdleStepNs = 4000000ull;  // 4 ms
+  if (until > now + kMaxIdleStepNs) until = now + kMaxIdleStepNs;
+  if (!GuestClockIdleUntil(until)) return false;
+  DeliverGuestInterruptsNow();
+  return true;
+}
+
 void GuestFiberHostYieldIfDue() {
 #if defined(__wasm__)
   if (g_rewinding) {
@@ -423,6 +480,25 @@ uint32_t r360_fiber_take_host_yield() {
 }
 uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
 uint32_t r360_fiber_preemptions() { return rx::g_preemptions; }
+// Guest JIT frames (hir_wasm_jit.cpp) save their locals in the current
+// fiber's Asyncify buffer like Binaryen-instrumented functions: pushed on
+// unwind (after their callees), popped on rewind (before them).
+__attribute__((used, export_name("r360_jit_h_spill_alloc")))
+uint32_t r360_jit_h_spill_alloc(uint32_t bytes) {
+  if (rx::g_current >= rx::g_fibers.size() || !rx::g_fibers[rx::g_current].asyncify) abort();
+  auto* header = reinterpret_cast<uint32_t*>(rx::g_fibers[rx::g_current].asyncify);
+  const uint32_t at = header[0];
+  if (uint64_t(at) + bytes > header[1]) abort();
+  header[0] = at + bytes;
+  return at;
+}
+__attribute__((used, export_name("r360_jit_h_spill_pop")))
+uint32_t r360_jit_h_spill_pop(uint32_t bytes) {
+  if (rx::g_current >= rx::g_fibers.size() || !rx::g_fibers[rx::g_current].asyncify) abort();
+  auto* header = reinterpret_cast<uint32_t*>(rx::g_fibers[rx::g_current].asyncify);
+  header[0] -= bytes;
+  return header[0];
+}
 uint32_t r360_fiber_leave(uint32_t index, uint32_t field) {
   if (index >= rx::g_fibers.size()) return 0;
   if (field >= 2 && field < 7) return rx::g_fibers[index].leave_counts[field - 2];

@@ -1,21 +1,25 @@
 #include "title_gpu_runtime.h"
 
 #include <cstdint>
+#include <cstdio>
 
 #include "sparse_guest_memory.h"
 
+extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
 extern "C" {
 void r360_xenos_reset();
 uint32_t r360_xenos_ring_buffer();
 uint32_t r360_xenos_ring_capacity();
 uint32_t r360_xenos_submit(uint32_t words);
 uint32_t r360_xenos_status();
+uint32_t r360_xenos_trace_ibs(uint32_t on);
 uint32_t r360_xenos_last_fault_word();
 uint32_t r360_xenos_interrupts();
 uint32_t r360_xenos_register(uint32_t index);
 uint32_t r360_xenos_set_register(uint32_t index, uint32_t value);
 uint32_t r360_xenos_stall_ring_offset();
 uint32_t r360_xenos_arm_resume();
+uint32_t r360_xenos_stall_ready();
 uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
 uint32_t r360_xenos_last_interrupt_mask();
 }
@@ -200,6 +204,7 @@ bool ReadRingWordInternal(uint32_t index, uint32_t* out_value) {
   return true;
 }
 
+uint32_t g_pumps = 0;
 bool PublishReadPointer() {
   if (!g_rptr_writeback) return true;
   const uint8_t bytes[4] = {static_cast<uint8_t>(g_read_pointer >> 24),
@@ -230,6 +235,10 @@ bool DrainPendingRingToXenos() {
     return false;
   }
 
+  if (r360_xenos_trace_ibs(2) & 1u) {
+    std::fprintf(stderr, "R360_XENOS_DRAIN rptr=%u wptr=%u pending=%u stalled=%u\n",
+                 g_read_pointer, g_write_pointer, pending, g_gpu_stalled ? 1u : 0u);
+  }
   auto* decoder = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(decoder_ptr));
   for (uint32_t i = 0; i < pending; ++i) {
     const uint32_t ring_index = (g_read_pointer + i) % capacity;
@@ -363,7 +372,13 @@ bool TryTitleGpuKernelService(uint32_t module, uint32_t ordinal,
   }
 }
 
+// The XMA decoder's register window (kernel_xboxkrnl_services.cpp); the other
+// guest MMIO device the executor's MMIO path reaches.
+__attribute__((weak)) bool ReadXmaMmio(uint32_t, uint32_t*) { return false; }
+__attribute__((weak)) bool WriteXmaMmio(uint32_t, uint32_t) { return false; }
+
 bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
+  if (value && ReadXmaMmio(address, value)) return true;
   if (!value || !IsGpuMmio(address)) return false;
   switch (RegisterIndex(address)) {
     case kRegisterCpRbRptr:
@@ -396,10 +411,15 @@ bool ReadTitleGpuMmio(uint32_t address, uint32_t* value) {
 }
 
 bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
+  if (WriteXmaMmio(address, value)) return true;
   if (!IsGpuMmio(address)) return false;
   ++g_mmio_writes;
   switch (RegisterIndex(address)) {
     case kRegisterCpRbWptr:
+      if (r360_xenos_trace_ibs(2) & 1u) {
+        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X\n",
+                     g_write_pointer, value, g_read_pointer, r360_guest_thread_current());
+      }
       g_write_pointer = value;
       if (g_ring_base) g_status = g_status < 2u ? 2u : g_status;
       // GPU consumption is coupled to the real producer MMIO write so guest
@@ -427,7 +447,8 @@ uint32_t TitleGpuReadPointerBlockSizeLog2() {
 }
 uint32_t TitleGpuMmioWrites() { return g_mmio_writes; }
 void TitleGpuPump() {
-  if (g_gpu_stalled && g_ring_base) DrainPendingRingToXenos();
+  ++g_pumps;
+  if (g_gpu_stalled && g_ring_base && r360_xenos_stall_ready()) DrainPendingRingToXenos();
 }
 uint32_t TitleGpuTakePendingInterrupts(uint32_t* cpu_mask) {
   const uint32_t count = g_pending_interrupts;
@@ -455,6 +476,8 @@ uint32_t TitleGpuRingWord(uint32_t index, bool* ok) {
 }  // namespace render360::xenia_web
 
 extern "C" {
+uint32_t r360_title_gpu_stalled() { return render360::xenia_web::g_gpu_stalled ? 1u : 0u; }
+uint32_t r360_title_gpu_pumps() { return render360::xenia_web::g_pumps; }
 void r360_title_gpu_reset() {
   render360::xenia_web::ResetTitleGpuRuntime();
 }

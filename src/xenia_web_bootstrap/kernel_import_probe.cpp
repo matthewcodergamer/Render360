@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <unordered_map>
 
 #include "hir_correctness_executor.h"
 #include "kernel_xboxkrnl_services.h"
@@ -56,6 +57,9 @@ constexpr uint32_t kServiceStatusInvalid = 3;
 constexpr uint32_t kServiceStatusTerminal = 4;
 constexpr uint32_t kServiceStatusWouldBlock = 5;
 std::array<KernelImportEntry, kMaxKernelImports> g_entries{};
+// Every guest call asks whether its target is a thunk: index the entries.
+std::unordered_map<uint32_t, uint32_t> g_entry_by_thunk;  // thunk -> index
+uint32_t g_thunk_min = 0xFFFFFFFFu, g_thunk_max = 0;
 std::array<KernelServiceTraceEntry, kMaxKernelServiceTrace> g_service_trace{};
 uint32_t g_count = 0, g_calls = 0, g_last_thunk = 0, g_last_module = 0,
          g_last_ordinal = 0, g_last_status = 0, g_last_abi_target = 0,
@@ -98,10 +102,10 @@ void FinishKernelServiceTrace(KernelServiceTraceEntry* trace, uint32_t result,
     for (uint32_t i = 0; i < 6; ++i) hit |= trace->args[i] == watched;
     if (!hit) continue;
     std::fprintf(stderr,
-                 "R360_KWATCH seq=%u thread=0x%08X mod=%u ord=0x%X args=%08X,%08X,%08X,%08X,%08X,%08X -> %08X status=%u\n",
+                 "R360_KWATCH seq=%u thread=0x%08X mod=%u ord=0x%X args=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X -> %08X status=%u\n",
                  trace->sequence, r360_guest_thread_current(), trace->module_id,
                  trace->ordinal, trace->args[0], trace->args[1], trace->args[2],
-                 trace->args[3], trace->args[4], trace->args[5], result,
+                 trace->args[3], trace->args[4], trace->args[5], trace->args[6], trace->args[7], result,
                  service_status);
     break;
   }
@@ -172,10 +176,9 @@ bool TryBuiltInKernelService(const KernelImportEntry& entry,
 }
 
 const KernelImportEntry* FindKernelImport(uint32_t thunk_address) {
-  for (const auto& entry : g_entries) {
-    if (entry.used && entry.thunk_address == thunk_address) return &entry;
-  }
-  return nullptr;
+  if (thunk_address < g_thunk_min || thunk_address > g_thunk_max) return nullptr;
+  const auto it = g_entry_by_thunk.find(thunk_address);
+  return it == g_entry_by_thunk.end() ? nullptr : &g_entries[it->second];
 }
 
 // Calls per export (module 1 xboxkrnl, 2 xam; ordinals below 0x1000).
@@ -207,6 +210,9 @@ const KernelServiceTraceEntry* KernelServiceTraceAt(uint32_t index) {
 
 void ResetKernelImportProbe() {
   g_entries = {};
+  g_entry_by_thunk.clear();
+  g_thunk_min = 0xFFFFFFFFu;
+  g_thunk_max = 0;
   g_service_trace = {};
   g_export_calls = {};
   g_count = g_calls = g_last_thunk = g_last_module = g_last_ordinal =
@@ -228,6 +234,9 @@ bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
   }
   for (auto& entry : g_entries) {
     if (!entry.used) {
+      g_entry_by_thunk[thunk_address] = uint32_t(&entry - g_entries.data());
+      if (thunk_address < g_thunk_min) g_thunk_min = thunk_address;
+      if (thunk_address > g_thunk_max) g_thunk_max = thunk_address;
       entry.used = true;
       entry.thunk_address = thunk_address;
       entry.module_id = module_id;

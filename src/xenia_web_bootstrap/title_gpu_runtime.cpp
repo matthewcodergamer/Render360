@@ -417,8 +417,16 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
   switch (RegisterIndex(address)) {
     case kRegisterCpRbWptr:
       if (r360_xenos_trace_ibs(2) & 1u) {
-        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X\n",
+        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X words=",
                      g_write_pointer, value, g_read_pointer, r360_guest_thread_current());
+        const uint32_t capacity = RingCapacityInternal();
+        for (uint32_t i = g_write_pointer, n = 0; capacity && i != value && n < 16u;
+             i = (i + 1u) % capacity, ++n) {
+          uint32_t word = 0;
+          ReadRingWordInternal(i, &word);
+          std::fprintf(stderr, "%08X ", word);
+        }
+        std::fprintf(stderr, "\n");
       }
       g_write_pointer = value;
       if (g_ring_base) g_status = g_status < 2u ? 2u : g_status;

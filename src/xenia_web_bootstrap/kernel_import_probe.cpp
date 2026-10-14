@@ -86,6 +86,7 @@ KernelServiceTraceEntry* BeginKernelServiceTrace(
 // are logged to stderr (r360_kernel_watch_arg; tools/run-title.mjs
 // --watch-kernel-arg).
 std::array<uint32_t, 4> g_kernel_arg_watch{};
+uint32_t g_determinism_every = 0;
 
 void FinishKernelServiceTrace(KernelServiceTraceEntry* trace, uint32_t result,
                               uint32_t service_status, bool handled) {
@@ -93,6 +94,13 @@ void FinishKernelServiceTrace(KernelServiceTraceEntry* trace, uint32_t result,
   trace->result = result;
   trace->service_status = service_status;
   trace->handled = handled ? 1u : 0u;
+  // Determinism checkpoints: every Nth kernel call with the guest instruction
+  // count, so two runs can be diffed for the first divergence.
+  if (g_determinism_every && trace->sequence % g_determinism_every == 0) {
+    std::fprintf(stderr, "R360_DET seq=%u instr=%llu thread=0x%08X ord=%u.%X r3=0x%08X\n",
+                 trace->sequence, static_cast<unsigned long long>(HIRTotalInstructions()),
+                 r360_guest_thread_current(), trace->module_id, trace->ordinal, result);
+  }
   if (!g_kernel_arg_watch[0]) return;
   for (uint32_t watched : g_kernel_arg_watch) {
     if (!watched) continue;
@@ -384,6 +392,11 @@ __attribute__((used, export_name("r360_kernel_export_calls")))
 uint32_t r360_kernel_export_calls(uint32_t module, uint32_t ordinal) {
   if (module < 1 || module > 2 || ordinal >= 0x1000u) return 0;
   return render360::xenia_web::g_export_calls[module - 1][ordinal];
+}
+__attribute__((used, export_name("r360_kernel_determinism_every")))
+uint32_t r360_kernel_determinism_every(uint32_t n) {
+  render360::xenia_web::g_determinism_every = n;
+  return n;
 }
 __attribute__((used, export_name("r360_kernel_watch_arg")))
 uint32_t r360_kernel_watch_arg(uint32_t slot, uint32_t value) {

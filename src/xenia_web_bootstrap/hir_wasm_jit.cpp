@@ -236,7 +236,8 @@ constexpr uint32_t kPollBudget = 20000;  // backward branches between polls
 constexpr uint32_t kLocPc = 1, kLocBudget = 2, kLocResume = 3, kLocPending = 4,
                    kLocSp = 5, kLocTmp = 6, kLocTmpB = 7, kLocTmp64 = 8,
                    kLocTmp64B = 9, kLocTmpF64 = 10, kLocTmpV = 11, kLocAddr = 12,
-                   kLocPage = 13, kLocHost = 14, kLocVal = 15, kFixedLocals = 16;
+                   kLocPage = 13, kLocHost = 14, kLocVal = 15,
+                   kLocResumed = 16, kFixedLocals = 17;
 
 class Emitter {
  public:
@@ -1617,12 +1618,18 @@ bool Emitter::EmitSegment(uint32_t k) {
   if (k < real_) {
     const Segment& s = segments_[k];
     if (s.count) {
-      // Total instruction counter (--max-minstr, preemption accounting).
+      // Total instruction counter (--max-minstr, preemption accounting,
+      // deterministic clock). A segment re-entered by an Asyncify rewind
+      // (RESTORE) was already counted when it first ran.
+      Get(kLocResumed); Op(oI32Eqz);
+      If();
       I32(int32_t(counter_));
       I32(int32_t(counter_)); Mem(oI64Load, 3, 0);
       I64(int64_t(s.count)); Op(oI64Add);
       Mem(oI64Store, 3, 0);
+      End();
     }
+    I32(0); Set(kLocResumed);
     uint32_t source = 0;
     for (Instr* i = s.block->instr_head; i && i != s.first; i = i->next) {
       if (i->opcode && i->opcode->num == hir::OPCODE_SOURCE_OFFSET) source = uint32_t(i->src1.offset);
@@ -1644,6 +1651,8 @@ bool Emitter::EmitSegment(uint32_t k) {
     UnwindCheck(k);
     Get(kLocTmp); Op(oI32Eqz);
     If(); I32(int32_t(kJitStatusFailed)); Op(oReturn); End();
+    // Resumed here after a rewind: the branch target has not run yet.
+    I32(0); Set(kLocResumed);
     Get(kLocPending); Set(kLocPc);
     BrTo(DepthToLoop(k));
     return true;
@@ -1688,6 +1697,7 @@ bool Emitter::EmitSegment(uint32_t k) {
     }
     Set(i);
   }
+  I32(1); Set(kLocResumed);
   Get(kLocResume); Set(kLocPc);
   BrTo(DepthToLoop(k));
   return true;
@@ -1771,7 +1781,7 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   };
   for (uint32_t i = 1; i < kLocTmp64; ++i) add_local(kI32);
   add_local(kI64); add_local(kI64); add_local(kF64); add_local(kV128);
-  for (int i = 0; i < 4; ++i) add_local(kI32);
+  for (uint32_t i = kLocAddr; i < kFixedLocals; ++i) add_local(kI32);
   for (uint8_t t : local_types_) add_local(t);
   body.u32(uint32_t(runs.size()));
   for (const auto& r : runs) { body.u32(r.first); body.u8(r.second); }

@@ -47,6 +47,7 @@ function parseArgs(argv){
     else if(a==='--progress')args.progress=true;
     else if(a==='--no-jit')args.jit=0;
     else if(a==='--list-files'){}
+    else if(a==='--det-every')args.detEvery=Number(argv[++i])>>>0;
     else if(a==='--xenos-trace-from')args.xenosTraceFrom=Number(argv[++i])>>>0;
     else if(a==='--dump-shaders')args.dumpShaders=argv[++i];
     else if(a==='--deterministic')args.deterministicPs=Number(argv[++i])>>>0;
@@ -88,7 +89,7 @@ async function loadBootstrap(file,verbose){
   let pending='';
   const bytes=fs.readFileSync(file);
   const stderr=[];
-  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF'))process.stderr.write(line+'\n');}}});
+  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_DET')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF'))process.stderr.write(line+'\n');}}});
   const module=await WebAssembly.compile(bytes);
   const instance=attachRender360BrowserInstance(host,await WebAssembly.instantiate(module,host.imports));
   return {instance,host,stderr};
@@ -189,6 +190,7 @@ async function main(){
   // Per-call/per-function stderr tracing is off by default for speed.
   bootstrap.exports.r360_trace_set_verbose?.(args.traceCalls?1:0);
   if(args.watch)bootstrap.exports.r360_debug_watch?.(args.watch);
+  if(args.detEvery)bootstrap.exports.r360_kernel_determinism_every?.(args.detEvery);
   // Guest time from executed instructions (ps per HIR instruction): replayable runs.
   if(args.deterministicPs)bootstrap.exports.r360_set_deterministic_clock?.(args.deterministicPs);
   if(args.logDraws)bootstrap.exports.r360_xenos_debug_draws?.(args.logDraws);

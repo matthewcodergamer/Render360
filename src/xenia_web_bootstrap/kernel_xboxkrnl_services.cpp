@@ -5345,6 +5345,7 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
   // make kernel calls) while this one is suspended in a wait.
   const uint32_t caller_r13 = g_caller_r13, caller_lr = g_caller_lr,
                  caller_r1 = g_caller_r1;
+  uint64_t idle_started_ns = 0;
   for (;;) {
     g_status = kKernelServiceSuccess;
     g_handled = true;
@@ -5373,6 +5374,23 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
       g_caller_lr = caller_lr;
       g_caller_r1 = caller_r1;
       continue;
+    }
+    // Every guest thread is waiting (some may sleep until a deadline). On the
+    // console the CPU idles while vblank, audio and timers keep firing and
+    // eventually wake a thread: idle the guest clock, delivering interrupts,
+    // and retry. Ten seconds of guest time with no thread able to run is a
+    // real deadlock and is reported.
+    constexpr uint64_t kIdleStepNs = 4000000ull, kMaxIdleNs = 10000000000ull;
+    if (g_status == kKernelServiceWouldBlock && g_wait.reason >= 1 &&
+        g_wait.reason <= 3 && GuestFibersActive() && !GuestInterruptActive()) {
+      const uint64_t now = r360_guest_clock_ns();
+      if (!idle_started_ns) idle_started_ns = now;
+      if (now - idle_started_ns < kMaxIdleNs && GuestFiberIdle(now + kIdleStepNs)) {
+        g_caller_r13 = caller_r13;
+        g_caller_lr = caller_lr;
+        g_caller_r1 = caller_r1;
+        continue;
+      }
     }
     if (g_status == kKernelServiceSuccess) {
       GuestFiberNoteProgress();

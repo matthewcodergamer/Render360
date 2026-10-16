@@ -133,7 +133,7 @@ async function loadBootstrap(file,verbose){
   let pending='';
   const bytes=fs.readFileSync(file);
   const stderr=[];
-  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_DET')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF'))process.stderr.write(line+'\n');}}});
+  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_DET')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF')||line.startsWith('R360_PRIMARY_EXIT')||line.startsWith('R360_MESSAGE_BOX'))process.stderr.write(line+'\n');}}});
   const module=await WebAssembly.compile(bytes);
   const instance=attachRender360BrowserInstance(host,await WebAssembly.instantiate(module,host.imports));
   return {instance,host,stderr};

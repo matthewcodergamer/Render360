@@ -318,6 +318,21 @@ expect(k('NtWaitForSingleObjectEx',sys,1,0,P+0x8F0)===0x102,'drained listener sh
 const second=x('XamNotifyCreateListener',0x1,10);expect(x('XNotifyGetNext',second,0,P+0x900,P+0x904)===0&&r32(P+0x900)===0,'startup notifications must only go to the first system listener');
 console.log('XAM_NOTIFY_LISTENER_XENIA=PASS');
 
+// --- XamShowMessageBoxUI (Xenia xam_ui.cc headless: focused button) --------------
+utf16(P+0xA00,'Title');utf16(P+0xA40,'Continue?');utf16(P+0xA80,'Yes');utf16(P+0xA90,'No');
+w32(P+0xAA0,P+0xA80);w32(P+0xAA4,P+0xA90);w32(P+0xAB0,0xFFFFFFFF);
+w32(P+0xF000+0x54,0);  // ninth argument (overlapped) on the caller's stack
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,1,0,P+0xAB0)===0&&status()===1,'synchronous XamShowMessageBoxUI should succeed');
+expect(r32(P+0xAB0)===1,`message box should report the focused button, got ${r32(P+0xAB0)}`);
+const uiSeen=[];while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1)uiSeen.push(`${r32(P+0x900).toString(16)}:${r32(P+0x904)}`);
+expect(JSON.stringify(uiSeen)===JSON.stringify(['9:1','9:0']),`message box should bracket XN_SYS_UI, got ${uiSeen}`);
+w32(P+0xAB0,0xFFFFFFFF);for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===997&&status()===1,'overlapped XamShowMessageBoxUI should return ERROR_IO_PENDING');
+expect(r32(P+0xAB0)===0&&r32(P+0xAC0)===0,'overlapped message box should complete with the focused button and success');
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+w32(P+0xF000+0x54,0);
+console.log('XAM_MESSAGE_BOX_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

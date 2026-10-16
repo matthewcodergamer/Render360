@@ -5145,6 +5145,32 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       BroadcastNotification(0x0Au, 1);
       BroadcastNotification(0x09u, 0);
       return X_ERROR_SUCCESS;
+    case xam::XamShowMessageBoxUI: {
+      // (user, title, text, button_count, button_ptrs, active_button, flags,
+      //  result_ptr, overlapped): Xenia's headless path picks the focused
+      // button, bracketed by XN_SYS_UI. The text goes to the debug log so a
+      // run shows what the title asked.
+      uint32_t result_ptr = 0, overlapped = 0;
+      if (!StackArg(8, &overlapped)) return Invalid();
+      result_ptr = a[7];
+      std::u16string title, text;
+      ReadU16String(r4, &title);
+      ReadU16String(r5, &text);
+      std::string log = "XamShowMessageBoxUI \"" + Utf16ToUtf8(title) + "\": " + Utf16ToUtf8(text) + " [";
+      for (uint32_t i = 0; i < a[3] && i < 8u; ++i) {
+        uint32_t button = 0;
+        std::u16string label;
+        if (Rd32(a[4] + i * 4u, &button)) ReadU16String(button, &label);
+        log += (i ? " | " : "") + Utf16ToUtf8(label);
+      }
+      log += "] -> " + std::to_string(a[5]);
+      DebugLog(log);
+      std::fprintf(stderr, "R360_MESSAGE_BOX %s\n", log.c_str());
+      BroadcastNotification(0x09u, 1);
+      if (!result_ptr || !Wr32(result_ptr, a[5])) return Invalid();
+      BroadcastNotification(0x09u, 0);
+      return FinishXamOverlapped(overlapped, X_ERROR_SUCCESS, 0);
+    }
     case xam::XamShowDeviceSelectorUI: {
       // (user, content_type, content_flags, total_requested(qword),
       //  device_id*, overlapped): the dummy HDD, bracketed by XN_SYS_UI.

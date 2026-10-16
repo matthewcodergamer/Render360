@@ -17,6 +17,8 @@
 //  * Kernel pool allocations come from a sparse arena at 0x5A000000 rather than
 //    Xenia's system heap in the 0x80000000 XEX range.
 
+#include "xenia/kernel/util/xdbf_utils.h"
+#include "xenia/base/string.h"
 #include "kernel_xboxkrnl_services.h"
 
 #include <time.h>
@@ -2406,14 +2408,60 @@ uint32_t DeleteContent(uint32_t content_type, const std::string& file_name) {
   return X_ERROR_FILE_NOT_FOUND;
 }
 
+// XEX resource (Xenia UserModule::GetSection): name -> guest address, size.
+bool FindModuleSection(const std::string& name, uint32_t* address, uint32_t* size) {
+  uint32_t info = 0;
+  if (!XexOptionalHeader(kXexHeaderResourceInfo, &info) || !info) return false;
+  uint32_t info_size = 0;
+  if (!Rd32(info, &info_size) || info_size < 4u) return false;
+  const uint32_t count = (info_size - 4u) / 16u;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t entry = info + 4u + i * 16u;
+    char raw[9] = {};
+    if (!Rd(entry, raw, 8) || !Rd32(entry + 8u, address) || !Rd32(entry + 12u, size)) {
+      return false;
+    }
+    if (name == std::string(raw)) return true;
+  }
+  return false;
+}
+
+// Xenia KernelState::title_xdbf: the XDBF resource named by the title id.
+std::vector<uint8_t> TitleXdbf() {
+  uint32_t info = 0, title_id = 0;
+  if (!XexOptionalHeader(kXexHeaderExecutionInfo, &info) || !info ||
+      !Rd32(info + 0x0Cu, &title_id)) {
+    return {};
+  }
+  char name[9];
+  std::snprintf(name, sizeof(name), "%08X", title_id);
+  uint32_t address = 0, size = 0;
+  if (!FindModuleSection(name, &address, &size) || !size || size > (16u << 20)) return {};
+  std::vector<uint8_t> data(size);
+  if (!Rd(address, data.data(), size)) return {};
+  return data;
+}
+
 // XAM enumerators (Xenia XStaticEnumerator): fixed-size items handed out
 // items_per_enumerate at a time by XamEnumerate.
+struct XamAchievement {
+  uint32_t id = 0, image_id = 0, gamerscore = 0, flags = 0;
+  std::u16string label, description, unachieved;
+};
 struct XamEnumerator {
   uint32_t item_size = 0;
   uint32_t per_enumerate = 1;
   uint32_t current = 0;
   std::vector<uint8_t> items;
-  uint32_t count() const { return item_size ? uint32_t(items.size() / item_size) : 0; }
+  // Xenia XStaticAchievementEnumerator: X_ACHIEVEMENT_DETAILS records, then
+  // the strings the flags ask for (label 1, description 2, unachieved 4).
+  bool achievements = false;
+  uint32_t achievement_flags = 0;
+  std::vector<XamAchievement> achievement_items;
+  uint32_t count() const {
+    if (achievements) return uint32_t(achievement_items.size());
+    return item_size ? uint32_t(items.size() / item_size) : 0;
+  }
 };
 std::map<uint32_t, XamEnumerator>& XamEnumerators() {
   static std::map<uint32_t, XamEnumerator> enumerators;
@@ -2874,27 +2922,10 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       if (!r3 || r3 != g_exe.hmodule) return X_STATUS_INVALID_HANDLE;
       std::string name;
       if (!ReadCString(r4, &name, 64)) return Invalid();
-      uint32_t info = 0;
-      if (!XexOptionalHeader(kXexHeaderResourceInfo, &info) || !info) {
-        return X_STATUS_NOT_FOUND;
-      }
-      uint32_t info_size = 0;
-      if (!Rd32(info, &info_size) || info_size < 4u) return X_STATUS_NOT_FOUND;
-      const uint32_t count = (info_size - 4u) / 16u;
-      for (uint32_t i = 0; i < count; ++i) {
-        const uint32_t entry = info + 4u + i * 16u;
-        char raw[9] = {};
-        uint32_t address = 0, size = 0;
-        if (!Rd(entry, raw, 8) || !Rd32(entry + 8u, &address) ||
-            !Rd32(entry + 12u, &size)) {
-          return Invalid();
-        }
-        if (name == std::string(raw)) {
-          if (!Wr32(r5, address) || !Wr32(r6, size)) return Invalid();
-          return X_STATUS_SUCCESS;
-        }
-      }
-      return X_STATUS_NOT_FOUND;
+      uint32_t address = 0, size = 0;
+      if (!FindModuleSection(name, &address, &size)) return X_STATUS_NOT_FOUND;
+      if (!Wr32(r5, address) || !Wr32(r6, size)) return Invalid();
+      return X_STATUS_SUCCESS;
     }
 
     // --- Time --------------------------------------------------------------
@@ -5133,6 +5164,42 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;
     }
+    case xam::XamUserCreateAchievementEnumerator: {
+      // (title_id, user_index, xuid, flags, offset, count, buffer_size*,
+      //  handle*): Xenia's static enumerator over the title's XDBF
+      // achievement table, strings in the default user language (English).
+      const uint32_t flags = r6, count = a[5], size_ptr = a[6], handle_out = a[7];
+      if (!count || !size_ptr || !handle_out || r4 >= 4u) return X_ERROR_INVALID_PARAMETER;
+      const uint32_t entry_size = 36u + ((flags & 7u) ? 464u : 0u);
+      if (!Wr32(size_ptr, entry_size * count)) return Invalid();
+      const uint32_t handle = CreateXamEnumerator(entry_size, count, {});
+      if (!handle) return X_STATUS_NO_MEMORY;
+      XamEnumerator& e = XamEnumerators()[handle];
+      e.achievements = true;
+      e.achievement_flags = flags;
+      const std::vector<uint8_t> xdbf = TitleXdbf();
+      const xe::kernel::util::XdbfGameData db(xdbf.data(), xdbf.size());
+      if (db.is_valid()) {
+        const auto language = db.GetExistingLanguage(xe::XLanguage::kEnglish);
+        auto u16 = [&](uint16_t id) {
+          const std::string utf8 = db.GetStringTableEntry(language, id);
+          return xe::to_utf16(utf8);
+        };
+        for (const auto& entry : db.GetAchievements()) {
+          XamAchievement item;
+          item.id = entry.id;
+          item.label = u16(entry.label_id);
+          item.description = u16(entry.description_id);
+          item.unachieved = u16(entry.unachieved_id);
+          item.image_id = entry.image_id;
+          item.gamerscore = entry.gamerscore;
+          item.flags = entry.flags;
+          e.achievement_items.push_back(std::move(item));
+        }
+      }
+      if (!Wr32(handle_out, handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
     case xam::XamEnumerate: {
       // (handle, flags, buffer, buffer_length, items_returned*, overlapped)
       const uint32_t items_returned = a[4], overlapped = a[5];
@@ -5149,6 +5216,34 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
         count = std::min(e.count() - e.current, e.per_enumerate);
         if (!count) {
           result = X_ERROR_NO_MORE_FILES;
+        } else if (e.achievements) {
+          constexpr uint32_t kDetailsSize = 36, kStringBufferSize = 464;
+          uint32_t string_ptr = r5 + e.per_enumerate * kDetailsSize;
+          uint32_t string_left = count * kStringBufferSize;
+          auto append = [&](const std::u16string& text) -> uint32_t {
+            const uint32_t bytes = uint32_t(text.size() + 1) * 2u;
+            if (bytes > string_left) return 0;
+            const uint32_t ptr = string_ptr;
+            for (size_t c = 0; c <= text.size(); ++c) {
+              if (!Wr16(ptr + uint32_t(c) * 2u, c < text.size() ? uint16_t(text[c]) : 0u)) return 0;
+            }
+            string_ptr += bytes;
+            string_left -= bytes;
+            return ptr;
+          };
+          for (uint32_t i = 0; i < count; ++i, ++e.current) {
+            const XamAchievement& item = e.achievement_items[e.current];
+            const uint32_t d = r5 + i * kDetailsSize;
+            const uint32_t f = e.achievement_flags;
+            if (!Wr32(d + 0, item.id) ||
+                !Wr32(d + 4, (f & 1u) ? append(item.label) : 0u) ||
+                !Wr32(d + 8, (f & 2u) ? append(item.description) : 0u) ||
+                !Wr32(d + 12, (f & 4u) ? append(item.unachieved) : 0u) ||
+                !Wr32(d + 16, item.image_id) || !Wr32(d + 20, item.gamerscore) ||
+                !Wr32(d + 24, 0) || !Wr32(d + 28, 0) || !Wr32(d + 32, item.flags)) {
+              return Invalid();
+            }
+          }
         } else {
           if (!Wr(r5, e.items.data() + size_t(e.current) * e.item_size, count * e.item_size)) {
             return Invalid();

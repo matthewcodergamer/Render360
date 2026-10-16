@@ -353,6 +353,14 @@ while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
 need('r360_xam_dialog_set_host_answers')(0);
 console.log('XAM_MESSAGE_BOX_HOST_DIALOG=PASS');
 
+// --- XamUserCreateAchievementEnumerator (Xenia XStaticAchievementEnumerator) ------
+expect(x('XamUserCreateAchievementEnumerator',0,0,0,7,0,4,P+0xB00,P+0xB04)===0&&status()===1,'achievement enumerator not created');
+expect(r32(P+0xB00)===(36+464)*4,`achievement buffer size ${r32(P+0xB00)}`);
+expect(x('XamUserCreateAchievementEnumerator',0,4,0,7,0,4,P+0xB00,P+0xB04)===0x57,'bad user index must be rejected');
+w32(P+0xB08,0xFFFFFFFF);
+expect(x('XamEnumerate',r32(P+0xB04),0,P+0xC000,(36+464)*4,P+0xB08,0)===0x12&&r32(P+0xB08)===0,'title without an XDBF achievement table should enumerate nothing');
+console.log('XAM_ACHIEVEMENT_ENUMERATOR_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

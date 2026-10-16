@@ -43,7 +43,6 @@ extern "C" __attribute__((weak)) uint32_t r360_guest_clock_deterministic() { ret
 #include <vector>
 
 #include "guest_fibers.h"
-#include "hir_correctness_executor.h"
 #include "kernel_export_ordinals.h"
 
 // Weak defaults for builds that link the kernel services without the HIR
@@ -1010,12 +1009,8 @@ void UpdateTimerByGuest(uint32_t guest) {
 // ---------------------------------------------------------------------------
 // Service outcome plumbing.
 
-// Per-call service state is per guest thread: a service that sleeps, waits
-// with a timeout, yields or idles switches fibers mid-call, and the other
-// threads' kernel calls must not overwrite it (R360_FIBER_LOCAL: swapped
-// with the fiber, saved around interrupt callbacks).
-R360_FIBER_LOCAL uint32_t g_status = kKernelServiceSuccess;
-R360_FIBER_LOCAL bool g_handled = true;
+uint32_t g_status = kKernelServiceSuccess;
+bool g_handled = true;
 
 
 uint32_t Terminal(uint32_t kind, uint32_t code, uint32_t module,
@@ -5746,8 +5741,13 @@ void DeliverGuestInterruptsNow() {
 
 bool FinishGuestThreadFiber(uint32_t native, bool returned, uint32_t exit_code) {
   if (g_terminal.kind == kTerminalThreadExit) {
+    // ExTerminateThread already marked and terminated it. The service state
+    // it left (terminal) is not the next fiber's: a thread resuming in the
+    // middle of its own call (a sleep or timed wait) must not inherit it.
     g_terminal = {};
-    return true;  // ExTerminateThread already marked and terminated it
+    g_status = kKernelServiceSuccess;
+    g_handled = true;
+    return true;
   }
   if (!returned) return false;
   MarkThreadExited(r360_guest_thread_kthread(native), exit_code);

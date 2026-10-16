@@ -6,6 +6,8 @@
 #include "sparse_guest_memory.h"
 
 extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
+extern "C" __attribute__((weak)) uint64_t r360_guest_clock_ns() { return 0; }
+extern "C" __attribute__((weak)) uint32_t r360_kernel_vblank_interrupts() { return 0; }
 extern "C" {
 void r360_xenos_reset();
 uint32_t r360_xenos_ring_buffer();
@@ -417,8 +419,10 @@ bool WriteTitleGpuMmio(uint32_t address, uint32_t value) {
   switch (RegisterIndex(address)) {
     case kRegisterCpRbWptr:
       if (r360_xenos_trace_ibs(2) & 1u) {
-        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X words=",
-                     g_write_pointer, value, g_read_pointer, r360_guest_thread_current());
+        std::fprintf(stderr, "R360_XENOS_WPTR old=%u new=%u rptr=%u thread=0x%08X us=%llu vblank=%u words=",
+                     g_write_pointer, value, g_read_pointer, r360_guest_thread_current(),
+                     static_cast<unsigned long long>(r360_guest_clock_ns() / 1000u),
+                     r360_kernel_vblank_interrupts());
         const uint32_t capacity = RingCapacityInternal();
         for (uint32_t i = g_write_pointer, n = 0; capacity && i != value && n < 16u;
              i = (i + 1u) % capacity, ++n) {

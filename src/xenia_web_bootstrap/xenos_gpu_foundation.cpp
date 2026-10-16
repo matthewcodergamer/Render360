@@ -439,6 +439,13 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
     if (type != 3) { SetFault(header_index, depth, kStatusUnsupported); return false; }
     const uint32_t count = ((header >> 16) & 0x3FFFu) + 1u, opcode = (header >> 8) & 0x7Fu;
     if (count > word_count - i) { SetFault(header_index, depth, kStatusInvalid); return false; }
+    // CommandProcessor::ExecutePacketType3: bit 0 predicates the packet on the
+    // tiling bin (SET_BIN_MASK/SELECT); predicated swaps are always skipped.
+    // Predicated tiling replays one IB per bin, so a packet meant for a single
+    // bin must not run in every pass.
+    if ((header & 1u) && (!(g_bin_select & g_bin_mask) || opcode == kPm4XeSwap)) {
+      i += count; continue;
+    }
     const uint32_t* p = words + i; g_last_opcode = opcode; bool handled = true;
     switch (opcode) {
       case kPm4Nop: case kPm4MeInit: case kPm4WaitForIdle: break;

@@ -326,7 +326,7 @@ expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,1,0,P+0xAB0)===0&&sta
 expect(r32(P+0xAB0)===1,`message box should report the focused button, got ${r32(P+0xAB0)}`);
 const uiSeen=[];while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1)uiSeen.push(`${r32(P+0x900).toString(16)}:${r32(P+0x904)}`);
 expect(JSON.stringify(uiSeen)===JSON.stringify(['9:1','9:0']),`message box should bracket XN_SYS_UI, got ${uiSeen}`);
-w32(P+0xAB0,0xFFFFFFFF);for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
+w32(P+0xAB0,0xFFFFFFFF);for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0);w32(P+0xAC0,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
 expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===997&&status()===1,'overlapped XamShowMessageBoxUI should return ERROR_IO_PENDING');
 expect(r32(P+0xAB0)===0&&r32(P+0xAC0)===0,'overlapped message box should complete with the focused button and success');
 while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);

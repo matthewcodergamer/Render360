@@ -2490,10 +2490,27 @@ std::map<uint32_t, XamEnumerator>& XamEnumerators() {
   static std::map<uint32_t, XamEnumerator> enumerators;
   return enumerators;
 }
+// Xenia XEnumerator::Initialize: the guest-visible X_KENUMERATOR (app id,
+// open/close messages, user, items per enumerate, flags), optionally followed
+// by an extra block (XamGetPrivateEnumStructureFromHandle returns it).
+struct XamEnumeratorInit {
+  uint32_t user_index = 0xFF, app_id = 0xFE, open_message = 0, close_message = 0;
+  uint32_t flags = 0, extra_size = 0;
+};
 uint32_t CreateXamEnumerator(uint32_t item_size, uint32_t per_enumerate,
-                             std::vector<uint8_t> items) {
-  const uint32_t handle = CreateObject(ObjectType::kEnumerator, 0, false);
+                             std::vector<uint8_t> items, const XamEnumeratorInit& init = {},
+                             uint32_t* guest_out = nullptr) {
+  const uint32_t guest = PoolAlloc(0x18u + init.extra_size, 8u);
+  if (!guest) return 0;
+  for (uint32_t i = 0; i < 0x18u + init.extra_size; i += 4) Wr32(guest + i, 0);
+  if (!Wr32(guest + 0x00u, init.app_id) || !Wr32(guest + 0x04u, init.open_message) ||
+      !Wr32(guest + 0x08u, init.close_message) || !Wr32(guest + 0x0Cu, init.user_index) ||
+      !Wr32(guest + 0x10u, per_enumerate ? per_enumerate : 1u) || !Wr32(guest + 0x14u, init.flags)) {
+    return 0;
+  }
+  const uint32_t handle = CreateObject(ObjectType::kEnumerator, guest, true);
   if (!handle) return 0;
+  if (guest_out) *guest_out = guest;
   XamEnumerator e;
   e.item_size = item_size;
   e.per_enumerate = per_enumerate ? per_enumerate : 1u;
@@ -5209,10 +5226,29 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
           items.insert(items.end(), item.begin(), item.end());
         }
       }
-      const uint32_t handle = CreateXamEnumerator(0x148u, 1u, std::move(items));
+      // Initialize(0xFF, 0xFE, 0x2000E, 0x20010, 0) with an
+      // X_KENUMERATOR_CONTENT_AGGREGATE (kXObjSignature 'XEN\0', handle).
+      XamEnumeratorInit init;
+      init.open_message = 0x2000Eu;
+      init.close_message = 0x20010u;
+      init.extra_size = 8u;
+      uint32_t guest = 0;
+      const uint32_t handle = CreateXamEnumerator(0x148u, 1u, std::move(items), init, &guest);
       if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(guest + 0x18u, 0x58454E00u) || !Wr32(guest + 0x1Cu, handle)) return Invalid();
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;
+    }
+    case xam::XamGetPrivateEnumStructureFromHandle: {
+      // (handle, object_ptr*): Xenia xam_enum.cc. The caller takes a
+      // reference (released by ObDereferenceObject).
+      KernelObject* object = ResolveHandle(r3);
+      if (!object || object->type != ObjectType::kEnumerator || !object->guest) {
+        return X_STATUS_INVALID_HANDLE;
+      }
+      ++object->handle_count;
+      if (r4 && !Wr32(r4, object->guest)) return Invalid();
+      return X_STATUS_SUCCESS;
     }
     case xam::XamContentCreateEnumerator: {
       // (user, device_id, content_type, content_flags, items_per_enumerate,
@@ -5233,7 +5269,10 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
           items.insert(items.end(), item.begin(), item.end());
         }
       }
-      const uint32_t handle = CreateXamEnumerator(0x134u, per, std::move(items));
+      XamEnumeratorInit init;  // Xenia xam_content.cc: Initialize(0xFF, 0xFE, 0x20005, 0x20007, 0)
+      init.open_message = 0x20005u;
+      init.close_message = 0x20007u;
+      const uint32_t handle = CreateXamEnumerator(0x134u, per, std::move(items), init);
       if (!handle) return X_STATUS_NO_MEMORY;
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;
@@ -5246,7 +5285,12 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       if (!count || !size_ptr || !handle_out || r4 >= 4u) return X_ERROR_INVALID_PARAMETER;
       const uint32_t entry_size = 36u + ((flags & 7u) ? 464u : 0u);
       if (!Wr32(size_ptr, entry_size * count)) return Invalid();
-      const uint32_t handle = CreateXamEnumerator(entry_size, count, {});
+      XamEnumeratorInit init;  // Xenia: Initialize(user_index, 0xFB, 0xB000A, 0xB000B, 0)
+      init.user_index = r4;
+      init.app_id = 0xFBu;
+      init.open_message = 0xB000Au;
+      init.close_message = 0xB000Bu;
+      const uint32_t handle = CreateXamEnumerator(entry_size, count, {}, init);
       if (!handle) return X_STATUS_NO_MEMORY;
       XamEnumerator& e = XamEnumerators()[handle];
       e.achievements = true;

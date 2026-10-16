@@ -379,6 +379,11 @@ expect(x('XamContentAggregateCreateEnumerator',0,0,1,0,P+0xBA0)===0&&status()===
 expect(x('XamContentAggregateCreateEnumerator',0,99,1,0,P+0xBA4)===0x80070057,'unknown device must be rejected');
 w32(P+0xBA8,0xFFFFFFFF);
 expect(x('XamEnumerate',r32(P+0xBA0),0,P+0xC000,0x148,P+0xBA8,0)===0x12&&r32(P+0xBA8)===0,'no saved content should enumerate nothing');
+expect(x('XamGetPrivateEnumStructureFromHandle',r32(P+0xBA0),P+0xBAC)===0&&status()===1,'private enum structure lookup failed');
+const enumObject=r32(P+0xBAC);
+expect(r32(enumObject)===0xFE&&r32(enumObject+4)===0x2000E&&r32(enumObject+8)===0x20010&&r32(enumObject+0xC)===0xFF&&r32(enumObject+0x10)===1,'X_KENUMERATOR header mismatch');
+expect(r32(enumObject+0x18)===0x58454E00&&r32(enumObject+0x1C)===r32(P+0xBA0),'aggregate extra block should hold the XEN signature and handle');
+expect(x('XamGetPrivateEnumStructureFromHandle',0x12345678,P+0xBAC)===0xC0000008,'bad enumerator handle must be rejected');
 console.log('XAM_CONTENT_AGGREGATE_XENIA=PASS');
 
 // --- Diagnostics / boundaries ------------------------------------------------------

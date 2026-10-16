@@ -315,10 +315,9 @@ struct ExecutableModule {
 };
 ExecutableModule g_exe;
 uint32_t g_process_info_block = 0;
-// The calling guest thread's r13/LR/r1 for the current service (per fiber).
-R360_FIBER_LOCAL uint32_t g_caller_r13 = 0;
-R360_FIBER_LOCAL uint32_t g_caller_lr = 0;
-R360_FIBER_LOCAL uint32_t g_caller_r1 = 0;
+uint32_t g_caller_r13 = 0;
+uint32_t g_caller_lr = 0;
+uint32_t g_caller_r1 = 0;
 uint32_t g_irql = 0;
 uint32_t g_next_thread_id = 2;  // The primary thread is thread id 1.
 uint64_t g_virtual_time_100ns = 0;
@@ -352,7 +351,7 @@ struct WaitInfo {
   uint32_t object_type = 0;
   uint32_t reason = 0;  // 1 infinite wait, 2 spinning bounded wait, 3 lock.
 };
-R360_FIBER_LOCAL WaitInfo g_wait;
+WaitInfo g_wait;
 // Last blocking wait of each guest thread suspended in a fiber yield, with
 // the guest return address (diagnostics: r360_kernel_thread_wait).
 struct ThreadWait {

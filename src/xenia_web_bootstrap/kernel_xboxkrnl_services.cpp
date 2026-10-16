@@ -5261,8 +5261,6 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       Objects()[slot].thread = native;
       return X_STATUS_SUCCESS;
     }
-    case xam::XamTaskShouldExit:
-      return 0;  // Xenia: tasks are never asked to exit early.
     case xam::XamGetPrivateEnumStructureFromHandle: {
       // (handle, object_ptr*): Xenia xam_enum.cc. The caller takes a
       // reference (released by ObDereferenceObject).

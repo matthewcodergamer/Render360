@@ -378,6 +378,19 @@ std::vector<std::string>& DebugLogEntries() {
 }
 constexpr size_t kMaxDebugLog = 64;
 uint32_t g_debug_log_total = 0;
+// XamShowMessageBoxUI waiting for the player (host dialog mode).
+struct MessageBox {
+  enum State { kIdle, kPending, kAnswered } state = kIdle;
+  uint32_t thread = 0, result_ptr = 0, overlapped = 0;
+  uint32_t active_button = 0, choice = 0;
+  std::string title, text;
+  std::vector<std::string> buttons;
+};
+MessageBox& PendingMessageBox() {
+  static MessageBox box;
+  return box;
+}
+bool g_dialog_host_answers = false;
 
 void DebugLog(std::string text) {
   if (text.size() > 512) text.resize(512);
@@ -5147,29 +5160,64 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       return X_ERROR_SUCCESS;
     case xam::XamShowMessageBoxUI: {
       // (user, title, text, button_count, button_ptrs, active_button, flags,
-      //  result_ptr, overlapped): Xenia's headless path picks the focused
-      // button, bracketed by XN_SYS_UI. The text goes to the debug log so a
-      // run shows what the title asked.
-      uint32_t result_ptr = 0, overlapped = 0;
+      //  result_ptr, overlapped), bracketed by XN_SYS_UI. Without a host
+      // dialog this is Xenia's headless path (the focused button). With one
+      // (r360_xam_dialog_set_host_answers), the player chooses, as with
+      // Xenia's MessageBoxDialog: an overlapped call returns
+      // ERROR_IO_PENDING and completes on r360_xam_dialog_answer; a
+      // synchronous call blocks its thread until then.
+      uint32_t overlapped = 0;
       if (!StackArg(8, &overlapped)) return Invalid();
-      result_ptr = a[7];
+      const uint32_t result_ptr = a[7];
+      if (!result_ptr) return Invalid();
+      MessageBox& box = PendingMessageBox();
+      if (box.state == MessageBox::kAnswered && box.thread == r360_guest_thread_current() &&
+          !box.overlapped) {
+        // Retry of a blocked synchronous call: the player has answered.
+        const uint32_t choice = box.choice;
+        box = {};
+        if (!Wr32(result_ptr, choice)) return Invalid();
+        BroadcastNotification(0x09u, 0);
+        return X_ERROR_SUCCESS;
+      }
+      if (box.state != MessageBox::kIdle) {
+        // Another dialog is up (or this thread's is unanswered): wait.
+        return WouldBlock(kModuleXam, xam::XamShowMessageBoxUI, 0, 0, 1);
+      }
       std::u16string title, text;
       ReadU16String(r4, &title);
       ReadU16String(r5, &text);
-      std::string log = "XamShowMessageBoxUI \"" + Utf16ToUtf8(title) + "\": " + Utf16ToUtf8(text) + " [";
+      box.title = Utf16ToUtf8(title);
+      box.text = Utf16ToUtf8(text);
+      box.buttons.clear();
       for (uint32_t i = 0; i < a[3] && i < 8u; ++i) {
         uint32_t button = 0;
         std::u16string label;
         if (Rd32(a[4] + i * 4u, &button)) ReadU16String(button, &label);
-        log += (i ? " | " : "") + Utf16ToUtf8(label);
+        box.buttons.push_back(Utf16ToUtf8(label));
       }
-      log += "] -> " + std::to_string(a[5]);
+      box.active_button = a[5];
+      std::string log = "XamShowMessageBoxUI \"" + box.title + "\": " + box.text + " [";
+      for (size_t i = 0; i < box.buttons.size(); ++i) log += (i ? " | " : "") + box.buttons[i];
+      log += "] focused " + std::to_string(a[5]);
       DebugLog(log);
       std::fprintf(stderr, "R360_MESSAGE_BOX %s\n", log.c_str());
       BroadcastNotification(0x09u, 1);
-      if (!result_ptr || !Wr32(result_ptr, a[5])) return Invalid();
-      BroadcastNotification(0x09u, 0);
-      return FinishXamOverlapped(overlapped, X_ERROR_SUCCESS, 0);
+      if (!g_dialog_host_answers) {
+        box = {};
+        if (!Wr32(result_ptr, a[5])) return Invalid();
+        BroadcastNotification(0x09u, 0);
+        return FinishXamOverlapped(overlapped, X_ERROR_SUCCESS, 0);
+      }
+      box.state = MessageBox::kPending;
+      box.thread = r360_guest_thread_current();
+      box.result_ptr = result_ptr;
+      box.overlapped = overlapped;
+      if (overlapped) {
+        if (!Wr32(overlapped, X_ERROR_IO_PENDING)) return Invalid();
+        return X_ERROR_IO_PENDING;
+      }
+      return WouldBlock(kModuleXam, xam::XamShowMessageBoxUI, 0, 0, 1);
     }
     case xam::XamShowDeviceSelectorUI: {
       // (user, content_type, content_flags, total_requested(qword),
@@ -5411,7 +5459,10 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
         g_wait.reason <= 3 && GuestFibersActive() && !GuestInterruptActive()) {
       const uint64_t now = r360_guest_clock_ns();
       if (!idle_started_ns) idle_started_ns = now;
-      if (now - idle_started_ns < kMaxIdleNs && GuestFiberIdle(now + kIdleStepNs)) {
+      // A thread waiting for the player's answer to a dialog is not
+      // deadlocked, however long it waits.
+      const bool player_wait = PendingMessageBox().state != MessageBox::kIdle;
+      if ((player_wait || now - idle_started_ns < kMaxIdleNs) && GuestFiberIdle(now + kIdleStepNs)) {
         g_caller_r13 = caller_r13;
         g_caller_lr = caller_lr;
         g_caller_r1 = caller_r1;
@@ -5618,6 +5669,7 @@ void ResetExtendedKernelServices() {
   g_wait = {};
   g_timeout_spin = {};
   DebugLogEntries().clear();
+  PendingMessageBox() = {};
   g_debug_log_total = 0;
   Input() = {};
   Input()[0].connected = true;
@@ -5777,6 +5829,60 @@ uint32_t r360_kernel_debug_log_read(uint32_t index, uint32_t out,
 }
 
 // Render360 controller -> XInput gamepad state for user_index.
+// Host dialog for XamShowMessageBoxUI: the page shows the pending message
+// box and passes back the chosen button.
+R360_WASM_EXPORT("r360_xam_dialog_set_host_answers")
+uint32_t r360_xam_dialog_set_host_answers(uint32_t on) {
+  r360k::g_dialog_host_answers = on != 0;
+  return r360k::g_dialog_host_answers ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_pending")
+uint32_t r360_xam_dialog_pending() {
+  return r360k::PendingMessageBox().state == r360k::MessageBox::kPending ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_button_count")
+uint32_t r360_xam_dialog_button_count() { return uint32_t(r360k::PendingMessageBox().buttons.size()); }
+R360_WASM_EXPORT("r360_xam_dialog_active_button")
+uint32_t r360_xam_dialog_active_button() { return r360k::PendingMessageBox().active_button; }
+// which: 0 title, 1 text, 2 + n button n. UTF-8, not terminated.
+static const std::string* DialogString(uint32_t which) {
+  const auto& box = r360k::PendingMessageBox();
+  if (which == 0) return &box.title;
+  if (which == 1) return &box.text;
+  if (which - 2u < box.buttons.size()) return &box.buttons[which - 2u];
+  return nullptr;
+}
+R360_WASM_EXPORT("r360_xam_dialog_string_ptr")
+uint32_t r360_xam_dialog_string_ptr(uint32_t which) {
+  const std::string* s = DialogString(which);
+  return s ? uint32_t(reinterpret_cast<uintptr_t>(s->data())) : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_string_len")
+uint32_t r360_xam_dialog_string_len(uint32_t which) {
+  const std::string* s = DialogString(which);
+  return s ? uint32_t(s->size()) : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_answer")
+uint32_t r360_xam_dialog_answer(uint32_t button) {
+  auto& box = r360k::PendingMessageBox();
+  if (box.state != r360k::MessageBox::kPending || button >= box.buttons.size()) return 0;
+  box.choice = button;
+  if (box.overlapped) {
+    // Xenia CompleteOverlappedDeferred: result, then XN_SYS_UI off.
+    const uint32_t result_ptr = box.result_ptr, overlapped = box.overlapped;
+    box = {};
+    if (!r360k::Wr32(result_ptr, button) ||
+        !r360k::CompleteOverlappedEx(overlapped, r360k::X_ERROR_SUCCESS, 0, 0)) {
+      return 0;
+    }
+    r360k::BroadcastNotification(0x09u, 0);
+  } else {
+    box.state = r360k::MessageBox::kAnswered;  // the blocked call's retry completes it
+  }
+  r360k::GuestFiberNoteProgress();
+  return 1;
+}
+
 R360_WASM_EXPORT("r360_input_set_gamepad")
 uint32_t r360_input_set_gamepad(uint32_t user_index, uint32_t connected,
                                 uint32_t buttons, uint32_t triggers,

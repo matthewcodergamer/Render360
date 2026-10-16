@@ -85,8 +85,11 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
   let lastReport=0;
   globalThis.render360GuestRun={stop:()=>controller.abort(),signal:controller.signal};
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
+  // System message boxes (XamShowMessageBoxUI) are answered by the player.
+  if(globalThis.document)bootstrap?.exports?.r360_xam_dialog_set_host_answers?.(1);
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
     pushGuestControllerState(bootstrap);
+    showGuestDialog(bootstrap);
     const t=now();
     if(t-lastReport<500)return;
     lastReport=t;
@@ -96,6 +99,38 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
     const seconds=Math.max(0.001,(t-started)/1000);
     onProgress?.(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
   }};
+}
+
+
+// Shows a pending XamShowMessageBoxUI as a page dialog (the console's system
+// UI); the chosen button goes back to the title through r360_xam_dialog_answer.
+let shownDialog=null;
+export function showGuestDialog(bootstrap,doc=globalThis.document){
+  const e=bootstrap?.exports;
+  if(!doc||typeof e?.r360_xam_dialog_pending!=='function')return false;
+  if(!(e.r360_xam_dialog_pending()>>>0)){if(shownDialog){shownDialog.remove();shownDialog=null;}return false;}
+  if(shownDialog)return true;
+  const str=w=>new TextDecoder().decode(new Uint8Array(e.memory.buffer,e.r360_xam_dialog_string_ptr(w)>>>0,e.r360_xam_dialog_string_len(w)>>>0).slice());
+  const count=e.r360_xam_dialog_button_count()>>>0,focused=e.r360_xam_dialog_active_button()>>>0;
+  const box=doc.createElement('div');
+  box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');
+  box.style.cssText='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:9999;padding:16px';
+  const panel=doc.createElement('div');
+  panel.style.cssText='max-width:520px;width:100%;background:#1d1f24;color:#f2f2f2;border-radius:10px;padding:20px;font:15px/1.45 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.5)';
+  const title=doc.createElement('h2');title.textContent=str(0)||'Message';title.style.cssText='margin:0 0 8px;font-size:18px';
+  const text=doc.createElement('p');text.textContent=str(1);text.style.cssText='margin:0 0 16px;white-space:pre-wrap';
+  const row=doc.createElement('div');row.style.cssText='display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end';
+  let focus=null;
+  for(let i=0;i<count;i++){
+    const b=doc.createElement('button');b.type='button';b.textContent=str(2+i);
+    b.style.cssText='padding:8px 14px;border-radius:6px;border:1px solid #5a5f6b;background:'+(i===focused?'#2f6f3e':'#2a2d34')+';color:inherit;font:inherit;cursor:pointer';
+    b.addEventListener('click',()=>{e.r360_xam_dialog_answer(i);box.remove();shownDialog=null;});
+    if(i===focused)focus=b;
+    row.append(b);
+  }
+  panel.append(title,text,row);box.append(panel);doc.body.append(box);
+  shownDialog=box;focus?.focus();
+  return true;
 }
 
 // XInput gamepad bits (XINPUT_GAMEPAD_*) for the Render360 controller keys.

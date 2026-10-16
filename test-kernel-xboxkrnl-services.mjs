@@ -333,6 +333,26 @@ while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
 w32(P+0xF000+0x54,0);
 console.log('XAM_MESSAGE_BOX_XENIA=PASS');
 
+// Host dialog mode: the player answers (Xenia MessageBoxDialog).
+expect((need('r360_xam_dialog_set_host_answers')(1)>>>0)===1,'host dialog mode not enabled');
+const dlgStr=w=>Buffer.from(new Uint8Array(e.memory.buffer,need('r360_xam_dialog_string_ptr')(w)>>>0,need('r360_xam_dialog_string_len')(w)>>>0)).toString('utf8');
+for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0);w32(P+0xAB0,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===997&&r32(P+0xAC0)===997,'overlapped host dialog should stay pending');
+expect((need('r360_xam_dialog_pending')()>>>0)===1&&dlgStr(0)==='Title'&&dlgStr(1)==='Continue?'&&dlgStr(3)==='No'&&(need('r360_xam_dialog_button_count')()>>>0)===2,'pending dialog not exposed to the host');
+expect(r32(P+0xAB0)===0xFFFFFFFF,'unanswered dialog must not write a result');
+expect((need('r360_xam_dialog_answer')(5)>>>0)===0,'out-of-range answer must be rejected');
+expect((need('r360_xam_dialog_answer')(1)>>>0)===1&&r32(P+0xAB0)===1&&r32(P+0xAC0)===0&&(need('r360_xam_dialog_pending')()>>>0)===0,'answer should complete the overlapped dialog with the chosen button');
+w32(P+0xF000+0x54,0);w32(P+0xAB0,0xFFFFFFFF);
+x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0);
+expect(status()===5&&r32(P+0xAB0)===0xFFFFFFFF,'synchronous host dialog should block until answered');
+x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0);
+expect(status()===5,'retry before the answer should still block');
+expect((need('r360_xam_dialog_answer')(1)>>>0)===1,'answer to synchronous dialog rejected');
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===0&&status()===1&&r32(P+0xAB0)===1,'retry after the answer should return the chosen button');
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+need('r360_xam_dialog_set_host_answers')(0);
+console.log('XAM_MESSAGE_BOX_HOST_DIALOG=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

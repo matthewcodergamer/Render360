@@ -386,6 +386,13 @@ expect(r32(enumObject+0x18)===0x58454E00&&r32(enumObject+0x1C)===r32(P+0xBA0),'a
 expect(x('XamGetPrivateEnumStructureFromHandle',0x12345678,P+0xBAC)===0xC0000008,'bad enumerator handle must be rejected');
 console.log('XAM_CONTENT_AGGREGATE_XENIA=PASS');
 
+// --- XamTaskSchedule (Xenia xam_task.cc: the callback runs on a new thread) -------
+w32(P+0xC14,0);
+expect(x('XamTaskSchedule',0x82400000,P+0xC00,0,P+0xC14)===0&&status()===1&&r32(P+0xC14)===12345,'XamTaskSchedule should start the task thread and report handle 12345');
+expect(x('XamTaskSchedule',0,P+0xC00,0,P+0xC14)===0xC000000D,'a task without a callback must be rejected');
+expect(x('XamTaskShouldExit',0)===0,'XamTaskShouldExit mismatch');
+console.log('XAM_TASK_SCHEDULE_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

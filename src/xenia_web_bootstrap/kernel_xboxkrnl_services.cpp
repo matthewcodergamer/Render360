@@ -5239,6 +5239,30 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;
     }
+    case xam::XamTaskSchedule: {
+      // (callback, message, unknown, handle*): Xenia xam_task.cc runs the
+      // callback with the message on a new guest thread (the executable's
+      // stack size, 16 KiB minimum, 4 KiB aligned) and reports handle 12345.
+      if (!r3 || !a[3]) return X_STATUS_INVALID_PARAMETER;
+      if (!Wr32(a[3], 12345u)) return Invalid();
+      uint32_t stack_size = ExecutableStackSize();
+      stack_size = std::max<uint32_t>(0x4000u, (stack_size + 0xFFFu) & 0xFFFFF000u);
+      const uint32_t native = r360_guest_thread_create(r3, r4, stack_size, 0);
+      if (!native) return X_STATUS_NO_MEMORY;
+      const uint32_t kthread = PrepareThreadObjects(native, r3, 0, 0);
+      if (!kthread) {
+        r360_guest_thread_terminate(native, 0);
+        return X_STATUS_NO_MEMORY;
+      }
+      const uint32_t handle = CreateObject(ObjectType::kThread, kthread, false);
+      if (!handle) return X_STATUS_NO_MEMORY;
+      uint32_t slot = 0;
+      SlotForHandle(handle, &slot);
+      Objects()[slot].thread = native;
+      return X_STATUS_SUCCESS;
+    }
+    case xam::XamTaskShouldExit:
+      return 0;  // Xenia: tasks are never asked to exit early.
     case xam::XamGetPrivateEnumStructureFromHandle: {
       // (handle, object_ptr*): Xenia xam_enum.cc. The caller takes a
       // reference (released by ObDereferenceObject).

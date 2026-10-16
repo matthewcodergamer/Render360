@@ -3345,6 +3345,17 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
         return Terminal(kTerminalThreadExit, r3, kModuleXboxkrnl, ordinal, a);
       }
       // The primary thread leaving ends the title, as on the console.
+      {
+        uint32_t thread_id = 0, back = 0, lr = 0;
+        Rd32(kthread + 0x14Cu, &thread_id);
+        std::fprintf(stderr, "R360_PRIMARY_EXIT code=0x%08X kthread=0x%08X id=%u native=%u lr=0x%08X stack=",
+                     r3, kthread, thread_id, native, g_caller_lr);
+        uint32_t fp = g_caller_r1;
+        for (uint32_t n = 0; n < 16 && fp && Rd32(fp, &back) && back > fp; ++n, fp = back) {
+          if (Rd32(back - 8u, &lr)) std::fprintf(stderr, "0x%08X ", lr);
+        }
+        std::fprintf(stderr, "\n");
+      }
       MarkThreadExited(kthread, r3);
       return Terminal(kTerminalProcessExit, r3, kModuleXboxkrnl, ordinal, a);
     }

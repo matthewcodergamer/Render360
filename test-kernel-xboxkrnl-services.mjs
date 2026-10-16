@@ -361,6 +361,26 @@ w32(P+0xB08,0xFFFFFFFF);
 expect(x('XamEnumerate',r32(P+0xB04),0,P+0xC000,(36+464)*4,P+0xB08,0)===0x12&&r32(P+0xB08)===0,'title without an XDBF achievement table should enumerate nothing');
 console.log('XAM_ACHIEVEMENT_ENUMERATOR_XENIA=PASS');
 
+// --- XexGetProcedureAddress (Xenia KernelModule::GetProcAddressByOrdinal) -------
+ascii(P+0xB40,'xam.xex');
+expect(k('XexGetModuleHandle',P+0xB40,P+0xB60)===0&&r32(P+0xB60)!==0,'xam.xex module handle missing');
+const xamModule=r32(P+0xB60);
+expect(k('XexGetProcedureAddress',xamModule,0x279,P+0xB64)===0&&status()===1&&r32(P+0xB64)!==0,'XAM export trampoline not created');
+const trampoline=r32(P+0xB64);
+expect(k('XexGetProcedureAddress',xamModule,0x279,P+0xB68)===0&&r32(P+0xB68)===trampoline,'repeated lookup should return the same trampoline');
+expect(k('XexGetProcedureAddress',xamModule,0x2CA,P+0xB68)===0&&r32(P+0xB68)!==trampoline,'another ordinal should get its own trampoline');
+expect(k('XexGetProcedureAddress',0x12345678,0x279,P+0xB68)===0xC0000008,'bad module handle must be rejected');
+ascii(P+0xB80,'XamSomething');
+expect(k('XexGetProcedureAddress',xamModule,P+0xB80,P+0xB68)===0xC0000263&&r32(P+0xB68)===0,'lookup by name should report the entry point as not found');
+console.log('XEX_GET_PROCEDURE_ADDRESS_XENIA=PASS');
+
+// --- XamContentAggregateCreateEnumerator (Xenia xam_content_aggregate.cc) ---------
+expect(x('XamContentAggregateCreateEnumerator',0,0,1,0,P+0xBA0)===0&&status()===1,'aggregate content enumerator not created');
+expect(x('XamContentAggregateCreateEnumerator',0,99,1,0,P+0xBA4)===0x80070057,'unknown device must be rejected');
+w32(P+0xBA8,0xFFFFFFFF);
+expect(x('XamEnumerate',r32(P+0xBA0),0,P+0xC000,0x148,P+0xBA8,0)===0x12&&r32(P+0xBA8)===0,'no saved content should enumerate nothing');
+console.log('XAM_CONTENT_AGGREGATE_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

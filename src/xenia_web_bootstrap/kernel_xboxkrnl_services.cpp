@@ -43,6 +43,7 @@ extern "C" __attribute__((weak)) uint32_t r360_guest_clock_deterministic() { ret
 #include <vector>
 
 #include "guest_fibers.h"
+#include "kernel_import_probe.h"
 #include "kernel_export_ordinals.h"
 
 // Weak defaults for builds that link the kernel services without the HIR
@@ -141,6 +142,7 @@ constexpr uint32_t X_ERROR_NOT_FOUND = 0x00000490u;
 constexpr uint32_t X_ERROR_NO_SUCH_USER = 0x00000525u;
 constexpr uint32_t X_E_SUCCESS = 0x00000000u;
 constexpr uint32_t X_E_INVALIDARG = 0x80070057u;
+constexpr uint32_t X_STATUS_DRIVER_ENTRYPOINT_NOT_FOUND = 0xC0000263u;
 constexpr uint32_t X_E_NO_SUCH_USER = 0x80070525u;
 constexpr uint32_t X_ERROR_INSUFFICIENT_BUFFER = 0x0000007Au;
 constexpr uint32_t X_ERROR_IO_INCOMPLETE = 0x000003E4u;
@@ -1319,6 +1321,27 @@ uint32_t KernelModuleHandle(uint32_t index) {
     g_kernel_module_handles[index] = PoolAlloc(0x60u, 16u);
   }
   return g_kernel_module_handles[index];
+}
+
+// Xenia KernelModule::GetProcAddressByOrdinal: one guest trampoline per
+// xboxkrnl/XAM export, made on first request. Here it is a registered import
+// thunk, so calls through it reach the same service dispatcher as static
+// imports (an unimplemented export still fails closed when it is called).
+std::map<uint32_t, uint32_t>& ProcTrampolines() {  // (module << 16 | ordinal) -> guest address
+  static std::map<uint32_t, uint32_t> trampolines;
+  return trampolines;
+}
+uint32_t KernelExportTrampoline(uint32_t module_id, uint32_t ordinal) {
+  const uint32_t key = (module_id << 16) | (ordinal & 0xFFFFu);
+  auto it = ProcTrampolines().find(key);
+  if (it != ProcTrampolines().end()) return it->second;
+  const uint32_t address = PoolAlloc(8u, 8u);
+  if (!address || !Wr32(address, 0x4E800020u) || !Wr32(address + 4u, 0x4E800020u) ||  // blr
+      !RegisterKernelImportThunk(address, module_id, ordinal, false, 0)) {
+    return 0;
+  }
+  ProcTrampolines()[key] = address;
+  return address;
 }
 
 std::map<uint32_t, int32_t>& ThreadPriority() {
@@ -2917,6 +2940,28 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       }
       if (r4 && !Wr32(r4, hmodule)) return Invalid();
       return hmodule ? X_ERROR_SUCCESS : X_ERROR_NOT_FOUND;
+    }
+    case kx::XexGetProcedureAddress: {
+      // (hmodule, ordinal or name, function_ptr*): Xenia
+      // xboxkrnl_modules.cc. Kernel modules hand out export trampolines.
+      if (!r5) return Invalid();
+      const bool by_name = (r4 & 0xFFFF0000u) != 0;
+      uint32_t module_id = 0;
+      if (r3 && r3 == KernelModuleHandle(0)) module_id = kModuleXboxkrnl;
+      if (r3 && r3 == KernelModuleHandle(1)) module_id = kModuleXam;
+      if (!module_id && r3 && r3 != g_exe.hmodule) return X_STATUS_INVALID_HANDLE;
+      uint32_t address = 0;
+      if (module_id && !by_name) address = KernelExportTrampoline(module_id, r4);
+      if (!address) {
+        std::string name;
+        if (by_name) ReadCString(r4, &name, 128);
+        DebugLog("XexGetProcedureAddress not found: module " + std::to_string(module_id) +
+                 (by_name ? " name " + name : " ordinal " + std::to_string(r4)));
+        if (!Wr32(r5, 0)) return Invalid();
+        return X_STATUS_DRIVER_ENTRYPOINT_NOT_FOUND;
+      }
+      if (!Wr32(r5, address)) return Invalid();
+      return X_STATUS_SUCCESS;
     }
     case kx::XexGetModuleSection: {
       if (!r3 || r3 != g_exe.hmodule) return X_STATUS_INVALID_HANDLE;
@@ -5142,6 +5187,33 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       if (!Wr32(a[4], handle)) return Invalid();
       return X_ERROR_SUCCESS;
     }
+    case xam::XamContentAggregateCreateEnumerator: {
+      // (xuid (qword), device_id, content_type, unknown, handle*): Xenia
+      // xam_content_aggregate.cc. XCONTENT_AGGREGATE_DATA items (0x148: the
+      // content data, a zero qword, the title id) for the HDD packages of
+      // the running title. Xenia's ODD test adds packages under
+      // game:\Content\0000000000000000, which title packages do not have.
+      const uint32_t device_id = r4, content_type = r5, handle_out = a[4];
+      if ((device_id && !FindDummyDevice(device_id)) || !handle_out) return X_E_INVALIDARG;
+      uint32_t info = 0, title_id = 0;
+      if (XexOptionalHeader(kXexHeaderExecutionInfo, &info) && info) Rd32(info + 0x0Cu, &title_id);
+      std::vector<uint8_t> items;
+      if (!device_id || device_id == 1u) {
+        for (const auto& package : ContentPackages()) {
+          if (package.content_type != content_type) continue;
+          std::array<uint8_t, 0x148> item{};
+          std::copy(package.data.begin(), package.data.end(), item.begin());
+          item[0] = 0; item[1] = 0; item[2] = 0; item[3] = 1;  // device_id = HDD
+          item[0x13C] = uint8_t(title_id >> 24); item[0x13D] = uint8_t(title_id >> 16);
+          item[0x13E] = uint8_t(title_id >> 8); item[0x13F] = uint8_t(title_id);
+          items.insert(items.end(), item.begin(), item.end());
+        }
+      }
+      const uint32_t handle = CreateXamEnumerator(0x148u, 1u, std::move(items));
+      if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(handle_out, handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
     case xam::XamContentCreateEnumerator: {
       // (user, device_id, content_type, content_flags, items_per_enumerate,
       //  buffer_size*, handle*)
@@ -5775,6 +5847,7 @@ void ResetExtendedKernelServices() {
   g_timeout_spin = {};
   DebugLogEntries().clear();
   PendingMessageBox() = {};
+  ProcTrampolines().clear();
   g_debug_log_total = 0;
   Input() = {};
   Input()[0].connected = true;

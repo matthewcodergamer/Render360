@@ -55,6 +55,10 @@ function parseArgs(argv){
     else if(a==='--watch-kernel-arg')(args.kernelWatch||=[]).push(Number(argv[++i])>>>0);
     else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
+    // --frame-at M1,M2,...:PREFIX saves PREFIX-M.png when the run passes M million instructions.
+    else if(a==='--frame-at'){const v=String(argv[++i]),c=v.lastIndexOf(':');args.frameAt={at:v.slice(0,c).split(',').map(Number).sort((x,y)=>x-y),prefix:v.slice(c+1)};}
+    // --press FROM:TO:BUTTONS holds gamepad 0 buttons (XINPUT bits, e.g. 0x10 = START, 0x1000 = A) between FROM and TO million instructions.
+    else if(a==='--press'){const [from,to,buttons]=String(argv[++i]).split(':');(args.press??=[]).push({from:Number(from),to:Number(to),buttons:Number(buttons)&0xFFFF});}
     else if(a==='--slice-ms')args.sliceMs=Number(argv[++i])>>>0;
     else if(a==='--watch')args.watch=Number(argv[++i])>>>0;
     else if(a==='--dump-guest'){const [addr,len,file]=String(argv[++i]).split(':');(args.dumps??=[]).push({address:Number(addr)>>>0,length:Number(len)>>>0,file});}
@@ -63,6 +67,39 @@ function parseArgs(argv){
     else throw new Error(`unexpected argument ${a}`);
   }
   return args;
+}
+
+
+// PNG of the last swapped frontbuffer (Xenos decode of the VdSwap fetch
+// constant from guest memory), for --frame and --frame-at.
+let frontbufferModule=null,runArgs={};
+const savedFrames=[];
+function saveFramePng(file){
+  let frame=null;
+  try{frame=frontbufferModule.captureTitleFrontbuffer({bootstrap:globalThis.__r360Bootstrap});}catch(e){frame={captured:false,reason:e.message};}
+  if(!frame?.captured)return {file,captured:false,reason:frame?.reason};
+  const {width,height,rgba}=frame;
+  const raw=Buffer.alloc((width*4+1)*height);
+  for(let y=0;y<height;y++){raw[y*(width*4+1)]=0;Buffer.from(rgba.buffer,rgba.byteOffset+y*width*4,width*4).copy(raw,y*(width*4+1)+1);}
+  const crcTable=Array.from({length:256},(_,n)=>{let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;return c>>>0;});
+  const crc=b=>{let c=0xFFFFFFFF;for(const x of b)c=crcTable[(c^x)&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;};
+  const chunk=(type,data)=>{const len=Buffer.alloc(4);len.writeUInt32BE(data.length);const td=Buffer.concat([Buffer.from(type),data]);const c=Buffer.alloc(4);c.writeUInt32BE(crc(td));return Buffer.concat([len,td,c]);};
+  const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(width,0);ihdr.writeUInt32BE(height,4);ihdr[8]=8;ihdr[9]=6;
+  fs.writeFileSync(file,Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlibModule.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
+  let nonBlack=0;for(let i=0;i<rgba.length;i+=4)if(rgba[i]|rgba[i+1]|rgba[i+2])nonBlack++;
+  return {file,width,height,hash:frame.hash,format:frame.format,tiled:frame.tiled,nonBlackPixels:nonBlack};
+}
+let zlibModule=null;
+function slicePressAndFrames(x){
+  const m=x.r360_hir_total_instructions_millions?.()>>>0;
+  if(runArgs.press){
+    let buttons=0;for(const p of runArgs.press)if(m>=p.from&&m<p.to)buttons|=p.buttons;
+    if(buttons!==globalThis.__r360PressButtons){globalThis.__r360PressButtons=buttons;x.r360_input_set_gamepad?.(0,1,buttons,0,0,0);process.stderr.write(`press ${m}M buttons=0x${buttons.toString(16)}\n`);}
+  }
+  if(runArgs.frameAt){
+    const pending=runArgs.frameAt.at.filter(at=>at<=m&&!savedFrames.some(f=>f.at===at));
+    if(pending.length){const at=pending[pending.length-1];const info=saveFramePng(`${runArgs.frameAt.prefix}-${at}.png`);for(const p of pending)savedFrames.push({at:p,actual:m,vdSwap:x.r360_title_gpu_vd_swap_calls?.()>>>0,...(p===at?info:{skipped:true})});process.stderr.write(`frame ${m}M -> ${JSON.stringify(info)}\n`);}
+  }
 }
 
 const hex=v=>`0x${(Number(v)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
@@ -180,6 +217,8 @@ async function main(){
   }
   const bootstrapFile=args.bootstrap||(fs.existsSync(rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'))?rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'):rel('xenia_ppc_bootstrap.wasm'));
   const {instance:bootstrap,host,stderr}=await loadBootstrap(bootstrapFile,args.verbose);
+  runArgs=args;globalThis.__r360Bootstrap=bootstrap;
+  if(args.frame||args.frameAt){frontbufferModule=await import(rel('render360-title-frontbuffer.mjs'));zlibModule=await import('node:zlib');}
   const core=await loadCore();
   const started=Date.now();
   const title=await openTitle(args.input,{core,host});
@@ -211,7 +250,7 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress||args.dumpShaders||args.xenosTraceFrom!==undefined)?(s=>{const x=bootstrap.exports;if(args.dumpShaders)dumpCurrentShaders(x,args.dumpShaders);if(args.xenosTraceFrom!==undefined&&!globalThis.__r360XenosTrace&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.xenosTraceFrom){globalThis.__r360XenosTrace=1;x.r360_xenos_trace_ibs?.(1);}if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · jit ${globalThis.__r360Jit?(()=>{const t=globalThis.__r360Jit.telemetry();return `${t.functions}fn/${t.rejected}rej/${Math.round(t.calls/1000)}kcalls`;})():'off'} · resolve ${g('r360_xenos_soft_resolves')}/${g('r360_xenos_soft_resolve_kpixels')}kpx clear ${g('r360_xenos_soft_clear_ksamples')}ks info 0x${g('r360_xenos_soft_last_resolve_info').toString(16)} · cp ${g('r360_xenos_status').toString(16)} stalled ${g('r360_title_gpu_stalled')} ready ${g('r360_xenos_stall_ready')} pumps ${g('r360_title_gpu_pumps')}/${g('r360_title_gpu_status')} waits ${g('r360_xenos_waits')} stall ${[0,1,2,3,4].map(i=>hex(x.r360_xenos_stall_wait?.(i)??0)).join(',')} wptr ${g('r360_title_gpu_write_pointer')} lastop 0x${g('r360_xenos_last_opcode').toString(16)} · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress||args.frameAt||args.press)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress||args.dumpShaders||args.xenosTraceFrom!==undefined||args.frameAt||args.press)?(s=>{const x=bootstrap.exports;slicePressAndFrames(x);if(args.dumpShaders)dumpCurrentShaders(x,args.dumpShaders);if(args.xenosTraceFrom!==undefined&&!globalThis.__r360XenosTrace&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.xenosTraceFrom){globalThis.__r360XenosTrace=1;x.r360_xenos_trace_ibs?.(1);}if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · jit ${globalThis.__r360Jit?(()=>{const t=globalThis.__r360Jit.telemetry();return `${t.functions}fn/${t.rejected}rej/${Math.round(t.calls/1000)}kcalls`;})():'off'} · resolve ${g('r360_xenos_soft_resolves')}/${g('r360_xenos_soft_resolve_kpixels')}kpx clear ${g('r360_xenos_soft_clear_ksamples')}ks info 0x${g('r360_xenos_soft_last_resolve_info').toString(16)} · cp ${g('r360_xenos_status').toString(16)} stalled ${g('r360_title_gpu_stalled')} ready ${g('r360_xenos_stall_ready')} pumps ${g('r360_title_gpu_pumps')}/${g('r360_title_gpu_status')} waits ${g('r360_xenos_waits')} stall ${[0,1,2,3,4].map(i=>hex(x.r360_xenos_stall_wait?.(i)??0)).join(',')} wptr ${g('r360_title_gpu_write_pointer')} lastop 0x${g('r360_xenos_last_opcode').toString(16)} · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}
@@ -253,24 +292,8 @@ async function main(){
   // R360_DUMP=address,bytes,file: guest bytes (sparse memory) after the run.
   for(const spec of (process.env.R360_DUMP||'').split(';').filter(Boolean)){const [a0,n0,file]=spec.split(',');const a=Number(a0)>>>0,n=Number(n0)>>>0,x=bootstrap.exports,out=Buffer.alloc(n);
     const tmp=x.r360_ppc_probe_input_buffer()>>>0;for(let i=0;i<n;i+=4){x.r360_sparse_guest_memory_read_u32_be(a+i,tmp);out.writeUInt32BE(new DataView(x.memory.buffer).getUint32(tmp,true),i);}fs.writeFileSync(file,out);}
-  if(args.frame){
-    const {captureTitleFrontbuffer}=await import(rel('render360-title-frontbuffer.mjs'));
-    const zlib=await import('node:zlib');
-    let frame=null;
-    try{frame=captureTitleFrontbuffer({bootstrap});}catch(e){frame={captured:false,reason:e.message};}
-    if(frame?.captured){
-      const {width,height,rgba}=frame;
-      const raw=Buffer.alloc((width*4+1)*height);
-      for(let y=0;y<height;y++){raw[y*(width*4+1)]=0;Buffer.from(rgba.buffer,rgba.byteOffset+y*width*4,width*4).copy(raw,y*(width*4+1)+1);}
-      const crcTable=Array.from({length:256},(_,n)=>{let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;return c>>>0;});
-      const crc=b=>{let c=0xFFFFFFFF;for(const x of b)c=crcTable[(c^x)&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;};
-      const chunk=(type,data)=>{const len=Buffer.alloc(4);len.writeUInt32BE(data.length);const td=Buffer.concat([Buffer.from(type),data]);const c=Buffer.alloc(4);c.writeUInt32BE(crc(td));return Buffer.concat([len,td,c]);};
-      const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(width,0);ihdr.writeUInt32BE(height,4);ihdr[8]=8;ihdr[9]=6;
-      fs.writeFileSync(args.frame,Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
-      let nonBlack=0;for(let i=0;i<rgba.length;i+=4)if(rgba[i]|rgba[i+1]|rgba[i+2])nonBlack++;
-      report.frame={file:args.frame,width,height,hash:frame.hash,format:frame.format,tiled:frame.tiled,nonBlackPixels:nonBlack};
-    }else report.frame={captured:false,reason:frame?.reason};
-  }
+  if(args.frame)report.frame=saveFramePng(args.frame);
+  if(args.frameAt)report.framesAt=savedFrames;
   // --dump-guest ADDR:LEN:FILE writes raw big-endian guest memory (for
   // powerpc objdump -b binary -EB) after the run.
   for(const dump of args.dumps||[]){

@@ -197,6 +197,7 @@ queue_cpp "render360/guest_fibers.cpp" "$ROOT/src/xenia_web_bootstrap/guest_fibe
 queue_cpp "render360/hir_wasm_jit.cpp" "$ROOT/src/xenia_web_bootstrap/hir_wasm_jit.cpp"
 queue_cpp "render360/xenos_soft_renderer.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_soft_renderer.cpp"
 queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
+queue_cpp "render360/xam_xdbf.cpp" "$ROOT/src/xenia_web_bootstrap/xam_xdbf.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
 queue_cpp "render360/xenos_gpu_foundation.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_gpu_foundation.cpp"
 queue_cpp "render360/xenos_shader_interpreter_probe.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_shader_interpreter_probe.cpp"

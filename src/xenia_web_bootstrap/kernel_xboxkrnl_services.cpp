@@ -17,8 +17,7 @@
 //  * Kernel pool allocations come from a sparse arena at 0x5A000000 rather than
 //    Xenia's system heap in the 0x80000000 XEX range.
 
-#include "xenia/kernel/util/xdbf_utils.h"
-#include "xenia/base/string.h"
+#include "xam_xdbf.h"
 #include "kernel_xboxkrnl_services.h"
 
 #include <time.h>
@@ -5178,24 +5177,16 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       e.achievements = true;
       e.achievement_flags = flags;
       const std::vector<uint8_t> xdbf = TitleXdbf();
-      const xe::kernel::util::XdbfGameData db(xdbf.data(), xdbf.size());
-      if (db.is_valid()) {
-        const auto language = db.GetExistingLanguage(xe::XLanguage::kEnglish);
-        auto u16 = [&](uint16_t id) {
-          const std::string utf8 = db.GetStringTableEntry(language, id);
-          return xe::to_utf16(utf8);
-        };
-        for (const auto& entry : db.GetAchievements()) {
-          XamAchievement item;
-          item.id = entry.id;
-          item.label = u16(entry.label_id);
-          item.description = u16(entry.description_id);
-          item.unachieved = u16(entry.unachieved_id);
-          item.image_id = entry.image_id;
-          item.gamerscore = entry.gamerscore;
-          item.flags = entry.flags;
-          e.achievement_items.push_back(std::move(item));
-        }
+      for (auto& entry : ParseXdbfAchievements(xdbf.data(), xdbf.size())) {
+        XamAchievement item;
+        item.id = entry.id;
+        item.label = std::move(entry.label);
+        item.description = std::move(entry.description);
+        item.unachieved = std::move(entry.unachieved);
+        item.image_id = entry.image_id;
+        item.gamerscore = entry.gamerscore;
+        item.flags = entry.flags;
+        e.achievement_items.push_back(std::move(item));
       }
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;

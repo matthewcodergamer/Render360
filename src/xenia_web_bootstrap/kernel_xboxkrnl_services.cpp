@@ -3370,6 +3370,8 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       const uint32_t kthread = CurrentKThread();
       const uint32_t native = NativeThreadForKThread(kthread);
       if (native && !r360_guest_thread_external(native)) {
+        std::fprintf(stderr, "R360_THREAD_EXIT thread=0x%08X kthread=0x%08X code=0x%08X lr=0x%08X\n",
+                     native, kthread, r3, g_caller_lr);
         MarkThreadExited(kthread, r3);
         r360_guest_thread_terminate(native, r3);
         return Terminal(kTerminalThreadExit, r3, kModuleXboxkrnl, ordinal, a);

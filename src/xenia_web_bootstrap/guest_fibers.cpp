@@ -568,6 +568,8 @@ uint32_t r360_fiber_entry() {
   if (rx::g_current == 0 || rx::g_current >= rx::g_fibers.size()) return 0;
   const uint32_t handle = rx::g_fibers[rx::g_current].thread;
   const uint32_t entry = r360_guest_thread_entry(handle);
+  std::fprintf(stderr, "R360_FIBER_START fiber=%u thread=0x%08X entry=0x%08X minstr=%llu\n", rx::g_current,
+               handle, entry, static_cast<unsigned long long>(rx::HIRTotalInstructions() / 1000000ull));
   rx::ResetHIRCorrectnessInitialState();
   rx::ClearHIRCorrectnessInitialRegisterStrings();
   rx::SetHIRCorrectnessInitialGPR(1, r360_guest_thread_stack_top(handle));

@@ -1012,6 +1012,38 @@ void UpdateTimerByGuest(uint32_t guest) {
 uint32_t g_status = kKernelServiceSuccess;
 bool g_handled = true;
 
+// A service that switches fibers mid-call (a timed sleep or wait, a yield, an
+// idle step that runs interrupt callbacks) resumes after other guest threads
+// made kernel calls of their own. The per-call state they share (status,
+// handled flag, wait record, caller registers) belongs to this call again
+// when it continues.
+struct KernelCallState {
+  uint32_t status = g_status;
+  bool handled = g_handled;
+  WaitInfo wait = g_wait;
+  uint32_t r13 = g_caller_r13, lr = g_caller_lr, r1 = g_caller_r1;
+  ~KernelCallState() {
+    g_status = status;
+    g_handled = handled;
+    g_wait = wait;
+    g_caller_r13 = r13;
+    g_caller_lr = lr;
+    g_caller_r1 = r1;
+  }
+};
+bool ServiceSleepUntil(uint64_t deadline_ns) {
+  KernelCallState saved;
+  return GuestFiberSleepUntil(deadline_ns);
+}
+bool ServiceIdle(uint64_t deadline_ns) {
+  KernelCallState saved;
+  return GuestFiberIdle(deadline_ns);
+}
+bool ServiceYield(bool blocked) {
+  KernelCallState saved;
+  return GuestFiberYield(blocked);
+}
+
 uint32_t Terminal(uint32_t kind, uint32_t code, uint32_t module,
                   uint32_t ordinal, const uint32_t* args) {
   g_terminal = {};
@@ -1110,8 +1142,8 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
       g_timeout_spin = {};
       return X_STATUS_TIMEOUT;
     }
-    if (GuestFiberSleepUntil(deadline_ns)) continue;
-    if (GuestFiberIdle(deadline_ns)) continue;
+    if (ServiceSleepUntil(deadline_ns)) continue;
+    if (ServiceIdle(deadline_ns)) continue;
   }
   // Without guest fibers: the old synchronous model (one turn, then elapse).
   if (timeout && attempt == 0 && GuestFibersActive()) {
@@ -1127,7 +1159,7 @@ uint32_t WaitObjects(uint32_t module, uint32_t ordinal,
     poll.caller_lr = g_caller_lr;
     ++poll.count;
   }
-  if (timeout && attempt == 0 && GuestFiberYield(false)) continue;
+  if (timeout && attempt == 0 && ServiceYield(false)) continue;
   if (timeout) {
     // No other guest thread can signal during this synchronous kernel call, so
     // a bounded wait elapses. Detect a guest spinning on the same unsignalled
@@ -3317,22 +3349,22 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       if (GuestFibersActive() && !GuestInterruptActive()) {
         const uint64_t deadline = TimeoutDeadlineNs(interval);
         if (deadline <= r360_guest_clock_ns()) {
-          GuestFiberYield(false);
+          ServiceYield(false);
           return X_STATUS_SUCCESS;
         }
         while (r360_guest_clock_ns() < deadline) {
-          if (GuestFiberSleepUntil(deadline)) continue;
-          if (!GuestFiberIdle(deadline)) break;
+          if (ServiceSleepUntil(deadline)) continue;
+          if (!ServiceIdle(deadline)) break;
         }
         if (r360_guest_clock_ns() >= deadline) return X_STATUS_SUCCESS;
       }
       AdvanceVirtualTime(interval);
-      GuestFiberYield(false);
+      ServiceYield(false);
       return X_STATUS_SUCCESS;
     }
     case kx::NtYieldExecution:
       GuestFiberNoteProgress();
-      GuestFiberYield(false);
+      ServiceYield(false);
       return X_STATUS_SUCCESS;
 
     // --- Threads -----------------------------------------------------------

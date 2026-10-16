@@ -35,9 +35,30 @@ After the fix (deterministic headless runs):
   frame (XamInputGetState 4056 calls by 90B, was 20).
 - Frame at 61B: the Rare logo intro renders (software renderer).
 
+## Verified: title screen, input and main menu
+Headless deterministic run (`run-title --deterministic 1000`), software
+renderer, controller input injected with `--press`:
+- 61B instructions: Rare logo intro.
+- 80B: title screen ("PRESS START TO PLAY") over a moving 3D flythrough.
+- Start at 80B: the title asks "Gamer profile not online" (offline profile);
+  the player's answer is passed back (`--dialog-button 1` = "Continue
+  playing offline"; in the browser the page shows the dialog).
+- 82B: main menu, Banjo's room, rendered in 3D.
+- 85B: "Trial game" notice (the default license is trial, as in Xenia).
+- 90B: "PRESS A TO PLAY THE GAME"; frames change every second and the run
+  reaches its instruction limit with no blocker.
+
+Fixed on the way (each with a kernel services test):
+- XamShowMessageBoxUI (headless focused button, or the player's answer).
+- XamUserCreateAchievementEnumerator (title XDBF via Xenia xdbf_utils).
+- XexGetProcedureAddress (kernel export trampolines),
+  XamContentAggregateCreateEnumerator, XamGetPrivateEnumStructureFromHandle
+  (guest X_KENUMERATOR objects), XamTaskSchedule.
+- A thread's exit left the kernel service status at "terminal" and the next
+  thread resuming mid-sleep returned it, ending the run.
+
 ## Current work
-Verifying the title screen and that controller input changes what the game
-does (`run-title --press`, `--frame-at`).
+Pressing A at "PRESS A TO PLAY THE GAME" to reach gameplay.
 
 ## Tests (latest build)
 - Regression runner: 60 of 69 pass. The 9 failures are pre-existing

@@ -5167,7 +5167,7 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       // (title_id, user_index, xuid, flags, offset, count, buffer_size*,
       //  handle*): Xenia's static enumerator over the title's XDBF
       // achievement table, strings in the default user language (English).
-      const uint32_t flags = r6, count = a[5], size_ptr = a[6], handle_out = a[7];
+      const uint32_t flags = a[3], count = a[5], size_ptr = a[6], handle_out = a[7];
       if (!count || !size_ptr || !handle_out || r4 >= 4u) return X_ERROR_INVALID_PARAMETER;
       const uint32_t entry_size = 36u + ((flags & 7u) ? 464u : 0u);
       if (!Wr32(size_ptr, entry_size * count)) return Invalid();

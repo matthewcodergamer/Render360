@@ -293,6 +293,7 @@ async function main(){
       titleGpu:result.titleGpuTelemetry,
       debugLog:readDebugLog(bootstrap),
       guestVfsFetched:result.guestVfsFetched,
+      threads:globalThis.__r360Threads??null,
     });
   }
   // --frame FILE.png saves the last swapped frontbuffer (Xenos decode of the

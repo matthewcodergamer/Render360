@@ -1,5 +1,6 @@
 #include "guest_fibers.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
@@ -583,7 +584,12 @@ uint32_t r360_fiber_entry() {
   const bool returned = hir && r360_ppc_probe_correctness_status() == 3u;
   const bool exited = rx::FinishGuestThreadFiber(
       handle, returned, uint32_t(rx::GetHIRCorrectnessLastGPR(3)));
-  if (!exited) return hir ? hir : 1u;  // stopped on a blocker: end the run
+  if (!exited) {
+    // Stopped on a blocker: end the run.
+    std::fprintf(stderr, "R360_FIBER_STOP fiber=%u thread=0x%08X hir=%u status=%u returned=%u\n",
+                 rx::g_current, handle, hir, r360_ppc_probe_correctness_status(), returned ? 1u : 0u);
+    return hir ? hir : 1u;
+  }
   fiber.state = rx::kFiberDone;
   rx::GuestFiberNoteProgress();
   uint32_t target = 0;
@@ -593,7 +599,11 @@ uint32_t r360_fiber_entry() {
     target = 0;
     rx::g_force_fail = rx::g_fibers[0].state == rx::kFiberBlocked ||
                        rx::g_fibers[0].state == rx::kFiberReady;
-    if (!rx::g_force_fail) return hir ? hir : 1u;
+    if (!rx::g_force_fail) {
+      std::fprintf(stderr, "R360_FIBER_STOP no-target fiber=%u primary_state=%u\n", rx::g_current,
+                   uint32_t(rx::g_fibers[0].state));
+      return hir ? hir : 1u;
+    }
   }
   rx::g_target = target;
   rx::g_switch_pending = true;

@@ -19,24 +19,28 @@ Branch: `claude/xbox-360-emulator-optimization-74g72w`. Test title: Banjo-Tooie 
 - Shader path: Xenia SpirvShaderTranslator → Naga → WGSL. All shaders seen
   during loading compile in Chromium WebGPU (SwiftShader).
 
-## Current blocker (investigation, not fixed)
-At about 58B instructions the main render thread blocks in D3D `Swap`,
-waiting for the GPU to reach the previous frame's timestamp. Confirmed so far:
-- The GPU command processor is not deadlocked. It advances one swap at a
-  time; each swap waits (WAIT_REG_MEM on 0xFFCF4004) for D3D's vblank handler
-  to release it, and that handshake works on every cycle.
-- The ring has a growing backlog (~730 words pending behind the read
-  pointer). D3D's command-stream worker thread (0x36000201) keeps appending
-  small kicks faster than the vblank-paced CP drains them, so the main
-  thread's timestamp is never reached.
-- Some replayed command buffers contain older fence values, so the fence also
-  moves backwards. This is what the guest wrote: the CP does not cache IBs.
+## Fixed: Swap stall at ~58B instructions
+Root cause: the command processor ignored PM4 type-3 predication. D3D
+predicated tiling replays each frame's command buffer once per screen bin,
+and packets meant for one bin (including D3D's GPU-to-CPU deferred callback
+requests) ran in every pass. Each extra callback made D3D's worker thread
+queue another frame, the ring backlog outgrew the vblank-paced swaps, and
+the main thread waited forever for its frame. Ported Xenia's check
+(`ExecutePacketType3`: skip predicated packets when `bin_select & bin_mask`
+is 0, never run a predicated swap).
 
-Next step: identify what the worker appends (the ring-word trace added in
-this commit shows it), and why it outpaces the GPU, before changing anything.
+After the fix (deterministic headless runs):
+- 90B instructions: 2551 frames (VdSwap), was stuck at ~1542.
+- 120B instructions: 3067 frames; the title polls the controller every
+  frame (XamInputGetState 4056 calls by 90B, was 20).
+- Frame at 61B: the Rare logo intro renders (software renderer).
+
+## Current work
+Verifying the title screen and that controller input changes what the game
+does (`run-title --press`, `--frame-at`).
 
 ## Tests (latest build)
-- Regression runner: 59 of 68 pass. The 9 failures are pre-existing
+- Regression runner: 60 of 69 pass. The 9 failures are pre-existing
   foundation tests (fpu/vmx/wasm-backend probes, guest-control, translation
   probe) and are unchanged by recent work.
 - Xenia PPC instruction suite with JIT forced: pass (1398 tests, 1406
@@ -44,6 +48,8 @@ this commit shows it), and why it outpaces the GPU, before changing anything.
 - Guest JIT differential test: pass (2920 cases, 73 instructions).
 - `test-translation-window-consistency.mjs` fails before the window fix and
   passes after it.
+- `test-xenos-predication.mjs` fails before the predication fix and passes
+  after it.
 
 ## Not done yet
 - Interactive gameplay: not reached.

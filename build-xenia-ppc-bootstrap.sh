@@ -230,7 +230,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 29 ))
+expected=$(( ${#SOURCES[@]} + 2 + 30 ))
 actual=$(( passed + failed ))
 
 echo

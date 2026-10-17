@@ -495,13 +495,25 @@ CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder) {
   return &entry;
 }
 
+// A nested call's first run after a translation miss: ProbeAssembler::Assemble
+// skips executing a builder about to be retained, and DefineOrRunCached runs
+// it from its new cache entry instead, so that run already has a JIT slot
+// (compilation by call count, on-stack replacement of a long first run).
+bool g_defer_first_run = false;       // DefineOrRunCached is translating
+bool g_deferred_first_run = false;    // Assemble skipped the run
+bool CanRetainTranslatedBuilder() {
+  if (!g_retain_pending) return false;
+  auto it = g_translation_cache.find(g_retain_key);
+  return it == g_translation_cache.end() || !it->second.pins;
+}
+
 // Runs a cached translation as ProbeAssembler::Assemble runs a nested one.
-bool ExecuteCachedTranslation(CachedTranslation& entry) {
+bool ExecuteCachedTranslation(CachedTranslation& entry, bool count_hit = true) {
   auto* memory = g_probe_backend && g_probe_backend->processor()
                      ? g_probe_backend->processor()->memory()
                      : nullptr;
   if (!memory) return false;
-  ++g_translation_cache_hits;
+  if (count_hit) ++g_translation_cache_hits;
   ++entry.pins;
   NoteTrapPhase(kTrapPhaseExecute, entry.begin);
   xe::cpu::hir::HIRBuilder* const builder = ExecutionBuilder(entry);
@@ -527,7 +539,22 @@ bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
   g_retain_key = key;
   g_retain_begin = function->address();
   g_retain_end = function->end_address();
-  const bool ok = frontend->DefineFunction(function, 0);
+  const bool saved_defer = g_defer_first_run;
+  g_defer_first_run = true;
+  g_deferred_first_run = false;
+  bool ok = frontend->DefineFunction(function, 0);
+  g_defer_first_run = saved_defer;
+  if (g_deferred_first_run) {
+    g_deferred_first_run = false;
+    // RetainTranslatedBuilder pinned the entry so nothing evicted it.
+    auto it = g_translation_cache.find(key);
+    if (!ok || it == g_translation_cache.end()) {
+      ok = false;
+    } else {
+      --it->second.pins;
+      ok = ExecuteCachedTranslation(it->second, false);
+    }
+  }
   if (g_retain_pending) NoteCacheMiss(key, ok ? 4u : 5u);  // not retained
   g_retain_pending = saved_pending;
   g_retain_key = saved_key;
@@ -932,6 +959,7 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
   entry.hir_instructions = uint32_t(instructions);
   for (auto* block = builder->first_block(); block; block = block->next) ++entry.hir_blocks;
   entry.last_use = ++g_translation_cache_clock;
+  if (g_deferred_first_run) entry.pins = 1;  // until DefineOrRunCached runs it
   entry.builder = std::move(builder);
   g_translation_cache_bytes += entry.bytes;
   g_translation_cache.emplace(g_retain_key, std::move(entry)); ++g_cache_epoch;
@@ -1078,7 +1106,13 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
   }
 
   HIRCorrectnessResult correctness;
-  if (execute_correctness) {
+  if (nested_execution && g_defer_first_run && !g_deferred_first_run &&
+      CanRetainTranslatedBuilder()) {
+    // DefineOrRunCached runs it once it is retained (see g_defer_first_run).
+    g_deferred_first_run = true;
+    correctness.supported = true;
+    correctness.reached_return_boundary = true;
+  } else if (execute_correctness) {
     NoteTrapPhase(kTrapPhaseExecute, function ? function->address() : 0u);
     correctness = ExecuteHIRCorrectnessProbe(builder, memory);
   } else {

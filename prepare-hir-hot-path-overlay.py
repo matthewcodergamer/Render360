@@ -41,4 +41,49 @@ if noinline_marker not in s:
     s = s.replace(old, '// ' + noinline_marker + ': kept out of the per-call entry.\n'
                   '__attribute__((noinline)) ' + old, 1)
     path.write_text(s)
+
+# On-stack replacement (hir_wasm_jit.h JitOsrFunction): a run that has
+# interpreted many instructions, or an interior entry, continues in compiled
+# code at the next block head. Without it a function entered once that loops
+# (a thread's main loop, a wait loop) was interpreted for its whole life.
+s = path.read_text()
+osr_marker = 'R360_HOT_PATH_OSR'
+if osr_marker not in s:
+    builder_at = s.index('HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,\n')
+    decl_at = s.rindex('\n', 0, s.rindex('// R360_HOT_PATH_NOINLINE', 0, builder_at)) + 1
+    s = (s[:decl_at] +
+         '// ' + osr_marker + ' (prepare-hir-hot-path-overlay.py; defined in hir_jit_glue.inc).\n'
+         '}  // namespace\n'
+         'bool JitTryOsr(xe::cpu::hir::HIRBuilder* builder, JitSlot* slot,\n'
+         '               const xe::cpu::hir::Block* block, bool hot, xe::Memory* memory,\n'
+         '               xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result);\n'
+         'namespace {\n'
+         '// Interpreted instructions in one run before it moves to compiled code.\n'
+         'constexpr uint32_t kOsrInstructions = 1000;\n\n' + s[decl_at:])
+    builder_at = s.index('HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,\n')
+    values = '  RuntimeValues values;\n'
+    at = s.index(values, builder_at) + len(values)
+    s = s[:at] + '  JitSlot* const osr_slot = JitTakeOsrSlot(builder);\n  bool osr_tried = false;\n' + s[at:]
+    loop = '  while (block && supported && !reached_return) {\n    auto* next_block = block->next;\n'
+    at = s.index(loop, builder_at)
+    if s.count(loop) != 1:
+        raise SystemExit('prepare-hir-hot-path-overlay: interpreter loop anchor not found exactly once')
+    hook = ('  while (block && supported && !reached_return) {\n'
+            '    if (osr_slot) {\n'
+            '      // An interior entry starts at a block head: run it compiled once\n'
+            '      // the owner is hot; a long run moves over at its next block.\n'
+            '      const bool interior = first_execution_block && entry_instr;\n'
+            '      const bool hot = !osr_tried && result.instructions_executed >= kOsrInstructions;\n'
+            '      if (interior || hot) {\n'
+            '        if (hot) osr_tried = true;\n'
+            '        HIRCorrectnessResult compiled;\n'
+            '        if (JitTryOsr(builder, osr_slot, block, hot, memory, context, &compiled)) {\n'
+            '          compiled.instructions_executed = result.instructions_executed;\n'
+            '          return compiled;\n'
+            '        }\n'
+            '      }\n'
+            '    }\n'
+            '    auto* next_block = block->next;\n')
+    s = s[:at] + hook + s[at + len(loop):]
+    path.write_text(s)
 print('R360_HOT_PATH_OVERLAY applied')

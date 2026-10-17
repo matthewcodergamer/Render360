@@ -20,6 +20,9 @@ namespace render360::xenia_web {
 uint32_t JitInstructionCounterAddress();
 uint32_t JitFaultAddress();
 uint32_t JitScratchAddress();
+// Dispatcher segment the next generated-function call starts at (0 = entry);
+// generated code reads and clears it.
+uint32_t JitEntrySegmentAddress();
 uint32_t SparseGuestPageDirectoryAddress();
 // Nonzero while a debug store watch (r360_debug_watch) is armed.
 uint32_t JitDebugWatchAddress();
@@ -51,6 +54,9 @@ uint32_t g_compiler = 0;
 uint32_t g_next_request = 1;
 std::unordered_map<uint32_t, JitSlot*> g_pending;
 HIRBuilder* g_candidate_builder = nullptr;
+// The run JitTakeFunction last sent to the interpreter (JitTakeOsrSlot).
+HIRBuilder* g_osr_builder = nullptr;
+JitSlot* g_osr_slot = nullptr;
 uint32_t g_last_decision = 0;
 JitSlot* g_candidate_slot = nullptr;
 // Telemetry.
@@ -246,6 +252,7 @@ class Emitter {
   bool Compile(std::vector<uint8_t>* out);
   uint32_t reject_opcode() const { return reject_opcode_; }
   bool uses_exec() const { return uses_exec_; }
+  bool osr_capable() const { return osr_capable_; }
 
  private:
   struct Segment {
@@ -345,6 +352,8 @@ class Emitter {
   uint32_t extra_ = 0;
   uint32_t reject_opcode_ = 0;
   bool uses_exec_ = false;
+  bool osr_capable_ = false;
+  uint32_t entry_slot_ = 0;
   uint32_t counter_ = 0, fault_ = 0, return_slot_ = 0, return_valid_ = 0, scratch_ = 0;
   uint32_t page_directory_ = 0;
   // Inline sparse page walk for an access of `size` bytes at kLocAddr: falls
@@ -1742,14 +1751,32 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   scratch_ = JitScratchAddress();
   page_directory_ = SparseGuestPageDirectoryAddress();
   return_valid_ = JitReturnValidSlot();
+  entry_slot_ = JitEntrySegmentAddress();
   if (!Plan()) return false;
   AllocateTemporaries();
+  // Block-local values only: every block head is a valid entry.
+  using namespace xe::cpu::hir;
+  osr_capable_ = true;
+  for (Block* block = builder_->first_block(); block && osr_capable_; block = block->next) {
+    for (Instr* i = block->instr_head; i && osr_capable_; i = i->next) {
+      const auto sig = i->opcode->signature;
+      const Value* operands[3] = {
+          GET_OPCODE_SIG_TYPE_SRC1(sig) == OPCODE_SIG_TYPE_V ? i->src1.value : nullptr,
+          GET_OPCODE_SIG_TYPE_SRC2(sig) == OPCODE_SIG_TYPE_V ? i->src2.value : nullptr,
+          GET_OPCODE_SIG_TYPE_SRC3(sig) == OPCODE_SIG_TYPE_V ? i->src3.value : nullptr};
+      for (const Value* v : operands) {
+        if (v && !v->IsConstant() && (!v->def || v->def->block != block)) osr_capable_ = false;
+      }
+    }
+  }
 
   // Function body (after the local declarations, which depend on it).
-  // Entry: rewinding -> RESTORE, else segment 0.
+  // Entry: rewinding -> RESTORE, else the requested entry segment (0 unless
+  // the interpreter is handing over mid-run), which is then cleared.
   Call(kHState); I32(2); Op(oI32Eq);
-  If(kI32); I32(int32_t(restore_)); Else(); I32(0); End();
+  If(kI32); I32(int32_t(restore_)); Else(); I32(int32_t(entry_slot_)); Mem(oI32Load, 2, 0); End();
   Set(kLocPc);
+  I32(int32_t(entry_slot_)); I32(0); Mem(oI32Store, 2, 0);
   I32(int32_t(kPollBudget)); Set(kLocBudget);
   code_.u8(oLoop); code_.u8(kVoid);
   for (uint32_t i = 0; i < n_; ++i) { code_.u8(oBlock); code_.u8(kVoid); }
@@ -1840,6 +1867,7 @@ uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
   }
   const uint32_t request = g_next_request++;
   slot->builder_free = !emitter.uses_exec();
+  slot->osr_capable = emitter.osr_capable();
   slot->state = 1;
   slot->request = request;
   g_pending[request] = slot;
@@ -1867,6 +1895,8 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
   JitSlot* slot = g_candidate_builder == builder ? g_candidate_slot : nullptr;
   g_candidate_builder = nullptr;
   g_candidate_slot = nullptr;
+  g_osr_builder = builder;
+  g_osr_slot = slot;
   g_last_decision = 5;
   if (!g_mode || !g_compiler) return 0;
   g_last_decision = 1;
@@ -1895,6 +1925,42 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
 
 uint32_t JitLastDecision() { return g_last_decision; }
 bool JitEnabled() { return g_mode && g_compiler; }
+
+JitSlot* JitTakeOsrSlot(HIRBuilder* builder) {
+  JitSlot* slot = nullptr;
+  if (g_candidate_builder == builder) {
+    slot = g_candidate_slot;
+  } else if (g_osr_builder == builder) {
+    slot = g_osr_slot;
+  }
+  g_candidate_builder = g_osr_builder = nullptr;
+  g_candidate_slot = g_osr_slot = nullptr;
+  return slot;
+}
+
+uint32_t JitOsrFunction(HIRBuilder* builder, JitSlot* slot, bool hot) {
+  if (!slot || !g_mode || !g_compiler) return 0;
+  if (!slot->function) {
+    if (slot->state) return 0;  // pending or not compilable
+    if (!hot && ++slot->runs < g_hot_threshold) return 0;
+    if (!RequestCompile(builder, slot)) return 0;
+  }
+  return slot->osr_capable ? slot->function : 0;
+}
+
+uint32_t JitSegmentOfBlock(HIRBuilder* builder, const Block* target) {
+  // Plan()'s split: one segment per block plus one per call site after the
+  // block's first instruction.
+  uint32_t segment = 0;
+  for (Block* block = builder->first_block(); block; block = block->next) {
+    if (block == target) return segment;
+    ++segment;
+    for (Instr* instr = block->instr_head; instr; instr = instr->next) {
+      if (instr != block->instr_head && instr->opcode && IsCallSite(instr->opcode->num)) ++segment;
+    }
+  }
+  return 0xFFFFFFFFu;
+}
 uint32_t JitRejectOpcode(HIRBuilder* builder) {
   auto it = g_reject_by_builder.find(builder);
   return it == g_reject_by_builder.end() ? 0xFFu : it->second;

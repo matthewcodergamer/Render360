@@ -87,6 +87,8 @@ uint32_t JitInstructionCounterAddress() {
 uint32_t JitDebugWatchAddress() { return g_debug_watch_address; }
 uint32_t JitFaultAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_fault)); }
 uint32_t JitScratchAddress() { return uint32_t(reinterpret_cast<uintptr_t>(g_jit_scratch)); }
+uint32_t g_jit_entry_segment = 0;
+uint32_t JitEntrySegmentAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_entry_segment)); }
 uint32_t JitReturnAddressSlot() {
   return uint32_t(reinterpret_cast<uintptr_t>(&g_next_guest_return_address));
 }
@@ -119,12 +121,39 @@ void JitProfileInterpreted(xe::cpu::hir::HIRBuilder* builder, uint32_t reason, u
   ++e.runs;
 }
 
+// Runs the compiled `function` from dispatcher segment `entry` and maps its
+// status to an executor result.
+void JitRun(uint32_t function, uint32_t entry, xe::Memory* memory,
+            xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result);
+
 // Runs `builder` as compiled code when it has some (ExecuteHIRCorrectnessProbe
 // calls this in place of ExecuteBuilder for plain function entries).
 bool JitTryExecute(xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory,
                    xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
   const uint32_t function = JitTakeFunction(builder);
   if (!function) return false;
+  JitRun(function, 0, memory, context, result);
+  return true;
+}
+
+// ExecuteBuilder hands a run over to compiled code at the head of `block`
+// (JitOsrFunction); false keeps interpreting.
+uint64_t g_jit_osr_entries = 0;
+bool JitTryOsr(xe::cpu::hir::HIRBuilder* builder, JitSlot* slot,
+               const xe::cpu::hir::Block* block, bool hot, xe::Memory* memory,
+               xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
+  const uint32_t function = JitOsrFunction(builder, slot, hot);
+  if (!function) return false;
+  const uint32_t segment = JitSegmentOfBlock(builder, block);
+  if (segment == 0xFFFFFFFFu) return false;
+  ++g_jit_osr_entries;
+  JitRun(function, segment, memory, context, result);
+  return true;
+}
+
+void JitRun(uint32_t function, uint32_t entry, xe::Memory* memory,
+            xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
+  g_jit_entry_segment = entry;
   g_jit_memory = memory;
   g_jit_fault = 0;
   g_jit_fail_kind = g_jit_fail_opcode = g_jit_fail_address = 0;
@@ -149,7 +178,6 @@ bool JitTryExecute(xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory,
       result->blocker_address = g_jit_fail_address;
       break;
   }
-  return true;
 }
 
 }  // namespace render360::xenia_web
@@ -278,6 +306,8 @@ R360_JIT_HELPER(mulhi64) uint64_t r360_jit_h_mulhi64(uint64_t a, uint64_t b, uin
   return is_unsigned ? uint64_t((unsigned __int128)a * (unsigned __int128)b >> 64)
                      : uint64_t(((__int128)int64_t(a) * (__int128)int64_t(b)) >> 64);
 }
+__attribute__((used, export_name("r360_jit_osr_entries")))
+uint32_t r360_jit_osr_entries() { return uint32_t(rxj::g_jit_osr_entries); }
 __attribute__((used, export_name("r360_jit_profile")))
 uint32_t r360_jit_profile(uint32_t command) {
   if (command == 1) { rxj::g_jit_profile = true; rxj::g_jit_profile_entries.clear(); return 1; }

@@ -32,7 +32,13 @@ struct JitSlot {
   uint32_t state = 0;     // 0 not compiled, 1 compile pending, 2 not compilable
   uint32_t runs = 0;
   uint32_t request = 0;   // pending asynchronous compile request id
+  // The compiled code holds no pointer into its HIR builder (no single-op
+  // executor fallbacks), so it can run after the builder is freed.
+  bool builder_free = false;
 };
+
+// Compiled code can run (a JIT compiler is installed and enabled).
+bool JitEnabled();
 
 // The next HIR execution of `builder` belongs to `slot` (set by the cache just
 // before it runs the builder).

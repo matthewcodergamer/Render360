@@ -83,7 +83,10 @@ std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>> g_executable_aliases
 // This is the authoritative executable-byte content generation. It is sparse
 // across the full 32-bit Xbox virtual address space and is intentionally
 // independent of permission/mapping invalidation and the legacy backend epoch.
-std::map<uint32_t, uint32_t> g_executable_content_generations;
+// Two-level table (same split as g_page_directory): translation-cache lookups
+// read two generations per guest call, so this must be a couple of loads.
+// A zero entry means the default generation 1.
+std::array<uint32_t*, kDirectoryEntries> g_executable_content_generations{};
 uint32_t g_last_fault_address = 0;
 uint32_t g_last_fault_code = kFaultNone;
 
@@ -108,14 +111,18 @@ bool PageRangeValid(uint32_t address, uint32_t page_count) {
 
 uint32_t ContentGeneration(uint32_t address) {
   const uint32_t page = address >> kPageShift;
-  auto it = g_executable_content_generations.find(page);
-  return it == g_executable_content_generations.end() ? 1u : it->second;
+  const uint32_t* table = g_executable_content_generations[page >> kTableBits];
+  if (!table) return 1u;
+  const uint32_t generation = table[page & (kTableEntries - 1u)];
+  return generation ? generation : 1u;
 }
 
 void BumpContentGeneration(uint32_t page) {
-  auto [it, inserted] = g_executable_content_generations.emplace(page, 1u);
-  ++it->second;
-  if (it->second == 0) it->second = 1u;
+  uint32_t*& table = g_executable_content_generations[page >> kTableBits];
+  if (!table) table = new uint32_t[kTableEntries]();
+  uint32_t& generation = table[page & (kTableEntries - 1u)];
+  generation = (generation ? generation : 1u) + 1u;
+  if (generation == 0) generation = 1u;
 }
 
 Backing* GetBacking(uint32_t backing_id) {
@@ -242,7 +249,10 @@ void ResetSparseGuestMemory() {
   g_mapped_pages = 0;
   g_backings.clear();
   g_executable_aliases.clear();
-  g_executable_content_generations.clear();
+  for (uint32_t*& table : g_executable_content_generations) {
+    delete[] table;
+    table = nullptr;
+  }
   ClearFault();
 }
 

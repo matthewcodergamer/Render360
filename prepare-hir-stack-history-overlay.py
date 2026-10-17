@@ -40,19 +40,26 @@ thread_local std::array<R360StackCallHistoryEvent, kR360StackHistoryCapacity>
     g_r360_stack_call_history{};
 thread_local uint32_t g_r360_stack_write_history_count = 0;
 thread_local uint32_t g_r360_stack_call_history_count = 0;
+// Ring buffers (every guest call records one event): index of the oldest.
+thread_local uint32_t g_r360_stack_write_history_head = 0;
+thread_local uint32_t g_r360_stack_call_history_head = 0;
 thread_local uint32_t g_r360_stack_event_sequence = 0;
 
 template <typename T, size_t N>
 void PushBoundedHistory(std::array<T, N>& history, uint32_t* count,
-                        const T& event) {
-  if (!count) return;
+                        uint32_t* head, const T& event) {
+  if (!count || !head) return;
   if (*count < N) {
-    history[*count] = event;
+    history[(*head + *count) % N] = event;
     ++(*count);
     return;
   }
-  for (size_t i = 1; i < N; ++i) history[i - 1] = history[i];
-  history[N - 1] = event;
+  history[*head] = event;
+  *head = uint32_t((*head + 1) % N);
+}
+// Oldest-first index into a ring history.
+inline size_t HistorySlot(uint32_t head, uint32_t index) {
+  return size_t((head + index) % kR360StackHistoryCapacity);
 }
 
 void RecordStackWriteHistory(uint32_t source, uint64_t old_r1,
@@ -64,7 +71,8 @@ void RecordStackWriteHistory(uint32_t source, uint64_t old_r1,
   event.old_r1 = old_r1;
   event.new_r1 = new_r1;
   PushBoundedHistory(g_r360_stack_write_history,
-                     &g_r360_stack_write_history_count, event);
+                     &g_r360_stack_write_history_count,
+                     &g_r360_stack_write_history_head, event);
 }
 
 void RecordStackCallHistory(uint32_t target, uint32_t flags) {
@@ -77,7 +85,8 @@ void RecordStackCallHistory(uint32_t target, uint32_t flags) {
   event.flags = flags;
   event.r1 = g_active_context->r[1];
   PushBoundedHistory(g_r360_stack_call_history,
-                     &g_r360_stack_call_history_count, event);
+                     &g_r360_stack_call_history_count,
+                     &g_r360_stack_call_history_head, event);
 }
 '''
 replace_once(state_anchor, state_replacement, 'history state')
@@ -141,6 +150,8 @@ reset_replacement = '''    g_current_source_address = 0;
     g_r360_stack_call_history = {};
     g_r360_stack_write_history_count = 0;
     g_r360_stack_call_history_count = 0;
+    g_r360_stack_write_history_head = 0;
+    g_r360_stack_call_history_head = 0;
     g_r360_stack_event_sequence = 0;
 '''
 replace_once(reset_anchor, reset_replacement, 'outer history reset')
@@ -157,40 +168,40 @@ __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_count
   return g_r360_stack_write_history_count;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_sequence(uint32_t index) {
-  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[index].sequence : 0;
+  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[HistorySlot(g_r360_stack_write_history_head, index)].sequence : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_address(uint32_t index) {
-  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[index].source : 0;
+  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[HistorySlot(g_r360_stack_write_history_head, index)].source : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_old_r1(uint32_t index) {
-  return index < g_r360_stack_write_history_count ? static_cast<uint32_t>(g_r360_stack_write_history[index].old_r1) : 0;
+  return index < g_r360_stack_write_history_count ? static_cast<uint32_t>(g_r360_stack_write_history[HistorySlot(g_r360_stack_write_history_head, index)].old_r1) : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_new_r1(uint32_t index) {
-  return index < g_r360_stack_write_history_count ? static_cast<uint32_t>(g_r360_stack_write_history[index].new_r1) : 0;
+  return index < g_r360_stack_write_history_count ? static_cast<uint32_t>(g_r360_stack_write_history[HistorySlot(g_r360_stack_write_history_head, index)].new_r1) : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_write_depth(uint32_t index) {
-  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[index].depth : 0;
+  return index < g_r360_stack_write_history_count ? g_r360_stack_write_history[HistorySlot(g_r360_stack_write_history_head, index)].depth : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_count() {
   return g_r360_stack_call_history_count;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_sequence(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[index].sequence : 0;
+  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].sequence : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_source(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[index].source : 0;
+  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].source : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_target(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[index].target : 0;
+  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].target : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_r1(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? static_cast<uint32_t>(g_r360_stack_call_history[index].r1) : 0;
+  return index < g_r360_stack_call_history_count ? static_cast<uint32_t>(g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].r1) : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_depth(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[index].depth : 0;
+  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].depth : 0;
 }
 __attribute__((visibility("default"))) uint32_t r360_ppc_probe_stack_call_flags(uint32_t index) {
-  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[index].flags : 0;
+  return index < g_r360_stack_call_history_count ? g_r360_stack_call_history[HistorySlot(g_r360_stack_call_history_head, index)].flags : 0;
 }
 }  // extern "C"
 '''

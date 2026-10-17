@@ -7,7 +7,7 @@ Branch: `claude/xbox-360-emulator-optimization-74g72w`. Test title: Banjo-Tooie 
   HIR executor and guest JIT. File loading finishes (`db360.textures.cmp`,
   ~50 MB, is read in full); 7 title threads run.
 - CPU: guest JIT compiles Xenia HIR to WebAssembly. Headless speed is about
-  180M guest instructions/s.
+  540M guest instructions/s over Banjo's first 30B instructions (see Step 1).
 - Deterministic headless runs (`run-title --deterministic 1000`): two
   identical runs match through 58.3B instructions (1098 checkpoints, same
   frames, draws and GPU packets). Fixed: a JIT segment resumed after an
@@ -87,6 +87,32 @@ path in Spiral Mountain: the camera follows him past Bottles (124B) and by
 127B he has reached the boulder pit, which triggers the next dialogue.
 Frames keep changing to the 127.5B instruction limit (3607 frames).
 
+## Step 1: CPU speed (in progress)
+Benchmark: Banjo-Tooie, first 30B guest instructions headless
+(`run-title --max-minstr 30000 --render-from-minstr 999999 --deterministic
+1000`), same container, Node 22. MIPS = guest instructions per second.
+
+| Change | MIPS | Cache misses |
+| --- | --- | --- |
+| Baseline (start of step 1) | 274 | — |
+| No per-call `PPCContext` zeroing | 355 | 19.6k |
+| Native vector compares in the JIT | 347 | — |
+| Flat executable-page generation table; guest function object only on a miss | 355 | 19.6k |
+| Ring-buffer call/stack history (was a 32-entry shift per call); cached epilogue signature per tail target | 387 | 20.6k |
+| Compiled-only tier: an evicted translation keeps its compiled code (when it holds no HIR pointers) and runs again without retranslating or recompiling | 503–543 | 2.7k |
+
+What the profile showed: 74.5M guest calls in 30B instructions. The
+translation cache (192 MiB of HIR) holds ~1000 functions, fewer than one
+frame touches, so per-frame functions were evicted and retranslated and
+recompiled 100+ times each. The JIT's function table only grows, so every
+recompile also leaked a module. The compiled-only tier fixes both. Only
+0.11% of instructions are interpreted (interior entries and cold code).
+The cache budget is now checked against real arena bytes (Xenia's `Arena`
+chunks), not an estimate. Wasm memory at 30B: 668 MiB.
+
+Next: cut the per-call path (JIT → resolver → cache → executor → JIT), which
+is now the largest cost.
+
 ## Not yet
 - Speed: reaching gameplay takes ~1 hour headless with the software
   renderer; the browser needs the WebGPU renderer and faster CPU emulation
@@ -95,7 +121,7 @@ Frames keep changing to the 127.5B instruction limit (3607 frames).
 - Banjo's model looks small and partly fragmented in some frames.
 
 ## Tests (latest build)
-- Regression runner: 60 of 69 pass. The 9 failures are pre-existing
+- Regression runner: 61 of 70 pass. The 9 failures are pre-existing
   foundation tests (fpu/vmx/wasm-backend probes, guest-control, translation
   probe) and are unchanged by recent work.
 - Xenia PPC instruction suite with JIT forced: pass (1398 tests, 1406

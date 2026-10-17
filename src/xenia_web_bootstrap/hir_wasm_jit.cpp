@@ -245,6 +245,7 @@ class Emitter {
 
   bool Compile(std::vector<uint8_t>* out);
   uint32_t reject_opcode() const { return reject_opcode_; }
+  bool uses_exec() const { return uses_exec_; }
 
  private:
   struct Segment {
@@ -343,6 +344,7 @@ class Emitter {
   uint32_t real_ = 0, n_ = 0, end_ = 0, poll_ = 0, spill_ = 0, restore_ = 0;
   uint32_t extra_ = 0;
   uint32_t reject_opcode_ = 0;
+  bool uses_exec_ = false;
   uint32_t counter_ = 0, fault_ = 0, return_slot_ = 0, return_valid_ = 0, scratch_ = 0;
   uint32_t page_directory_ = 0;
   // Inline sparse page walk for an access of `size` bytes at kLocAddr: falls
@@ -920,6 +922,7 @@ bool Emitter::EmitGeneric(Instr* instr, uint32_t source) {
     StoreClass(c, uint32_t(16 * n));
   }
   if (instr->dest && ClassOf(instr->dest->type) == Cls::kNone) return Reject(instr);
+  uses_exec_ = true;  // the code now points into the builder's HIR
   I32(int32_t(reinterpret_cast<uintptr_t>(instr)));
   I32(int32_t(source));
   Call(kHExec);
@@ -1836,6 +1839,7 @@ uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
     return 0;
   }
   const uint32_t request = g_next_request++;
+  slot->builder_free = !emitter.uses_exec();
   slot->state = 1;
   slot->request = request;
   g_pending[request] = slot;
@@ -1890,6 +1894,7 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
 }
 
 uint32_t JitLastDecision() { return g_last_decision; }
+bool JitEnabled() { return g_mode && g_compiler; }
 uint32_t JitRejectOpcode(HIRBuilder* builder) {
   auto it = g_reject_by_builder.find(builder);
   return it == g_reject_by_builder.end() ? 0xFFu : it->second;

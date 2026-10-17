@@ -25,6 +25,7 @@ extern "C" char __stop_r360_fiber[];
 
 extern "C" {
 uint32_t r360_guest_thread_current();
+uint32_t r360_kernel_thread_wait(uint32_t thread, uint32_t field);
 uint32_t r360_guest_thread_set_current(uint32_t handle);
 uint32_t r360_guest_thread_runnable_list(uint32_t* out, uint32_t capacity);
 uint32_t r360_guest_thread_entry(uint32_t handle);
@@ -328,6 +329,28 @@ bool GuestFiberYield(bool blocked) {
 
 bool GuestInterruptActive() { return g_in_interrupt; }
 
+// Scheduler state for diagnostics (r360_jit_diag).
+void GuestFiberDiagnostic(char* out, size_t size) {
+  uint32_t ready = 0, blocked = 0;
+  for (const auto& f : g_fibers) {
+    if (f.state == kFiberReady) ++ready;
+    if (f.state == kFiberBlocked) ++blocked;
+  }
+  int n = std::snprintf(out, size, "fibers=%u current=%u ready=%u blocked=%u clock_ms=%llu |",
+                        uint32_t(g_fibers.size()), g_current, ready, blocked,
+                        (unsigned long long)(GuestClockNanoseconds() / 1000000ull));
+  // Per fiber: state, last kernel call (module<<16|ordinal), wake deadline,
+  // guest PC when it left.
+  for (size_t i = 0; i < g_fibers.size() && n > 0 && size_t(n) < size; ++i) {
+    const Fiber& f = g_fibers[i];
+    // Kernel wait record: object, reason, caller.
+    n += std::snprintf(out + n, size - size_t(n), " %u:%u/%llu/obj=%08x/r=%u/lr=%08x", uint32_t(i),
+                       uint32_t(f.state), (unsigned long long)(f.wake_ns / 1000000ull),
+                       r360_kernel_thread_wait(f.thread, 1), r360_kernel_thread_wait(f.thread, 4),
+                       r360_kernel_thread_wait(f.thread, 5));
+  }
+}
+
 // Xenia blocks a sleeping or timed-waiting XThread on a host wait until its
 // deadline; here the fiber blocks with a guest-clock deadline and another
 // fiber runs. Returns true when resumed (the caller re-checks its condition),
@@ -381,7 +404,15 @@ bool GuestFiberIdle(uint64_t deadline_ns) {
   return true;
 }
 
+// Verbose runtime tracing from an instruction count on (r360_trace_verbose_from):
+// checked here because a stuck guest may never return to the host to turn it on.
+uint64_t g_trace_from_instructions = 0;
+
 void GuestFiberHostYieldIfDue() {
+  if (g_trace_from_instructions && HIRTotalInstructions() >= g_trace_from_instructions) {
+    g_trace_from_instructions = 0;
+    g_r360_verbose_trace = true;
+  }
 #if defined(__wasm__)
   if (g_rewinding) {
     // Resumed after the page got its turn.
@@ -403,6 +434,9 @@ void GuestFiberHostYieldIfDue() {
       return;
     }
   }
+  R360_VERBOSE_TRACE("R360_HOST_YIELD_CHECK fiber=%u interrupt=%u deadline=%llu now=%llu\n",
+                     g_current, g_in_interrupt ? 1u : 0u,
+                     (unsigned long long)g_host_slice_deadline_ms, (unsigned long long)HostMillis());
   if (!g_enabled || g_in_interrupt || !g_host_slice_deadline_ms ||
       g_current >= g_fibers.size() || HostMillis() < g_host_slice_deadline_ms) {
     return;
@@ -489,6 +523,11 @@ uint32_t r360_fiber_switch_pending() { return rx::g_switch_pending ? 1u : 0u; }
 uint32_t r360_fiber_set_host_slice(uint32_t milliseconds) {
   rx::g_host_slice_deadline_ms = milliseconds ? rx::HostMillis() + milliseconds : 0;
   return milliseconds;
+}
+__attribute__((used, export_name("r360_trace_verbose_from")))
+uint32_t r360_trace_verbose_from(uint32_t millions) {
+  rx::g_trace_from_instructions = uint64_t(millions) * 1000000ull;
+  return millions;
 }
 // 1 when the last unwind was a host time-slice yield (consumed by this call).
 uint32_t r360_fiber_take_host_yield() {

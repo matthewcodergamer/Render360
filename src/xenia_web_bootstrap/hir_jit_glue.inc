@@ -6,6 +6,7 @@
 // PPCContext, so guest calls, returns, memory, MMIO and atomics behave exactly
 // as in ExecuteBuilder above.
 // ---------------------------------------------------------------------------
+extern "C" uint32_t r360_guest_thread_current();
 namespace render360::xenia_web {
 namespace {
 xe::Memory* g_jit_memory = nullptr;
@@ -93,6 +94,19 @@ uint32_t JitDebugWatchAddress() { return g_debug_watch_address; }
 uint32_t JitFaultAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_fault)); }
 uint32_t JitScratchAddress() { return uint32_t(reinterpret_cast<uintptr_t>(g_jit_scratch)); }
 uint32_t g_jit_entry_segment = 0;
+// r360_jit_diag: a line every 2^27 guest instructions (where the guest runs
+// when it never returns to the host, e.g. inside back-to-back interrupts).
+bool g_jit_diag = false;
+uint64_t g_jit_diag_next = 0;
+void JitDiagnosticPoll() {
+  if (!g_jit_diag || g_total_instructions < g_jit_diag_next) return;
+  g_jit_diag_next = (g_total_instructions | ((uint64_t(1) << 27) - 1)) + 1;
+  char fibers[512];
+  GuestFiberDiagnostic(fibers, sizeof(fibers));
+  std::fprintf(stderr, "R360_DIAG minstr=%llu interrupt=%u active=%u thread=0x%08X source=0x%08X %s\n",
+               (unsigned long long)(g_total_instructions / 1000000u), GuestInterruptActive() ? 1u : 0u,
+               GuestFibersActive() ? 1u : 0u, r360_guest_thread_current(), g_current_source_address, fibers);
+}
 uint32_t JitEntrySegmentAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_entry_segment)); }
 uint32_t JitReturnAddressSlot() {
   return uint32_t(reinterpret_cast<uintptr_t>(&g_next_guest_return_address));
@@ -258,6 +272,7 @@ R360_JIT_HELPER(st64) void r360_jit_h_st64(uint32_t a, uint64_t v, uint32_t s) {
 // Loops in generated code poll here: guest interrupts, preemption and host
 // time slices (may unwind), and the --max-minstr budget.
 R360_JIT_HELPER(poll) uint32_t r360_jit_h_poll() {
+  rxj::JitDiagnosticPoll();
   rxj::DeliverGuestInterruptsNow();
   if (rxj::g_total_instruction_budget &&
       rxj::g_total_instructions > rxj::g_total_instruction_budget) {
@@ -327,6 +342,8 @@ R360_JIT_HELPER(mulhi64) uint64_t r360_jit_h_mulhi64(uint64_t a, uint64_t b, uin
   return is_unsigned ? uint64_t((unsigned __int128)a * (unsigned __int128)b >> 64)
                      : uint64_t(((__int128)int64_t(a) * (__int128)int64_t(b)) >> 64);
 }
+__attribute__((used, export_name("r360_jit_diag")))
+uint32_t r360_jit_diag(uint32_t on) { rxj::g_jit_diag = on != 0; return on; }
 __attribute__((used, export_name("r360_jit_osr_entries")))
 uint32_t r360_jit_osr_entries() { return uint32_t(rxj::g_jit_osr_entries); }
 __attribute__((used, export_name("r360_jit_profile")))

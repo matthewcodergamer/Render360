@@ -26,6 +26,7 @@ extern "C" char __stop_r360_fiber[];
 extern "C" {
 uint32_t r360_guest_thread_current();
 uint32_t r360_kernel_thread_wait(uint32_t thread, uint32_t field);
+uint32_t r360_guest_thread_kthread(uint32_t handle);
 uint32_t r360_guest_thread_set_current(uint32_t handle);
 uint32_t r360_guest_thread_runnable_list(uint32_t* out, uint32_t capacity);
 uint32_t r360_guest_thread_entry(uint32_t handle);
@@ -344,7 +345,8 @@ void GuestFiberDiagnostic(char* out, size_t size) {
   for (size_t i = 0; i < g_fibers.size() && n > 0 && size_t(n) < size; ++i) {
     const Fiber& f = g_fibers[i];
     // Kernel wait record: object, reason, caller.
-    n += std::snprintf(out + n, size - size_t(n), " %u:%u/%llu/obj=%08x/r=%u/lr=%08x", uint32_t(i),
+    n += std::snprintf(out + n, size - size_t(n), " %u:kt=%08x:%u/%llu/obj=%08x/r=%u/lr=%08x", uint32_t(i),
+                       r360_guest_thread_kthread(f.thread),
                        uint32_t(f.state), (unsigned long long)(f.wake_ns / 1000000ull),
                        r360_kernel_thread_wait(f.thread, 1), r360_kernel_thread_wait(f.thread, 4),
                        r360_kernel_thread_wait(f.thread, 5));

@@ -94,6 +94,8 @@ uint32_t JitDebugWatchAddress() { return g_debug_watch_address; }
 uint32_t JitFaultAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_fault)); }
 uint32_t JitScratchAddress() { return uint32_t(reinterpret_cast<uintptr_t>(g_jit_scratch)); }
 uint32_t g_jit_entry_segment = 0;
+uint32_t g_jit_poll_source = 0;
+uint32_t JitPollSourceAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_poll_source)); }
 // r360_jit_diag: a line every 2^27 guest instructions (where the guest runs
 // when it never returns to the host, e.g. inside back-to-back interrupts).
 bool g_jit_diag = false;
@@ -103,9 +105,10 @@ void JitDiagnosticPoll() {
   g_jit_diag_next = (g_total_instructions | ((uint64_t(1) << 27) - 1)) + 1;
   char fibers[512];
   GuestFiberDiagnostic(fibers, sizeof(fibers));
-  std::fprintf(stderr, "R360_DIAG minstr=%llu interrupt=%u active=%u thread=0x%08X source=0x%08X %s\n",
+  std::fprintf(stderr, "R360_DIAG minstr=%llu interrupt=%u active=%u thread=0x%08X source=0x%08X loop=0x%08X %s\n",
                (unsigned long long)(g_total_instructions / 1000000u), GuestInterruptActive() ? 1u : 0u,
-               GuestFibersActive() ? 1u : 0u, r360_guest_thread_current(), g_current_source_address, fibers);
+               GuestFibersActive() ? 1u : 0u, r360_guest_thread_current(), g_current_source_address,
+               g_jit_poll_source, fibers);
 }
 uint32_t JitEntrySegmentAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_entry_segment)); }
 uint32_t JitReturnAddressSlot() {

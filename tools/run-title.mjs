@@ -253,10 +253,11 @@ async function main(){
   // Guest JIT (render360-guest-jit.mjs): hot guest functions run as
   // generated WebAssembly. --no-jit keeps everything on the HIR executor.
   const {installGuestJit}=await import(rel('render360-guest-jit.mjs'));
-  const jit=args.jit===0?null:installGuestJit(bootstrap,{mode:args.jit||1,onError:(err)=>{if(!globalThis.__r360JitErrShown){globalThis.__r360JitErrShown=1;console.error('JIT module error:',err.message);}}});
+  const jit=args.jit===0?null:installGuestJit(bootstrap,{mode:args.jit||1,hotThreshold:Number(process.env.R360_JIT_HOT||2),onError:(err)=>{if(!globalThis.__r360JitErrShown){globalThis.__r360JitErrShown=1;console.error('JIT module error:',err.message);}}});
   globalThis.__r360Jit=jit;
   if(process.env.R360_JITPROF)bootstrap.exports.r360_jit_profile?.(1);
   if(process.env.R360_DIAG){bootstrap.exports.r360_jit_diag?.(1);}
+  if(process.env.R360_JIT_EXCLUDE){const [b,e]=process.env.R360_JIT_EXCLUDE.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_exclude?.(b,e);}
   if(args.traceFrom!==undefined){globalThis.__r360TraceOn=1;bootstrap.exports.r360_trace_verbose_from?.(args.traceFrom);}
   if(process.env.R360_OSR!==undefined)bootstrap.exports.r360_jit_set_osr?.(Number(process.env.R360_OSR));
   (args.kernelWatch||[]).slice(0,4).forEach((v,k)=>bootstrap.exports.r360_kernel_watch_arg?.(k,v));

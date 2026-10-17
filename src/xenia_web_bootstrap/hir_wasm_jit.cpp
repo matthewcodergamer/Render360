@@ -23,6 +23,9 @@ uint32_t JitScratchAddress();
 // Dispatcher segment the next generated-function call starts at (0 = entry);
 // generated code reads and clears it.
 uint32_t JitEntrySegmentAddress();
+// Guest address of the loop head a generated function last polled at
+// (diagnostics: r360_jit_diag).
+uint32_t JitPollSourceAddress();
 uint32_t SparseGuestPageDirectoryAddress();
 // Nonzero while a debug store watch (r360_debug_watch) is armed.
 uint32_t JitDebugWatchAddress();
@@ -353,7 +356,14 @@ class Emitter {
   uint32_t reject_opcode_ = 0;
   bool uses_exec_ = false;
   bool osr_capable_ = false;
-  uint32_t entry_slot_ = 0;
+  uint32_t entry_slot_ = 0, poll_source_ = 0;
+  // First guest address in segment k.
+  uint32_t SegmentSource(uint32_t k) const {
+    for (Instr* i = segments_[k].first; i && i != segments_[k].end; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+    }
+    return 0;
+  }
   uint32_t counter_ = 0, fault_ = 0, return_slot_ = 0, return_valid_ = 0, scratch_ = 0;
   uint32_t page_directory_ = 0;
   // Inline sparse page walk for an access of `size` bytes at kLocAddr: falls
@@ -447,6 +457,7 @@ void Emitter::Jump(uint32_t k, uint32_t j) {
   Else();
   I32(int32_t(kPollBudget)); Set(kLocBudget);
   I32(int32_t(j)); Set(kLocPending);
+  I32(int32_t(poll_source_)); I32(int32_t(SegmentSource(j))); Mem(oI32Store, 2, 0);
   I32(int32_t(poll_)); Set(kLocPc);
   End();
   BrTo(DepthToLoop(k));
@@ -1752,6 +1763,7 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   page_directory_ = SparseGuestPageDirectoryAddress();
   return_valid_ = JitReturnValidSlot();
   entry_slot_ = JitEntrySegmentAddress();
+  poll_source_ = JitPollSourceAddress();
   if (!Plan()) return false;
   AllocateTemporaries();
   // Block-local values only: every block head is a valid entry.
@@ -1854,7 +1866,27 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   return true;
 }
 
+// Functions starting in [g_exclude_begin, g_exclude_end) stay interpreted
+// (r360_jit_set_exclude; bisecting a suspected miscompile).
+uint32_t g_exclude_begin = 0, g_exclude_end = 0;
+bool Excluded(HIRBuilder* builder) {
+  if (g_exclude_begin >= g_exclude_end) return false;
+  for (Block* b = builder->first_block(); b; b = b->next) {
+    for (Instr* i = b->instr_head; i; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) {
+        const uint32_t start = uint32_t(i->src1.offset);
+        return start >= g_exclude_begin && start < g_exclude_end;
+      }
+    }
+  }
+  return false;
+}
+
 uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
+  if (Excluded(builder)) {
+    slot->state = 2;
+    return 0;
+  }
   Emitter emitter(builder);
   std::vector<uint8_t> bytes;
   if (!emitter.Compile(&bytes)) {
@@ -1984,6 +2016,12 @@ void JitReleaseSlot(JitSlot* slot) {
 namespace rx = render360::xenia_web;
 
 extern "C" {
+__attribute__((used, export_name("r360_jit_set_exclude")))
+uint32_t r360_jit_set_exclude(uint32_t begin, uint32_t end) {
+  rx::g_exclude_begin = begin;
+  rx::g_exclude_end = end;
+  return end > begin ? end - begin : 0;
+}
 // On-stack replacement: bit 0 long runs, bit 1 interior entries (default 3;
 // 0 for bisecting).
 __attribute__((used, export_name("r360_jit_set_osr")))

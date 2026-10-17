@@ -5,21 +5,14 @@
 //
 // Usage: node test-guest-jit-osr.mjs [bootstrap.wasm]
 // Requires powerpc64-linux-gnu-{as,ld} (apt: binutils-powerpc64-linux-gnu).
+import './test-node-wasi-safe.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {WASI} from 'node:wasi';
-import {spawnSync} from 'node:child_process';
 import {installGuestJit} from './render360-guest-jit.mjs';
 
-// The probe translates and runs the guest code on one host stack; V8's
-// default 984 KiB native stack can overflow when a wasm tier-up lands deep in
-// it (a segfault, not a JS RangeError). Re-run with a larger stack.
-if(!process.execArgv.some(a=>a.startsWith('--stack-size'))){
-  const r=spawnSync(process.execPath,['--stack-size=4000',...process.execArgv,...process.argv.slice(1)],{stdio:'inherit'});
-  process.exit(r.status??1);
-}
 
 const wasmPath=process.argv[2]||'build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm';
 const BASE=0x82010000;

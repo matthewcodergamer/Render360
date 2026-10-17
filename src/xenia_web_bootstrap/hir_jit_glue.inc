@@ -9,11 +9,16 @@
 namespace render360::xenia_web {
 namespace {
 xe::Memory* g_jit_memory = nullptr;
-uint32_t g_jit_fault = 0;
+// Fault state of the running generated function, per guest thread: a guest
+// interrupt (RunGuestInterrupt swaps the fiber-local section) or another
+// fiber can run nested JIT code that fails, and must not leave the fault set
+// for the interrupted code's next FaultCheck. Generated code reads it at a
+// fixed address, which the section swap keeps valid.
+R360_FIBER_LOCAL uint32_t g_jit_fault = 0;
 // Operand/result exchange for r360_jit_h_exec: three 16-byte operand slots
 // and the result slot.
 alignas(16) uint8_t g_jit_scratch[64] = {};
-uint32_t g_jit_fail_kind = 0, g_jit_fail_opcode = 0, g_jit_fail_address = 0;
+R360_FIBER_LOCAL uint32_t g_jit_fail_kind = 0, g_jit_fail_opcode = 0, g_jit_fail_address = 0;
 
 // Blocker for a failed helper, preferring a nested callee's blocker as the
 // executor does after a failed call.
@@ -136,6 +141,13 @@ bool JitTryExecute(xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory,
   return true;
 }
 
+uint32_t JitBlockSource(const xe::cpu::hir::Block* block) {
+  for (auto* i = block->instr_head; i; i = i->next) {
+    if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+  }
+  return 0;
+}
+
 // ExecuteBuilder hands a run over to compiled code at the head of `block`
 // (JitOsrFunction); false keeps interpreting.
 uint64_t g_jit_osr_entries = 0;
@@ -148,6 +160,11 @@ bool JitTryOsr(xe::cpu::hir::HIRBuilder* builder, JitSlot* slot,
   if (segment == 0xFFFFFFFFu) return false;
   ++g_jit_osr_entries;
   JitRun(function, segment, memory, context, result);
+  if (!result->supported) {
+    std::fprintf(stderr, "R360_OSR_FAILED block_source=0x%08X segment=%u hot=%u blocker=%u@0x%08X\n",
+                 JitBlockSource(block), segment, hot ? 1u : 0u, result->blocker_kind,
+                 result->blocker_address);
+  }
   return true;
 }
 
@@ -155,10 +172,14 @@ void JitRun(uint32_t function, uint32_t entry, xe::Memory* memory,
             xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
   g_jit_entry_segment = entry;
   g_jit_memory = memory;
+  // A caller in generated code learns of this run's failure from its
+  // helper's return value; its own fault flag stays as it was.
+  const uint32_t caller_fault = g_jit_fault;
   g_jit_fault = 0;
   g_jit_fail_kind = g_jit_fail_opcode = g_jit_fail_address = 0;
   const uint32_t status = reinterpret_cast<uint32_t (*)(uint32_t)>(uintptr_t(function))(
       uint32_t(reinterpret_cast<uintptr_t>(&context)));
+  g_jit_fault = caller_fault;
   *result = HIRCorrectnessResult{};
   result->r3 = context.r[3];
   switch (status) {

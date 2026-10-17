@@ -6,6 +6,7 @@
 //
 // Usage: node test-guest-jit-differential.mjs [bootstrap.wasm] [iterations]
 // Requires powerpc64-linux-gnu-{as,ld} (apt: binutils-powerpc64-linux-gnu).
+import './test-node-wasi-safe.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

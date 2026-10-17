@@ -1895,8 +1895,11 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
   JitSlot* slot = g_candidate_builder == builder ? g_candidate_slot : nullptr;
   g_candidate_builder = nullptr;
   g_candidate_slot = nullptr;
-  g_osr_builder = builder;
-  g_osr_slot = slot;
+  // Recorded only for a run going to the interpreter, which takes it at once
+  // (JitTakeOsrSlot): a stale record could match a later builder allocated at
+  // the same address.
+  g_osr_builder = nullptr;
+  g_osr_slot = nullptr;
   g_last_decision = 5;
   if (!g_mode || !g_compiler) return 0;
   g_last_decision = 1;
@@ -1916,7 +1919,11 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
     return 0;
   }
   g_last_decision = 2;
-  if (++slot->runs < (g_mode >= 2 ? 1u : g_hot_threshold)) return 0;
+  if (++slot->runs < (g_mode >= 2 ? 1u : g_hot_threshold)) {
+    g_osr_builder = builder;
+    g_osr_slot = slot;
+    return 0;
+  }
   const uint32_t index = RequestCompile(builder, slot);
   if (!index) g_last_decision = slot->state == 1 ? 3 : 4;
   if (index) ++g_jit_calls;
@@ -1938,8 +1945,10 @@ JitSlot* JitTakeOsrSlot(HIRBuilder* builder) {
   return slot;
 }
 
+// Bit 0: long runs, bit 1: interior entries.
+uint32_t g_osr_enabled = 3;
 uint32_t JitOsrFunction(HIRBuilder* builder, JitSlot* slot, bool hot) {
-  if (!slot || !g_mode || !g_compiler) return 0;
+  if (!slot || !g_mode || !g_compiler || !(g_osr_enabled & (hot ? 1u : 2u))) return 0;
   if (!slot->function) {
     if (slot->state) return 0;  // pending or not compilable
     if (!hot && ++slot->runs < g_hot_threshold) return 0;
@@ -1975,6 +1984,10 @@ void JitReleaseSlot(JitSlot* slot) {
 namespace rx = render360::xenia_web;
 
 extern "C" {
+// On-stack replacement: bit 0 long runs, bit 1 interior entries (default 3;
+// 0 for bisecting).
+__attribute__((used, export_name("r360_jit_set_osr")))
+uint32_t r360_jit_set_osr(uint32_t mask) { rx::g_osr_enabled = mask & 3u; return rx::g_osr_enabled; }
 __attribute__((used, export_name("r360_jit_set_compiler")))
 uint32_t r360_jit_set_compiler(uint32_t table_index) {
   rx::g_compiler = table_index;

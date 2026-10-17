@@ -499,8 +499,10 @@ CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder) {
 // skips executing a builder about to be retained, and DefineOrRunCached runs
 // it from its new cache entry instead, so that run already has a JIT slot
 // (compilation by call count, on-stack replacement of a long first run).
-bool g_defer_first_run = false;       // DefineOrRunCached is translating
-bool g_deferred_first_run = false;    // Assemble skipped the run
+// Per guest thread: a fiber can switch while a translation that was not
+// deferred runs guest code inside Assemble.
+R360_FIBER_LOCAL bool g_defer_first_run = false;     // DefineOrRunCached is translating
+R360_FIBER_LOCAL bool g_deferred_first_run = false;  // Assemble skipped the run
 bool CanRetainTranslatedBuilder() {
   if (!g_retain_pending) return false;
   auto it = g_translation_cache.find(g_retain_key);
@@ -520,6 +522,12 @@ bool ExecuteCachedTranslation(CachedTranslation& entry, bool count_hit = true) {
   JitSetCandidate(builder, &entry.jit);
   const HIRCorrectnessResult result = ExecuteHIRCorrectnessProbe(builder, memory);
   --entry.pins;
+  if (!(result.supported && result.reached_return_boundary)) {
+    R360_VERBOSE_TRACE("R360_CACHED_RUN_FAILED begin=0x%08X compiled_only=%u jit=%u supported=%u returned=%u blocker=%u@0x%08X instr=%u\n",
+                       entry.begin, entry.builder ? 0u : 1u, entry.jit.function,
+                       result.supported ? 1u : 0u, result.reached_return_boundary ? 1u : 0u,
+                       result.blocker_kind, result.blocker_address, result.instructions_executed);
+  }
   return result.supported && result.reached_return_boundary;
 }
 

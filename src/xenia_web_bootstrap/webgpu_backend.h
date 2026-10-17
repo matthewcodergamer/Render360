@@ -29,8 +29,34 @@ enum GpuStreamOp : uint32_t {
   // A draw: WebGpuDrawHeader, the system constants, vertex and pixel float
   // constants, bool/loop constants, fetch constants, then the indices.
   kGpuStreamDraw = 5,
-  // A swap: the front buffer's texture fetch constant (6 words).
+  // A swap: the front buffer's texture fetch constant (6 words), then its
+  // texture id (0: none).
   kGpuStreamSwap = 6,
+  // One of Xenia's texture_load_* compute shaders, once: load shader index
+  // (TextureCache::LoadShaderIndex), SPIR-V word count, SPIR-V.
+  kGpuStreamLoadShader = 7,
+  // A texture: id, format (WebGpuTextureFormat), dimension (0 2D array,
+  // 1 3D, 2 cube), width, height, depth or layers, mip levels.
+  kGpuStreamTexture = 8,
+  // Texture data load (webgpu_textures.cpp LoadTextureData): id, load
+  // shader, expand, scratch size, base offset / size and mips offset / size
+  // in shared memory, dispatch count, copy count, then the dispatches
+  // (source, LoadConstants, 3 group counts) and copies (buffer offset,
+  // bytes per row, rows per image, mip level, layers, width, height, depth).
+  kGpuStreamTextureLoad = 9,
+  // Before a resolve copy (VulkanRenderTargetCache::DumpRenderTargets): the
+  // EDRAM tile span to write from the host render targets owning it into
+  // the EDRAM buffer: base tiles, row length used, rows, pitch (tiles).
+  kGpuStreamEdramDump = 10,
+  // Resolve copy (VulkanRenderTargetCache::Resolve): copy shader
+  // (draw_util::ResolveCopyShaderIndex, SPIR-V sent as load shader 64 +
+  // index), the 5 ResolveCopyShaderConstants words (dest_base relative to
+  // the binding), group counts x / y, shared memory binding offset / size.
+  kGpuStreamResolve = 11,
+  // Resolve clear of host render targets: is_depth, EDRAM base tiles, pitch
+  // tiles, MSAA samples, format, x / y / width / height (pixels from the
+  // base tile), clear value low / high (guest encoding).
+  kGpuStreamClear = 12,
 };
 
 // Pipeline state, following Xenia's VulkanPipelineCache::PipelineDescription.
@@ -79,6 +105,10 @@ struct WebGpuDrawHeader {
   uint32_t vertex_count;  // indices, or vertices without an index buffer
   uint32_t vertex_texture_mask;  // fetch constants the shaders sample
   uint32_t pixel_texture_mask;
+  // After the fetch constants: for the vertex then the pixel shader, a
+  // texture id per texture binding then packed sampler parameters per
+  // sampler binding (webgpu_textures.h).
+  uint32_t binding_words;
 };
 
 // Records draws for the WebGPU backend when enabled (r360_gpu_set_mode);

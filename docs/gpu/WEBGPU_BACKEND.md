@@ -44,7 +44,35 @@ GPU frames are compared against.
 5. Texture cache with tiled/endian-swapped formats.
 6. Play path switched to WebGPU; software renderer only for verification.
 
+## Status
+
+- Steps 1-3 done. `render360-webgpu-backend.mjs` replays the whole stream:
+  Naga turns the translated SPIR-V into WGSL, bind group layouts come from
+  the WGSL declarations, constants go to a dynamic-offset uniform ring, and
+  indices go to an index ring. Draws use the D3D12 viewport convention:
+  WebGPU clip space has Y up.
+- Step 5 in progress (`webgpu_textures.cpp`), a port of Xenia's
+  `TextureCache` keys and bindings, and of `VulkanTextureCache`'s host
+  formats and `LoadTextureDataFromResidentMemoryImpl`.
+  - Xenia's own `texture_load_*` compute shaders untile and convert from
+    the shared memory buffer into a scratch buffer, which is then copied
+    into the texture.
+  - The SPIR-V travels in the stream on first use: `NonReadable` is
+    stripped, and the push constants become a uniform at group 2.
+  - Unsigned and signed versions are separate textures whenever their
+    formats differ, because WebGPU views cannot reinterpret unorm as snorm.
+  - S3TC/DXN/DXT5A are decompressed by Xenia's fallback shaders (BC is
+    optional in WebGPU and absent on iOS).
+  - 16-bit packed formats (565, 655, 1555, 4444) are loaded as 16bpb and
+    expanded to RGBA8.
+  - Xenia's 16-bit normalized outputs are converted to float16 in place.
+  - Host rows are padded to the 256-byte `bytesPerRow` WebGPU requires.
+  - Texture pages are re-checked against the sparse memory GPU watch
+    generations.
+- Test: `test-webgpu-replay-capture-browser.mjs` replays a local capture
+  (`run-title.mjs --gpu-capture`) and compares it with the software frame.
+
 Rules kept: no game data, decrypted XEX or game-derived shaders in the
 repository; translated shaders live only in the browser at run time.
 Xenia's own compute shaders (resolve, texture load) are Xenia's code and are
-converted from Xenia's SPIR-V at build time.
+converted from Xenia's SPIR-V by Naga in the browser.

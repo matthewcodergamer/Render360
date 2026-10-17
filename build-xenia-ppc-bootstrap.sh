@@ -200,6 +200,7 @@ queue_cpp "render360/hir_wasm_jit.cpp" "$ROOT/src/xenia_web_bootstrap/hir_wasm_j
 queue_cpp "render360/xenos_soft_renderer.cpp" "$ROOT/src/xenia_web_bootstrap/xenos_soft_renderer.cpp"
 queue_cpp "render360/webgpu_backend.cpp" "$ROOT/src/xenia_web_bootstrap/webgpu_backend.cpp"
 queue_cpp "render360/webgpu_draws.cpp" "$ROOT/src/xenia_web_bootstrap/webgpu_draws.cpp"
+queue_cpp "render360/webgpu_textures.cpp" "$ROOT/src/xenia_web_bootstrap/webgpu_textures.cpp"
 queue_cpp "render360/kernel_xboxkrnl_services.cpp" "$ROOT/src/xenia_web_bootstrap/kernel_xboxkrnl_services.cpp"
 queue_cpp "render360/xam_xdbf.cpp" "$ROOT/src/xenia_web_bootstrap/xam_xdbf.cpp"
 queue_cpp "render360/title_gpu_runtime.cpp" "$ROOT/src/xenia_web_bootstrap/title_gpu_runtime.cpp"
@@ -234,7 +235,7 @@ done
 
 passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$OUT/report.tsv")"
 failed="$(awk -F '\t' '$2=="BLOCKED"{n++} END{print n+0}' "$OUT/report.tsv")"
-expected=$(( ${#SOURCES[@]} + 2 + 32 ))
+expected=$(( ${#SOURCES[@]} + 2 + 33 ))
 actual=$(( passed + failed ))
 
 echo

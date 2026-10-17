@@ -11,14 +11,15 @@ async function decodePng(url){
   return {width:bitmap.width,height:bitmap.height,pixels:ctx.getImageData(0,0,bitmap.width,bitmap.height).data};
 }
 
-export default async function run(captureUrl,referenceUrl){
+export default async function run(captureUrl,referenceUrl,drawLimit){
   const adapter=await navigator.gpu?.requestAdapter();
   if(!adapter)return {ok:false,error:'no WebGPU adapter'};
-  const device=await adapter.requestDevice({requiredLimits:{
+  const device=await adapter.requestDevice({requiredFeatures:['float32-filterable'].filter(f=>adapter.features.has(f)),requiredLimits:{
     maxBufferSize:adapter.limits.maxBufferSize,maxStorageBufferBindingSize:adapter.limits.maxStorageBufferBindingSize}});
   const errors=[];
   device.onuncapturederror=e=>{if(errors.length<20)errors.push(e.error.message.slice(0,400));};
   const backend=await new XenosWebGpuBackend(device,null).init();
+  if(drawLimit!==undefined&&drawLimit!==null)backend.drawLimit=drawLimit;
   const words=new Uint32Array(await (await fetch(captureUrl)).arrayBuffer());
   const started=performance.now();
   backend.replayWords(words);
@@ -27,9 +28,14 @@ export default async function run(captureUrl,referenceUrl){
   const replayMs=performance.now()-started;
   const shaderErrors=[...backend.shaders.values()].filter(s=>s.error).map(s=>`${s.id}: ${s.error.slice(0,300)}`).slice(0,5);
   const pipelineErrors=[...backend.pipelines.entries()].filter(([,p])=>p.error).map(([id,p])=>`${id}: ${p.error.slice(0,300)}`).slice(0,5);
-  const result={ok:true,stats:backend.stats,replayMs:Math.round(replayMs),shaderErrors,pipelineErrors,errors,
+  const loadShaderErrors=[...backend.loadShaders.entries()].filter(([,l])=>l.error).map(([i,l])=>`${i}: ${l.error.slice(0,300)}`).slice(0,5);
+  const result={ok:true,stats:backend.stats,loadShaderErrors,replayMs:Math.round(replayMs),shaderErrors,pipelineErrors,errors,
     targets:[...backend.targets.values()].map(t=>`${t.key} ${t.format} ${t.width}x${t.height}`)};
-  const front=[...backend.targets.values()].find(t=>!t.depth&&t.base===0&&t.format==='rgba8unorm');
+  // The swapped front buffer (resolved into shared memory, loaded by the
+  // texture cache), else the color render target at EDRAM base 0.
+  const front=(backend.frontTexture?.format==='rgba8unorm'?backend.frontTexture:null)||
+    [...backend.targets.values()].find(t=>!t.depth&&t.base===0&&t.format==='rgba8unorm');
+  result.front=front===backend.frontTexture?'front buffer':'render target';
   if(front&&referenceUrl){
     const got=await backend.readTarget(front),want=await decodePng(referenceUrl);
     const w=Math.min(got.width,want.width),h=Math.min(got.height,want.height);
@@ -41,10 +47,14 @@ export default async function run(captureUrl,referenceUrl){
     }
     result.compare={size:`${w}x${h}`,meanAbsDiff:+(diff/(w*h*3)).toFixed(2),closePixels:+(close/(w*h)).toFixed(4),litPixels:+(lit/(w*h)).toFixed(4)};
     // The frame for viewing: PNG data URL of the WebGPU render target.
+    // Opaque for viewing (render target alpha is the game's, often 0).
+    for(let i=3;i<got.pixels.length;i+=4)got.pixels[i]=255;
     const canvas=new OffscreenCanvas(got.width,got.height);
     canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(got.pixels.buffer),got.width,got.height),0,0);
     const blob=await canvas.convertToBlob({type:'image/png'});
-    result.png=btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer()).reduce((a,b)=>(a.push(b),a),[])));
+    const png=new Uint8Array(await blob.arrayBuffer());let text='';
+    for(let i=0;i<png.length;i+=32768)text+=String.fromCharCode(...png.subarray(i,i+32768));
+    result.png=btoa(text);
   }
   if(errors.length||!backend.stats.draws)result.ok=false;
   return result;

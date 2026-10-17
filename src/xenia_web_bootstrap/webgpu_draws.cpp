@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "webgpu_backend.h"
+#include "webgpu_textures.h"
 #include "xenos_soft_draw.h"
 #include "sparse_guest_memory.h"
 #include "xenia/base/math.h"
@@ -19,7 +20,21 @@
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/spirv_shader_translator.h"
+#include "xenia/gpu/trace_writer.h"
 #include "xenia/gpu/xenos.h"
+#include "ppc_translation_probe_runtime.h"
+
+namespace xe::gpu::shaders {
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_fast_32bpp_1x2xmsaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_fast_32bpp_4xmsaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_fast_64bpp_1x2xmsaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_fast_64bpp_4xmsaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_full_128bpp_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_full_16bpp_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_full_32bpp_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_full_64bpp_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_full_8bpp_cs.h"
+}  // namespace xe::gpu::shaders
 
 extern "C" uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address);
 
@@ -301,7 +316,7 @@ bool BuildIndices(const XenosSoftDraw& draw, Indices& out) {
 // Port of VulkanCommandProcessor::UpdateSystemConstantValues for the host
 // render targets path (no fragment shader interlock, no resolution scale).
 void FillSystemConstants(SpirvShaderTranslator::SystemConstants& c, bool primitive_polygonal,
-                         const draw_util::ViewportInfo& viewport_info) {
+                         const draw_util::ViewportInfo& viewport_info, uint32_t used_texture_mask) {
   const RegisterFile& regs = Regs();
   std::memset(&c, 0, sizeof(c));
   auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
@@ -353,9 +368,16 @@ void FillSystemConstants(SpirvShaderTranslator::SystemConstants& c, bool primiti
     c.point_screen_diameter_to_ndc_radius[0] = 1.0f / std::max(viewport_info.xy_extent[0], 1u);
     c.point_screen_diameter_to_ndc_radius[1] = 1.0f / std::max(viewport_info.xy_extent[1], 1u);
   }
-  // Texture signs and swizzles come from the texture cache (not yet: the
-  // backend binds placeholder textures, sampled as unsigned RGBA).
-  for (uint32_t i = 0; i < 16; ++i) c.texture_swizzles[i] = 0x688u | (0x688u << 12);  // RGBA
+  // Texture signedness / gamma and host swizzles (applied in the shader:
+  // WebGPU views do not swizzle) from the texture cache.
+  uint32_t textures_remaining = used_texture_mask, texture_index;
+  while (xe::bit_scan_forward(textures_remaining, &texture_index)) {
+    textures_remaining &= ~(1u << texture_index);
+    c.texture_swizzled_signs[texture_index >> 2] |= uint32_t(WebGpuTextureSwizzledSigns(texture_index))
+                                                    << (8 * (texture_index & 3));
+    c.texture_swizzles[texture_index >> 1] |= WebGpuTextureHostSwizzle(texture_index)
+                                              << (12 * (texture_index & 1));
+  }
   c.alpha_test_reference = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
 }
 
@@ -399,6 +421,103 @@ WebGpuRenderTargetsKey RenderTargets(uint32_t normalized_color_mask, bool depth_
   return key;
 }
 
+// Xenia's resolve copy shaders, sent once as load shaders 64 + index.
+void SendResolveShader(draw_util::ResolveCopyShaderIndex index) {
+  static bool sent[size_t(draw_util::ResolveCopyShaderIndex::kCount)] = {};
+  if (sent[size_t(index)]) return;
+  sent[size_t(index)] = true;
+  static const std::pair<const uint32_t*, size_t> kShaders[] = {
+      {shaders::resolve_fast_32bpp_1x2xmsaa_cs, sizeof(shaders::resolve_fast_32bpp_1x2xmsaa_cs)},
+      {shaders::resolve_fast_32bpp_4xmsaa_cs, sizeof(shaders::resolve_fast_32bpp_4xmsaa_cs)},
+      {shaders::resolve_fast_64bpp_1x2xmsaa_cs, sizeof(shaders::resolve_fast_64bpp_1x2xmsaa_cs)},
+      {shaders::resolve_fast_64bpp_4xmsaa_cs, sizeof(shaders::resolve_fast_64bpp_4xmsaa_cs)},
+      {shaders::resolve_full_8bpp_cs, sizeof(shaders::resolve_full_8bpp_cs)},
+      {shaders::resolve_full_16bpp_cs, sizeof(shaders::resolve_full_16bpp_cs)},
+      {shaders::resolve_full_32bpp_cs, sizeof(shaders::resolve_full_32bpp_cs)},
+      {shaders::resolve_full_64bpp_cs, sizeof(shaders::resolve_full_64bpp_cs)},
+      {shaders::resolve_full_128bpp_cs, sizeof(shaders::resolve_full_128bpp_cs)},
+  };
+  const auto& shader = kShaders[size_t(index)];
+  uint32_t* w = GpuStream().Begin(kGpuStreamLoadShader, 2 + uint32_t(shader.second / 4));
+  w[0] = 64u + uint32_t(index);
+  w[1] = uint32_t(shader.second / 4);
+  std::memcpy(w + 2, shader.first, shader.second);
+}
+
+// VulkanRenderTargetCache::Resolve for the host render targets path: dump
+// the render targets owning the source span into the EDRAM buffer, run
+// Xenia's resolve copy shader into shared memory, then clear.
+uint32_t g_resolves = 0, g_resolve_failures = 0;
+void Resolve() {
+  const RegisterFile& regs = Regs();
+  xe::Memory* memory = ActiveProbeMemory();
+  if (!memory) {
+    ++g_resolve_failures;
+    return;
+  }
+  // GetResolveInfo reads guest memory only through the sparse memory
+  // overlay; its trace writer is never used (as in xenos_soft_renderer.cpp).
+  alignas(TraceWriter) static uint8_t trace_storage[sizeof(TraceWriter)] = {};
+  auto& trace_writer = *reinterpret_cast<TraceWriter*>(trace_storage);
+  draw_util::ResolveInfo info;
+  if (!draw_util::GetResolveInfo(regs, *memory, trace_writer, 1, 1, false, false, info)) {
+    ++g_resolve_failures;
+    return;
+  }
+  if (!info.coordinate_info.width_div_8 || !info.height_div_8) return;
+  ++g_resolves;
+  if (info.copy_dest_extent_length) {
+    uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
+    info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+    uint32_t* w = GpuStream().Begin(kGpuStreamEdramDump, 4);
+    w[0] = dump_base;
+    w[1] = dump_row_length_used;
+    w[2] = dump_rows;
+    w[3] = dump_pitch;
+    draw_util::ResolveCopyShaderConstants constants;
+    uint32_t group_count_x, group_count_y;
+    const draw_util::ResolveCopyShaderIndex copy_shader =
+        info.GetCopyShader(1, 1, constants, group_count_x, group_count_y);
+    if (copy_shader != draw_util::ResolveCopyShaderIndex::kUnknown &&
+        GpuSharedMemory().RequestRange(info.copy_dest_extent_start, info.copy_dest_extent_length)) {
+      SendResolveShader(copy_shader);
+      // Storage bindings start at 256-byte multiples in WebGPU.
+      const uint32_t binding_offset = info.copy_dest_base & ~255u;
+      const uint32_t binding_size =
+          xe::align(info.copy_dest_extent_start - binding_offset + info.copy_dest_extent_length, 16u);
+      constants.dest_base -= binding_offset;
+      static_assert(sizeof(constants) == 20, "ResolveCopyShaderConstants layout");
+      w = GpuStream().Begin(kGpuStreamResolve, 10);
+      w[0] = uint32_t(copy_shader);
+      std::memcpy(w + 1, &constants, sizeof(constants));
+      w[6] = group_count_x;
+      w[7] = group_count_y;
+      w[8] = binding_offset;
+      w[9] = binding_size;
+      GpuSharedMemory().RangeWrittenByGpu(info.copy_dest_extent_start, info.copy_dest_extent_length);
+      WebGpuTexturesMarkRangeResolved(info.copy_dest_extent_start, info.copy_dest_extent_length);
+    }
+  }
+  auto clear = [&](bool depth, const draw_util::ResolveEdramInfo& edram, uint32_t lo, uint32_t hi) {
+    uint32_t* w = GpuStream().Begin(kGpuStreamClear, 11);
+    w[0] = depth;
+    w[1] = edram.base_tiles;
+    w[2] = edram.pitch_tiles;
+    w[3] = uint32_t(edram.msaa_samples);
+    w[4] = edram.format;
+    w[5] = info.coordinate_info.edram_offset_x_div_8 * 8u;
+    w[6] = info.coordinate_info.edram_offset_y_div_8 * 8u;
+    w[7] = info.coordinate_info.width_div_8 * 8u;
+    w[8] = info.height_div_8 * 8u;
+    w[9] = lo;
+    w[10] = hi;
+  };
+  if (info.IsClearingDepth()) clear(true, info.depth_edram_info, info.rb_depth_clear, 0);
+  if (info.IsClearingColor()) {
+    clear(false, info.color_edram_info, info.rb_color_clear, info.rb_color_clear_lo);
+  }
+}
+
 WebGpuRenderTargetsKey g_bound_targets{};
 bool g_targets_bound = false;
 
@@ -408,8 +527,10 @@ bool WebGpuBackendEnabled() { return g_mode != 0; }
 
 void WebGpuSwap(const uint32_t* fetch_constant) {
   if (!g_mode) return;
-  uint32_t* w = GpuStream().Begin(kGpuStreamSwap, 6);
+  const uint32_t texture = WebGpuSwapTexture(fetch_constant);
+  uint32_t* w = GpuStream().Begin(kGpuStreamSwap, 7);
   std::memcpy(w, fetch_constant, 6 * sizeof(uint32_t));
+  w[6] = texture;
 }
 
 bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
@@ -418,8 +539,12 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   const uint32_t count = std::min<uint32_t>(draw.register_count, RegisterFile::kRegisterCount);
   std::memcpy(regs.values, draw.registers, count * sizeof(uint32_t));
   const auto edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+  if (edram_mode == xenos::EdramMode::kCopy) {
+    Resolve();
+    return true;
+  }
   if (edram_mode != xenos::EdramMode::kColorDepth && edram_mode != xenos::EdramMode::kDepthOnly) {
-    return true;  // copies are resolves (not recorded here yet)
+    return true;
   }
 
   SpirvShader* vertex_shader =
@@ -524,9 +649,26 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
     }
   }
 
+  // Textures (VulkanCommandProcessor::IssueDraw requests them before
+  // updating the constants and bindings).
+  const uint32_t used_texture_mask =
+      vertex_shader->GetUsedTextureMaskAfterTranslation() |
+      (pixel_shader ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0u);
+  WebGpuRequestTextures(regs, used_texture_mask);
+  std::vector<uint32_t> binding_words;
+  for (const SpirvShader* shader : {vertex_shader, pixel_shader}) {
+    if (!shader) continue;
+    for (const auto& t : shader->GetTextureBindingsAfterTranslation()) {
+      binding_words.push_back(WebGpuTextureForBinding(t));
+    }
+    for (const auto& s : shader->GetSamplerBindingsAfterTranslation()) {
+      binding_words.push_back(WebGpuSamplerParameters(regs, s));
+    }
+  }
+
   // Constants.
   SpirvShaderTranslator::SystemConstants system{};
-  FillSystemConstants(system, primitive_polygonal, viewport_info);
+  FillSystemConstants(system, primitive_polygonal, viewport_info, used_texture_mask);
   std::vector<uint32_t> float_vertex, float_pixel;
   PackFloatConstants(*vertex_shader, false, float_vertex);
   if (pixel_shader) PackFloatConstants(*pixel_shader, true, float_pixel);
@@ -542,7 +684,7 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   const uint32_t system_words = sizeof(system) / 4;
   const uint32_t payload = sizeof(WebGpuDrawHeader) / 4 + system_words +
                            uint32_t(float_vertex.size() + float_pixel.size()) + kBoolLoopWords +
-                           kFetchWords + index_words;
+                           kFetchWords + uint32_t(binding_words.size()) + index_words;
   const uint32_t pipeline_id = PipelineId(description);
   uint32_t* w = GpuStream().Begin(kGpuStreamDraw, payload);
   WebGpuDrawHeader header{};
@@ -571,6 +713,7 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   header.vertex_count = indices.values.empty() ? indices.vertex_count : uint32_t(indices.values.size());
   header.vertex_texture_mask = vertex_shader->GetUsedTextureMaskAfterTranslation();
   header.pixel_texture_mask = pixel_shader ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0u;
+  header.binding_words = uint32_t(binding_words.size());
   std::memcpy(w, &header, sizeof(header));
   w += sizeof(header) / 4;
   std::memcpy(w, &system, sizeof(system));
@@ -583,6 +726,8 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   w += kBoolLoopWords;
   std::memcpy(w, &regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], kFetchWords * 4);
   w += kFetchWords;
+  std::memcpy(w, binding_words.data(), binding_words.size() * 4);
+  w += binding_words.size();
   if (index_words) {
     if (indices.use_32bit) {
       std::memcpy(w, indices.values.data(), indices.values.size() * 4);
@@ -608,11 +753,14 @@ uint32_t r360_gpu_set_mode(uint32_t mode) {
   rx::g_targets_bound = false;
   return mode;
 }
-// 0 draws recorded, 1..5 skips by reason (see DrawSkip), 6 last skip reason.
+// 0 draws recorded, 1..5 skips by reason (see DrawSkip), 6 last skip reason,
+// 7 resolves, 8 resolve failures.
 __attribute__((used, export_name("r360_gpu_draw_stat")))
 uint32_t r360_gpu_draw_stat(uint32_t index) {
   if (index == 0) return rx::g_draws;
   if (index < rx::kSkipCount) return rx::g_skips[index];
+  if (index == 7) return rx::g_resolves;
+  if (index == 8) return rx::g_resolve_failures;
   return rx::g_last_skip;
 }
 }  // extern "C"

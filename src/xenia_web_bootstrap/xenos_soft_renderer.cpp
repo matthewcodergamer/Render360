@@ -1220,7 +1220,11 @@ uint64_t MonotonicNs() {
 }
 bool RenderXenosDrawUntimed(const XenosSoftDraw& draw);
 bool RenderXenosDraw(const XenosSoftDraw& draw) {
-  if (!g_rasterize) return true;
+  if (!g_rasterize) {
+    // WebGPU play path: the software renderer does no work at all.
+    if (WebGpuBackendEnabled()) WebGpuIssueDraw(draw);
+    return true;
+  }
   const uint64_t start = MonotonicNs();
   const bool ok = RenderXenosDrawUntimed(draw);
   g_render_ns += MonotonicNs() - start;

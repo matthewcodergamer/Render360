@@ -86,6 +86,12 @@ struct RootView: View {
                 Text((Breadcrumbs.shared.previousTail.suffix(4)).joined(separator: "\n"))
             }
         }
+        .onAppear {
+            // Test hooks (devicectl launch -e): start a game / point telemetry at the Mac.
+            let env = ProcessInfo.processInfo.environment
+            if let url = env["R360_TELEMETRY"] { UserDefaults.standard.set(url, forKey: "r360.telemetryServer") }
+            if let id = env["R360_AUTOPLAY"], playing == nil { playing = library.games.first { $0.id == id } }
+        }
         .fullScreenCover(item: $playing) { game in PlayView(game: game).environmentObject(input) }
     }
 }
@@ -228,6 +234,8 @@ struct PerfOverlay: View {
             Text(String(format: "Emulation speed %.0f%%  idle %.0f%%  %.0f MIPS  interpreted %.1f%%", stats.emulationSpeedPercent, stats.idlePercent, stats.mips, stats.interpretedPercent))
             Text(String(format: "Memory %.0f MB used · %.0f MB free (lowest %.0f)", MemoryGuard.footprintMB, MemoryGuard.availableMB,
                         memory.lowestAvailableMB.isFinite ? memory.lowestAvailableMB : MemoryGuard.availableMB))
+            Text(String(format: "Guest %.0fM instructions · %.0f frames%@", Double(r360_hir_total_instructions_millions()),
+                        Double(r360_title_gpu_vd_swap_calls()), r360_title_gpu_vd_swap_calls() == 0 ? " · booting (first frame takes a few minutes)" : ""))
             Text("30 FPS bar: \(stats.barPass ? "PASS" : "not met") · \(stateText) · thermal \(["nominal", "fair", "serious", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)])")
         }
         .font(.system(size: 11, design: .monospaced))

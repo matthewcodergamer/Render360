@@ -11,6 +11,7 @@
 #include <cstring>
 #include <sys/mman.h>
 #if defined(__APPLE__)
+#include <TargetConditionals.h>
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
 #endif
@@ -49,11 +50,11 @@ uint32_t ProbeExecutableMemory() {
 #else
   static const uint8_t kStub[] = {0xB8, 42, 0, 0, 0 /* mov eax, 42 */, 0xC3 /* ret */};
 #endif
-#if defined(__APPLE__) && defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__) && TARGET_OS_OSX
   pthread_jit_write_protect_np(0);
 #endif
   std::memcpy(page, kStub, sizeof(kStub));
-#if defined(__APPLE__) && defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__) && TARGET_OS_OSX
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(page, sizeof(kStub));
 #endif

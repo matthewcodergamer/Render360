@@ -71,8 +71,13 @@ final class EmulatorSession: ObservableObject {
 
     func stop() { stopRequested = true }
 
+    /// The core holds one title per process (a stopped run leaves parked
+    /// guest threads), so boot exactly once even if the view appears twice.
+    private static var booted = false
+
     func start(game: GameEntry) {
-        guard state == .idle else { return }
+        guard state == .idle, !Self.booted else { return }
+        Self.booted = true
         self.game = game
         state = .booting
         Breadcrumbs.shared.log("boot \(game.title) discs=\(game.discs.count)")

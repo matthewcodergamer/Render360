@@ -70,7 +70,6 @@ targets:
         HEADER_SEARCH_PATHS: ["$(SRCROOT)/../native/include"]
         LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/../build/native-ios-arm64"]
         OTHER_LDFLAGS: ["-lrender360core", "-lc++", "-Wl,-dead_strip"]
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - sdk: Metal.framework
       - sdk: MetalKit.framework

@@ -10,4 +10,10 @@
 #define lseek64 lseek
 #define pread64 pread
 #define pwrite64 pwrite
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+// The iOS SDK has no stat64; off_t/stat are 64-bit already.
+#define stat64 stat
+#define fstat64 fstat
+#endif
 #endif

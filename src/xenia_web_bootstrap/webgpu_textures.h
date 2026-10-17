@@ -66,6 +66,9 @@ uint32_t WebGpuSamplerParameters(const xe::gpu::RegisterFile& regs,
 // if there is none.
 uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant);
 
+// Forgets every texture (a new stream consumer, r360_gpu_set_mode).
+void WebGpuTexturesReset();
+
 // A resolve wrote the range on the GPU (TextureCache::MarkRangeAsResolved):
 // textures in it are reloaded on their next use.
 void WebGpuTexturesMarkRangeResolved(uint32_t start, uint32_t length);

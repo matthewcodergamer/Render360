@@ -170,7 +170,7 @@ async function loadBootstrap(file,verbose){
   let pending='';
   const bytes=fs.readFileSync(file);
   const stderr=[];
-  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||globalThis.__r360TraceOn||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_DET')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF')||line.startsWith('R360_PRIMARY_EXIT')||line.startsWith('R360_MESSAGE_BOX')||line.startsWith('R360_FIBER_')||line.startsWith('R360_THREAD_EXIT')||line.startsWith('R360_OSR')||line.startsWith('R360_DIAG'))process.stderr.write(line+'\n');}}});
+  const host=createRender360BrowserImports({onStdout:t=>{if(verbose)process.stdout.write(t+'\n');},onStderr:t=>{pending+=t;let n;while((n=pending.indexOf('\n'))>=0){const line=pending.slice(0,n);pending=pending.slice(n+1);stderr.push(line);if(stderr.length>4000)stderr.shift();if(verbose||globalThis.__r360TraceOn||line.startsWith('R360_KWATCH')||line.startsWith('R360_WATCH')||line.startsWith('R360_DET')||line.startsWith('R360_XENOS_')||line.startsWith('R360_JITPROF')||line.startsWith('R360_PRIMARY_EXIT')||line.startsWith('R360_MESSAGE_BOX')||line.startsWith('R360_FIBER_')||line.startsWith('R360_THREAD_EXIT')||line.startsWith('R360_OSR')||line.startsWith('R360_DIAG')||line.startsWith('R360_JIT_SEQ'))process.stderr.write(line+'\n');}}});
   const module=await WebAssembly.compile(bytes);
   const instance=attachRender360BrowserInstance(host,await WebAssembly.instantiate(module,host.imports));
   return {instance,host,stderr};
@@ -286,6 +286,7 @@ async function main(){
   globalThis.__r360Jit=jit;
   if(process.env.R360_JITPROF)bootstrap.exports.r360_jit_profile?.(1);
   if(process.env.R360_DIAG){bootstrap.exports.r360_jit_diag?.(1);}
+  if(process.env.R360_JIT_LOG_SEQ){const [b,e]=process.env.R360_JIT_LOG_SEQ.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_log_seq?.(b,e,process.env.R360_JIT_LOG_DUMP?1:0);}
   if(process.env.R360_JIT_EXCLUDE_SEQ){const [b,e]=process.env.R360_JIT_EXCLUDE_SEQ.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_exclude_seq?.(b,e);}
   if(process.env.R360_JIT_EXCLUDE){const [b,e]=process.env.R360_JIT_EXCLUDE.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_exclude?.(b,e);}
   if(args.traceFrom!==undefined){globalThis.__r360TraceOn=1;bootstrap.exports.r360_trace_verbose_from?.(args.traceFrom);}

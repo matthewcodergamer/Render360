@@ -78,7 +78,7 @@ export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,
 // Browser options for a continuous title run: ~25 ms host slices, Stop through
 // globalThis.render360GuestRun.stop() (aborts at the next slice), and a
 // progress line about twice a second.
-export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,sliceMs=25}={}){
+export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,sliceMs=25}={}){
   let lastFrames=-1;
   globalThis.render360GuestRun?.stop?.();
   const controller=new AbortController();
@@ -100,6 +100,7 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
     const gpuMs=((renderUs-lastRenderUs)>>>0)/1000;lastRenderUs=renderUs;
     pushGuestControllerState(bootstrap);
     showGuestDialog(bootstrap);
+    try{onSlice?.();}catch{}
     const frames=read('r360_title_gpu_vd_swap_calls');
     perf.submitted(t,frames);
     // Present every new guest frame (software Xenos backend output).

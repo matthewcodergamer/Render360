@@ -773,6 +773,13 @@ uint32_t WebGpuTextureForBinding(const SpirvShader::TextureBinding& shader_bindi
   return texture && (texture->loaded_base || texture->loaded_mips) ? texture->id : 0;
 }
 
+void WebGpuTexturesReset() {
+  Cache& c = cache();
+  c.textures.clear();
+  for (TextureBinding& binding : c.bindings) binding.Reset();
+  for (bool& sent : c.load_shader_sent) sent = false;
+}
+
 // VulkanTextureCache::RequestSwapTexture.
 uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant) {
   xenos::xe_gpu_texture_fetch_t fetch;

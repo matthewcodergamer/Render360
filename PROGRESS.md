@@ -118,6 +118,30 @@ Next: cut the per-call path (JIT → resolver → cache → executor → JIT), w
 is now the largest cost: 74.5M guest calls go through ~10 host frames each,
 all instrumented by Asyncify for guest-thread fibers.
 
+## Step 2: WebGPU renderer (in progress)
+A port of Xenia's Vulkan backend (docs/gpu/WEBGPU_BACKEND.md).
+
+- **Core side:** records a command stream.
+- **Replay:** `render360-webgpu-backend.mjs` replays it into WebGPU.
+- **Shaders:** Xenia's SPIR-V shader translator, converted to WGSL by Naga.
+- **Vertex fetch:** read from a 512 MiB shared memory buffer.
+- **Texture cache:** a port of `TextureCache`/`VulkanTextureCache`. Xenia's own texture load compute shaders do the untiling and format conversion.
+- **Resolves:** the host render targets owning the tiles are dumped into an EDRAM buffer. Xenia's resolve copy shaders then write shared memory.
+
+Measured on a Banjo-Tooie main menu capture (2 frames; headless Chromium, SwiftShader):
+
+| Stage | Draws replayed | Validation errors | Result |
+| --- | --- | --- | --- |
+| Draw path, placeholder textures | 1390 | 0 | geometry only |
+| Texture cache | 2400 | 0 | 144 textures loaded, menu art and text correct |
+
+The menu is drawn in screen tiles (predicated tiling) and assembled by
+resolves, so the presented frame needs the resolve path.
+
+Opt-in in the browser: `?gpu=xenos` switches the page to the WebGPU play
+path. The software renderer then does no work, and each frame presents the
+swapped front buffer from the GPU.
+
 ## Not yet
 - Speed: reaching gameplay takes ~1 hour headless with the software
   renderer; the browser needs the WebGPU renderer and faster CPU emulation

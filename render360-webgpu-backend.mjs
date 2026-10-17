@@ -660,6 +660,34 @@ export class XenosWebGpuBackend{
     return this.clearBindGroup;
   }
 
+  // Draws the front buffer of the last swap to a canvas context configured
+  // on this device (the play path's present; Xenia's swap presenter).
+  present(context,format){
+    const front=this.frontTexture;
+    if(!front)return false;
+    this.presentPipelines??=new Map();
+    let pipeline=this.presentPipelines.get(format);
+    if(!pipeline){
+      const module=this.device.createShaderModule({label:'Render360 present',code:PRESENT_SHADER});
+      pipeline=this.device.createRenderPipeline({label:'Render360 present',layout:'auto',
+        vertex:{module,entryPoint:'vs'},fragment:{module,entryPoint:'fs',targets:[{format}]},primitive:{topology:'triangle-list'}});
+      this.presentPipelines.set(format,pipeline);
+    }
+    if(this.presentSource!==front.texture||this.presentPipeline!==pipeline){
+      this.presentSampler??=this.device.createSampler({magFilter:'linear',minFilter:'linear'});
+      this.presentGroup=this.device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:front.views['2d-array']},{binding:1,resource:this.presentSampler}]});
+      this.presentSource=front.texture;this.presentPipeline=pipeline;
+    }
+    const encoder=this.encoderForCommands();
+    this.endPass();
+    const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),loadOp:'clear',clearValue:{r:0,g:0,b:0,a:1},storeOp:'store'}]});
+    pass.setPipeline(pipeline);pass.setBindGroup(0,this.presentGroup);pass.draw(3);pass.end();
+    this.submit();
+    this.stats.presents=(this.stats.presents||0)+1;
+    return true;
+  }
+
   // RGBA8 pixels of a color render target (tests and the frame preview).
   async readTarget(t){
     this.submit();
@@ -1013,3 +1041,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 }`;
 }
+
+const PRESENT_SHADER=`struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
+@vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
+  let p = vec2<f32>(f32(i == 1u) * 4.0 - 1.0, f32(i == 2u) * 4.0 - 1.0);
+  return Out(vec4<f32>(p, 0.0, 1.0), vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+@group(0) @binding(0) var front: texture_2d_array<f32>;
+@group(0) @binding(1) var front_sampler: sampler;
+@fragment fn fs(i: Out) -> @location(0) vec4<f32> {
+  return vec4<f32>(textureSample(front, front_sampler, i.uv, 0).rgb, 1.0);
+}`;

@@ -211,8 +211,9 @@ struct PipelineKeyHash {
     return size_t(h ^ (h >> 32));
   }
 };
+std::unordered_map<std::vector<uint32_t>, uint32_t, PipelineKeyHash> g_pipelines;
 uint32_t PipelineId(const WebGpuPipelineDescription& description) {
-  static std::unordered_map<std::vector<uint32_t>, uint32_t, PipelineKeyHash> pipelines;
+  auto& pipelines = g_pipelines;
   static uint32_t next_id = 1;
   constexpr uint32_t kWords = sizeof(description) / 4;
   std::vector<uint32_t> key(kWords);
@@ -422,10 +423,10 @@ WebGpuRenderTargetsKey RenderTargets(uint32_t normalized_color_mask, bool depth_
 }
 
 // Xenia's resolve copy shaders, sent once as load shaders 64 + index.
+bool g_resolve_shader_sent[size_t(draw_util::ResolveCopyShaderIndex::kCount)] = {};
 void SendResolveShader(draw_util::ResolveCopyShaderIndex index) {
-  static bool sent[size_t(draw_util::ResolveCopyShaderIndex::kCount)] = {};
-  if (sent[size_t(index)]) return;
-  sent[size_t(index)] = true;
+  if (g_resolve_shader_sent[size_t(index)]) return;
+  g_resolve_shader_sent[size_t(index)] = true;
   static const std::pair<const uint32_t*, size_t> kShaders[] = {
       {shaders::resolve_fast_32bpp_1x2xmsaa_cs, sizeof(shaders::resolve_fast_32bpp_1x2xmsaa_cs)},
       {shaders::resolve_fast_32bpp_4xmsaa_cs, sizeof(shaders::resolve_fast_32bpp_4xmsaa_cs)},
@@ -749,8 +750,17 @@ extern "C" {
 // 0 off, 1 record draws for the WebGPU backend.
 __attribute__((used, export_name("r360_gpu_set_mode")))
 uint32_t r360_gpu_set_mode(uint32_t mode) {
+  // A new mode starts a new stream consumer: everything sent once (shaders,
+  // pipelines, textures, load and resolve shaders, shared memory) is sent
+  // again.
   rx::g_mode = mode;
   rx::g_targets_bound = false;
+  rx::ShaderIds().clear();
+  rx::g_pipelines.clear();
+  for (bool& sent : rx::g_resolve_shader_sent) sent = false;
+  rx::WebGpuTexturesReset();
+  rx::GpuSharedMemory().ClearCache();
+  rx::GpuStream().Reset();
   return mode;
 }
 // 0 draws recorded, 1..5 skips by reason (see DrawSkip), 6 last skip reason,

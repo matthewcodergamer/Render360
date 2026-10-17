@@ -1,11 +1,14 @@
 // Render360 guest JIT: finalized Xenia HIR -> WebAssembly (see hir_wasm_jit.h).
 #include "hir_wasm_jit.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "xenia/base/string_buffer.h"
 #include "xenia/cpu/function.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -1886,9 +1889,38 @@ bool Excluded(HIRBuilder* builder) {
 // interpreted (r360_jit_set_exclude_seq; bisecting by when code compiles,
 // which keeps early, hot functions compiled).
 uint32_t g_compile_seq = 0, g_exclude_seq_begin = 0, g_exclude_seq_end = 0;
+// Compile requests in [g_log_seq_begin, end) print their guest function
+// (r360_jit_set_log_seq; naming what a sequence bisect found).
+uint32_t g_log_seq_begin = 0, g_log_seq_end = 0;
+bool g_log_dump = false;  // also the HIR and the wasm module
+
+uint32_t SourceStart(HIRBuilder* builder) {
+  for (Block* b = builder->first_block(); b; b = b->next) {
+    for (Instr* i = b->instr_head; i; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+    }
+  }
+  return 0;
+}
 
 uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
   const uint32_t seq = g_compile_seq++;
+  const bool logged = seq >= g_log_seq_begin && seq < g_log_seq_end;
+  if (logged) {
+    std::fprintf(stderr, "R360_JIT_SEQ seq=%u start=0x%08X\n", seq, SourceStart(builder));
+    if (g_log_dump) {
+      xe::StringBuffer dump;
+      builder->Dump(&dump);
+      const std::string text = dump.to_string();
+      size_t at = 0;
+      while (at < text.size()) {
+        size_t end = text.find('\n', at);
+        if (end == std::string::npos) end = text.size();
+        std::fprintf(stderr, "R360_JIT_SEQ_HIR %u %.*s\n", seq, int(end - at), text.data() + at);
+        at = end + 1;
+      }
+    }
+  }
   if (Excluded(builder) || (seq >= g_exclude_seq_begin && seq < g_exclude_seq_end)) {
     slot->state = 2;
     return 0;
@@ -1902,6 +1934,13 @@ uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
     ++g_reject_histogram[g_last_reject_opcode & 0xFF];
     g_reject_by_builder[builder] = g_last_reject_opcode;
     return 0;
+  }
+  if (logged && g_log_dump) {
+    for (size_t at = 0; at < bytes.size(); at += 64) {
+      std::fprintf(stderr, "R360_JIT_SEQ_WASM %u ", seq);
+      for (size_t k = at; k < std::min(bytes.size(), at + 64); ++k) std::fprintf(stderr, "%02x", bytes[k]);
+      std::fprintf(stderr, "\n");
+    }
   }
   const uint32_t request = g_next_request++;
   slot->builder_free = !emitter.uses_exec();
@@ -2026,6 +2065,13 @@ __attribute__((used, export_name("r360_jit_set_exclude_seq")))
 uint32_t r360_jit_set_exclude_seq(uint32_t begin, uint32_t end) {
   rx::g_exclude_seq_begin = begin;
   rx::g_exclude_seq_end = end;
+  return rx::g_compile_seq;
+}
+__attribute__((used, export_name("r360_jit_set_log_seq")))
+uint32_t r360_jit_set_log_seq(uint32_t begin, uint32_t end, uint32_t dump) {
+  rx::g_log_dump = dump != 0;
+  rx::g_log_seq_begin = begin;
+  rx::g_log_seq_end = end;
   return rx::g_compile_seq;
 }
 __attribute__((used, export_name("r360_jit_compile_seq")))

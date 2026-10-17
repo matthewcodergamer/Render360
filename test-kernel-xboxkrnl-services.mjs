@@ -352,6 +352,12 @@ expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===0&&sta
 while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
 need('r360_xam_dialog_set_host_answers')(0);
 console.log('XAM_MESSAGE_BOX_HOST_DIALOG=PASS');
+expect((need('r360_xam_dialog_set_auto_answer')(1)|0)===1,'preset answer not set');
+w32(P+0xAB0,0xFFFFFFFF);w32(P+0xF000+0x54,0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===0&&status()===1&&r32(P+0xAB0)===1,'preset answer should complete the dialog inside the call');
+need('r360_xam_dialog_set_auto_answer')(-1);
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+console.log('XAM_MESSAGE_BOX_PRESET_ANSWER=PASS');
 
 // --- XamUserCreateAchievementEnumerator (Xenia XStaticAchievementEnumerator) ------
 expect(x('XamUserCreateAchievementEnumerator',0,0,0,7,0,4,P+0xB00,P+0xB04)===0&&status()===1,'achievement enumerator not created');

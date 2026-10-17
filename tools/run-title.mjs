@@ -225,7 +225,8 @@ async function main(){
   const bootstrapFile=args.bootstrap||(fs.existsSync(rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'))?rel('build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm'):rel('xenia_ppc_bootstrap.wasm'));
   const {instance:bootstrap,host,stderr}=await loadBootstrap(bootstrapFile,args.verbose);
   runArgs=args;globalThis.__r360Bootstrap=bootstrap;
-  if(args.dialogButton!==undefined)bootstrap.exports.r360_xam_dialog_set_host_answers?.(1);
+  // A preset answer inside the call keeps the run deterministic.
+  if(args.dialogButton!==undefined)bootstrap.exports.r360_xam_dialog_set_auto_answer?.(args.dialogButton);
   if(args.frame||args.frameAt){frontbufferModule=await import(rel('render360-title-frontbuffer.mjs'));zlibModule=await import('node:zlib');}
   const core=await loadCore();
   const started=Date.now();

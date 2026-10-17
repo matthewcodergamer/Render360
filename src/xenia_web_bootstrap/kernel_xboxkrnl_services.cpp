@@ -394,6 +394,9 @@ MessageBox& PendingMessageBox() {
   return box;
 }
 bool g_dialog_host_answers = false;
+// Headless runs: a preset answer given inside the call, so the run does not
+// depend on when the host gets to answer (-1: none).
+int32_t g_dialog_auto_answer = -1;
 
 void DebugLog(std::string text) {
   if (text.size() > 512) text.resize(512);
@@ -5441,9 +5444,15 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       DebugLog(log);
       std::fprintf(stderr, "R360_MESSAGE_BOX %s\n", log.c_str());
       BroadcastNotification(0x09u, 1);
-      if (!g_dialog_host_answers) {
+      if (!g_dialog_host_answers || g_dialog_auto_answer >= 0) {
+        uint32_t choice = a[5];
+        if (g_dialog_auto_answer >= 0) {
+          choice = std::min<uint32_t>(uint32_t(g_dialog_auto_answer),
+                                      box.buttons.empty() ? 0u : uint32_t(box.buttons.size() - 1));
+          std::fprintf(stderr, "R360_MESSAGE_BOX answered %u (preset)\n", choice);
+        }
         box = {};
-        if (!Wr32(result_ptr, a[5])) return Invalid();
+        if (!Wr32(result_ptr, choice)) return Invalid();
         BroadcastNotification(0x09u, 0);
         return FinishXamOverlapped(overlapped, X_ERROR_SUCCESS, 0);
       }
@@ -6079,6 +6088,11 @@ R360_WASM_EXPORT("r360_xam_dialog_set_host_answers")
 uint32_t r360_xam_dialog_set_host_answers(uint32_t on) {
   r360k::g_dialog_host_answers = on != 0;
   return r360k::g_dialog_host_answers ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_set_auto_answer")
+int32_t r360_xam_dialog_set_auto_answer(int32_t button) {
+  r360k::g_dialog_auto_answer = button < 0 ? -1 : button;
+  return r360k::g_dialog_auto_answer;
 }
 R360_WASM_EXPORT("r360_xam_dialog_pending")
 uint32_t r360_xam_dialog_pending() {

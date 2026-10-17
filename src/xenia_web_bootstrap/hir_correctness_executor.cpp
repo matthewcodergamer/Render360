@@ -33,6 +33,8 @@ uint32_t r360_ppc_probe_loaded_size();
 
 namespace render360::xenia_web {
 
+void MaybeDeliverGuestInterrupts();  // kernel_xboxkrnl_services.cpp
+
 bool g_r360_verbose_trace = false;
 
 namespace {
@@ -1637,6 +1639,11 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         supported = false;
         break;
       }
+      // Interpreted code polls like the guest JIT's backward branches: a
+      // loop in a function that was never compiled (one call that spins
+      // waiting for another thread, as in Banjo-Tooie's object table) would
+      // otherwise never deliver interrupts, preempt or return to the host.
+      if ((g_total_instructions & 4095u) == 0) MaybeDeliverGuestInterrupts();
       ++g_opcode_histogram[instr->opcode->num & 0xFFu];
       if (ExecuteFlaggedOperation(instr, values, &supported)) {
         if (!supported) {

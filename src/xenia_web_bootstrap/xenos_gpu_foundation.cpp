@@ -16,6 +16,8 @@ extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0;
 // standalone Xenos foundation keeps its bounded bring-up raster.
 namespace render360::xenia_web {
 __attribute__((weak)) bool RenderXenosDraw(const XenosSoftDraw&) { return false; }
+// The WebGPU backend (webgpu_draws.cpp) records the swap's front buffer.
+__attribute__((weak)) void WebGpuSwap(const uint32_t*) {}
 }
 
 namespace render360::xenia_web {
@@ -452,6 +454,7 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
       case kPm4DrawIndx: case kPm4DrawIndx2: handled = ExecuteDraw(opcode, p, count); break;
       case kPm4XeSwap:
         for (uint32_t w = 0; w < 6u; ++w) g_swap_fetch[w] = g_regs[0x4800u + w];
+        WebGpuSwap(g_swap_fetch.data());
         handled = ExecuteSwap(p, count); break;
       case kPm4RegRmw: {
         if (count != 3u) { handled = false; g_status = kStatusInvalid; break; }

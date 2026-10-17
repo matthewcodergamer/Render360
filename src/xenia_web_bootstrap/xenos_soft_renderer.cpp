@@ -7,6 +7,7 @@
 // assembly, triangle rasterization, the output merger and resolve copies.
 
 #include "xenos_soft_renderer.h"
+#include "webgpu_backend.h"
 
 #include <algorithm>
 #include <array>
@@ -1226,6 +1227,9 @@ bool RenderXenosDraw(const XenosSoftDraw& draw) {
   return ok;
 }
 bool RenderXenosDrawUntimed(const XenosSoftDraw& draw) {
+  // The WebGPU backend records the draw for the browser; the software
+  // renderer still runs (for comparison) unless rasterization is off.
+  if (WebGpuBackendEnabled()) WebGpuIssueDraw(draw);
   // Headless fast-forward (r360_xenos_soft_set_rasterize(0)): no EDRAM
   // work at all; the command processor still executes every packet.
   if (!g_rasterize) return true;

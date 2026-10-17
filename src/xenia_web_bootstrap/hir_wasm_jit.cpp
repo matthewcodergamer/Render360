@@ -1882,8 +1882,14 @@ bool Excluded(HIRBuilder* builder) {
   return false;
 }
 
+// Compile requests numbered in order; [g_exclude_seq_begin, end) stay
+// interpreted (r360_jit_set_exclude_seq; bisecting by when code compiles,
+// which keeps early, hot functions compiled).
+uint32_t g_compile_seq = 0, g_exclude_seq_begin = 0, g_exclude_seq_end = 0;
+
 uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
-  if (Excluded(builder)) {
+  const uint32_t seq = g_compile_seq++;
+  if (Excluded(builder) || (seq >= g_exclude_seq_begin && seq < g_exclude_seq_end)) {
     slot->state = 2;
     return 0;
   }
@@ -2016,6 +2022,14 @@ void JitReleaseSlot(JitSlot* slot) {
 namespace rx = render360::xenia_web;
 
 extern "C" {
+__attribute__((used, export_name("r360_jit_set_exclude_seq")))
+uint32_t r360_jit_set_exclude_seq(uint32_t begin, uint32_t end) {
+  rx::g_exclude_seq_begin = begin;
+  rx::g_exclude_seq_end = end;
+  return rx::g_compile_seq;
+}
+__attribute__((used, export_name("r360_jit_compile_seq")))
+uint32_t r360_jit_compile_seq() { return rx::g_compile_seq; }
 __attribute__((used, export_name("r360_jit_set_exclude")))
 uint32_t r360_jit_set_exclude(uint32_t begin, uint32_t end) {
   rx::g_exclude_begin = begin;

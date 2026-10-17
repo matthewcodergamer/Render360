@@ -58,6 +58,7 @@ function parseArgs(argv){
     else if(a==='--render-from-minstr')args.renderFrom=Number(argv[++i])>>>0;
     else if(a==='--frame')args.frame=argv[++i];
     // --frame-at M1,M2,...:PREFIX saves PREFIX-M.png when the run passes M million instructions.
+    else if(a==='--gpu-capture'){const [from,swaps,...file]=String(argv[++i]).split(':');args.gpuCapture={from:Number(from),swaps:Number(swaps),file:file.join(':')};}
     else if(a==='--frame-at'){const v=String(argv[++i]),c=v.lastIndexOf(':');args.frameAt={at:v.slice(0,c).split(',').map(Number).sort((x,y)=>x-y),prefix:v.slice(c+1)};}
     // --press FROM:TO:BUTTONS holds gamepad 0 buttons (XINPUT bits, e.g. 0x10 = START, 0x1000 = A) between FROM and TO million instructions.
     // --dialog-button N answers every XamShowMessageBoxUI with button N (the player's choice); without it the focused button is taken (Xenia headless).
@@ -96,6 +97,33 @@ function saveFramePng(file){
   return {file,width,height,hash:frame.hash,format:frame.format,tiled:frame.tiled,nonBlackPixels:nonBlack};
 }
 let zlibModule=null;
+// --gpu-capture M:SWAPS:FILE records the WebGPU backend command stream
+// (webgpu_backend.h) from M million instructions for SWAPS swaps to FILE
+// (game data: keep it out of the repository).
+const gpuCapture={chunks:[],started:false,done:false,startSwaps:0};
+function sliceGpuCapture(x,m){
+  const c=runArgs.gpuCapture;
+  if(!c||gpuCapture.done||!x.r360_gpu_set_mode)return;
+  if(!gpuCapture.started){
+    if(m<c.from)return;
+    x.r360_gpu_shared_memory_clear();x.r360_gpu_stream_reset();x.r360_gpu_set_mode(1);
+    gpuCapture.started=true;gpuCapture.startSwaps=x.r360_title_gpu_vd_swap_calls?.()>>>0;return;
+  }
+  const words=x.r360_gpu_stream_words()>>>0;
+  if(words)gpuCapture.chunks.push(Buffer.from(new Uint8Array(x.memory.buffer,x.r360_gpu_stream_data()>>>0,words*4)));
+  x.r360_gpu_stream_reset();
+  // Count swap ops recorded so far.
+  let swaps=0;for(const b of gpuCapture.chunks){const w=new Uint32Array(b.buffer,b.byteOffset,b.byteLength/4);for(let i=0;i<w.length;i+=1+(w[i]>>>8))if((w[i]&0xFF)===6)swaps++;}
+  if(swaps>=c.swaps){
+    x.r360_gpu_set_mode(0);gpuCapture.done=true;
+    fs.writeFileSync(c.file,Buffer.concat(gpuCapture.chunks));
+    const info={swaps,minstr:m,draws:x.r360_gpu_draw_stat(0)>>>0,skips:[1,2,3,4,5].map(i=>x.r360_gpu_draw_stat(i)>>>0),
+      uploadedKiB:x.r360_gpu_shared_memory_uploaded_kb()>>>0};
+    process.stderr.write(`gpu capture ${c.file}: ${JSON.stringify(info)}\n`);
+    if(frontbufferModule)info.frame=saveFramePng(c.file+'.png');
+    fs.writeFileSync(c.file+'.json',JSON.stringify(info));
+  }
+}
 function slicePressAndFrames(x){
   if(runArgs.dialogButton!==undefined&&x.r360_xam_dialog_pending?.()){
     const str=w=>Buffer.from(new Uint8Array(x.memory.buffer,x.r360_xam_dialog_string_ptr(w)>>>0,x.r360_xam_dialog_string_len(w)>>>0)).toString('utf8');
@@ -103,6 +131,7 @@ function slicePressAndFrames(x){
     process.stderr.write(`dialog "${str(0)}" -> ${choice} (${str(2+choice)})\n`);x.r360_xam_dialog_answer(choice);
   }
   const m=x.r360_hir_total_instructions_millions?.()>>>0;
+  sliceGpuCapture(x,m);
   if(runArgs.press||runArgs.stick){
     let buttons=0,lx=0,ly=0;
     for(const p of runArgs.press||[])if(m>=p.from&&m<p.to)buttons|=p.buttons;
@@ -235,7 +264,7 @@ async function main(){
   runArgs=args;globalThis.__r360Bootstrap=bootstrap;
   // A preset answer inside the call keeps the run deterministic.
   if(args.dialogButton!==undefined)bootstrap.exports.r360_xam_dialog_set_auto_answer?.(args.dialogButton);
-  if(args.frame||args.frameAt){frontbufferModule=await import(rel('render360-title-frontbuffer.mjs'));zlibModule=await import('node:zlib');}
+  if(args.frame||args.frameAt||args.gpuCapture){frontbufferModule=await import(rel('render360-title-frontbuffer.mjs'));zlibModule=await import('node:zlib');}
   const core=await loadCore();
   const started=Date.now();
   const title=await openTitle(args.input,{core,host});
@@ -257,6 +286,7 @@ async function main(){
   globalThis.__r360Jit=jit;
   if(process.env.R360_JITPROF)bootstrap.exports.r360_jit_profile?.(1);
   if(process.env.R360_DIAG){bootstrap.exports.r360_jit_diag?.(1);}
+  if(process.env.R360_JIT_EXCLUDE_SEQ){const [b,e]=process.env.R360_JIT_EXCLUDE_SEQ.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_exclude_seq?.(b,e);}
   if(process.env.R360_JIT_EXCLUDE){const [b,e]=process.env.R360_JIT_EXCLUDE.split('-').map(v=>Number(v)>>>0);bootstrap.exports.r360_jit_set_exclude?.(b,e);}
   if(args.traceFrom!==undefined){globalThis.__r360TraceOn=1;bootstrap.exports.r360_trace_verbose_from?.(args.traceFrom);}
   if(process.env.R360_OSR!==undefined)bootstrap.exports.r360_jit_set_osr?.(Number(process.env.R360_OSR));
@@ -271,7 +301,7 @@ async function main(){
   let error=null,result=null;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress||args.frameAt||args.press||args.stick||args.dialogButton!==undefined)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress||args.dumpShaders||args.xenosTraceFrom!==undefined||args.frameAt||args.press||args.stick||args.dialogButton!==undefined)?(s=>{const x=bootstrap.exports;slicePressAndFrames(x);if(args.dumpShaders)dumpCurrentShaders(x,args.dumpShaders);if(args.xenosTraceFrom!==undefined&&!globalThis.__r360XenosTrace&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.xenosTraceFrom){globalThis.__r360XenosTrace=1;x.r360_xenos_trace_ibs?.(1);}if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · jit ${globalThis.__r360Jit?(()=>{const t=globalThis.__r360Jit.telemetry();return `${t.functions}fn/${t.rejected}rej/${Math.round(t.calls/1000)}kcalls`;})():'off'} · resolve ${g('r360_xenos_soft_resolves')}/${g('r360_xenos_soft_resolve_kpixels')}kpx clear ${g('r360_xenos_soft_clear_ksamples')}ks info 0x${g('r360_xenos_soft_last_resolve_info').toString(16)} · cp ${g('r360_xenos_status').toString(16)} stalled ${g('r360_title_gpu_stalled')} ready ${g('r360_xenos_stall_ready')} pumps ${g('r360_title_gpu_pumps')}/${g('r360_title_gpu_status')} waits ${g('r360_xenos_waits')} stall ${[0,1,2,3,4].map(i=>hex(x.r360_xenos_stall_wait?.(i)??0)).join(',')} wptr ${g('r360_title_gpu_write_pointer')} lastop 0x${g('r360_xenos_last_opcode').toString(16)} · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:title.defaultXex,encryptedSecurityKey,scanEntryFunction:true,prepareMainThreadContext:true,guestSliceMs:args.sliceMs||((args.renderFrom!==undefined||args.progress||args.frameAt||args.gpuCapture||args.press||args.stick||args.dialogButton!==undefined)?200:0),onGuestSlice:(args.sliceMs||args.renderFrom!==undefined||args.progress||args.dumpShaders||args.xenosTraceFrom!==undefined||args.frameAt||args.gpuCapture||args.press||args.stick||args.dialogButton!==undefined)?(s=>{const x=bootstrap.exports;slicePressAndFrames(x);if(args.dumpShaders)dumpCurrentShaders(x,args.dumpShaders);if(args.xenosTraceFrom!==undefined&&!globalThis.__r360XenosTrace&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.xenosTraceFrom){globalThis.__r360XenosTrace=1;x.r360_xenos_trace_ibs?.(1);}if(args.progress){const now=Date.now();if(!globalThis.__r360LastProgress||now-globalThis.__r360LastProgress>5000){globalThis.__r360LastProgress=now;const g=n=>typeof x[n]==='function'?(x[n]()>>>0):0;globalThis.__r360Threads=Array.from({length:g('r360_fiber_count')},(_,k)=>{const t=x.r360_fiber_thread(k)>>>0,w=f=>(x.r360_kernel_thread_wait?.(t,f)??0)>>>0,id=w(0);return {fiber:k,thread:hex(t),state:['new','running','ready','blocked','done'][x.r360_fiber_state(k)>>>0]??'?',resumes:x.r360_fiber_resumes?.(k)>>>0,left:['-','blocked','yield','preempt','host'][x.r360_fiber_leave?.(k,0)>>>0],leaves:[3,4,5,6].map(f=>x.r360_fiber_leave?.(k,f)>>>0).join('/'),leftAfter:(c=>c?kernelExportName(c>>>16,c&0xFFFF):'-')(x.r360_fiber_leave?.(k,1)>>>0),minstr:x.r360_fiber_instructions_millions?.(k)>>>0,wait:id?kernelExportName(id>>>16,id&0xFFFF):null,object:id?hex(w(1)):null,handle:id?hex(w(2)):null,objectType:id?w(3):null,reason:id?w(4):null,callerLr:id?hex(w(5)):null,retries:id?w(6):null,...(()=>{const q=f=>(x.r360_kernel_thread_poll?.(t,f)??0)>>>0,pid=q(0);return pid?{poll:kernelExportName(pid>>>16,pid&0xFFFF),pollObject:hex(q(1)),pollHandle:hex(q(2)),pollType:q(3),pollTimeout:hex(q(4)),pollLr:hex(q(5)),polls:q(6)}:{};})()};});process.stdout.write(`progress ${g('r360_hir_total_instructions_millions')}M instr · ${g('r360_kernel_import_calls')} kernel calls · ${g('r360_title_gpu_vd_swap_calls')} frames · ${g('r360_xenos_soft_draws')} drawn · ${g('r360_xenos_soft_pixels')} px · ${g('r360_fiber_count')} fibers · ${g('r360_fiber_switches')} switches · ${g('r360_fiber_preemptions')} preemptions · ${g('r360_kernel_audio_callbacks')} audio callbacks · jit ${globalThis.__r360Jit?(()=>{const t=globalThis.__r360Jit.telemetry();return `${t.functions}fn/${t.rejected}rej/${Math.round(t.calls/1000)}kcalls`;})():'off'} · resolve ${g('r360_xenos_soft_resolves')}/${g('r360_xenos_soft_resolve_kpixels')}kpx clear ${g('r360_xenos_soft_clear_ksamples')}ks info 0x${g('r360_xenos_soft_last_resolve_info').toString(16)} · cp ${g('r360_xenos_status').toString(16)} stalled ${g('r360_title_gpu_stalled')} ready ${g('r360_xenos_stall_ready')} pumps ${g('r360_title_gpu_pumps')}/${g('r360_title_gpu_status')} waits ${g('r360_xenos_waits')} stall ${[0,1,2,3,4].map(i=>hex(x.r360_xenos_stall_wait?.(i)??0)).join(',')} wptr ${g('r360_title_gpu_write_pointer')} lastop 0x${g('r360_xenos_last_opcode').toString(16)} · pcs ${Array.from({length:g('r360_fiber_count')},(_,k)=>hex(x.r360_fiber_leave?.(k,7))).join(',')}\n`);}}if(args.renderFrom!==undefined&&(x.r360_hir_total_instructions_millions?.()>>>0)>=args.renderFrom)x.r360_xenos_soft_set_rasterize?.(1);if(args.sliceMs&&(s.slices<5||s.slices%50===0))process.stderr.write(`slice ${s.slices}: ${x.r360_title_gpu_vd_swap_calls?.()>>>0} frames\n`);}):null}),
       {bootstrap,fetchPending:async()=>false},
     );
   }catch(caught){if(process.env.R360_TRAP_STACK)console.error(caught?.stack);error=wrapCoreTrap(caught,bootstrap,{context:"run-title"});}

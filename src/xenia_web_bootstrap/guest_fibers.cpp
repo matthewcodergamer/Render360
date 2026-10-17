@@ -199,14 +199,31 @@ bool PickTarget(uint32_t from, uint32_t* target, bool preempting = false) {
       from >= n ? 0
                 : g_fibers[from].vruntime +
                       (from == g_current ? HIRTotalInstructions() - g_run_start : 0);
+  // Bounded lag (as CFS bounds it): a thread that has run far more than the
+  // others is passed over for at most kMaxLag instructions of theirs. On the
+  // console every thread runs on its own hardware thread, so a busy thread is
+  // never starved by an idle-looping one (Banjo-Tooie's main thread waited
+  // ~50B instructions for a lock while a timer thread spun Sleep(0)).
+  constexpr uint64_t kMaxLag = 8ull * kPreemptQuantum;
+  bool any = false;
+  uint64_t min_count = 0;
+  for (uint32_t index = 0; index < n; ++index) {
+    if (index == from) continue;
+    const Fiber& fiber = g_fibers[index];
+    if (!Eligible(fiber) || (index != 0 && !ThreadRunnable(fiber.thread))) continue;
+    if (!any || fiber.vruntime < min_count) min_count = fiber.vruntime;
+    any = true;
+  }
+  if (any && from < n && from_count < min_count) min_count = from_count;
   bool found = false;
   uint32_t best = 0;
   for (uint32_t step = 1; step <= n; ++step) {
     const uint32_t index = (from + step) % n;
     if (index == from) continue;
-    const Fiber& fiber = g_fibers[index];
+    Fiber& fiber = g_fibers[index];
     if (!Eligible(fiber)) continue;
     if (index != 0 && !ThreadRunnable(fiber.thread)) continue;
+    if (fiber.vruntime > min_count + kMaxLag) fiber.vruntime = min_count + kMaxLag;
     if (!found || fiber.vruntime < g_fibers[best].vruntime) best = index;
     found = true;
   }

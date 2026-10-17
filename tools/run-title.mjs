@@ -106,7 +106,7 @@ function sliceGpuCapture(x,m){
   if(!c||gpuCapture.done||!x.r360_gpu_set_mode)return;
   if(!gpuCapture.started){
     if(m<c.from)return;
-    x.r360_gpu_shared_memory_clear();x.r360_gpu_stream_reset();x.r360_gpu_set_mode(1);
+    x.r360_gpu_shared_memory_clear();x.r360_gpu_stream_reset();x.r360_gpu_set_mode(process.env.R360_GPU_DEBUG?3:1);
     gpuCapture.started=true;gpuCapture.startSwaps=x.r360_title_gpu_vd_swap_calls?.()>>>0;return;
   }
   const words=x.r360_gpu_stream_words()>>>0;

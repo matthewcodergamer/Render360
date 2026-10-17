@@ -11,7 +11,13 @@ async function decodePng(url){
   return {width:bitmap.width,height:bitmap.height,pixels:ctx.getImageData(0,0,bitmap.width,bitmap.height).data};
 }
 
-export default async function run(captureUrl,referenceUrl,drawLimit){
+async function readBuffer(device,buffer,offset,size){
+  const read=device.createBuffer({size,usage:0x1|0x8});
+  const e=device.createCommandEncoder();e.copyBufferToBuffer(buffer,offset,read,0,size);device.queue.submit([e.finish()]);
+  await read.mapAsync(1);const out=new Uint8Array(read.getMappedRange()).slice();read.unmap();read.destroy();return out;
+}
+
+export default async function run(captureUrl,referenceUrl,drawLimit,debugEdram){
   const adapter=await navigator.gpu?.requestAdapter();
   if(!adapter)return {ok:false,error:'no WebGPU adapter'};
   const device=await adapter.requestDevice({requiredFeatures:['float32-filterable'].filter(f=>adapter.features.has(f)),requiredLimits:{
@@ -20,6 +26,7 @@ export default async function run(captureUrl,referenceUrl,drawLimit){
   device.onuncapturederror=e=>{if(errors.length<20)errors.push(e.error.message.slice(0,400));};
   const backend=await new XenosWebGpuBackend(device,null).init();
   if(drawLimit!==undefined&&drawLimit!==null)backend.drawLimit=drawLimit;
+  backend.debugEdram=!!debugEdram;
   const words=new Uint32Array(await (await fetch(captureUrl)).arrayBuffer());
   const started=performance.now();
   backend.replayWords(words);
@@ -33,6 +40,25 @@ export default async function run(captureUrl,referenceUrl,drawLimit){
     targets:[...backend.targets.values()].map(t=>`${t.key} ${t.format} ${t.width}x${t.height}`)};
   // The swapped front buffer (resolved into shared memory, loaded by the
   // texture cache), else the color render target at EDRAM base 0.
+  // Debug: the EDRAM buffer against the color render target at base 0
+  // (Xenia's layout, 32bpp), at X shifts, to locate resolve offsets.
+  if(globalThis.location?.search?.includes('edram')||backend.debugEdram){
+    const rt=[...backend.targets.values()].find(t=>!t.depth&&t.base===0);
+    const img=await backend.readTarget(rt);
+    const ed=new Uint32Array((await readBuffer(device,backend.edram,0,backend.edram.size)).buffer);
+    const sx=rt.msaa>=2?2:1,sy=rt.msaa>=1?2:1,scores={};
+    for(const shift of [-64,-32,0,32,64]){
+      let same=0,n=0;
+      for(let y=0;y<rt.height;y+=37)for(let x=64;x<rt.width-64;x+=41){
+        const X=x+shift,s0x=X*sx,s0y=y*sy,tile=Math.floor(s0y/16)*rt.pitchTiles+Math.floor(s0x/80);
+        const o=((rt.base+tile)%2048)*1280+(s0y%16)*80+(s0x%80);
+        const a=(y*rt.width+x)*4,v=img.pixels[a]|img.pixels[a+1]<<8|img.pixels[a+2]<<16|img.pixels[a+3]<<24;
+        n++;if((ed[o]>>>0)===(v>>>0))same++;
+      }
+      scores[shift]=+(same/n).toFixed(3);
+    }
+    result.edramMatchByShift=scores;
+  }
   const front=(backend.frontTexture?.format==='rgba8unorm'?backend.frontTexture:null)||
     [...backend.targets.values()].find(t=>!t.depth&&t.base===0&&t.format==='rgba8unorm');
   result.front=front===backend.frontTexture?'front buffer':'render target';

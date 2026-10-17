@@ -4,6 +4,7 @@
 // recording into the command stream (webgpu_backend.h) instead of a Vulkan
 // command buffer. Render targets follow Xenia's host render target path.
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -467,6 +468,19 @@ void Resolve() {
   }
   if (!info.coordinate_info.width_div_8 || !info.height_div_8) return;
   ++g_resolves;
+  if (g_mode & 2) {
+    const auto window = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
+    const draw_util::ResolveEdramInfo& e = info.IsCopyingDepth() ? info.depth_edram_info : info.color_edram_info;
+    std::fprintf(stderr,
+                 "R360_XENOS_WGPU_RESOLVE base=%u pitch=%u msaa=%u fmt=%u off=%u,%u size=%ux%u "
+                 "dest=0x%08X dest_off=%u,%u dest_pitch=%u window=%d,%d window_enable=%u\n",
+                 e.base_tiles, e.pitch_tiles, uint32_t(e.msaa_samples), e.format,
+                 info.coordinate_info.edram_offset_x_div_8 * 8u, info.coordinate_info.edram_offset_y_div_8 * 8u,
+                 info.coordinate_info.width_div_8 * 8u, info.height_div_8 * 8u, info.copy_dest_base,
+                 info.copy_dest_coordinate_info.offset_x_div_8 * 8u, info.copy_dest_coordinate_info.offset_y_div_8 * 8u,
+                 info.copy_dest_coordinate_info.pitch_aligned_div_32 * 32u, int(window.window_x_offset),
+                 int(window.window_y_offset), uint32_t(regs.Get<reg::PA_SU_SC_MODE_CNTL>().vtx_window_offset_enable));
+  }
   if (info.copy_dest_extent_length) {
     uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
     info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
@@ -689,6 +703,14 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
                            uint32_t(float_vertex.size() + float_pixel.size()) + kBoolLoopWords +
                            kFetchWords + uint32_t(binding_words.size()) + index_words;
   const uint32_t pipeline_id = PipelineId(description);
+  if ((g_mode & 2) && g_draws < 4000 && (g_draws % 50) == 0) {
+    const auto window = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
+    std::fprintf(stderr, "R360_XENOS_WGPU_DRAW n=%u viewport=%u,%u %ux%u scissor=%u,%u %ux%u window=%d,%d enable=%u\n",
+                 g_draws, viewport_info.xy_offset[0], viewport_info.xy_offset[1], viewport_info.xy_extent[0],
+                 viewport_info.xy_extent[1], scissor.offset[0], scissor.offset[1], scissor.extent[0], scissor.extent[1],
+                 int(window.window_x_offset), int(window.window_y_offset),
+                 uint32_t(pa_su_sc_mode_cntl.vtx_window_offset_enable));
+  }
   uint32_t* w = GpuStream().Begin(kGpuStreamDraw, payload);
   WebGpuDrawHeader header{};
   header.pipeline = pipeline_id;

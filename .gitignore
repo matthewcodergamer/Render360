@@ -5,3 +5,21 @@ node_modules/
 *.log
 build/
 upstream/
+# Game data never goes in git (owner rule): discs, packages, decrypted images, captures, manifests
+*.iso
+*.xex
+*.xcp
+*.god
+*.stfs
+*.con
+*.r360cap
+*.gpucap
+rexglue-manifest*
+/games-local/
+
+# iOS: personal signing values, build products
+/ios/Signing.local.xcconfig
+/ios/Render360.xcodeproj/
+/ios/build/
+*.ipa
+/logs/

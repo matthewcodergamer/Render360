@@ -1,11 +1,14 @@
 // Render360 guest JIT: finalized Xenia HIR -> WebAssembly (see hir_wasm_jit.h).
 #include "hir_wasm_jit.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "xenia/base/string_buffer.h"
 #include "xenia/cpu/function.h"
 #include "xenia/cpu/hir/block.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -20,6 +23,12 @@ namespace render360::xenia_web {
 uint32_t JitInstructionCounterAddress();
 uint32_t JitFaultAddress();
 uint32_t JitScratchAddress();
+// Dispatcher segment the next generated-function call starts at (0 = entry);
+// generated code reads and clears it.
+uint32_t JitEntrySegmentAddress();
+// Guest address of the loop head a generated function last polled at
+// (diagnostics: r360_jit_diag).
+uint32_t JitPollSourceAddress();
 uint32_t SparseGuestPageDirectoryAddress();
 // Nonzero while a debug store watch (r360_debug_watch) is armed.
 uint32_t JitDebugWatchAddress();
@@ -51,6 +60,9 @@ uint32_t g_compiler = 0;
 uint32_t g_next_request = 1;
 std::unordered_map<uint32_t, JitSlot*> g_pending;
 HIRBuilder* g_candidate_builder = nullptr;
+// The run JitTakeFunction last sent to the interpreter (JitTakeOsrSlot).
+HIRBuilder* g_osr_builder = nullptr;
+JitSlot* g_osr_slot = nullptr;
 uint32_t g_last_decision = 0;
 JitSlot* g_candidate_slot = nullptr;
 // Telemetry.
@@ -236,7 +248,8 @@ constexpr uint32_t kPollBudget = 20000;  // backward branches between polls
 constexpr uint32_t kLocPc = 1, kLocBudget = 2, kLocResume = 3, kLocPending = 4,
                    kLocSp = 5, kLocTmp = 6, kLocTmpB = 7, kLocTmp64 = 8,
                    kLocTmp64B = 9, kLocTmpF64 = 10, kLocTmpV = 11, kLocAddr = 12,
-                   kLocPage = 13, kLocHost = 14, kLocVal = 15, kFixedLocals = 16;
+                   kLocPage = 13, kLocHost = 14, kLocVal = 15,
+                   kLocResumed = 16, kFixedLocals = 17;
 
 class Emitter {
  public:
@@ -244,6 +257,8 @@ class Emitter {
 
   bool Compile(std::vector<uint8_t>* out);
   uint32_t reject_opcode() const { return reject_opcode_; }
+  bool uses_exec() const { return uses_exec_; }
+  bool osr_capable() const { return osr_capable_; }
 
  private:
   struct Segment {
@@ -342,6 +357,16 @@ class Emitter {
   uint32_t real_ = 0, n_ = 0, end_ = 0, poll_ = 0, spill_ = 0, restore_ = 0;
   uint32_t extra_ = 0;
   uint32_t reject_opcode_ = 0;
+  bool uses_exec_ = false;
+  bool osr_capable_ = false;
+  uint32_t entry_slot_ = 0, poll_source_ = 0;
+  // First guest address in segment k.
+  uint32_t SegmentSource(uint32_t k) const {
+    for (Instr* i = segments_[k].first; i && i != segments_[k].end; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+    }
+    return 0;
+  }
   uint32_t counter_ = 0, fault_ = 0, return_slot_ = 0, return_valid_ = 0, scratch_ = 0;
   uint32_t page_directory_ = 0;
   // Inline sparse page walk for an access of `size` bytes at kLocAddr: falls
@@ -435,6 +460,7 @@ void Emitter::Jump(uint32_t k, uint32_t j) {
   Else();
   I32(int32_t(kPollBudget)); Set(kLocBudget);
   I32(int32_t(j)); Set(kLocPending);
+  I32(int32_t(poll_source_)); I32(int32_t(SegmentSource(j))); Mem(oI32Store, 2, 0);
   I32(int32_t(poll_)); Set(kLocPc);
   End();
   BrTo(DepthToLoop(k));
@@ -774,10 +800,18 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
       return SetDest(instr);
     case OPCODE_EXTRACT: {
       if (is_vec(a) && d && b && !b->IsConstant() && IsInt(b->type) &&
-          (d->type == INT8_TYPE || d->type == INT16_TYPE)) {
+          (d->type == INT8_TYPE || d->type == INT16_TYPE || d->type == INT32_TYPE)) {
         // Dynamic index: gather the element into lane 0 with a swizzle.
         Push(a);
-        if (d->type == INT8_TYPE) {
+        if (d->type == INT32_TYPE) {
+          // Lane index & 3, as the constant case: bytes 4*lane .. 4*lane+3.
+          uint8_t quad[16];
+          for (int k = 0; k < 16; ++k) quad[k] = uint8_t(k & 3);
+          PushAs(b, Cls::kI32); I32(3); Op(oI32And); I32(2); Op(oI32Shl);
+          Simd(0x0F); V128Const(quad); Simd(0x6E);       // splat(4*lane) + {0,1,2,3,...}
+          Simd(0x0E);
+          Simd(0x1B); code_.u8(0);
+        } else if (d->type == INT8_TYPE) {
           PushAs(b, Cls::kI32); I32(3); Op(oI32Xor); I32(0xF); Op(oI32And);
           Simd(0x0F); Simd(0x0E);                       // swizzle(v, splat(idx))
           Simd(0x16); code_.u8(0);
@@ -801,6 +835,27 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
         case FLOAT32_TYPE: Simd(0x1F); code_.u8(uint8_t(index & 3)); break;
         default: return Reject(instr);
       }
+      return SetDest(instr);
+    }
+    case OPCODE_VECTOR_COMPARE_EQ: case OPCODE_VECTOR_COMPARE_SGT:
+    case OPCODE_VECTOR_COMPARE_SGE: case OPCODE_VECTOR_COMPARE_UGT:
+    case OPCODE_VECTOR_COMPARE_UGE: {
+      // Lane-wise compare, all-ones where true (executor StoreVectorCompare /
+      // VectorCompareFloat: ordered float compares, so NaN lanes are false,
+      // as wasm f32x4.eq/gt/ge; unsigned float compares are the signed ones).
+      if (!is_vec(d) || !is_vec(a) || !is_vec(b)) return Reject(instr);
+      const bool eq = op == OPCODE_VECTOR_COMPARE_EQ;
+      const bool gt = op == OPCODE_VECTOR_COMPARE_SGT || op == OPCODE_VECTOR_COMPARE_UGT;
+      const bool uns = op == OPCODE_VECTOR_COMPARE_UGT || op == OPCODE_VECTOR_COMPARE_UGE;
+      uint32_t simd = 0;
+      switch (TypeName(instr->flags & 0xFF)) {
+        case INT8_TYPE: simd = eq ? 0x23 : gt ? (uns ? 0x28 : 0x27) : (uns ? 0x2C : 0x2B); break;
+        case INT16_TYPE: simd = eq ? 0x2D : gt ? (uns ? 0x32 : 0x31) : (uns ? 0x36 : 0x35); break;
+        case INT32_TYPE: simd = eq ? 0x37 : gt ? (uns ? 0x3C : 0x3B) : (uns ? 0x40 : 0x3F); break;
+        case FLOAT32_TYPE: simd = eq ? 0x41 : gt ? 0x44 : 0x46; break;
+        default: return Reject(instr);
+      }
+      Push(a); Push(b); Simd(simd);
       return SetDest(instr);
     }
     case OPCODE_SWIZZLE: {
@@ -890,6 +945,7 @@ bool Emitter::EmitGeneric(Instr* instr, uint32_t source) {
     StoreClass(c, uint32_t(16 * n));
   }
   if (instr->dest && ClassOf(instr->dest->type) == Cls::kNone) return Reject(instr);
+  uses_exec_ = true;  // the code now points into the builder's HIR
   I32(int32_t(reinterpret_cast<uintptr_t>(instr)));
   I32(int32_t(source));
   Call(kHExec);
@@ -903,6 +959,7 @@ bool Emitter::EmitGeneric(Instr* instr, uint32_t source) {
   return true;
 }
 
+extern bool g_reject_tail_calls;
 bool Emitter::EmitInstr(Instr* instr, uint32_t k, uint32_t source) {
   const size_t mark = code_.b.size();
   const uint32_t extra = extra_;
@@ -1533,6 +1590,7 @@ bool Emitter::EmitNative(Instr* instr, uint32_t k, uint32_t source) {
       return true;
 
     case OPCODE_CALL: case OPCODE_CALL_TRUE: {
+      if ((instr->flags & CALL_TAIL) && g_reject_tail_calls) return Reject(instr);
       const bool conditional = op == OPCODE_CALL_TRUE;
       auto* symbol = conditional ? instr->src2.symbol : instr->src1.symbol;
       uint32_t direct_target = 0;
@@ -1617,12 +1675,18 @@ bool Emitter::EmitSegment(uint32_t k) {
   if (k < real_) {
     const Segment& s = segments_[k];
     if (s.count) {
-      // Total instruction counter (--max-minstr, preemption accounting).
+      // Total instruction counter (--max-minstr, preemption accounting,
+      // deterministic clock). A segment re-entered by an Asyncify rewind
+      // (RESTORE) was already counted when it first ran.
+      Get(kLocResumed); Op(oI32Eqz);
+      If();
       I32(int32_t(counter_));
       I32(int32_t(counter_)); Mem(oI64Load, 3, 0);
       I64(int64_t(s.count)); Op(oI64Add);
       Mem(oI64Store, 3, 0);
+      End();
     }
+    I32(0); Set(kLocResumed);
     uint32_t source = 0;
     for (Instr* i = s.block->instr_head; i && i != s.first; i = i->next) {
       if (i->opcode && i->opcode->num == hir::OPCODE_SOURCE_OFFSET) source = uint32_t(i->src1.offset);
@@ -1644,6 +1708,8 @@ bool Emitter::EmitSegment(uint32_t k) {
     UnwindCheck(k);
     Get(kLocTmp); Op(oI32Eqz);
     If(); I32(int32_t(kJitStatusFailed)); Op(oReturn); End();
+    // Resumed here after a rewind: the branch target has not run yet.
+    I32(0); Set(kLocResumed);
     Get(kLocPending); Set(kLocPc);
     BrTo(DepthToLoop(k));
     return true;
@@ -1688,6 +1754,7 @@ bool Emitter::EmitSegment(uint32_t k) {
     }
     Set(i);
   }
+  I32(1); Set(kLocResumed);
   Get(kLocResume); Set(kLocPc);
   BrTo(DepthToLoop(k));
   return true;
@@ -1700,14 +1767,33 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   scratch_ = JitScratchAddress();
   page_directory_ = SparseGuestPageDirectoryAddress();
   return_valid_ = JitReturnValidSlot();
+  entry_slot_ = JitEntrySegmentAddress();
+  poll_source_ = JitPollSourceAddress();
   if (!Plan()) return false;
   AllocateTemporaries();
+  // Block-local values only: every block head is a valid entry.
+  using namespace xe::cpu::hir;
+  osr_capable_ = true;
+  for (Block* block = builder_->first_block(); block && osr_capable_; block = block->next) {
+    for (Instr* i = block->instr_head; i && osr_capable_; i = i->next) {
+      const auto sig = i->opcode->signature;
+      const Value* operands[3] = {
+          GET_OPCODE_SIG_TYPE_SRC1(sig) == OPCODE_SIG_TYPE_V ? i->src1.value : nullptr,
+          GET_OPCODE_SIG_TYPE_SRC2(sig) == OPCODE_SIG_TYPE_V ? i->src2.value : nullptr,
+          GET_OPCODE_SIG_TYPE_SRC3(sig) == OPCODE_SIG_TYPE_V ? i->src3.value : nullptr};
+      for (const Value* v : operands) {
+        if (v && !v->IsConstant() && (!v->def || v->def->block != block)) osr_capable_ = false;
+      }
+    }
+  }
 
   // Function body (after the local declarations, which depend on it).
-  // Entry: rewinding -> RESTORE, else segment 0.
+  // Entry: rewinding -> RESTORE, else the requested entry segment (0 unless
+  // the interpreter is handing over mid-run), which is then cleared.
   Call(kHState); I32(2); Op(oI32Eq);
-  If(kI32); I32(int32_t(restore_)); Else(); I32(0); End();
+  If(kI32); I32(int32_t(restore_)); Else(); I32(int32_t(entry_slot_)); Mem(oI32Load, 2, 0); End();
   Set(kLocPc);
+  I32(int32_t(entry_slot_)); I32(0); Mem(oI32Store, 2, 0);
   I32(int32_t(kPollBudget)); Set(kLocBudget);
   code_.u8(oLoop); code_.u8(kVoid);
   for (uint32_t i = 0; i < n_; ++i) { code_.u8(oBlock); code_.u8(kVoid); }
@@ -1771,7 +1857,7 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   };
   for (uint32_t i = 1; i < kLocTmp64; ++i) add_local(kI32);
   add_local(kI64); add_local(kI64); add_local(kF64); add_local(kV128);
-  for (int i = 0; i < 4; ++i) add_local(kI32);
+  for (uint32_t i = kLocAddr; i < kFixedLocals; ++i) add_local(kI32);
   for (uint8_t t : local_types_) add_local(t);
   body.u32(uint32_t(runs.size()));
   for (const auto& r : runs) { body.u32(r.first); body.u8(r.second); }
@@ -1785,7 +1871,65 @@ bool Emitter::Compile(std::vector<uint8_t>* out) {
   return true;
 }
 
+// Functions starting in [g_exclude_begin, g_exclude_end) stay interpreted
+// (r360_jit_set_exclude; bisecting a suspected miscompile).
+uint32_t g_exclude_begin = 0, g_exclude_end = 0;
+bool Excluded(HIRBuilder* builder) {
+  if (g_exclude_begin >= g_exclude_end) return false;
+  for (Block* b = builder->first_block(); b; b = b->next) {
+    for (Instr* i = b->instr_head; i; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) {
+        const uint32_t start = uint32_t(i->src1.offset);
+        return start >= g_exclude_begin && start < g_exclude_end;
+      }
+    }
+  }
+  return false;
+}
+
+// Compile requests numbered in order; [g_exclude_seq_begin, end) stay
+// interpreted (r360_jit_set_exclude_seq; bisecting by when code compiles,
+// which keeps early, hot functions compiled).
+uint32_t g_compile_seq = 0, g_exclude_seq_begin = 0, g_exclude_seq_end = 0;
+// Compile requests in [g_log_seq_begin, end) print their guest function
+// (r360_jit_set_log_seq; naming what a sequence bisect found).
+uint32_t g_log_seq_begin = 0, g_log_seq_end = 0;
+bool g_log_dump = false;  // also the HIR and the wasm module
+// Functions with direct tail calls stay interpreted (r360_jit_set_reject_tail;
+// isolating a tail-call miscompile).
+bool g_reject_tail_calls = false;
+
+uint32_t SourceStart(HIRBuilder* builder) {
+  for (Block* b = builder->first_block(); b; b = b->next) {
+    for (Instr* i = b->instr_head; i; i = i->next) {
+      if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+    }
+  }
+  return 0;
+}
+
 uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
+  const uint32_t seq = g_compile_seq++;
+  const bool logged = seq >= g_log_seq_begin && seq < g_log_seq_end;
+  if (logged) {
+    std::fprintf(stderr, "R360_JIT_SEQ seq=%u start=0x%08X\n", seq, SourceStart(builder));
+    if (g_log_dump) {
+      xe::StringBuffer dump;
+      builder->Dump(&dump);
+      const std::string text = dump.to_string();
+      size_t at = 0;
+      while (at < text.size()) {
+        size_t end = text.find('\n', at);
+        if (end == std::string::npos) end = text.size();
+        std::fprintf(stderr, "R360_JIT_SEQ_HIR %u %.*s\n", seq, int(end - at), text.data() + at);
+        at = end + 1;
+      }
+    }
+  }
+  if (Excluded(builder) || (seq >= g_exclude_seq_begin && seq < g_exclude_seq_end)) {
+    slot->state = 2;
+    return 0;
+  }
   Emitter emitter(builder);
   std::vector<uint8_t> bytes;
   if (!emitter.Compile(&bytes)) {
@@ -1796,7 +1940,16 @@ uint32_t RequestCompile(HIRBuilder* builder, JitSlot* slot) {
     g_reject_by_builder[builder] = g_last_reject_opcode;
     return 0;
   }
+  if (logged && g_log_dump) {
+    for (size_t at = 0; at < bytes.size(); at += 64) {
+      std::fprintf(stderr, "R360_JIT_SEQ_WASM %u ", seq);
+      for (size_t k = at; k < std::min(bytes.size(), at + 64); ++k) std::fprintf(stderr, "%02x", bytes[k]);
+      std::fprintf(stderr, "\n");
+    }
+  }
   const uint32_t request = g_next_request++;
+  slot->builder_free = !emitter.uses_exec();
+  slot->osr_capable = emitter.osr_capable();
   slot->state = 1;
   slot->request = request;
   g_pending[request] = slot;
@@ -1824,6 +1977,11 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
   JitSlot* slot = g_candidate_builder == builder ? g_candidate_slot : nullptr;
   g_candidate_builder = nullptr;
   g_candidate_slot = nullptr;
+  // Recorded only for a run going to the interpreter, which takes it at once
+  // (JitTakeOsrSlot): a stale record could match a later builder allocated at
+  // the same address.
+  g_osr_builder = nullptr;
+  g_osr_slot = nullptr;
   g_last_decision = 5;
   if (!g_mode || !g_compiler) return 0;
   g_last_decision = 1;
@@ -1843,7 +2001,11 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
     return 0;
   }
   g_last_decision = 2;
-  if (++slot->runs < (g_mode >= 2 ? 1u : g_hot_threshold)) return 0;
+  if (++slot->runs < (g_mode >= 2 ? 1u : g_hot_threshold)) {
+    g_osr_builder = builder;
+    g_osr_slot = slot;
+    return 0;
+  }
   const uint32_t index = RequestCompile(builder, slot);
   if (!index) g_last_decision = slot->state == 1 ? 3 : 4;
   if (index) ++g_jit_calls;
@@ -1851,6 +2013,45 @@ uint32_t JitTakeFunction(HIRBuilder* builder) {
 }
 
 uint32_t JitLastDecision() { return g_last_decision; }
+bool JitEnabled() { return g_mode && g_compiler; }
+
+JitSlot* JitTakeOsrSlot(HIRBuilder* builder) {
+  JitSlot* slot = nullptr;
+  if (g_candidate_builder == builder) {
+    slot = g_candidate_slot;
+  } else if (g_osr_builder == builder) {
+    slot = g_osr_slot;
+  }
+  g_candidate_builder = g_osr_builder = nullptr;
+  g_candidate_slot = g_osr_slot = nullptr;
+  return slot;
+}
+
+// Bit 0: long runs, bit 1: interior entries.
+uint32_t g_osr_enabled = 3;
+uint32_t JitOsrFunction(HIRBuilder* builder, JitSlot* slot, bool hot) {
+  if (!slot || !g_mode || !g_compiler || !(g_osr_enabled & (hot ? 1u : 2u))) return 0;
+  if (!slot->function) {
+    if (slot->state) return 0;  // pending or not compilable
+    if (!hot && ++slot->runs < g_hot_threshold) return 0;
+    if (!RequestCompile(builder, slot)) return 0;
+  }
+  return slot->osr_capable ? slot->function : 0;
+}
+
+uint32_t JitSegmentOfBlock(HIRBuilder* builder, const Block* target) {
+  // Plan()'s split: one segment per block plus one per call site after the
+  // block's first instruction.
+  uint32_t segment = 0;
+  for (Block* block = builder->first_block(); block; block = block->next) {
+    if (block == target) return segment;
+    ++segment;
+    for (Instr* instr = block->instr_head; instr; instr = instr->next) {
+      if (instr != block->instr_head && instr->opcode && IsCallSite(instr->opcode->num)) ++segment;
+    }
+  }
+  return 0xFFFFFFFFu;
+}
 uint32_t JitRejectOpcode(HIRBuilder* builder) {
   auto it = g_reject_by_builder.find(builder);
   return it == g_reject_by_builder.end() ? 0xFFu : it->second;
@@ -1865,6 +2066,33 @@ void JitReleaseSlot(JitSlot* slot) {
 namespace rx = render360::xenia_web;
 
 extern "C" {
+__attribute__((used, export_name("r360_jit_set_exclude_seq")))
+uint32_t r360_jit_set_exclude_seq(uint32_t begin, uint32_t end) {
+  rx::g_exclude_seq_begin = begin;
+  rx::g_exclude_seq_end = end;
+  return rx::g_compile_seq;
+}
+__attribute__((used, export_name("r360_jit_set_log_seq")))
+uint32_t r360_jit_set_log_seq(uint32_t begin, uint32_t end, uint32_t dump) {
+  rx::g_log_dump = dump != 0;
+  rx::g_log_seq_begin = begin;
+  rx::g_log_seq_end = end;
+  return rx::g_compile_seq;
+}
+__attribute__((used, export_name("r360_jit_set_reject_tail")))
+uint32_t r360_jit_set_reject_tail(uint32_t on) { rx::g_reject_tail_calls = on != 0; return on; }
+__attribute__((used, export_name("r360_jit_compile_seq")))
+uint32_t r360_jit_compile_seq() { return rx::g_compile_seq; }
+__attribute__((used, export_name("r360_jit_set_exclude")))
+uint32_t r360_jit_set_exclude(uint32_t begin, uint32_t end) {
+  rx::g_exclude_begin = begin;
+  rx::g_exclude_end = end;
+  return end > begin ? end - begin : 0;
+}
+// On-stack replacement: bit 0 long runs, bit 1 interior entries (default 3;
+// 0 for bisecting).
+__attribute__((used, export_name("r360_jit_set_osr")))
+uint32_t r360_jit_set_osr(uint32_t mask) { rx::g_osr_enabled = mask & 3u; return rx::g_osr_enabled; }
 __attribute__((used, export_name("r360_jit_set_compiler")))
 uint32_t r360_jit_set_compiler(uint32_t table_index) {
   rx::g_compiler = table_index;

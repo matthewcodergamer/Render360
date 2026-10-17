@@ -11,6 +11,11 @@
 // its own host thread and thread_local state).
 #if defined(__wasm__)
 #define R360_FIBER_LOCAL __attribute__((section("r360_fiber")))
+#elif defined(R360_NATIVE) && defined(__APPLE__)
+// Native build: guest threads are pthreads that run one at a time (a baton,
+// guest_fibers.cpp), and the block is swapped exactly as in the browser so
+// both builds schedule identically. Mach-O section syntax.
+#define R360_FIBER_LOCAL __attribute__((section("__DATA,r360_fiber")))
 #else
 #define R360_FIBER_LOCAL thread_local
 #endif

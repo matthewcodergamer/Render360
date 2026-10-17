@@ -36,7 +36,7 @@
 #include "third_party/glslang/SPIRV/InReadableOrder.cpp"
 
 extern "C" {
-uint32_t r360_xenos_shader_buffer(uint32_t shader_type);
+uintptr_t r360_xenos_shader_buffer(uint32_t shader_type);
 uint32_t r360_xenos_shader_dwords(uint32_t shader_type);
 uint32_t r360_xenos_shader_hash(uint32_t shader_type);
 uint32_t r360_xenos_fetch_constant_word(uint32_t group, uint32_t word);
@@ -115,7 +115,7 @@ uint32_t Translate(uint32_t type) {
   }
 
   const uint32_t count = r360_xenos_shader_dwords(type);
-  const uint32_t ptr = r360_xenos_shader_buffer(type);
+  const uintptr_t ptr = r360_xenos_shader_buffer(type);
   if (!count || !ptr) {
     g_status = kStatusNoShader;
     return 0;
@@ -414,10 +414,10 @@ uint32_t r360_xenos_spirv_translation_count() {
 uint32_t r360_xenos_spirv_error_count() {
   return render360::xenia_web::g_error_count;
 }
-uint32_t r360_xenos_spirv_buffer() {
+uintptr_t r360_xenos_spirv_buffer() {
   return render360::xenia_web::g_spirv.empty()
              ? 0u
-             : static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
+             : (reinterpret_cast<uintptr_t>(
                    render360::xenia_web::g_spirv.data()));
 }
 uint32_t r360_xenos_spirv_size() {
@@ -443,10 +443,10 @@ uint32_t r360_xenos_frontbuffer_snapshot_status() {
   return render360::xenia_web::g_frontbuffer_snapshot_status;
 }
 R360_WASM_EXPORT("r360_xenos_frontbuffer_snapshot_buffer")
-uint32_t r360_xenos_frontbuffer_snapshot_buffer() {
+uintptr_t r360_xenos_frontbuffer_snapshot_buffer() {
   return render360::xenia_web::g_frontbuffer_snapshot.empty()
              ? 0u
-             : static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
+             : (reinterpret_cast<uintptr_t>(
                    render360::xenia_web::g_frontbuffer_snapshot.data()));
 }
 R360_WASM_EXPORT("r360_xenos_frontbuffer_snapshot_size")

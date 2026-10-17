@@ -10,6 +10,8 @@ bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
                                uint32_t ordinal, bool implemented,
                                uint32_t abi_target);
 bool ResolveKernelImportThunk(uint32_t thunk_address);
+// A registered import thunk (no side effects, unlike ResolveKernelImportThunk).
+bool IsKernelImportThunk(uint32_t thunk_address);
 uint32_t KernelImportProbeCount();
 uint32_t KernelImportProbeCalls();
 uint32_t KernelImportProbeLastThunk();

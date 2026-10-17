@@ -42,7 +42,7 @@ uint32_t r360_xex_guest_mapper_map_section(uint32_t virtual_address,
                                            uint32_t virtual_size,
                                            uint32_t final_protection);
 uint32_t r360_xex_guest_mapper_load(uint32_t virtual_address,
-                                    uint32_t source_ptr, uint32_t size);
+                                    uintptr_t source_ptr, uint32_t size);
 uint32_t r360_xex_guest_mapper_set_entry(uint32_t entry_address);
 uint32_t r360_xex_guest_mapper_finalize();
 uint32_t r360_xex_guest_mapper_patch_u32_be(uint32_t address, uint32_t value);
@@ -51,7 +51,7 @@ uint32_t r360_xex_guest_mapper_status();
 uint32_t r360_xex_guest_mapper_entry_address();
 uint32_t r360_xex_guest_mapper_section_count();
 uint32_t r360_xex_guest_mapper_mapped_bytes();
-uint32_t r360_xex_guest_mapper_input_buffer();
+uintptr_t r360_xex_guest_mapper_input_buffer();
 uint32_t r360_xex_guest_mapper_input_capacity();
 uint32_t r360_xex_guest_mapper_input_max_capacity();
 }

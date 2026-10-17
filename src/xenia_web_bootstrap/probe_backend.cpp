@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <new>
 #include <unordered_map>
 #include <vector>
@@ -58,6 +59,9 @@ extern "C" char __stack_high;
 extern "C" uintptr_t emscripten_stack_get_current(void);
 #endif
 
+// Defined by the Arena overlay (prepare-xenia-arena-overlay.py).
+namespace xe { extern size_t g_r360_arena_live_bytes; }
+
 namespace render360::xenia_web {
 namespace {
 enum TrapPhase : uint32_t {
@@ -81,7 +85,18 @@ uint32_t CurrentStackPointer() {
 }
 
 uint32_t StackHeadroom() {
-#if defined(__wasm__)
+#if defined(R360_NATIVE)
+  // Native guest threads run on their own pthread stacks; measure the
+  // distance to the current thread's stack limit (64-bit addresses, so keep
+  // the low-water mark relative to the stack base).
+  const uintptr_t low = GuestFiberStackLow();
+  const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+  if (!low || sp <= low) return low ? 0 : UINT32_MAX;
+  const uint64_t room = sp - low;
+  const uint32_t headroom = room > UINT32_MAX ? UINT32_MAX : uint32_t(room);
+  if (!g_trap_stack_low_water || headroom < g_trap_stack_low_water) g_trap_stack_low_water = headroom;
+  return headroom;
+#elif defined(__wasm__)
   const uint32_t sp = CurrentStackPointer();
   const uint32_t low = static_cast<uint32_t>(GuestFiberStackLow());
   if (!g_trap_stack_low_water || sp < g_trap_stack_low_water) g_trap_stack_low_water = sp;
@@ -254,6 +269,23 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   }
 
   const uint32_t r1 = static_cast<uint32_t>(context->r[1]);
+  // rN..r31 are saved contiguously below the LR word at -8(r1): read the
+  // whole save area at once (the per-register loop below reports faults).
+  {
+    const uint32_t base = r1 - 16u - (31u - first_gpr) * 8u;
+    const uint32_t size = (32u - first_gpr) * 8u + 4u;
+    uint8_t area[18 * 8 + 4];
+    if (ReadSparseGuestMemory(base, area, size)) {
+      for (uint32_t reg = first_gpr; reg <= 31u; ++reg) {
+        context->r[reg] = ReadBigEndian64(area + (reg - first_gpr) * 8u);
+      }
+      context->lr = ReadBigEndian32(area + (32u - first_gpr) * 8u);
+      R360_VERBOSE_TRACE(
+                   "R360_EPILOG_HELPER executed target=0x%08X first_gpr=%u r1=0x%08X lr=0x%08X\n",
+                   address, first_gpr, r1, static_cast<uint32_t>(context->lr));
+      return true;
+    }
+  }
   for (uint32_t reg = first_gpr; reg <= 31u; ++reg) {
     const int32_t disp = -16 - int32_t(31u - reg) * 8;
     const uint32_t ea = r1 + static_cast<uint32_t>(disp);
@@ -304,7 +336,33 @@ struct CachedTranslation {
   JitSlot jit;  // compiled code for this translation (hir_wasm_jit.h)
   uint32_t hir_blocks = 0, hir_instructions = 0;
 };
-std::unordered_map<uint64_t, CachedTranslation> g_translation_cache;
+// libc++ hashes a 64-bit key with a byte-wise murmur on wasm32 (size_t is
+// 32 bits); translation keys are looked up on every guest call.
+struct TranslationKeyHash {
+  size_t operator()(uint64_t key) const {
+    return size_t(((key >> 32) ^ key) * 0x9E3779B97F4A7C15ull >> 32);
+  }
+};
+std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_translation_cache;
+// Second tier: evicted translations whose compiled code needs no HIR
+// (JitSlot::builder_free) keep only that code here, so a function that
+// falls out of the HIR budget runs compiled again without retranslating or
+// recompiling. Entries have no builder; interior entries (which run HIR) and
+// interpreter-only runs still translate afresh.
+std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_compiled_only_cache;
+constexpr size_t kCompiledOnlyCacheLimit = 65536;
+uint64_t g_compiled_only_hits = 0;
+// Any insert into or erase from either cache map.
+uint32_t g_cache_epoch = 1;
+// Stands in for the freed builder: ExecuteHIRCorrectnessProbe only matches it
+// against the JIT candidate (JitSetCandidate) and runs the compiled code.
+xe::cpu::hir::HIRBuilder* CompiledOnlyBuilder() {
+  static auto* stub = new xe::cpu::hir::HIRBuilder();
+  return stub;
+}
+xe::cpu::hir::HIRBuilder* ExecutionBuilder(CachedTranslation& entry) {
+  return entry.builder ? entry.builder.get() : CompiledOnlyBuilder();
+}
 size_t g_translation_cache_bytes = 0;
 size_t g_translation_cache_budget = size_t(192) * 1024 * 1024;
 uint64_t g_translation_cache_clock = 0;
@@ -324,8 +382,12 @@ uint64_t TranslationKey(uint32_t begin, uint32_t end, bool fragment) {
   return (uint64_t(begin) << 32) | (uint64_t(end) & ~3ull) | (fragment ? 1u : 0u);
 }
 
+// Bytes held by every Xenia arena chunk (prepare-xenia-arena-overlay.py);
+// retained translations are nearly all of it.
+size_t TranslationCacheLiveBytes() { return xe::g_r360_arena_live_bytes; }
+
 void EvictTranslations() {
-  while (g_translation_cache_bytes > g_translation_cache_budget) {
+  while (TranslationCacheLiveBytes() > g_translation_cache_budget) {
     auto victim = g_translation_cache.end();
     for (auto it = g_translation_cache.begin(); it != g_translation_cache.end(); ++it) {
       if (it->second.pins) continue;
@@ -336,8 +398,23 @@ void EvictTranslations() {
     }
     if (victim == g_translation_cache.end()) return;
     g_translation_cache_bytes -= victim->second.bytes;
+    CachedTranslation& evicted = victim->second;
+    auto twin = g_compiled_only_cache.find(victim->first);
+    if (evicted.jit.function && evicted.jit.builder_free &&
+        g_compiled_only_cache.size() < kCompiledOnlyCacheLimit &&
+        (twin == g_compiled_only_cache.end() || !twin->second.pins)) {
+      CachedTranslation code;
+      code.begin = evicted.begin;
+      code.end = evicted.end;
+      code.generation_begin = evicted.generation_begin;
+      code.generation_end = evicted.generation_end;
+      code.jit = evicted.jit;
+      code.hir_blocks = evicted.hir_blocks;
+      code.hir_instructions = evicted.hir_instructions;
+      g_compiled_only_cache.insert_or_assign(victim->first, std::move(code)); ++g_cache_epoch;
+    }
     JitReleaseSlot(&victim->second.jit);
-    g_translation_cache.erase(victim);
+    g_translation_cache.erase(victim); ++g_cache_epoch;
   }
 }
 
@@ -347,9 +424,73 @@ std::unordered_map<uint64_t, uint32_t> g_cache_miss_debug;
 void NoteCacheMiss(uint64_t key, uint32_t reason) {
   ++g_cache_miss_debug[(uint64_t(reason) << 32) | (key >> 32)];
 }
-CachedTranslation* LookupTranslation(uint64_t key) {
+// Compiled-only entry for `key`, or nullptr (stale ones are dropped).
+CachedTranslation* LookupCompiledOnly(uint64_t key) {
+  auto it = g_compiled_only_cache.find(key);
+  if (it == g_compiled_only_cache.end()) return nullptr;
+  CachedTranslation& entry = it->second;
+  if (entry.generation_begin != GetWasmBackendExecutableContentGeneration(entry.begin) ||
+      entry.generation_end != GetWasmBackendExecutableContentGeneration(entry.end)) {
+    if (entry.pins) return nullptr;
+    ++g_cache_epoch;
+    g_compiled_only_cache.erase(it);
+    return nullptr;
+  }
+  if (!JitEnabled()) return nullptr;
+  ++g_compiled_only_hits;
+  return &entry;
+}
+
+CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder);
+
+// Direct-mapped memo of LookupTranslation results. A slot holds while
+// neither cache map has changed and no executable page has been rewritten
+// (both epochs unchanged), so a hit needs no hashing or generation checks.
+struct LookupMemo {
+  uint64_t key = 0;
+  CachedTranslation* entry = nullptr;
+  uint32_t cache_epoch = 0, content_epoch = 0;
+  bool compiled_only = false;
+};
+std::array<LookupMemo, 4096> g_lookup_memo;
+uint64_t g_lookup_memo_hits = 0;
+
+// `need_builder`: the caller runs the HIR itself (an interior entry), so a
+// compiled-only entry does not count.
+CachedTranslation* LookupTranslation(uint64_t key, bool need_builder = false) {
+  if (need_builder) return LookupTranslationSlow(key, true);
+  LookupMemo& memo = g_lookup_memo[TranslationKeyHash{}(key) & 4095u];
+  const uint32_t content_epoch = GetWasmBackendExecutableContentEpoch();
+  if (memo.entry && memo.key == key && memo.cache_epoch == g_cache_epoch &&
+      memo.content_epoch == content_epoch && (!memo.compiled_only || JitEnabled())) {
+    ++g_lookup_memo_hits;
+    if (memo.compiled_only) {
+      ++g_compiled_only_hits;
+    } else {
+      memo.entry->last_use = ++g_translation_cache_clock;
+    }
+    return memo.entry;
+  }
+  CachedTranslation* entry = LookupTranslationSlow(key, false);
+  // The slow lookup may have erased a stale entry (epoch bumped): record the
+  // epochs after it.
+  memo.key = key;
+  memo.entry = entry;
+  memo.cache_epoch = g_cache_epoch;
+  memo.content_epoch = GetWasmBackendExecutableContentEpoch();
+  memo.compiled_only = entry && !entry->builder;
+  return entry;
+}
+
+CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder) {
   auto it = g_translation_cache.find(key);
-  if (it == g_translation_cache.end()) { NoteCacheMiss(key, 0); return nullptr; }
+  if (it == g_translation_cache.end()) {
+    if (!need_builder) {
+      if (CachedTranslation* code = LookupCompiledOnly(key)) return code;
+    }
+    NoteCacheMiss(key, 0);
+    return nullptr;
+  }
   CachedTranslation& entry = it->second;
   if (entry.generation_begin != GetWasmBackendExecutableContentGeneration(entry.begin) ||
       entry.generation_end != GetWasmBackendExecutableContentGeneration(entry.end)) {
@@ -357,6 +498,7 @@ CachedTranslation* LookupTranslation(uint64_t key) {
     NoteCacheMiss(key, 1);
     g_translation_cache_bytes -= entry.bytes;
     JitReleaseSlot(&entry.jit);
+    ++g_cache_epoch;
     g_translation_cache.erase(it);
     return nullptr;
   }
@@ -364,27 +506,48 @@ CachedTranslation* LookupTranslation(uint64_t key) {
   return &entry;
 }
 
+// A nested call's first run after a translation miss: ProbeAssembler::Assemble
+// skips executing a builder about to be retained, and DefineOrRunCached runs
+// it from its new cache entry instead, so that run already has a JIT slot
+// (compilation by call count, on-stack replacement of a long first run).
+// Per guest thread: a fiber can switch while a translation that was not
+// deferred runs guest code inside Assemble.
+R360_FIBER_LOCAL bool g_defer_first_run = false;     // DefineOrRunCached is translating
+R360_FIBER_LOCAL bool g_deferred_first_run = false;  // Assemble skipped the run
+bool CanRetainTranslatedBuilder() {
+  if (!g_retain_pending) return false;
+  auto it = g_translation_cache.find(g_retain_key);
+  return it == g_translation_cache.end() || !it->second.pins;
+}
+
 // Runs a cached translation as ProbeAssembler::Assemble runs a nested one.
-bool ExecuteCachedTranslation(CachedTranslation& entry) {
+bool ExecuteCachedTranslation(CachedTranslation& entry, bool count_hit = true) {
   auto* memory = g_probe_backend && g_probe_backend->processor()
                      ? g_probe_backend->processor()->memory()
                      : nullptr;
   if (!memory) return false;
-  ++g_translation_cache_hits;
+  if (count_hit) ++g_translation_cache_hits;
   ++entry.pins;
   NoteTrapPhase(kTrapPhaseExecute, entry.begin);
-  JitSetCandidate(entry.builder.get(), &entry.jit);
-  const HIRCorrectnessResult result =
-      ExecuteHIRCorrectnessProbe(entry.builder.get(), memory);
+  xe::cpu::hir::HIRBuilder* const builder = ExecutionBuilder(entry);
+  JitSetCandidate(builder, &entry.jit);
+  const HIRCorrectnessResult result = ExecuteHIRCorrectnessProbe(builder, memory);
   --entry.pins;
+  if (!(result.supported && result.reached_return_boundary)) {
+    R360_VERBOSE_TRACE("R360_CACHED_RUN_FAILED begin=0x%08X compiled_only=%u jit=%u supported=%u returned=%u blocker=%u@0x%08X instr=%u\n",
+                       entry.begin, entry.builder ? 0u : 1u, entry.jit.function,
+                       result.supported ? 1u : 0u, result.reached_return_boundary ? 1u : 0u,
+                       result.blocker_kind, result.blocker_address, result.instructions_executed);
+  }
   return result.supported && result.reached_return_boundary;
 }
 
 // DefineFunction (translate + execute), or the cached translation of the same
 // function. The interior entry and provenance mode are applied by the caller.
 bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
-                       xe::cpu::GuestFunction* function, uint64_t key) {
-  if (CachedTranslation* cached = LookupTranslation(key)) {
+                       xe::cpu::GuestFunction* function, uint64_t key,
+                       bool need_builder = false) {
+  if (CachedTranslation* cached = LookupTranslation(key, need_builder)) {
     return ExecuteCachedTranslation(*cached);
   }
   ++g_translation_cache_misses;
@@ -395,7 +558,22 @@ bool DefineOrRunCached(xe::cpu::ppc::PPCFrontend* frontend,
   g_retain_key = key;
   g_retain_begin = function->address();
   g_retain_end = function->end_address();
-  const bool ok = frontend->DefineFunction(function, 0);
+  const bool saved_defer = g_defer_first_run;
+  g_defer_first_run = true;
+  g_deferred_first_run = false;
+  bool ok = frontend->DefineFunction(function, 0);
+  g_defer_first_run = saved_defer;
+  if (g_deferred_first_run) {
+    g_deferred_first_run = false;
+    // RetainTranslatedBuilder pinned the entry so nothing evicted it.
+    auto it = g_translation_cache.find(key);
+    if (!ok || it == g_translation_cache.end()) {
+      ok = false;
+    } else {
+      --it->second.pins;
+      ok = ExecuteCachedTranslation(it->second, false);
+    }
+  }
   if (g_retain_pending) NoteCacheMiss(key, ok ? 4u : 5u);  // not retained
   g_retain_pending = saved_pending;
   g_retain_key = saved_key;
@@ -448,8 +626,31 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   return ok;
 }
 
+bool TranslateNestedGuestAddressFull(uint32_t address, xe::cpu::Module* module,
+                                     uint32_t call_flags);
+
+// The common case of TranslateNestedGuestAddressFull, kept small: a plain
+// (non-tail) call to a function with a cached translation. Tail calls (owner
+// and epilogue handling), import thunks and misses take the full path.
 bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                                      uint32_t call_flags) {
+  if (!(call_flags & xe::cpu::hir::CALL_TAIL) && !IsKernelImportThunk(address) &&
+      StackHeadroom() >= kMinNestedStackHeadroom) {
+    if (CachedTranslation* cached = LookupTranslation(TranslationKey(address, 0u, false))) {
+      SetHIRCorrectnessExecutionEntry(0u);
+      NoteTrapPhase(kTrapPhaseTranslate, address);
+      ++g_trap_depth;
+      const bool translated = ExecuteCachedTranslation(*cached);
+      --g_trap_depth;
+      SetHIRCorrectnessExecutionEntry(0u);
+      return translated;
+    }
+  }
+  return TranslateNestedGuestAddressFull(address, module, call_flags);
+}
+
+__attribute__((noinline)) bool TranslateNestedGuestAddressFull(
+    uint32_t address, xe::cpu::Module* module, uint32_t call_flags) {
   // Registered kernel/XAM import thunks are resolved before the bounded probe
   // memory check. Real XEX thunks may live outside the entry's 64 KiB staging
   // window, but a known HLE import is an external call boundary, not guest code
@@ -502,6 +703,10 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   struct CallTargetClass {
     uint32_t address = 0, fn_begin = 0, fn_end = 0, prolog = 0;
     bool valid = false, pdata = false, epilog_meta = false;
+    // MatchSharedEpilogReturnSignature reads the code at `address`; cached
+    // per content generation of the (at most two) pages it reads.
+    bool signature_checked = false, signature_match = false;
+    uint32_t signature_first_gpr = 0, signature_generation[2] = {};
   };
   static std::array<CallTargetClass, 8192> call_classes;
   if (g_call_class_generation != g_call_class_seen_generation) {
@@ -520,8 +725,21 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   }
   const bool epilog_by_metadata = cls.epilog_meta;
   uint32_t signature_first_gpr = 0;
-  const bool epilog_by_signature =
-      is_tail && MatchSharedEpilogReturnSignature(address, &signature_first_gpr);
+  bool epilog_by_signature = false;
+  if (is_tail) {
+    // The signature spans at most 21 words from `address` (r14..r31 + 3).
+    const uint32_t g0 = GetWasmBackendExecutableContentGeneration(address);
+    const uint32_t g1 = GetWasmBackendExecutableContentGeneration(address + 20u * 4u);
+    if (!cls.signature_checked || cls.signature_generation[0] != g0 ||
+        cls.signature_generation[1] != g1) {
+      cls.signature_match = MatchSharedEpilogReturnSignature(address, &cls.signature_first_gpr);
+      cls.signature_generation[0] = g0;
+      cls.signature_generation[1] = g1;
+      cls.signature_checked = true;
+    }
+    epilog_by_signature = cls.signature_match;
+    signature_first_gpr = cls.signature_first_gpr;
+  }
   const bool is_epilog_return = epilog_by_metadata || epilog_by_signature;
 
   if (is_tail && is_epilog_return) {
@@ -593,7 +811,13 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                  "depth=%u\n", address, g_trap_depth);
     return false;
   }
-  ProbeGuestFunction nested_function(module, fn_begin);
+  // Only a translation miss scans or defines the function: a cached
+  // translation runs without constructing the guest function object.
+  std::optional<ProbeGuestFunction> nested_storage;
+  auto nested = [&]() -> ProbeGuestFunction& {
+    if (!nested_storage) nested_storage.emplace(module, fn_begin);
+    return *nested_storage;
+  };
   uint32_t scan_end = use_owner ? fn_end - 4 : 0u;
   // Decoder-window-relative scan bound, valid once the code is paged.
   auto set_scan_end = [&]() -> bool {
@@ -601,7 +825,7 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     const uint32_t loaded_size = r360_ppc_probe_loaded_size();
     if (loaded_size < 4) return false;
     scan_end = use_owner ? fn_end - 4 : loaded_base + loaded_size - 4;
-    nested_function.set_end_address(scan_end);
+    nested().set_end_address(scan_end);
     return true;
   };
 
@@ -615,19 +839,20 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
       g_missing_interior_entries.count((owner_key << 0) ^ (uint64_t(interior_entry) * 0x9E3779B97F4A7C15ull));
   // The PPC scan only feeds a new translation: a cached one runs as is (its
   // key does not depend on the scan).
-  CachedTranslation* const cached_owner = known_missing ? nullptr : LookupTranslation(owner_key);
+  CachedTranslation* const cached_owner =
+      known_missing ? nullptr : LookupTranslation(owner_key, interior_entry != 0);
   if (!cached_owner && !known_missing) {
     if (!page_code() || !set_scan_end()) return false;
     xe::cpu::ppc::PPCScanner scanner(frontend);
-    if (!scanner.Scan(&nested_function, nullptr)) {
+    if (!scanner.Scan(&nested(), nullptr)) {
       std::fprintf(stderr,
                    "R360_CALL_RESOLVE scan failed target=0x%08X function=0x%08X "
                    "owner=%u\n",
                    address, fn_begin, use_owner ? 1u : 0u);
       return false;
     }
-    if (use_owner && nested_function.end_address() < address) {
-      nested_function.set_end_address(scan_end);
+    if (use_owner && nested().end_address() < address) {
+      nested().set_end_address(scan_end);
     }
   }
   if (interior_entry) {
@@ -643,7 +868,8 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
     NoteTrapPhase(kTrapPhaseTranslate, address);
     ++g_trap_depth;
     translated = cached_owner ? ExecuteCachedTranslation(*cached_owner)
-                              : DefineOrRunCached(frontend, &nested_function, owner_key);
+                              : DefineOrRunCached(frontend, &nested(), owner_key,
+                                                  interior_entry != 0);
     --g_trap_depth;
     SetHIRCorrectnessExecutionEntry(0u);
     missing_entry = interior_entry ? ConsumeHIRCorrectnessInteriorEntryMissing() : 0u;
@@ -654,7 +880,7 @@ bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
   R360_VERBOSE_TRACE(
                "R360_CALL_RESOLVE translated target=0x%08X function=0x%08X "
                "end=0x%08X flags=0x%X owner=%u interior=0x%08X result=%u\n",
-               address, fn_begin, nested_function.end_address(), call_flags,
+               address, fn_begin, nested().end_address(), call_flags,
                use_owner ? 1u : 0u, interior_entry, translated ? 1u : 0u);
 
   // A compiler tail target may be a valid PPC instruction without surviving as
@@ -730,35 +956,47 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
     g_translation_cache_bytes -= it->second.bytes;
     JitReleaseSlot(&it->second.jit);
     g_translation_cache.erase(it);
+    ++g_cache_epoch;
+  }
+  if (auto code = g_compiled_only_cache.find(g_retain_key);
+      code != g_compiled_only_cache.end() && !code->second.pins) {
+    g_compiled_only_cache.erase(code); ++g_cache_epoch;
   }
   CachedTranslation entry;
   entry.begin = g_retain_begin;
   entry.end = g_retain_end ? g_retain_end : g_retain_begin;
   entry.generation_begin = GetWasmBackendExecutableContentGeneration(entry.begin);
   entry.generation_end = GetWasmBackendExecutableContentGeneration(entry.end);
-  // Arena use is private to Xenia; an HIR instruction plus its result value
-  // and operand uses is about 192 bytes, plus the 64 KiB first arena chunk.
+  // Per-entry estimate (an HIR instruction with its value and uses is about
+  // 192 bytes, plus a part-used 64 KiB arena chunk); the budget itself is
+  // checked against the real arena bytes (EvictTranslations).
   size_t instructions = 0;
   for (auto* block = builder->first_block(); block; block = block->next) {
     for (auto* instr = block->instr_head; instr; instr = instr->next) ++instructions;
   }
-  entry.bytes = instructions * 192 + 64 * 1024;
+  entry.bytes = instructions * 192 + 32 * 1024;
   entry.hir_instructions = uint32_t(instructions);
   for (auto* block = builder->first_block(); block; block = block->next) ++entry.hir_blocks;
   entry.last_use = ++g_translation_cache_clock;
+  if (g_deferred_first_run) entry.pins = 1;  // until DefineOrRunCached runs it
   entry.builder = std::move(builder);
   g_translation_cache_bytes += entry.bytes;
-  g_translation_cache.emplace(g_retain_key, std::move(entry));
+  g_translation_cache.emplace(g_retain_key, std::move(entry)); ++g_cache_epoch;
   EvictTranslations();
 }
 void ResetTranslationCache() {
+  ++g_cache_epoch;
   for (auto it = g_translation_cache.begin(); it != g_translation_cache.end();) {
     if (it->second.pins) { ++it; continue; }
     g_translation_cache_bytes -= it->second.bytes;
     JitReleaseSlot(&it->second.jit);
     it = g_translation_cache.erase(it);
   }
+  for (auto it = g_compiled_only_cache.begin(); it != g_compiled_only_cache.end();) {
+    it = it->second.pins ? std::next(it) : g_compiled_only_cache.erase(it);
+  }
   g_translation_cache_hits = g_translation_cache_misses = 0;
+  g_compiled_only_hits = 0;
   g_missing_interior_entries.clear();
   ++g_call_class_generation;
   g_retain_pending = false;
@@ -787,7 +1025,7 @@ bool DefineTopLevelCached(xe::cpu::ppc::PPCFrontend* frontend,
                      ? g_probe_backend->processor()->memory()
                      : nullptr;
   if (memory && GetProbeExecuteCorrectnessOnAssemble() && !IsHIRCorrectnessExecutionActive()) {
-    if (CachedTranslation* cached = LookupTranslation(key)) {
+    if (CachedTranslation* cached = LookupTranslation(key, true)) {
       ++g_translation_cache_hits;
       ++cached->pins;
       NoteTrapPhase(kTrapPhaseExecute, cached->begin);
@@ -887,7 +1125,13 @@ bool ProbeAssembler::Assemble(xe::cpu::GuestFunction* function, xe::cpu::hir::HI
   }
 
   HIRCorrectnessResult correctness;
-  if (execute_correctness) {
+  if (nested_execution && g_defer_first_run && !g_deferred_first_run &&
+      CanRetainTranslatedBuilder()) {
+    // DefineOrRunCached runs it once it is retained (see g_defer_first_run).
+    g_deferred_first_run = true;
+    correctness.supported = true;
+    correctness.reached_return_boundary = true;
+  } else if (execute_correctness) {
     NoteTrapPhase(kTrapPhaseExecute, function ? function->address() : 0u);
     correctness = ExecuteHIRCorrectnessProbe(builder, memory);
   } else {
@@ -987,8 +1231,8 @@ void render360_wasi_initialize() {
 #endif
 
 R360_WASM_EXPORT("r360_trap_reason")
-uint32_t r360_trap_reason() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::g_trap_reason));
+uintptr_t r360_trap_reason() {
+  return reinterpret_cast<uintptr_t>(render360::xenia_web::g_trap_reason);
 }
 R360_WASM_EXPORT("r360_trap_reason_length")
 uint32_t r360_trap_reason_length() {
@@ -1021,7 +1265,10 @@ extern "C" {
 uint32_t r360_hir_cache_hits() { return uint32_t(render360::xenia_web::g_translation_cache_hits); }
 uint32_t r360_hir_cache_misses() { return uint32_t(render360::xenia_web::g_translation_cache_misses); }
 uint32_t r360_hir_cache_entries() { return uint32_t(render360::xenia_web::g_translation_cache.size()); }
-uint32_t r360_hir_cache_kilobytes() { return uint32_t(render360::xenia_web::g_translation_cache_bytes / 1024); }
+uint32_t r360_hir_cache_compiled_only_entries() { return uint32_t(render360::xenia_web::g_compiled_only_cache.size()); }
+uint32_t r360_hir_cache_memo_hits() { return uint32_t(render360::xenia_web::g_lookup_memo_hits); }
+uint32_t r360_hir_cache_compiled_only_hits() { return uint32_t(render360::xenia_web::g_compiled_only_hits); }
+uint32_t r360_hir_cache_kilobytes() { return uint32_t(render360::xenia_web::TranslationCacheLiveBytes() / 1024); }
 uint32_t r360_hir_cache_set_budget_mb(uint32_t megabytes) {
   if (megabytes) render360::xenia_web::g_translation_cache_budget = size_t(megabytes) * 1024 * 1024;
   render360::xenia_web::EvictTranslations();

@@ -70,11 +70,14 @@ constexpr uint32_t kDirectoryEntries = 1u << (32u - kDirectoryShift);
 
 std::vector<Backing> g_backings;
 std::array<PageEntry*, kDirectoryEntries> g_page_directory{};
-// Generated guest code (hir_wasm_jit.cpp) walks this table inline.
+// Generated guest code (hir_wasm_jit.cpp) walks this table inline. The
+// native build has no wasm JIT and 64-bit host pointers.
+#if !defined(R360_NATIVE)
 static_assert(sizeof(PageEntry) == 20 && offsetof(PageEntry, host) == 0 &&
                   offsetof(PageEntry, executable_aliases) == 4 &&
                   offsetof(PageEntry, protection) == 16,
               "guest JIT inline page walk layout");
+#endif
 uint32_t g_mapped_pages = 0;
 // Executable virtual pages aliasing each physical sparse backing page. Guest
 // RAM writes are extremely hot; they check the per-page alias count and only
@@ -83,7 +86,10 @@ std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>> g_executable_aliases
 // This is the authoritative executable-byte content generation. It is sparse
 // across the full 32-bit Xbox virtual address space and is intentionally
 // independent of permission/mapping invalidation and the legacy backend epoch.
-std::map<uint32_t, uint32_t> g_executable_content_generations;
+// Two-level table (same split as g_page_directory): translation-cache lookups
+// read two generations per guest call, so this must be a couple of loads.
+// A zero entry means the default generation 1.
+std::array<uint32_t*, kDirectoryEntries> g_executable_content_generations{};
 uint32_t g_last_fault_address = 0;
 uint32_t g_last_fault_code = kFaultNone;
 
@@ -108,14 +114,23 @@ bool PageRangeValid(uint32_t address, uint32_t page_count) {
 
 uint32_t ContentGeneration(uint32_t address) {
   const uint32_t page = address >> kPageShift;
-  auto it = g_executable_content_generations.find(page);
-  return it == g_executable_content_generations.end() ? 1u : it->second;
+  const uint32_t* table = g_executable_content_generations[page >> kTableBits];
+  if (!table) return 1u;
+  const uint32_t generation = table[page & (kTableEntries - 1u)];
+  return generation ? generation : 1u;
 }
 
+// Bumped with every content generation change (and on reset), so a cache of
+// generation checks can tell nothing has been rewritten.
+uint32_t g_executable_content_epoch = 1;
+
 void BumpContentGeneration(uint32_t page) {
-  auto [it, inserted] = g_executable_content_generations.emplace(page, 1u);
-  ++it->second;
-  if (it->second == 0) it->second = 1u;
+  ++g_executable_content_epoch;
+  uint32_t*& table = g_executable_content_generations[page >> kTableBits];
+  if (!table) table = new uint32_t[kTableEntries]();
+  uint32_t& generation = table[page & (kTableEntries - 1u)];
+  generation = (generation ? generation : 1u) + 1u;
+  if (generation == 0) generation = 1u;
 }
 
 Backing* GetBacking(uint32_t backing_id) {
@@ -230,11 +245,13 @@ void MarkWasmBackendExecutableContentChangedRange(uint32_t address,
   InvalidateWasmBackendExecutableRange(address, size);
 }
 
+uint32_t GetWasmBackendExecutableContentEpoch() { return g_executable_content_epoch; }
 uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address) {
   return ContentGeneration(address);
 }
 
 void ResetSparseGuestMemory() {
+  ++g_executable_content_epoch;
   for (PageEntry*& table : g_page_directory) {
     delete[] table;
     table = nullptr;
@@ -242,7 +259,10 @@ void ResetSparseGuestMemory() {
   g_mapped_pages = 0;
   g_backings.clear();
   g_executable_aliases.clear();
-  g_executable_content_generations.clear();
+  for (uint32_t*& table : g_executable_content_generations) {
+    delete[] table;
+    table = nullptr;
+  }
   ClearFault();
 }
 

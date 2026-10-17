@@ -80,9 +80,19 @@ Headless message-box answers are now given inside the call
 Known visual issue: Banjo's own model renders incompletely (small,
 fragmented); the level, HUD and other characters render.
 
-## Current work
-Proving in-game control (`--stick` for the left analog stick), then the
-renderer issue above and speed.
+## Verified: player control in gameplay
+Continuing the same run: A clears the Bottles dialogue (116-120B), then the
+left stick held forward (`--stick 122000:126000:0:1`) walks Banjo along the
+path in Spiral Mountain: the camera follows him past Bottles (124B) and by
+127B he has reached the boulder pit, which triggers the next dialogue.
+Frames keep changing to the 127.5B instruction limit (3607 frames).
+
+## Not yet
+- Speed: reaching gameplay takes ~1 hour headless with the software
+  renderer; the browser needs the WebGPU renderer and faster CPU emulation
+  to be playable in real time.
+- Audio: XMA decoding (Xenia uses FFmpeg's XMA/WMA Pro decoder).
+- Banjo's model looks small and partly fragmented in some frames.
 
 ## Tests (latest build)
 - Regression runner: 60 of 69 pass. The 9 failures are pre-existing
@@ -97,8 +107,8 @@ renderer issue above and speed.
   after it.
 
 ## Not done yet
-- Interactive gameplay: in-game reached; movement under player control is
-  being verified.
+- Interactive gameplay: reached and controllable headlessly; not yet at a
+  playable speed in the browser.
 - WebGPU real-time renderer: only the shader pipeline is proven; draws,
   render targets, textures and resolves are not implemented. Frames come
   from the CPU software renderer.

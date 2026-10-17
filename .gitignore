@@ -22,3 +22,4 @@ rexglue-manifest*
 /ios/Render360.xcodeproj/
 /ios/build/
 *.ipa
+/logs/

@@ -1247,12 +1247,12 @@ struct ExportName {
   const char* name;
 };
 const ExportName kXboxkrnl[] = {
-#define XE_EXPORT(module, ordinal, name, kind) {ordinal, #name},
+#define XE_EXPORT(module, ordinal, name, kind) {ordinal, #name}
 #include "xenia/kernel/xboxkrnl/xboxkrnl_table.inc"
 #undef XE_EXPORT
 };
 const ExportName kXam[] = {
-#define XE_EXPORT(module, ordinal, name, kind) {ordinal, #name},
+#define XE_EXPORT(module, ordinal, name, kind) {ordinal, #name}
 #include "xenia/kernel/xam/xam_table.inc"
 #undef XE_EXPORT
 };

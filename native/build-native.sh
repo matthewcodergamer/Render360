@@ -41,11 +41,15 @@ COMMON=(-std=c++20 "$R360_OPT" -g "${NATIVE_DEFS[@]}" "${ARCHFLAGS[@]}" -isysroo
 COMMON_C=("$R360_OPT" -g "${NATIVE_DEFS[@]}" "${ARCHFLAGS[@]}" -isysroot "$SYSROOT"
   -I"$XENIA/third_party/mspack" -I"$XENIA/third_party/crypto" -Wno-everything)
 
-mkdir -p "$OUT"; rm -f "$OUT"/*.o "$OUT"/*.log "$OUT"/*.fail
+mkdir -p "$OUT"; rm -f "$OUT"/*.fail
+# Fresh overlays rewrite every source, so rebuild everything; with
+# R360_SKIP_OVERLAYS=1 only units whose source is newer than the object.
+[ "${R360_SKIP_OVERLAYS:-0}" = 1 ] || rm -f "$OUT"/*.o "$OUT"/*.log
+up_to_date() { [ "${R360_SKIP_OVERLAYS:-0}" = 1 ] && [ -f "$1" ] && [ "$1" -nt "$2" ] && [ ! "$2" -nt "$1" ]; }
 obj_for() { printf '%s/%s.o' "$OUT" "$(printf '%s' "$1" | tr '/' '_')"; }
 throttle() { while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$JOBS" ]; do sleep 0.2; done; }
-cpp() { throttle; ( o="$(obj_for "$1")"; "$CXX" "${COMMON[@]}" -c "$2" -o "$o" >"$o.log" 2>&1 || touch "$o.fail" ) & }
-cc()  { throttle; ( o="$(obj_for "$1")"; "$CC" "${COMMON_C[@]}" -c "$2" -o "$o" >"$o.log" 2>&1 || touch "$o.fail" ) & }
+cpp() { up_to_date "$(obj_for "$1")" "$2" && { : > "$(obj_for "$1").log"; return 0; }; throttle; ( o="$(obj_for "$1")"; "$CXX" "${COMMON[@]}" -c "$2" -o "$o" >"$o.log" 2>&1 || touch "$o.fail" ) & }
+cc()  { up_to_date "$(obj_for "$1")" "$2" && { : > "$(obj_for "$1").log"; return 0; }; throttle; ( o="$(obj_for "$1")"; "$CC" "${COMMON_C[@]}" -c "$2" -o "$o" >"$o.log" 2>&1 || touch "$o.fail" ) & }
 # Native-only translation units (fiber baton, C API, JIT stub).
 native_units() {
   local f

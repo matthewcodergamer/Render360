@@ -4,6 +4,8 @@
 // blocks in the kernel, the core snapshots it and unwinds the wasm stack back
 // here (Binaryen Asyncify); this loop then starts or rewinds the next guest
 // thread on its own C stack until the title's primary thread returns.
+
+import {PerfStats,createPerfOverlay} from './render360-perf-overlay.mjs';
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
 
 export function hasGuestFibers(bootstrap){
@@ -87,15 +89,29 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
   // System message boxes (XamShowMessageBoxUI) are answered by the player.
   if(globalThis.document)bootstrap?.exports?.r360_xam_dialog_set_host_answers?.(1);
+  // FPS / frame-time overlay: time inside the emulator per slice, the GPU
+  // renderer's share of it, page-side present time, submitted vs presented.
+  const perf=new PerfStats();
+  const overlay=globalThis.document?createPerfOverlay():null;
+  let sliceExit=now(),lastRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
+    const t=now();
+    const renderUs=read('r360_xenos_soft_render_us');
+    const gpuMs=((renderUs-lastRenderUs)>>>0)/1000;lastRenderUs=renderUs;
     pushGuestControllerState(bootstrap);
     showGuestDialog(bootstrap);
-    const t=now();
+    const frames=read('r360_title_gpu_vd_swap_calls');
+    perf.submitted(t,frames);
+    // Present every new guest frame (software Xenos backend output).
+    let presentMs=0;
+    if(onFrame&&frames!==lastFrames){lastFrames=frames;const p0=now();try{onFrame();}catch{}presentMs=now()-p0;perf.framePresented(now());}
+    perf.slice(t,t-sliceExit,gpuMs,presentMs);
+    if(overlay&&t-lastOverlay>=1000){lastOverlay=t;overlay.update(perf.snapshot(t));}
+    globalThis.render360Perf=perf;
+    sliceExit=now();
     if(t-lastReport<500)return;
     lastReport=t;
-    const frames=read('r360_title_gpu_vd_swap_calls'),draws=read('r360_xenos_draws');
-    // Show the newest swapped frontbuffer (software Xenos backend output).
-    if(onFrame&&frames!==lastFrames){lastFrames=frames;try{onFrame();}catch{}}
+    const draws=read('r360_xenos_draws');
     const seconds=Math.max(0.001,(t-started)/1000);
     onProgress?.(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
   }};

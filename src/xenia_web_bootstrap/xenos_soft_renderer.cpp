@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -1208,7 +1209,23 @@ bool SampleXenosTexture(const xenos::xe_gpu_texture_fetch_t& fetch,
   return true;
 }
 
+// Host time spent rendering (draws, clears, resolves), for the frame-time
+// overlay's CPU-emulation vs GPU-rendering split (r360_xenos_soft_render_us).
+uint64_t g_render_ns = 0;
+uint64_t MonotonicNs() {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+bool RenderXenosDrawUntimed(const XenosSoftDraw& draw);
 bool RenderXenosDraw(const XenosSoftDraw& draw) {
+  if (!g_rasterize) return true;
+  const uint64_t start = MonotonicNs();
+  const bool ok = RenderXenosDrawUntimed(draw);
+  g_render_ns += MonotonicNs() - start;
+  return ok;
+}
+bool RenderXenosDrawUntimed(const XenosSoftDraw& draw) {
   // Headless fast-forward (r360_xenos_soft_set_rasterize(0)): no EDRAM
   // work at all; the command processor still executes every packet.
   if (!g_rasterize) return true;
@@ -1241,6 +1258,8 @@ void ResetXenosSoftRenderer() {
 namespace rx = render360::xenia_web;
 extern "C" {
 uint32_t r360_xenos_soft_draws() { return rx::g_draws_rendered; }
+// Cumulative host microseconds inside the GPU renderer (wraps; take deltas).
+uint32_t r360_xenos_soft_render_us() { return uint32_t(rx::g_render_ns / 1000u); }
 uint32_t r360_xenos_soft_set_rasterize(uint32_t on) { rx::g_rasterize = on ? 1u : 0u; return rx::g_rasterize; }
 uint32_t r360_xenos_soft_skipped() { return rx::g_draws_skipped; }
 uint32_t r360_xenos_soft_resolves() { return rx::g_resolves; }

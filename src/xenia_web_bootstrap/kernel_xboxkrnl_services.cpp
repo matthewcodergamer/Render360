@@ -645,6 +645,8 @@ std::map<uint32_t, PhysicalAllocation>& PhysicalByVirtual() {
   static std::map<uint32_t, PhysicalAllocation> allocations;
   return allocations;
 }
+// Bumped whenever the physical range tables change (GPU address cache).
+uint32_t g_physical_ranges_generation = 1;
 std::map<uint32_t, uint32_t>& PhysicalRanges() {  // physical base -> size
   static std::map<uint32_t, uint32_t> ranges;
   return ranges;
@@ -749,6 +751,7 @@ uint32_t AllocatePhysical(uint32_t size, uint32_t protect_bits,
         return 0;
       }
       PhysicalRanges()[physical] = adjusted_size;
+      ++g_physical_ranges_generation;
       PhysicalVirtualBases()[physical] = virtual_address;
       PhysicalByVirtual()[virtual_address] = {virtual_address, physical,
                                                 adjusted_size, page_size,
@@ -4010,6 +4013,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       auto it = PhysicalByVirtual().find(r4);
       if (it != PhysicalByVirtual().end()) {
         PhysicalRanges().erase(it->second.physical_address);
+        ++g_physical_ranges_generation;
         PhysicalVirtualBases().erase(it->second.physical_address);
         PhysicalByVirtual().erase(it);
       }
@@ -5960,6 +5964,7 @@ void ResetExtendedKernelServices() {
   g_pool_top = kPoolBase;
   PhysicalByVirtual().clear();
   PhysicalRanges().clear();
+  ++g_physical_ranges_generation;
   PhysicalVirtualBases().clear();
   Objects().clear();
   ThreadPriority().clear();
@@ -6304,6 +6309,13 @@ uint32_t r360_audio_client_last_samples(uint32_t index) {
 R360_WASM_EXPORT("r360_kernel_gpu_address_to_virtual")
 uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
   if (address >= 0x20000000u) return address;
+  // The GPU command processor translates every word it reads; nearly all hit
+  // the same range as the previous call, so remember it (two map lookups
+  // were ~14% of a native Banjo-Tooie run).
+  static uint32_t cached_generation = 0, cached_base = 0, cached_size = 0, cached_virtual = 0;
+  if (cached_generation == r360k::g_physical_ranges_generation && address - cached_base < cached_size) {
+    return cached_virtual + (address - cached_base);
+  }
   auto& ranges = r360k::PhysicalRanges();
   auto it = ranges.upper_bound(address);
   if (it == ranges.begin()) return address;
@@ -6311,6 +6323,10 @@ uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
   if (address - it->first >= it->second) return address;
   auto base = r360k::PhysicalVirtualBases().find(it->first);
   if (base == r360k::PhysicalVirtualBases().end()) return address;
+  cached_generation = r360k::g_physical_ranges_generation;
+  cached_base = it->first;
+  cached_size = it->second;
+  cached_virtual = base->second;
   return base->second + (address - it->first);
 }
 R360_WASM_EXPORT("r360_kernel_vblank_interrupts")

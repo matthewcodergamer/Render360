@@ -7,7 +7,7 @@ Branch: `claude/xbox-360-emulator-optimization-74g72w`. Test title: Banjo-Tooie 
   HIR executor and guest JIT. File loading finishes (`db360.textures.cmp`,
   ~50 MB, is read in full); 7 title threads run.
 - CPU: guest JIT compiles Xenia HIR to WebAssembly. Headless speed is about
-  540M guest instructions/s over Banjo's first 30B instructions (see Step 1).
+  640M guest instructions/s over Banjo's first 30B instructions (see Step 1).
 - Deterministic headless runs (`run-title --deterministic 1000`): two
   identical runs match through 58.3B instructions (1098 checkpoints, same
   frames, draws and GPU packets). Fixed: a JIT segment resumed after an
@@ -100,6 +100,7 @@ Benchmark: Banjo-Tooie, first 30B guest instructions headless
 | Flat executable-page generation table; guest function object only on a miss | 355 | 19.6k |
 | Ring-buffer call/stack history (was a 32-entry shift per call); cached epilogue signature per tail target | 387 | 20.6k |
 | Compiled-only tier: an evicted translation keeps its compiled code (when it holds no HIR pointers) and runs again without retranslating or recompiling | 503–543 | 2.7k |
+| Small fast path for plain calls that hit the cache; interpreter kept out of the per-call entry; one read for `__restgprlr` register restores; cheap 64-bit key hash | 642 | 2.7k |
 
 What the profile showed: 74.5M guest calls in 30B instructions. The
 translation cache (192 MiB of HIR) holds ~1000 functions, fewer than one

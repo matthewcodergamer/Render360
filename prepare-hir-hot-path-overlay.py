@@ -28,4 +28,17 @@ if marker not in s:
     if '#include <new>' not in s:
         s = '#include <new>\n' + s
     path.write_text(s)
+
+# The interpreter (ExecuteBuilder) runs well under 1% of guest instructions
+# once the JIT is warm, but it was inlined into ExecuteHIRCorrectnessProbe,
+# the per-call entry, which made every call pay for its frame.
+s = path.read_text()
+noinline_marker = 'R360_HOT_PATH_NOINLINE'
+if noinline_marker not in s:
+    old = 'HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,\n'
+    if s.count(old) != 1:
+        raise SystemExit('prepare-hir-hot-path-overlay: ExecuteBuilder anchor not found exactly once')
+    s = s.replace(old, '// ' + noinline_marker + ': kept out of the per-call entry.\n'
+                  '__attribute__((noinline)) ' + old, 1)
+    path.write_text(s)
 print('R360_HOT_PATH_OVERLAY applied')

@@ -257,6 +257,10 @@ bool RegisterKernelImportThunk(uint32_t thunk_address, uint32_t module_id,
   }
   return false;
 }
+bool IsKernelImportThunk(uint32_t thunk_address) {
+  return FindKernelImport(thunk_address) != nullptr;
+}
+
 bool ResolveKernelImportThunk(uint32_t thunk_address) {
   const auto* entry = FindKernelImport(thunk_address);
   if (!entry) return false;

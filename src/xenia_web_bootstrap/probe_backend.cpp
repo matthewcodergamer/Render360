@@ -258,6 +258,23 @@ bool ExecuteSharedEpilogReturn(uint32_t address) {
   }
 
   const uint32_t r1 = static_cast<uint32_t>(context->r[1]);
+  // rN..r31 are saved contiguously below the LR word at -8(r1): read the
+  // whole save area at once (the per-register loop below reports faults).
+  {
+    const uint32_t base = r1 - 16u - (31u - first_gpr) * 8u;
+    const uint32_t size = (32u - first_gpr) * 8u + 4u;
+    uint8_t area[18 * 8 + 4];
+    if (ReadSparseGuestMemory(base, area, size)) {
+      for (uint32_t reg = first_gpr; reg <= 31u; ++reg) {
+        context->r[reg] = ReadBigEndian64(area + (reg - first_gpr) * 8u);
+      }
+      context->lr = ReadBigEndian32(area + (32u - first_gpr) * 8u);
+      R360_VERBOSE_TRACE(
+                   "R360_EPILOG_HELPER executed target=0x%08X first_gpr=%u r1=0x%08X lr=0x%08X\n",
+                   address, first_gpr, r1, static_cast<uint32_t>(context->lr));
+      return true;
+    }
+  }
   for (uint32_t reg = first_gpr; reg <= 31u; ++reg) {
     const int32_t disp = -16 - int32_t(31u - reg) * 8;
     const uint32_t ea = r1 + static_cast<uint32_t>(disp);
@@ -308,13 +325,20 @@ struct CachedTranslation {
   JitSlot jit;  // compiled code for this translation (hir_wasm_jit.h)
   uint32_t hir_blocks = 0, hir_instructions = 0;
 };
-std::unordered_map<uint64_t, CachedTranslation> g_translation_cache;
+// libc++ hashes a 64-bit key with a byte-wise murmur on wasm32 (size_t is
+// 32 bits); translation keys are looked up on every guest call.
+struct TranslationKeyHash {
+  size_t operator()(uint64_t key) const {
+    return size_t(((key >> 32) ^ key) * 0x9E3779B97F4A7C15ull >> 32);
+  }
+};
+std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_translation_cache;
 // Second tier: evicted translations whose compiled code needs no HIR
 // (JitSlot::builder_free) keep only that code here, so a function that
 // falls out of the HIR budget runs compiled again without retranslating or
 // recompiling. Entries have no builder; interior entries (which run HIR) and
 // interpreter-only runs still translate afresh.
-std::unordered_map<uint64_t, CachedTranslation> g_compiled_only_cache;
+std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_compiled_only_cache;
 constexpr size_t kCompiledOnlyCacheLimit = 65536;
 uint64_t g_compiled_only_hits = 0;
 // Stands in for the freed builder: ExecuteHIRCorrectnessProbe only matches it
@@ -513,8 +537,31 @@ bool TranslateNestedGuestAddress(uint32_t address, xe::cpu::Module* module) {
   return ok;
 }
 
+bool TranslateNestedGuestAddressFull(uint32_t address, xe::cpu::Module* module,
+                                     uint32_t call_flags);
+
+// The common case of TranslateNestedGuestAddressFull, kept small: a plain
+// (non-tail) call to a function with a cached translation. Tail calls (owner
+// and epilogue handling), import thunks and misses take the full path.
 bool TranslateNestedGuestAddressOnce(uint32_t address, xe::cpu::Module* module,
                                      uint32_t call_flags) {
+  if (!(call_flags & xe::cpu::hir::CALL_TAIL) && !IsKernelImportThunk(address) &&
+      StackHeadroom() >= kMinNestedStackHeadroom) {
+    if (CachedTranslation* cached = LookupTranslation(TranslationKey(address, 0u, false))) {
+      SetHIRCorrectnessExecutionEntry(0u);
+      NoteTrapPhase(kTrapPhaseTranslate, address);
+      ++g_trap_depth;
+      const bool translated = ExecuteCachedTranslation(*cached);
+      --g_trap_depth;
+      SetHIRCorrectnessExecutionEntry(0u);
+      return translated;
+    }
+  }
+  return TranslateNestedGuestAddressFull(address, module, call_flags);
+}
+
+__attribute__((noinline)) bool TranslateNestedGuestAddressFull(
+    uint32_t address, xe::cpu::Module* module, uint32_t call_flags) {
   // Registered kernel/XAM import thunks are resolved before the bounded probe
   // memory check. Real XEX thunks may live outside the entry's 64 KiB staging
   // window, but a known HLE import is an external call boundary, not guest code

@@ -1050,6 +1050,8 @@ bool ExecuteIndirect(uint64_t target, uint32_t flags, bool* reached_return,
 uint32_t g_debug_watch_address = 0;
 uint64_t g_total_instruction_budget = 0;
 uint64_t g_total_instructions = 0;
+// Instructions run by this interpreter (the rest ran in generated code).
+uint64_t g_interpreted_instructions = 0;
 uint64_t g_opcode_histogram[256] = {};  // executed HIR opcodes (run-title R360_OPHIST)
 // Guest address of the last SOURCE_OFFSET executed (diagnostics).
 uint32_t g_last_source_address = 0;
@@ -1632,6 +1634,7 @@ HIRCorrectnessResult ExecuteBuilder(xe::cpu::hir::HIRBuilder* builder,
         break;
       }
 
+      ++g_interpreted_instructions;
       if (++g_total_instructions > g_total_instruction_budget &&
           g_total_instruction_budget) {
         result.blocker_kind = kHIRBlockerInstructionLimit;
@@ -2240,6 +2243,16 @@ extern "C" __attribute__((used, export_name("r360_hir_set_total_instruction_budg
 uint32_t r360_hir_set_total_instruction_budget(uint32_t millions) {
   render360::xenia_web::g_total_instruction_budget = uint64_t(millions) * 1000000ull;
   return millions;
+}
+// Performance overlay counters (render360-perf-overlay.mjs), as doubles:
+// 0 guest instructions, 1 interpreted instructions.
+extern "C" __attribute__((used, export_name("r360_perf_counter")))
+double r360_perf_counter(uint32_t index) {
+  switch (index) {
+    case 0: return double(render360::xenia_web::g_total_instructions);
+    case 1: return double(render360::xenia_web::g_interpreted_instructions);
+    default: return 0.0;
+  }
 }
 extern "C" __attribute__((used, export_name("r360_hir_total_instructions_millions")))
 uint32_t r360_hir_total_instructions_millions() {

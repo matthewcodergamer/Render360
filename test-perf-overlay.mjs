@@ -41,4 +41,42 @@ for (let i = 1; i <= 600; ++i) w.framePresented(60000 + i * 50); // then 20 FPS 
 expect(near(w.snapshot(90000).averageFps, 15, 1.5), `windowed average ${w.snapshot(90000).averageFps}`);
 
 console.log(text);
+// 30 FPS bar on guest frames. 60 s at 30 guest FPS with 20% idle, 2% of
+// instructions interpreted: passes. One 80 ms hitch per 10 s: fails stutter.
+{
+  const run = (hitchEvery) => {
+    const b = new PerfStats();
+    let t = 0, swaps = 0, instr = 0, interp = 0, idle = 0;
+    b.submitted(t, swaps);
+    b.counters(t, instr, interp, idle);
+    for (let frame = 1; frame <= 1800; ++frame) {
+      t += hitchEvery && frame % hitchEvery === 0 ? 80 : 1000 / 30;
+      b.submitted(t, ++swaps);
+      instr += 20e6; interp += 0.4e6; idle += (1000 / 30) * 0.2;
+      b.counters(t, instr, interp, idle);
+      b.slice(t, 20, 4, 1);
+      b.gpuFrame(t, 6);
+      b.record(t);
+    }
+    return b;
+  };
+  const good = run(0), gs = good.snapshot(1800 * 1000 / 30);
+  expect(near(gs.gameFps, 30, 1) && near(gs.gameAverageFps, 30, 0.5), `game FPS ${gs.gameFps}/${gs.gameAverageFps}`);
+  expect(near(gs.interpretedPercent, 2, 0.01), `interpreted ${gs.interpretedPercent}`);
+  expect(near(gs.idlePercent, 20, 0.5) && near(gs.emulationSpeedPercent, 125, 1), `speed ${gs.emulationSpeedPercent} idle ${gs.idlePercent}`);
+  expect(near(gs.mips, 600, 5), `MIPS ${gs.mips}`);
+  expect(near(gs.gpuMsPerFrame, 6, 0.01) && near(gs.cpuMsPerGuestFrame, 16, 1), `ms/frame ${gs.cpuMsPerGuestFrame}/${gs.gpuMsPerFrame}`);
+  expect(gs.bar.pass && gs.stuttersPerMinute === 0, `bar should pass: ${JSON.stringify(gs.bar)}`);
+  expect(good.log.length >= 59 && good.exportLog({cores: 8}).records.length === good.log.length, 'log records');
+  expect(formatPerf(gs).includes('30 FPS bar: PASS'), 'overlay verdict');
+  const hitchy = run(300).snapshot(1800 * 1000 / 30);
+  expect(!hitchy.bar.pass && !hitchy.bar.stutter && near(hitchy.stuttersPerMinute, 6, 0.6), `stutters ${hitchy.stuttersPerMinute}`);
+  // No idle time and 20 guest FPS: speed is 20/30, bar not met.
+  const slow = new PerfStats();
+  let t = 0;
+  slow.submitted(0, 0); slow.counters(0, 0, 0, 0);
+  for (let f = 1; f <= 600; ++f) { t += 50; slow.submitted(t, f); slow.counters(t, f * 1e7, 0, 0); }
+  const ss = slow.snapshot(t);
+  expect(near(ss.emulationSpeedPercent, 66.7, 1) && !ss.bar.pass && !ss.bar.average, `slow ${ss.emulationSpeedPercent}`);
+}
 console.log('PERF_OVERLAY_STATS=PASS');

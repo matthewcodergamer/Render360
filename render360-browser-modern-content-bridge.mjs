@@ -39,6 +39,7 @@ function guestRunOptions(bootstrap,onStage){
   }
   return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),
     onSlice:()=>play.path?.slice(),
+    gpuFrameMs:()=>play.path?.takeGpuMs?.()??null,
     onFrame:()=>{
       if(play.path&&!play.path.lost){play.path.frame();return;}
       const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);

@@ -390,6 +390,9 @@ bool GuestFiberSleepUntil(uint64_t deadline_ns) {
 // steps no longer than a vblank period, delivering the interrupts that fall
 // in between (their handlers may wake a thread). Returns false if idling is
 // not possible here.
+// Guest time spent idle (nothing runnable): the emulator was ahead of the
+// guest's real-time needs (render360-perf-overlay.mjs headroom).
+uint64_t g_idle_ns = 0;
 bool GuestFiberIdle(uint64_t deadline_ns) {
   if (!g_enabled || g_in_interrupt) return false;
   const uint64_t now = GuestClockNanoseconds();
@@ -402,6 +405,7 @@ bool GuestFiberIdle(uint64_t deadline_ns) {
   constexpr uint64_t kMaxIdleStepNs = 4000000ull;  // 4 ms
   if (until > now + kMaxIdleStepNs) until = now + kMaxIdleStepNs;
   if (!GuestClockIdleUntil(until)) return false;
+  g_idle_ns += until - now;
   DeliverGuestInterruptsNow();
   return true;
 }
@@ -539,6 +543,8 @@ uint32_t r360_fiber_take_host_yield() {
 }
 uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
 uint32_t r360_fiber_preemptions() { return rx::g_preemptions; }
+__attribute__((used, export_name("r360_fiber_idle_ms")))
+double r360_fiber_idle_ms() { return double(rx::g_idle_ns) / 1e6; }
 // Guest JIT frames (hir_wasm_jit.cpp) save their locals in the current
 // fiber's Asyncify buffer like Binaryen-instrumented functions: pushed on
 // unwind (after their callees), popped on rewind (before them).

@@ -775,10 +775,18 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
       return SetDest(instr);
     case OPCODE_EXTRACT: {
       if (is_vec(a) && d && b && !b->IsConstant() && IsInt(b->type) &&
-          (d->type == INT8_TYPE || d->type == INT16_TYPE)) {
+          (d->type == INT8_TYPE || d->type == INT16_TYPE || d->type == INT32_TYPE)) {
         // Dynamic index: gather the element into lane 0 with a swizzle.
         Push(a);
-        if (d->type == INT8_TYPE) {
+        if (d->type == INT32_TYPE) {
+          // Lane index & 3, as the constant case: bytes 4*lane .. 4*lane+3.
+          uint8_t quad[16];
+          for (int k = 0; k < 16; ++k) quad[k] = uint8_t(k & 3);
+          PushAs(b, Cls::kI32); I32(3); Op(oI32And); I32(2); Op(oI32Shl);
+          Simd(0x0F); V128Const(quad); Simd(0x6E);       // splat(4*lane) + {0,1,2,3,...}
+          Simd(0x0E);
+          Simd(0x1B); code_.u8(0);
+        } else if (d->type == INT8_TYPE) {
           PushAs(b, Cls::kI32); I32(3); Op(oI32Xor); I32(0xF); Op(oI32And);
           Simd(0x0F); Simd(0x0E);                       // swizzle(v, splat(idx))
           Simd(0x16); code_.u8(0);
@@ -802,6 +810,27 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
         case FLOAT32_TYPE: Simd(0x1F); code_.u8(uint8_t(index & 3)); break;
         default: return Reject(instr);
       }
+      return SetDest(instr);
+    }
+    case OPCODE_VECTOR_COMPARE_EQ: case OPCODE_VECTOR_COMPARE_SGT:
+    case OPCODE_VECTOR_COMPARE_SGE: case OPCODE_VECTOR_COMPARE_UGT:
+    case OPCODE_VECTOR_COMPARE_UGE: {
+      // Lane-wise compare, all-ones where true (executor StoreVectorCompare /
+      // VectorCompareFloat: ordered float compares, so NaN lanes are false,
+      // as wasm f32x4.eq/gt/ge; unsigned float compares are the signed ones).
+      if (!is_vec(d) || !is_vec(a) || !is_vec(b)) return Reject(instr);
+      const bool eq = op == OPCODE_VECTOR_COMPARE_EQ;
+      const bool gt = op == OPCODE_VECTOR_COMPARE_SGT || op == OPCODE_VECTOR_COMPARE_UGT;
+      const bool uns = op == OPCODE_VECTOR_COMPARE_UGT || op == OPCODE_VECTOR_COMPARE_UGE;
+      uint32_t simd = 0;
+      switch (TypeName(instr->flags & 0xFF)) {
+        case INT8_TYPE: simd = eq ? 0x23 : gt ? (uns ? 0x28 : 0x27) : (uns ? 0x2C : 0x2B); break;
+        case INT16_TYPE: simd = eq ? 0x2D : gt ? (uns ? 0x32 : 0x31) : (uns ? 0x36 : 0x35); break;
+        case INT32_TYPE: simd = eq ? 0x37 : gt ? (uns ? 0x3C : 0x3B) : (uns ? 0x40 : 0x3F); break;
+        case FLOAT32_TYPE: simd = eq ? 0x41 : gt ? 0x44 : 0x46; break;
+        default: return Reject(instr);
+      }
+      Push(a); Push(b); Simd(simd);
       return SetDest(instr);
     }
     case OPCODE_SWIZZLE: {

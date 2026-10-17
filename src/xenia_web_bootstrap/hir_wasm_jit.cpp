@@ -959,6 +959,7 @@ bool Emitter::EmitGeneric(Instr* instr, uint32_t source) {
   return true;
 }
 
+extern bool g_reject_tail_calls;
 bool Emitter::EmitInstr(Instr* instr, uint32_t k, uint32_t source) {
   const size_t mark = code_.b.size();
   const uint32_t extra = extra_;
@@ -1589,6 +1590,7 @@ bool Emitter::EmitNative(Instr* instr, uint32_t k, uint32_t source) {
       return true;
 
     case OPCODE_CALL: case OPCODE_CALL_TRUE: {
+      if ((instr->flags & CALL_TAIL) && g_reject_tail_calls) return Reject(instr);
       const bool conditional = op == OPCODE_CALL_TRUE;
       auto* symbol = conditional ? instr->src2.symbol : instr->src1.symbol;
       uint32_t direct_target = 0;
@@ -1893,6 +1895,9 @@ uint32_t g_compile_seq = 0, g_exclude_seq_begin = 0, g_exclude_seq_end = 0;
 // (r360_jit_set_log_seq; naming what a sequence bisect found).
 uint32_t g_log_seq_begin = 0, g_log_seq_end = 0;
 bool g_log_dump = false;  // also the HIR and the wasm module
+// Functions with direct tail calls stay interpreted (r360_jit_set_reject_tail;
+// isolating a tail-call miscompile).
+bool g_reject_tail_calls = false;
 
 uint32_t SourceStart(HIRBuilder* builder) {
   for (Block* b = builder->first_block(); b; b = b->next) {
@@ -2074,6 +2079,8 @@ uint32_t r360_jit_set_log_seq(uint32_t begin, uint32_t end, uint32_t dump) {
   rx::g_log_seq_end = end;
   return rx::g_compile_seq;
 }
+__attribute__((used, export_name("r360_jit_set_reject_tail")))
+uint32_t r360_jit_set_reject_tail(uint32_t on) { rx::g_reject_tail_calls = on != 0; return on; }
 __attribute__((used, export_name("r360_jit_compile_seq")))
 uint32_t r360_jit_compile_seq() { return rx::g_compile_seq; }
 __attribute__((used, export_name("r360_jit_set_exclude")))

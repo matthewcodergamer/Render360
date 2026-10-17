@@ -781,12 +781,14 @@ void WebGpuTexturesReset() {
 }
 
 // VulkanTextureCache::RequestSwapTexture.
-uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant) {
+uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant, uint32_t* host_swizzle) {
   xenos::xe_gpu_texture_fetch_t fetch;
   std::memcpy(&fetch, fetch_constant, sizeof(fetch));
   TextureKey key;
   BindingInfoFromFetchConstant(fetch, key, nullptr);
+  *host_swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA;
   if (!key.is_valid || !key.base_page || key.dimension != xenos::DataDimension::k2DOrStacked) return 0;
+  *host_swizzle = Types::GuestToHostSwizzle(fetch.swizzle, GetHostFormatPair(key).swizzle);
   Texture* texture = FindOrCreateTexture(key);
   if (!texture) return 0;
   MakeUpToDate(*texture);

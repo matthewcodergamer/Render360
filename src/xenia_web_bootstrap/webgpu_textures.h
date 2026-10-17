@@ -63,8 +63,8 @@ uint32_t WebGpuSamplerParameters(const xe::gpu::RegisterFile& regs,
                                  const xe::gpu::SpirvShader::SamplerBinding& binding);
 
 // The front buffer texture of a swap (6 fetch constant words), loaded; 0
-// if there is none.
-uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant);
+// if there is none. `host_swizzle` gets the swizzle to present it with.
+uint32_t WebGpuSwapTexture(const uint32_t* fetch_constant, uint32_t* host_swizzle);
 
 // Forgets every texture (a new stream consumer, r360_gpu_set_mode).
 void WebGpuTexturesReset();

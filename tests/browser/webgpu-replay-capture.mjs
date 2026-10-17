@@ -38,6 +38,14 @@ export default async function run(captureUrl,referenceUrl,drawLimit){
   result.front=front===backend.frontTexture?'front buffer':'render target';
   if(front&&referenceUrl){
     const got=await backend.readTarget(front),want=await decodePng(referenceUrl);
+    // The front buffer as presented: the swap's host swizzle.
+    if(front===backend.frontTexture){
+      const sw=backend.frontSwizzle??0x688,px=got.pixels;
+      for(let i=0;i<px.length;i+=4){
+        const t=[px[i],px[i+1],px[i+2],px[i+3]],c=k=>{const v=(sw>>>(3*k))&7;return v>=5?255:v===4?0:t[v];};
+        px[i]=c(0);px[i+1]=c(1);px[i+2]=c(2);px[i+3]=c(3);
+      }
+    }
     const w=Math.min(got.width,want.width),h=Math.min(got.height,want.height);
     let diff=0,close=0,lit=0;
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){

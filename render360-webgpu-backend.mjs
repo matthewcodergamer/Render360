@@ -125,7 +125,7 @@ export class XenosWebGpuBackend{
       else if(op===GPU_STREAM_PIPELINE)this.definePipeline(p);
       else if(op===GPU_STREAM_RENDER_TARGETS){this.endPass();this.boundTargets=parseRenderTargets(p);}
       else if(op===GPU_STREAM_DRAW)this.draw(p);
-      else if(op===GPU_STREAM_SWAP){this.stats.swaps++;this.lastSwap=p.slice();this.frontTexture=this.textures.get(p[6])||null;this.submit();}
+      else if(op===GPU_STREAM_SWAP){this.stats.swaps++;this.lastSwap=p.slice();this.frontTexture=this.textures.get(p[6])||null;this.frontSwizzle=p[7]??0x688;this.submit();}
       else if(op===GPU_STREAM_EDRAM_DUMP)this.dumpEdram(p);
       else if(op===GPU_STREAM_RESOLVE)this.resolve(p);
       else if(op===GPU_STREAM_CLEAR)this.clear(p);
@@ -673,10 +673,13 @@ export class XenosWebGpuBackend{
         vertex:{module,entryPoint:'vs'},fragment:{module,entryPoint:'fs',targets:[{format}]},primitive:{topology:'triangle-list'}});
       this.presentPipelines.set(format,pipeline);
     }
+    this.presentSwizzleBuffer??=this.device.createBuffer({size:16,usage:BUFFER_USAGE.UNIFORM|BUFFER_USAGE.COPY_DST});
+    this.device.queue.writeBuffer(this.presentSwizzleBuffer,0,new Uint32Array([this.frontSwizzle??0x688,0,0,0]));
     if(this.presentSource!==front.texture||this.presentPipeline!==pipeline){
       this.presentSampler??=this.device.createSampler({magFilter:'linear',minFilter:'linear'});
       this.presentGroup=this.device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[
-        {binding:0,resource:front.views['2d-array']},{binding:1,resource:this.presentSampler}]});
+        {binding:0,resource:front.views['2d-array']},{binding:1,resource:this.presentSampler},
+        {binding:2,resource:{buffer:this.presentSwizzleBuffer}}]});
       this.presentSource=front.texture;this.presentPipeline=pipeline;
     }
     const encoder=this.encoderForCommands();
@@ -1007,7 +1010,7 @@ fn f32_to_20e4(f: f32) -> u32 {
   return (u >> 3u) & 0xFFFFFFu;
 }
 fn s16(f: f32) -> u32 { return u32(i32(round(clamp(f, -1.0, 1.0) * 32767.0))) & 0xFFFFu; }
-fn unorm(f: f32, bits: u32) -> u32 { let m = f32((1u << bits) - 1u); return u32(round(clamp(f, 0.0, 1.0) * m)); }
+fn to_unorm(f: f32, bits: u32) -> u32 { let m = f32((1u << bits) - 1u); return u32(round(clamp(f, 0.0, 1.0) * m)); }
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -1022,8 +1025,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   lo = (d24 << 8u) | stencil;`:`let c = textureLoad(color_texture, vec2<i32>(pixel), 0);
   switch dump.format {
     case 0u, 1u: { lo = pack4x8unorm(c); }
-    case 2u, 10u: { lo = unorm(c.x, 10u) | (unorm(c.y, 10u) << 10u) | (unorm(c.z, 10u) << 20u) | (unorm(c.w, 2u) << 30u); }
-    case 3u, 12u: { lo = f32_to_7e3(c.x) | (f32_to_7e3(c.y) << 10u) | (f32_to_7e3(c.z) << 20u) | (unorm(c.w, 2u) << 30u); }
+    case 2u, 10u: { lo = to_unorm(c.x, 10u) | (to_unorm(c.y, 10u) << 10u) | (to_unorm(c.z, 10u) << 20u) | (to_unorm(c.w, 2u) << 30u); }
+    case 3u, 12u: { lo = f32_to_7e3(c.x) | (f32_to_7e3(c.y) << 10u) | (f32_to_7e3(c.z) << 20u) | (to_unorm(c.w, 2u) << 30u); }
     case 4u: { lo = s16(c.x) | (s16(c.y) << 16u); }
     case 5u: { lo = s16(c.x) | (s16(c.y) << 16u); hi = s16(c.z) | (s16(c.w) << 16u); }
     case 6u: { lo = pack2x16float(c.xy); }
@@ -1049,6 +1052,16 @@ const PRESENT_SHADER=`struct Out { @builtin(position) position: vec4<f32>, @loca
 }
 @group(0) @binding(0) var front: texture_2d_array<f32>;
 @group(0) @binding(1) var front_sampler: sampler;
+// Host swizzle of the swap fetch constant (3 bits per component: 0-3 RGBA,
+// 4 zero, 5 one), as Xenia's swap texture view applies it.
+@group(0) @binding(2) var<uniform> swizzle: vec4<u32>;
+fn component(t: vec4<f32>, s: u32) -> f32 {
+  if (s >= 5u) { return 1.0; }
+  if (s == 4u) { return 0.0; }
+  return t[s];
+}
 @fragment fn fs(i: Out) -> @location(0) vec4<f32> {
-  return vec4<f32>(textureSample(front, front_sampler, i.uv, 0).rgb, 1.0);
+  let t = textureSample(front, front_sampler, i.uv, 0);
+  let s = swizzle.x;
+  return vec4<f32>(component(t, s & 7u), component(t, (s >> 3u) & 7u), component(t, (s >> 6u) & 7u), 1.0);
 }`;

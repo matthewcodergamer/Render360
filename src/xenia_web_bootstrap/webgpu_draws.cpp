@@ -528,10 +528,12 @@ bool WebGpuBackendEnabled() { return g_mode != 0; }
 
 void WebGpuSwap(const uint32_t* fetch_constant) {
   if (!g_mode) return;
-  const uint32_t texture = WebGpuSwapTexture(fetch_constant);
-  uint32_t* w = GpuStream().Begin(kGpuStreamSwap, 7);
+  uint32_t swizzle;
+  const uint32_t texture = WebGpuSwapTexture(fetch_constant, &swizzle);
+  uint32_t* w = GpuStream().Begin(kGpuStreamSwap, 8);
   std::memcpy(w, fetch_constant, 6 * sizeof(uint32_t));
   w[6] = texture;
+  w[7] = swizzle;
 }
 
 bool WebGpuIssueDraw(const XenosSoftDraw& draw) {

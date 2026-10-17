@@ -29,8 +29,8 @@ enum GpuStreamOp : uint32_t {
   // A draw: WebGpuDrawHeader, the system constants, vertex and pixel float
   // constants, bool/loop constants, fetch constants, then the indices.
   kGpuStreamDraw = 5,
-  // A swap: the front buffer's texture fetch constant (6 words), then its
-  // texture id (0: none).
+  // A swap: the front buffer's texture fetch constant (6 words), its
+  // texture id (0: none) and the host swizzle to present it with.
   kGpuStreamSwap = 6,
   // One of Xenia's texture_load_* compute shaders, once: load shader index
   // (TextureCache::LoadShaderIndex), SPIR-V word count, SPIR-V.

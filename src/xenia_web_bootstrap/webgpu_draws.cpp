@@ -474,7 +474,7 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
       depth_control.z_enable ? uint32_t(depth_control.zfunc) : uint32_t(xenos::CompareFunction::kAlways);
   description.depth_write = depth_control.z_enable && depth_control.z_write_enable;
   if (depth_control.stencil_enable) {
-    description.stencil = depth_control.value & 0x7FFF00u;
+    description.stencil = depth_control.value & 0xFFFFFF81u;
     description.stencil_masks = regs[XE_GPU_REG_RB_STENCILREFMASK] & 0xFFFF00u;
   }
   for (uint32_t i = 0; i < 4; ++i) {
@@ -491,12 +491,13 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   description.msaa_samples = uint32_t(regs.Get<reg::RB_SURFACE_INFO>().msaa_samples);
 
   // Viewport and scissor in render target pixels (origin top-left, no
-  // resolution scale), as VulkanCommandProcessor computes them.
+  // resolution scale). WebGPU clip space has Y up like Direct3D 12, so the
+  // NDC transform is D3D12CommandProcessor's (origin_bottom_left).
   auto surface = regs.Get<reg::RB_SURFACE_INFO>();
   const uint32_t pitch = std::max<uint32_t>(surface.surface_pitch, 1u);
   constexpr uint32_t kMaxHeight = 2560;
   draw_util::ViewportInfo viewport_info;
-  draw_util::GetHostViewportInfo(regs, 1, 1, false, pitch, kMaxHeight, false, depth_control,
+  draw_util::GetHostViewportInfo(regs, 1, 1, true, pitch, kMaxHeight, false, depth_control,
                                  false, false, pixel_shader && pixel_shader->writes_depth(),
                                  viewport_info);
   draw_util::Scissor scissor;

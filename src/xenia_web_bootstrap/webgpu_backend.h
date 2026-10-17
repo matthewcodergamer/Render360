@@ -42,7 +42,7 @@ struct WebGpuPipelineDescription {
   uint32_t front_face_cw;
   uint32_t depth_compare;  // xenos::CompareFunction, kAlways when the test is off
   uint32_t depth_write;
-  uint32_t stencil;        // RB_DEPTHCONTROL bits 0x7FFF00 when stencil is on, else 0
+  uint32_t stencil;        // RB_DEPTHCONTROL bits 0 and 7..31 when stencil is on, else 0
   uint32_t stencil_masks;  // RB_STENCILREFMASK (front) read/write masks
   uint32_t color_formats[4];   // xenos::ColorRenderTargetFormat + 1, 0: unused
   uint32_t color_write_masks;  // 4 bits per render target

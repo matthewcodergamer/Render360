@@ -21,7 +21,7 @@ function loadPlaywright(){
   return createRequire(path.join(globalRoot,'noop.js'))(path.join(globalRoot,'playwright'));
 }
 
-function serve(){
+function serve(dataRoot){
   const server=http.createServer((req,res)=>{
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/__test__.html'){
@@ -29,17 +29,21 @@ function serve(){
       res.end('<!doctype html><meta charset="utf-8"><body></body>');
       return;
     }
-    const file=path.join(ROOT,decodeURIComponent(url.pathname));
-    if(!file.startsWith(ROOT)||!fs.existsSync(file)||fs.statSync(file).isDirectory()){res.writeHead(404);res.end();return;}
+    // /__data__/ serves dataRoot: local inputs (game captures) kept outside
+    // the repository.
+    const data=dataRoot&&url.pathname.startsWith('/__data__/');
+    const root=data?path.resolve(dataRoot):ROOT;
+    const file=path.join(root,decodeURIComponent(data?url.pathname.slice(9):url.pathname));
+    if(!file.startsWith(root)||!fs.existsSync(file)||fs.statSync(file).isDirectory()){res.writeHead(404);res.end();return;}
     res.writeHead(200,{'content-type':TYPES[path.extname(file)]||'application/octet-stream'});
     fs.createReadStream(file).pipe(res);
   });
   return new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(server)));
 }
 
-export async function runBrowserTest(modulePath,{args=[],timeoutMs=300000,onConsole=null}={}){
+export async function runBrowserTest(modulePath,{args=[],timeoutMs=300000,onConsole=null,dataRoot=null}={}){
   const {chromium}=loadPlaywright();
-  const server=await serve();
+  const server=await serve(dataRoot);
   const port=server.address().port;
   const browser=await chromium.launch({args:['--enable-unsafe-webgpu','--enable-features=Vulkan',
     '--use-vulkan=swiftshader','--use-webgpu-adapter=swiftshader','--disable-vulkan-surface']});

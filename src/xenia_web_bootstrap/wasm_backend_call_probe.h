@@ -22,6 +22,8 @@ void MarkWasmBackendExecutableContentChangedRange(uint32_t address,
                                                   uint32_t size);
 uint32_t GetWasmBackendExecutablePageGeneration(uint32_t address);
 uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address);
+// Changes whenever any executable content generation changes.
+uint32_t GetWasmBackendExecutableContentEpoch();
 uint32_t GetWasmBackendCallStatus();
 uint32_t GetWasmBackendCallFunctionCount();
 uint32_t GetWasmBackendCallFunctionAddress(uint32_t index);

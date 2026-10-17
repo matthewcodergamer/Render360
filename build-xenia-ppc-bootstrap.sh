@@ -64,10 +64,11 @@ python3 "$ROOT/prepare-xenia-spirv-browser-overlay.py"
 python3 "$ROOT/prepare-wasm-fpu-overlay.py"
 python3 "$ROOT/prepare-wasm-backend-cfg-overlay.py"
 
-# Optimization level for the browser CPU runtime. -O0 made the HIR executor,
+# Optimization level for the browser CPU runtime (-O3: ~4% faster guest code
+# than -O2 on Banjo-Tooie). -O0 made the HIR executor,
 # sparse memory and kernel services several times slower on phones.
 # Override with R360_OPT=-O0 when bisecting a suspected miscompile.
-R360_OPT="${R360_OPT:--O2}"
+R360_OPT="${R360_OPT:--O3}"
 case "$R360_OPT" in -O0|-O1|-O2|-O3|-Os|-Oz) ;; *) echo "ERROR: invalid R360_OPT=$R360_OPT" >&2; exit 2 ;; esac
 # Xenia ships Release builds with NDEBUG ("We rely on assert being compiled out
 # in NDEBUG", xenia/base/assert.h). Debug-only asserts fire on real retail code

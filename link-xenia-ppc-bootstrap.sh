@@ -148,7 +148,7 @@ EXPORT_LIST="$(IFS=,; echo "${EXPORTS[*]}")"
 # Xenos ExecuteBuffer has bounded nested command/constant scratch frames. Give
 # wasm32 an explicit 2 MiB stack so those frames cannot overwrite the sparse
 # guest-memory allocator while the source is being moved to static scratch.
-R360_OPT="${R360_OPT:--O2}"
+R360_OPT="${R360_OPT:--O3}"
 # Link without Binaryen optimization: Asyncify (below) must instrument the
 # module before any wasm-level inlining. A function that calls
 # asyncify.start_unwind is not instrumented itself, so inlining the fiber

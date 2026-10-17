@@ -7,7 +7,7 @@ Branch: `claude/xbox-360-emulator-optimization-74g72w`. Test title: Banjo-Tooie 
   HIR executor and guest JIT. File loading finishes (`db360.textures.cmp`,
   ~50 MB, is read in full); 7 title threads run.
 - CPU: guest JIT compiles Xenia HIR to WebAssembly. Headless speed is about
-  640M guest instructions/s over Banjo's first 30B instructions (see Step 1).
+  665M guest instructions/s over Banjo's first 30B instructions (see Step 1).
 - Deterministic headless runs (`run-title --deterministic 1000`): two
   identical runs match through 58.3B instructions (1098 checkpoints, same
   frames, draws and GPU packets). Fixed: a JIT segment resumed after an
@@ -101,6 +101,7 @@ Benchmark: Banjo-Tooie, first 30B guest instructions headless
 | Ring-buffer call/stack history (was a 32-entry shift per call); cached epilogue signature per tail target | 387 | 20.6k |
 | Compiled-only tier: an evicted translation keeps its compiled code (when it holds no HIR pointers) and runs again without retranslating or recompiling | 503–543 | 2.7k |
 | Small fast path for plain calls that hit the cache; interpreter kept out of the per-call entry; one read for `__restgprlr` register restores; cheap 64-bit key hash | 642 | 2.7k |
+| Memo of cache lookups (99.9% hit; neutral); build at `-O3` instead of `-O2` | 663–671 | 2.7k |
 
 What the profile showed: 74.5M guest calls in 30B instructions. The
 translation cache (192 MiB of HIR) holds ~1000 functions, fewer than one
@@ -111,8 +112,11 @@ recompile also leaked a module. The compiled-only tier fixes both. Only
 The cache budget is now checked against real arena bytes (Xenia's `Arena`
 chunks), not an estimate. Wasm memory at 30B: 668 MiB.
 
+Benchmark noise between identical runs is about ±4%.
+
 Next: cut the per-call path (JIT → resolver → cache → executor → JIT), which
-is now the largest cost.
+is now the largest cost: 74.5M guest calls go through ~10 host frames each,
+all instrumented by Asyncify for guest-thread fibers.
 
 ## Not yet
 - Speed: reaching gameplay takes ~1 hour headless with the software

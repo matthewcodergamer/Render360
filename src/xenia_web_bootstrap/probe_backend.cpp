@@ -341,6 +341,8 @@ std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_translatio
 std::unordered_map<uint64_t, CachedTranslation, TranslationKeyHash> g_compiled_only_cache;
 constexpr size_t kCompiledOnlyCacheLimit = 65536;
 uint64_t g_compiled_only_hits = 0;
+// Any insert into or erase from either cache map.
+uint32_t g_cache_epoch = 1;
 // Stands in for the freed builder: ExecuteHIRCorrectnessProbe only matches it
 // against the JIT candidate (JitSetCandidate) and runs the compiled code.
 xe::cpu::hir::HIRBuilder* CompiledOnlyBuilder() {
@@ -398,10 +400,10 @@ void EvictTranslations() {
       code.jit = evicted.jit;
       code.hir_blocks = evicted.hir_blocks;
       code.hir_instructions = evicted.hir_instructions;
-      g_compiled_only_cache.insert_or_assign(victim->first, std::move(code));
+      g_compiled_only_cache.insert_or_assign(victim->first, std::move(code)); ++g_cache_epoch;
     }
     JitReleaseSlot(&victim->second.jit);
-    g_translation_cache.erase(victim);
+    g_translation_cache.erase(victim); ++g_cache_epoch;
   }
 }
 
@@ -419,6 +421,7 @@ CachedTranslation* LookupCompiledOnly(uint64_t key) {
   if (entry.generation_begin != GetWasmBackendExecutableContentGeneration(entry.begin) ||
       entry.generation_end != GetWasmBackendExecutableContentGeneration(entry.end)) {
     if (entry.pins) return nullptr;
+    ++g_cache_epoch;
     g_compiled_only_cache.erase(it);
     return nullptr;
   }
@@ -427,9 +430,48 @@ CachedTranslation* LookupCompiledOnly(uint64_t key) {
   return &entry;
 }
 
+CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder);
+
+// Direct-mapped memo of LookupTranslation results. A slot holds while
+// neither cache map has changed and no executable page has been rewritten
+// (both epochs unchanged), so a hit needs no hashing or generation checks.
+struct LookupMemo {
+  uint64_t key = 0;
+  CachedTranslation* entry = nullptr;
+  uint32_t cache_epoch = 0, content_epoch = 0;
+  bool compiled_only = false;
+};
+std::array<LookupMemo, 4096> g_lookup_memo;
+uint64_t g_lookup_memo_hits = 0;
+
 // `need_builder`: the caller runs the HIR itself (an interior entry), so a
 // compiled-only entry does not count.
 CachedTranslation* LookupTranslation(uint64_t key, bool need_builder = false) {
+  if (need_builder) return LookupTranslationSlow(key, true);
+  LookupMemo& memo = g_lookup_memo[TranslationKeyHash{}(key) & 4095u];
+  const uint32_t content_epoch = GetWasmBackendExecutableContentEpoch();
+  if (memo.entry && memo.key == key && memo.cache_epoch == g_cache_epoch &&
+      memo.content_epoch == content_epoch && (!memo.compiled_only || JitEnabled())) {
+    ++g_lookup_memo_hits;
+    if (memo.compiled_only) {
+      ++g_compiled_only_hits;
+    } else {
+      memo.entry->last_use = ++g_translation_cache_clock;
+    }
+    return memo.entry;
+  }
+  CachedTranslation* entry = LookupTranslationSlow(key, false);
+  // The slow lookup may have erased a stale entry (epoch bumped): record the
+  // epochs after it.
+  memo.key = key;
+  memo.entry = entry;
+  memo.cache_epoch = g_cache_epoch;
+  memo.content_epoch = GetWasmBackendExecutableContentEpoch();
+  memo.compiled_only = entry && !entry->builder;
+  return entry;
+}
+
+CachedTranslation* LookupTranslationSlow(uint64_t key, bool need_builder) {
   auto it = g_translation_cache.find(key);
   if (it == g_translation_cache.end()) {
     if (!need_builder) {
@@ -445,6 +487,7 @@ CachedTranslation* LookupTranslation(uint64_t key, bool need_builder = false) {
     NoteCacheMiss(key, 1);
     g_translation_cache_bytes -= entry.bytes;
     JitReleaseSlot(&entry.jit);
+    ++g_cache_epoch;
     g_translation_cache.erase(it);
     return nullptr;
   }
@@ -867,10 +910,11 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
     g_translation_cache_bytes -= it->second.bytes;
     JitReleaseSlot(&it->second.jit);
     g_translation_cache.erase(it);
+    ++g_cache_epoch;
   }
   if (auto code = g_compiled_only_cache.find(g_retain_key);
       code != g_compiled_only_cache.end() && !code->second.pins) {
-    g_compiled_only_cache.erase(code);
+    g_compiled_only_cache.erase(code); ++g_cache_epoch;
   }
   CachedTranslation entry;
   entry.begin = g_retain_begin;
@@ -890,10 +934,11 @@ void RetainTranslatedBuilder(std::unique_ptr<xe::cpu::hir::HIRBuilder> builder) 
   entry.last_use = ++g_translation_cache_clock;
   entry.builder = std::move(builder);
   g_translation_cache_bytes += entry.bytes;
-  g_translation_cache.emplace(g_retain_key, std::move(entry));
+  g_translation_cache.emplace(g_retain_key, std::move(entry)); ++g_cache_epoch;
   EvictTranslations();
 }
 void ResetTranslationCache() {
+  ++g_cache_epoch;
   for (auto it = g_translation_cache.begin(); it != g_translation_cache.end();) {
     if (it->second.pins) { ++it; continue; }
     g_translation_cache_bytes -= it->second.bytes;
@@ -1168,6 +1213,7 @@ uint32_t r360_hir_cache_hits() { return uint32_t(render360::xenia_web::g_transla
 uint32_t r360_hir_cache_misses() { return uint32_t(render360::xenia_web::g_translation_cache_misses); }
 uint32_t r360_hir_cache_entries() { return uint32_t(render360::xenia_web::g_translation_cache.size()); }
 uint32_t r360_hir_cache_compiled_only_entries() { return uint32_t(render360::xenia_web::g_compiled_only_cache.size()); }
+uint32_t r360_hir_cache_memo_hits() { return uint32_t(render360::xenia_web::g_lookup_memo_hits); }
 uint32_t r360_hir_cache_compiled_only_hits() { return uint32_t(render360::xenia_web::g_compiled_only_hits); }
 uint32_t r360_hir_cache_kilobytes() { return uint32_t(render360::xenia_web::TranslationCacheLiveBytes() / 1024); }
 uint32_t r360_hir_cache_set_budget_mb(uint32_t megabytes) {

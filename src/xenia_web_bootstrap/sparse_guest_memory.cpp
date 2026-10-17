@@ -117,7 +117,12 @@ uint32_t ContentGeneration(uint32_t address) {
   return generation ? generation : 1u;
 }
 
+// Bumped with every content generation change (and on reset), so a cache of
+// generation checks can tell nothing has been rewritten.
+uint32_t g_executable_content_epoch = 1;
+
 void BumpContentGeneration(uint32_t page) {
+  ++g_executable_content_epoch;
   uint32_t*& table = g_executable_content_generations[page >> kTableBits];
   if (!table) table = new uint32_t[kTableEntries]();
   uint32_t& generation = table[page & (kTableEntries - 1u)];
@@ -237,11 +242,13 @@ void MarkWasmBackendExecutableContentChangedRange(uint32_t address,
   InvalidateWasmBackendExecutableRange(address, size);
 }
 
+uint32_t GetWasmBackendExecutableContentEpoch() { return g_executable_content_epoch; }
 uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address) {
   return ContentGeneration(address);
 }
 
 void ResetSparseGuestMemory() {
+  ++g_executable_content_epoch;
   for (PageEntry*& table : g_page_directory) {
     delete[] table;
     table = nullptr;

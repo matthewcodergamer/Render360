@@ -168,3 +168,28 @@ swapped front buffer from the GPU.
   render targets, textures and resolves are not implemented. Frames come
   from the CPU software renderer.
 - Audio: XMA decoding not implemented (XMA register window only).
+
+## Native iOS app on the iPhone 11 (2026-10-17)
+
+Native app (`ios/`, SwiftUI + Metal, core from `native/build-native.sh`), signed
+with the free Personal Team, installed with `devicectl`; see `docs/IOS_APP.md`.
+Interpreter only (no arm64 JIT backend exists yet).
+
+Measured, Banjo-Tooie (host clock, phone telemetry to `tools/telemetry-server.py`):
+
+| Device | Run | Guest instr. | Frames | MIPS | Memory used / free | Thermal |
+| --- | --- | --- | --- | --- | --- | --- |
+| iPhone 11 | 94 s, then stopped from the app | 867M | 92 (VdSwap, 1280x720) | 11-13 cool, 5.8 once "serious" | 532 MB / 1816 MB | serious |
+| 2018 MBP (native run-title, `--deterministic 1000`) | 554 s | 5000M | 132 | 9.0 | – | – |
+
+- Entitlements on the signed app: increased-memory-limit granted (≈2.1 GB
+  available at start); extended-virtual-addressing is not available to a free team.
+- JIT probe on the phone: not available (no StikDebug).
+- Game FPS ≈ 1, emulation speed ≈ 1% of real time: the 30 FPS bar is far off.
+  Limit: CPU (interpreted PPC); gameplay (~127B instructions) is hours away.
+- Fixed on the way: the play view booted the core twice; `MMIOHandler` null
+  lookup (wasm read zeros); ~20 r360_* exports truncated 64-bit pointers.
+
+Next: profile the native interpreter (9-13 MIPS is low even for an
+interpreter), then an arm64 backend for JIT-enabled devices. Watch Dogs /
+ReXGlue manifest not started.

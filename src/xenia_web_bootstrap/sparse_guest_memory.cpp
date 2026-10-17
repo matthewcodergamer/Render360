@@ -70,11 +70,14 @@ constexpr uint32_t kDirectoryEntries = 1u << (32u - kDirectoryShift);
 
 std::vector<Backing> g_backings;
 std::array<PageEntry*, kDirectoryEntries> g_page_directory{};
-// Generated guest code (hir_wasm_jit.cpp) walks this table inline.
+// Generated guest code (hir_wasm_jit.cpp) walks this table inline. The
+// native build has no wasm JIT and 64-bit host pointers.
+#if !defined(R360_NATIVE)
 static_assert(sizeof(PageEntry) == 20 && offsetof(PageEntry, host) == 0 &&
                   offsetof(PageEntry, executable_aliases) == 4 &&
                   offsetof(PageEntry, protection) == 16,
               "guest JIT inline page walk layout");
+#endif
 uint32_t g_mapped_pages = 0;
 // Executable virtual pages aliasing each physical sparse backing page. Guest
 // RAM writes are extremely hot; they check the per-page alias count and only

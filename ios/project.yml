@@ -1,0 +1,78 @@
+# Render360 native iOS app. Generate the Xcode project with XcodeGen:
+#   cd ios && xcodegen generate
+# The Render360 core is a static library built by native/build-native.sh
+# (R360_NATIVE_TARGET=ios-arm64). See docs/IOS_APP.md.
+name: Render360
+options:
+  bundleIdPrefix: com.render360
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    # Free Apple ID ("Personal Team") signing: set your team in
+    # ios/Signing.local.xcconfig (git-ignored), see docs/IOS_APP.md.
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_BITCODE: NO
+    CLANG_CXX_LANGUAGE_STANDARD: c++20
+    ARCHS: arm64
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+targets:
+  Render360:
+    type: application
+    platform: iOS
+    sources:
+      - path: Render360
+        excludes:
+          - "*.entitlements"
+    info:
+      path: Render360/Info.plist
+      properties:
+        CFBundleDisplayName: Render360
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: false
+        UISupportsDocumentBrowser: false
+        GCSupportsControllerUserInteraction: true
+        GCSupportedGameControllers:
+          - ProfileName: ExtendedGamepad
+        NSLocalNetworkUsageDescription: "Render360 downloads your own game files from your Mac and serves live performance telemetry to it over Wi-Fi."
+        NSBonjourServices: [_render360._tcp]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Xbox 360 game
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.data, public.disk-image, com.render360.xbox360-game]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.render360.xbox360-game
+            UTTypeDescription: Xbox 360 game
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [iso, xex, god, stfs, con]
+    entitlements:
+      path: Render360/Render360.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(R360_BUNDLE_ID)
+        SWIFT_OBJC_BRIDGING_HEADER: Render360/Render360-Bridging-Header.h
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../native/include"]
+        LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/../build/native-ios-arm64"]
+        OTHER_LDFLAGS: ["-lrender360core", "-lc++", "-Wl,-dead_strip"]
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: GameController.framework
+      - sdk: Network.framework

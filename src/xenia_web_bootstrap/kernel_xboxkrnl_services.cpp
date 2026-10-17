@@ -65,6 +65,9 @@ __attribute__((weak)) uint32_t TitleGpuTakePendingInterrupts(uint32_t* mask) { i
 
 #if defined(__wasm__)
 #include <wasi/api.h>
+#elif defined(R360_NATIVE)
+#include <cerrno>
+#include <unistd.h>
 #endif
 
 #if defined(__wasm__)
@@ -1709,6 +1712,32 @@ uint32_t ReadVfs(VfsEntry& entry, uint32_t entry_index, uint64_t offset,
       }
       if (!Wr(guest_buffer + done, chunk.data(), got)) return X_STATUS_ACCESS_VIOLATION;
       done += got;
+    }
+    *read = done;
+    ++g_vfs_reads;
+    g_vfs_bytes_read += done;
+    return X_STATUS_SUCCESS;
+  }
+#elif defined(R360_NATIVE)
+  // Native host: host_fd is a real POSIX descriptor opened by the app/runner.
+  if (entry.host_fd) {
+    std::vector<uint8_t> chunk(std::min<uint32_t>(count, 1u << 20));
+    uint32_t done = 0;
+    while (done < count) {
+      const uint32_t want = std::min<uint32_t>(count - done, uint32_t(chunk.size()));
+      const ssize_t got = ::pread(int(entry.host_fd), chunk.data(), want,
+                                  off_t(entry.host_offset + offset + done));
+      if (got <= 0) {
+        if (done) break;
+        g_host_io = {entry_index, offset, count, uint32_t(got < 0 ? errno : 0)};
+        g_wait = {};
+        g_wait.object = entry_index;
+        g_wait.reason = kWaitReasonHostIo;
+        g_status = kKernelServiceWouldBlock;
+        return 0;
+      }
+      if (!Wr(guest_buffer + done, chunk.data(), uint32_t(got))) return X_STATUS_ACCESS_VIOLATION;
+      done += uint32_t(got);
     }
     *read = done;
     ++g_vfs_reads;
@@ -6072,7 +6101,7 @@ uint32_t r360_kernel_debug_log_count() {
 }
 // Copies debug log entry |index| into wasm memory at |out| (capacity bytes).
 R360_WASM_EXPORT("r360_kernel_debug_log_read")
-uint32_t r360_kernel_debug_log_read(uint32_t index, uint32_t out,
+uint32_t r360_kernel_debug_log_read(uint32_t index, uintptr_t out,
                                     uint32_t capacity) {
   if (index >= r360k::DebugLogEntries().size() || !out || !capacity) return 0;
   const std::string& text = r360k::DebugLogEntries()[index];
@@ -6111,9 +6140,9 @@ static const std::string* DialogString(uint32_t which) {
   return nullptr;
 }
 R360_WASM_EXPORT("r360_xam_dialog_string_ptr")
-uint32_t r360_xam_dialog_string_ptr(uint32_t which) {
+uintptr_t r360_xam_dialog_string_ptr(uint32_t which) {
   const std::string* s = DialogString(which);
-  return s ? uint32_t(reinterpret_cast<uintptr_t>(s->data())) : 0u;
+  return s ? (reinterpret_cast<uintptr_t>(s->data())) : 0u;
 }
 R360_WASM_EXPORT("r360_xam_dialog_string_len")
 uint32_t r360_xam_dialog_string_len(uint32_t which) {
@@ -6180,8 +6209,8 @@ void r360_vfs_reset() {
 }
 // 1 KiB scratch buffer in wasm memory for passing a UTF-8 guest path.
 R360_WASM_EXPORT("r360_vfs_path_buffer")
-uint32_t r360_vfs_path_buffer() {
-  return uint32_t(uintptr_t(r360k::g_vfs_path_buffer));
+uintptr_t r360_vfs_path_buffer() {
+  return (uintptr_t(r360k::g_vfs_path_buffer));
 }
 // Registers a file or directory relative to \Device\Cdrom0 (the game disc).
 // Returns the 1-based entry id. host_fd/host_offset let WASI fd_pread supply
@@ -6203,12 +6232,12 @@ uint32_t r360_vfs_register(uint32_t path_length, uint32_t size_lo,
 // Allocates an in-memory buffer holding the whole file for entry |id| and
 // returns its wasm address for the loader to fill (0 on failure).
 R360_WASM_EXPORT("r360_vfs_data_buffer")
-uint32_t r360_vfs_data_buffer(uint32_t id) {
+uintptr_t r360_vfs_data_buffer(uint32_t id) {
   auto* entry = r360k::VfsEntryAt(id);
   if (!entry || entry->size > 0x7FFFFFFFull) return 0;
   entry->data.assign(size_t(entry->size), 0);
   entry->has_data = true;
-  return entry->size ? uint32_t(uintptr_t(entry->data.data())) : 1u;
+  return entry->size ? (uintptr_t(entry->data.data())) : 1u;
 }
 R360_WASM_EXPORT("r360_vfs_entry_count")
 uint32_t r360_vfs_entry_count() { return uint32_t(r360k::VfsEntries().size()); }

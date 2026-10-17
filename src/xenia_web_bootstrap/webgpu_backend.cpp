@@ -109,8 +109,8 @@ namespace rx = render360::xenia_web;
 extern "C" {
 // The recorded command stream (words) for render360-webgpu-xenos.mjs.
 __attribute__((used, export_name("r360_gpu_stream_data")))
-uint32_t r360_gpu_stream_data() {
-  return uint32_t(reinterpret_cast<uintptr_t>(rx::GpuStream().words().data()));
+uintptr_t r360_gpu_stream_data() {
+  return (reinterpret_cast<uintptr_t>(rx::GpuStream().words().data()));
 }
 __attribute__((used, export_name("r360_gpu_stream_words")))
 uint32_t r360_gpu_stream_words() { return uint32_t(rx::GpuStream().words().size()); }

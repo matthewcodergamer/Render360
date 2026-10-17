@@ -362,7 +362,7 @@ uint32_t r360_kernel_import_register(uint32_t a, uint32_t m, uint32_t o,
              : 0u;
 }
 uint32_t r360_kernel_import_dispatch_context(uint32_t thunk_address,
-                                             uint32_t context_ptr) {
+                                             uintptr_t context_ptr) {
   if (!context_ptr ||
       (context_ptr & (alignof(xe::cpu::ppc::PPCContext) - 1u)) != 0u) {
     return 0;

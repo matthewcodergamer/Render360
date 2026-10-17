@@ -276,7 +276,7 @@ uint32_t r360_xex_guest_mapper_map_section(uint32_t virtual_address,
              : 0u;
 }
 uint32_t r360_xex_guest_mapper_load(uint32_t virtual_address,
-                                    uint32_t source_ptr, uint32_t size) {
+                                    uintptr_t source_ptr, uint32_t size) {
   const void* source = reinterpret_cast<const void*>(uintptr_t(source_ptr));
   return render360::xenia_web::LoadXexGuestSectionData(virtual_address, source,
                                                         size)
@@ -310,8 +310,8 @@ uint32_t r360_xex_guest_mapper_section_count() {
 uint32_t r360_xex_guest_mapper_mapped_bytes() {
   return render360::xenia_web::XexGuestMappedBytes();
 }
-uint32_t r360_xex_guest_mapper_input_buffer() {
-  return static_cast<uint32_t>(
+uintptr_t r360_xex_guest_mapper_input_buffer() {
+  return (
       reinterpret_cast<uintptr_t>(render360::xenia_web::XexGuestInputBuffer()));
 }
 uint32_t r360_xex_guest_mapper_input_capacity() {

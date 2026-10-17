@@ -44,7 +44,7 @@ needle = "  // Value of last reserved load\n  uint64_t reserved_val;\n"
 if needle not in text:
     raise SystemExit("Upstream PPCContext layout drifted: reserved_val anchor not found")
 replacement = needle + (
-    "\n#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)\n"
+    "\n#if (defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)) && !defined(R360_NATIVE)\n"
     "  // Render360 web ABI: compensate for 32-bit host pointers without\n"
     "  // moving any existing PPCContext field. Keep this as tail padding.\n"
     "  uint8_t render360_wasm32_tail_padding[16];\n"

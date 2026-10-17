@@ -642,8 +642,8 @@ __attribute__((visibility("default")))
 uint32_t r360_io_capacity() { return R360_IO_CAPACITY; }
 
 __attribute__((visibility("default")))
-uint32_t r360_io_ptr() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(io_buffer));
+uintptr_t r360_io_ptr() {
+  return reinterpret_cast<uintptr_t>(io_buffer);
 }
 
 __attribute__((visibility("default")))
@@ -820,8 +820,8 @@ R360_STFS_GETTER(r360_stfs_request_kind, request_kind)
 #undef R360_STFS_GETTER
 
 __attribute__((visibility("default")))
-uint32_t r360_stfs_display_name_ptr() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(stfs_display_name));
+uintptr_t r360_stfs_display_name_ptr() {
+  return reinterpret_cast<uintptr_t>(stfs_display_name);
 }
 __attribute__((visibility("default")))
 uint32_t r360_stfs_display_name_length() { return stfs_display_name_length; }
@@ -836,9 +836,9 @@ __attribute__((visibility("default")))
 uint32_t r360_stfs_request_offset_hi() { return static_cast<uint32_t>(stfs_state.request_offset >> 32); }
 
 __attribute__((visibility("default")))
-uint32_t r360_stfs_entry_name_ptr(uint32_t index) {
+uintptr_t r360_stfs_entry_name_ptr(uint32_t index) {
   if (index >= stfs_state.entry_count) return 0u;
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(stfs_entries[index].name));
+  return reinterpret_cast<uintptr_t>(stfs_entries[index].name);
 }
 __attribute__((visibility("default")))
 uint32_t r360_stfs_entry_name_length(uint32_t index) {

@@ -10,7 +10,7 @@ extern "C" __attribute__((weak)) uint64_t r360_guest_clock_ns() { return 0; }
 extern "C" __attribute__((weak)) uint32_t r360_kernel_vblank_interrupts() { return 0; }
 extern "C" {
 void r360_xenos_reset();
-uint32_t r360_xenos_ring_buffer();
+uintptr_t r360_xenos_ring_buffer();
 uint32_t r360_xenos_ring_capacity();
 uint32_t r360_xenos_submit(uint32_t words);
 uint32_t r360_xenos_status();
@@ -229,7 +229,7 @@ bool DrainPendingRingToXenos() {
                                ? g_write_pointer - g_read_pointer
                                : (capacity - g_read_pointer) + g_write_pointer;
   const uint32_t decoder_capacity = r360_xenos_ring_capacity();
-  const uint32_t decoder_ptr = r360_xenos_ring_buffer();
+  const uintptr_t decoder_ptr = r360_xenos_ring_buffer();
   if (!pending || !decoder_ptr || pending > decoder_capacity) {
     ++g_xenos_rejections;
     g_last_xenos_status = r360_xenos_status();

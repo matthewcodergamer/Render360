@@ -320,8 +320,8 @@ uint32_t r360_ppc_probe_read_guest_u32_be(uint32_t address) {
          (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
 }
 
-uint32_t r360_ppc_probe_input_buffer() {
-  return static_cast<uint32_t>(
+uintptr_t r360_ppc_probe_input_buffer() {
+  return (
       reinterpret_cast<uintptr_t>(render360::xenia_web::g_input_buffer));
 }
 

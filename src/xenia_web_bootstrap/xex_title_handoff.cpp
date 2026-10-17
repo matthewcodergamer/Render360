@@ -7,7 +7,7 @@
 
 extern "C" {
 void r360_ppc_probe_reset();
-uint32_t r360_ppc_probe_input_buffer();
+uintptr_t r360_ppc_probe_input_buffer();
 uint32_t r360_ppc_probe_input_capacity();
 uint32_t r360_ppc_probe_load_at(uint32_t address, const uint8_t* bytes,
                                 uint32_t length);
@@ -53,7 +53,7 @@ uint32_t TranslatePreparedPeEntry(uint32_t byte_count) {
   }
 
   const uint32_t entry = PreparedPeGuestEntryAddress();
-  const uint32_t input_ptr = r360_ppc_probe_input_buffer();
+  const uintptr_t input_ptr = r360_ppc_probe_input_buffer();
   auto* input = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(input_ptr));
   if (!input || !ReadSparseGuestMemory(entry, input, byte_count)) {
     g_status = kPreparedEntryHandoffReadFailed;

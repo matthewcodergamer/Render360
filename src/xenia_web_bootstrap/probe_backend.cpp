@@ -85,7 +85,18 @@ uint32_t CurrentStackPointer() {
 }
 
 uint32_t StackHeadroom() {
-#if defined(__wasm__)
+#if defined(R360_NATIVE)
+  // Native guest threads run on their own pthread stacks; measure the
+  // distance to the current thread's stack limit (64-bit addresses, so keep
+  // the low-water mark relative to the stack base).
+  const uintptr_t low = GuestFiberStackLow();
+  const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+  if (!low || sp <= low) return low ? 0 : UINT32_MAX;
+  const uint64_t room = sp - low;
+  const uint32_t headroom = room > UINT32_MAX ? UINT32_MAX : uint32_t(room);
+  if (!g_trap_stack_low_water || headroom < g_trap_stack_low_water) g_trap_stack_low_water = headroom;
+  return headroom;
+#elif defined(__wasm__)
   const uint32_t sp = CurrentStackPointer();
   const uint32_t low = static_cast<uint32_t>(GuestFiberStackLow());
   if (!g_trap_stack_low_water || sp < g_trap_stack_low_water) g_trap_stack_low_water = sp;
@@ -1220,8 +1231,8 @@ void render360_wasi_initialize() {
 #endif
 
 R360_WASM_EXPORT("r360_trap_reason")
-uint32_t r360_trap_reason() {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(render360::xenia_web::g_trap_reason));
+uintptr_t r360_trap_reason() {
+  return reinterpret_cast<uintptr_t>(render360::xenia_web::g_trap_reason);
 }
 R360_WASM_EXPORT("r360_trap_reason_length")
 uint32_t r360_trap_reason_length() {

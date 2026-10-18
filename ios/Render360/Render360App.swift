@@ -9,7 +9,7 @@ struct Render360App: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            NativeShell()
                 .environmentObject(library)
                 .environmentObject(input)
                 .preferredColorScheme(.dark)
@@ -35,39 +35,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
     func applicationWillTerminate(_ application: UIApplication) { Breadcrumbs.shared.endSession() }
-}
-
-/// The website's UI (WebUIView) over the native game views. The library,
-/// details, settings, touch controller and HUD are the website's own; the
-/// emulator, game storage and Metal rendering are native.
-struct RootView: View {
-    @EnvironmentObject var library: GameLibrary
-    @EnvironmentObject var input: InputHub
-    @StateObject private var session = EmulatorSession()
-    @State private var bridge: WebBridge?
-    private let memory = MemoryGuard()
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            MetalFrameView(frames: session.frames, perf: session.perf).ignoresSafeArea()
-                .opacity(session.renderer == "software" ? 1 : 0)
-            GPUFrameView(session: session).ignoresSafeArea()
-                .opacity(session.renderer == "software" ? 0 : 1)
-            if let bridge { WebUIView(bridge: bridge).ignoresSafeArea() }
-        }
-        .onAppear {
-            if bridge == nil { bridge = WebBridge(session: session, input: input) }
-            session.memory = memory
-            Telemetry.shared.emulator = session
-            Telemetry.shared.memory = memory
-            UIApplication.shared.isIdleTimerDisabled = true
-            // Test hook (devicectl launch -e): telemetry to the Mac.
-            if let url = ProcessInfo.processInfo.environment["R360_TELEMETRY"] {
-                UserDefaults.standard.set(url, forKey: "r360.telemetryServer")
-            }
-        }
-    }
 }
 
 struct GameRow: View {

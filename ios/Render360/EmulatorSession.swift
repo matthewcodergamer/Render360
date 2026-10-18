@@ -40,6 +40,10 @@ final class EmulatorSession: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var stats = PerfStats.Snapshot()
     @Published var dialog: GuestDialog?
+    // The website's boot card: hidden at the first guest frame.
+    @Published private(set) var firstFrame = false
+    @Published private(set) var bootMessage = "Preparing Xbox 360 runtime…"
+    @Published private(set) var bootStage = "LAUNCH"
 
     let frames = FrameStore()
     let perf = PerfStats()
@@ -108,6 +112,12 @@ final class EmulatorSession: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.stats = self.perf.snapshot()
+            let frames = r360_title_gpu_vd_swap_calls(), draws = r360_xenos_draws()
+            if frames > 0 && draws > 0 { self.firstFrame = true }
+            let threads = r360_fiber_count() > 0 ? r360_fiber_count() - 1 : 0
+            self.bootMessage = String(format: "Running · %u frames presented (%.1f/s) · %u GPU draws · %u guest threads · %.0f MIPS",
+                                      frames, self.stats.gameFps, draws, threads, self.stats.mips)
+            self.bootStage = "EXECUTE"
         }
     }
 

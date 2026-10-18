@@ -62,10 +62,6 @@ targets:
             UTTypeConformsTo: [public.data]
             UTTypeTagSpecification:
               public.filename-extension: [iso, xex, god, stfs, con]
-    preBuildScripts:
-      - name: Bundle the Render360 website UI
-        script: bash "$SRCROOT/bundle-web.sh"
-        basedOnDependencyAnalysis: false
     entitlements:
       path: Render360/Render360.entitlements
       properties:

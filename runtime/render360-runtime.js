@@ -1,6 +1,5 @@
 import {RuntimeHost} from '../runtime-host.js';
 import {pauseActiveTitle,resumeActiveTitle} from './title-controls.js';
-import {nativeHost} from './native-host.js';
 
 const ext=name=>String(name||'').toLowerCase().split('.').pop()||'';
 const fmtHex=value=>`0x${(Number(value)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
@@ -25,14 +24,6 @@ export class Render360Runtime extends EventTarget{
     this.telemetryTimer=0;this.frameTimes=[];this.lastGeneration=null;this.lastFrameAt=0;this.backend='WASM';
     this.workerStats={hz:0,ticks:0,work:0};
     this.inputHost=new RuntimeHost((level,message)=>this.emit('log',{level,message}),stats=>{this.workerStats=stats;this.emit('workerTelemetry',stats);});
-    // Native iOS app (runtime/native-host.js): the native core reports frames,
-    // stages and telemetry in the same shapes the browser runtime emits.
-    if(nativeHost){
-      nativeHost.on('telemetry',t=>this.emit('telemetry',t));
-      nativeHost.on('framePresented',f=>this.emit('framePresented',f));
-      nativeHost.on('bootStage',e=>this.emit('bootStage',e));
-      nativeHost.on('fatalError',e=>{nativeHost.setPlaying(false);this.emit('fatalError',e);});
-    }
   }
   emit(type,detail={}){this.dispatchEvent(new CustomEvent(type,{detail}));try{globalThis.dispatchEvent(new CustomEvent(`render360:${type}`,{detail}));}catch{}}
   async init(){
@@ -53,15 +44,13 @@ export class Render360Runtime extends EventTarget{
   configure(config={}){this.launchConfig={...this.launchConfig,...config};return this.launchConfig;}
   bindSource(gameId,file){if(gameId&&file)this.sources.set(gameId,file);}
   getSource(gameId){return this.sources.get(gameId)||null;}
-  // Native iOS app: games imported into the app's storage need no web File.
-  nativeSource(game){return nativeHost&&game?.native?{native:true,name:game.sourceName,size:game.size}:null;}
   unbindSource(gameId){this.sources.delete(gameId);}
   // The guest controller state (render360-guest-fibers.mjs feeds it to the
   // native XInput emulation every guest time slice).
-  setKey(key,pressed){if(nativeHost)nativeHost.post({type:'key',key:String(key).toUpperCase(),pressed:!!pressed});this.inputHost.setKey(key,pressed);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});if(pressed)g.keys.add(key);else g.keys.delete(key);}
-  setAnalog(lx=0,ly=0,rx=0,ry=0){if(nativeHost)nativeHost.post({type:'analog',lx:+lx||0,ly:+ly||0,rx:+rx||0,ry:+ry||0});this.inputHost.setAnalog(lx,ly,rx,ry);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});Object.assign(g,{lx,ly,rx,ry});}
-  pause(){if(nativeHost)nativeHost.post({type:'pause'});const titlePaused=pauseActiveTitle();this.inputHost.pause();this.emit('paused',{titlePaused});return titlePaused;}
-  resume(){if(nativeHost)nativeHost.post({type:'resume'});const titleResumed=resumeActiveTitle();this.inputHost.resume();this.emit('resumed',{titleResumed});return titleResumed;}
+  setKey(key,pressed){this.inputHost.setKey(key,pressed);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});if(pressed)g.keys.add(key);else g.keys.delete(key);}
+  setAnalog(lx=0,ly=0,rx=0,ry=0){this.inputHost.setAnalog(lx,ly,rx,ry);const g=(globalThis.render360GuestInput??={keys:new Set(),lx:0,ly:0,rx:0,ry:0});Object.assign(g,{lx,ly,rx,ry});}
+  pause(){const titlePaused=pauseActiveTitle();this.inputHost.pause();this.emit('paused',{titlePaused});return titlePaused;}
+  resume(){const titleResumed=resumeActiveTitle();this.inputHost.resume();this.emit('resumed',{titleResumed});return titleResumed;}
   resetInput(){this.inputHost.reset();globalThis.render360GuestInput?.keys?.clear?.();this.setAnalog(0,0,0,0);}
   resetTelemetry(){this.frameTimes.length=0;this.lastGeneration=null;this.lastFrameAt=0;}
   async inspectFile(file){
@@ -86,15 +75,6 @@ export class Render360Runtime extends EventTarget{
     return {sourceType:lower.endsWith('.xex')?'xex':ext(file.name),displayType,name,titleId,mediaId,probe};
   }
   async play(game,file=this.getSource(game.id),config={}){
-    if(nativeHost&&game.native){
-      // Native iOS app: the native core runs the title from the app's storage.
-      this.currentGame=game;this.resetTelemetry();
-      const launchConfig={...this.launchConfig,...config};
-      this.emit('bootStage',{stage:'launch',message:`Starting ${game.name}…`,type:game.sourceType,titleId:game.titleId||0,mediaId:game.mediaId||0});
-      nativeHost.setPlaying(true);
-      const result=await nativeHost.request('play',{nativeId:game.nativeId,name:game.name,fullLicense:launchConfig.xblaLicense==='full'});
-      this.emit('titleStarted',{game,result,type:game.sourceType,config:launchConfig});return result;
-    }
     if(!file)throw new Error('The original game file is not linked. Choose it again or enable persistent Game Storage.');
     if(!this.ready||!this.core)throw new Error('Render360 core is still loading');
     this.currentGame=game;this.bindSource(game.id,file);this.resetTelemetry();

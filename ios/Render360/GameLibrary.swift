@@ -9,6 +9,11 @@ struct GameEntry: Codable, Identifiable, Equatable {
     var discs: [String]              // file names inside the game folder, disc order
     var ownedFullLicense = false     // XAM license mask (Xenia default: trial)
     var addedAt = Date()
+    // Library metadata (the website's inspectFile fields), from r360_native_inspect.
+    var titleId: UInt32? = nil
+    var mediaId: UInt32? = nil
+    var contentType: String? = nil   // "CON", "LIVE", "PIRS", "ISO", "XEX"
+    var lastPlayed: Date? = nil
 
     var folder: URL { GameLibrary.gamesRoot.appendingPathComponent(id, isDirectory: true) }
     var discURLs: [URL] { discs.map { folder.appendingPathComponent($0) } }
@@ -80,6 +85,24 @@ final class GameLibrary: ObservableObject {
         if let data = try? JSONEncoder().encode(entry) { try? data.write(to: folder.appendingPathComponent("game.json")) }
         reload()
         return entry
+    }
+
+    /// Fills title / media id, display name and content type with the native
+    /// core (as the website's import does), once per game.
+    func inspectIfNeeded() {
+        for var entry in games where entry.titleId == nil {
+            guard let disc = entry.discURLs.first else { continue }
+            var info = R360GameInfo()
+            guard r360_native_inspect(disc.path, &info) == 1 else { continue }
+            func str<T>(_ t: T) -> String { withUnsafeBytes(of: t) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) } }
+            entry.titleId = info.title_id
+            entry.mediaId = info.media_id
+            entry.contentType = str(info.source_type).uppercased()
+            let name = str(info.name)
+            if !name.isEmpty, entry.title.count == 42 || entry.title == disc.lastPathComponent { entry.title = name }
+            if let data = try? JSONEncoder().encode(entry) { try? data.write(to: entry.folder.appendingPathComponent("game.json")) }
+        }
+        DispatchQueue.main.async { self.reload() }
     }
 
     func update(_ entry: GameEntry) {

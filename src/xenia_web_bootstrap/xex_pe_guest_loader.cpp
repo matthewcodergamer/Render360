@@ -295,7 +295,7 @@ void r360_pe_guest_reset() {
 }
 // Supplies the XEX page descriptors for the next r360_pe_guest_load*: count
 // big-endian-decoded words at words_ptr and the image page size.
-uint32_t r360_pe_guest_set_xex_pages(uint32_t words_ptr, uint32_t count,
+uint32_t r360_pe_guest_set_xex_pages(uintptr_t words_ptr, uint32_t count,
                                      uint32_t page_size) {
   auto& words = render360::xenia_web::g_xex_page_words;
   words.clear();
@@ -310,13 +310,13 @@ uint32_t r360_pe_guest_set_xex_pages(uint32_t words_ptr, uint32_t count,
   render360::xenia_web::g_xex_page_size = page_size;
   return 1;
 }
-uint32_t r360_pe_guest_load(uint32_t source_ptr, uint32_t length) {
+uint32_t r360_pe_guest_load(uintptr_t source_ptr, uint32_t length) {
   const auto* source =
       reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(source_ptr));
   return render360::xenia_web::LoadPreparedPeImageToGuest(source, length) ? 1u
                                                                          : 0u;
 }
-uint32_t r360_pe_guest_load_at_entry(uint32_t source_ptr, uint32_t length,
+uint32_t r360_pe_guest_load_at_entry(uintptr_t source_ptr, uint32_t length,
                                       uint32_t entry_address) {
   const auto* source =
       reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(source_ptr));

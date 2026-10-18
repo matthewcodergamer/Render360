@@ -46,6 +46,10 @@ uint32_t SparseGuestBackingPageCount();
 uint32_t SparseGuestLastFaultAddress();
 uint32_t SparseGuestLastFaultCode();
 
+// Native build: host address of guest address 0 in the flat guest memory
+// layout (statically recompiled code accesses base + address; addresses at
+// or above 0xE0000000 add 0x1000). Null in the browser build.
+uint8_t* SparseGuestFlatBase();
 }  // namespace render360::xenia_web
 
 extern "C" {

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 namespace xe::cpu::hir {
+class Block;
 class HIRBuilder;
 }
 
@@ -32,7 +33,16 @@ struct JitSlot {
   uint32_t state = 0;     // 0 not compiled, 1 compile pending, 2 not compilable
   uint32_t runs = 0;
   uint32_t request = 0;   // pending asynchronous compile request id
+  // The compiled code holds no pointer into its HIR builder (no single-op
+  // executor fallbacks), so it can run after the builder is freed.
+  bool builder_free = false;
+  // No HIR value is used outside its defining block, so the code can be
+  // entered at any block head (JitOsrFunction).
+  bool osr_capable = false;
 };
+
+// Compiled code can run (a JIT compiler is installed and enabled).
+bool JitEnabled();
 
 // The next HIR execution of `builder` belongs to `slot` (set by the cache just
 // before it runs the builder).
@@ -48,6 +58,19 @@ uint32_t JitTakeFunction(xe::cpu::hir::HIRBuilder* builder);
 uint32_t JitLastDecision();
 // First HIR opcode that kept `builder` from compiling (diagnostics).
 uint32_t JitRejectOpcode(xe::cpu::hir::HIRBuilder* builder);
+
+// Entering compiled code from the interpreter (on-stack replacement): a
+// function entered once that loops (a thread's main loop, a wait loop) never
+// reaches the call-count threshold and would stay interpreted.
+// The slot the interpreter's current run of `builder` belongs to (the
+// candidate JitTakeFunction declined, or one an interior entry never took).
+JitSlot* JitTakeOsrSlot(xe::cpu::hir::HIRBuilder* builder);
+// Compiled function for entering `builder` mid-run, compiling it now when
+// `hot` (else when it has run often enough); 0 when it cannot be entered.
+uint32_t JitOsrFunction(xe::cpu::hir::HIRBuilder* builder, JitSlot* slot, bool hot);
+// Dispatcher segment where `block` starts in the compiled function.
+uint32_t JitSegmentOfBlock(xe::cpu::hir::HIRBuilder* builder,
+                           const xe::cpu::hir::Block* block);
 
 // The cache entry owning `slot` is being destroyed.
 void JitReleaseSlot(JitSlot* slot);

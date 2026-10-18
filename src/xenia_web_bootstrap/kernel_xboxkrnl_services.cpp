@@ -17,6 +17,7 @@
 //  * Kernel pool allocations come from a sparse arena at 0x5A000000 rather than
 //    Xenia's system heap in the 0x80000000 XEX range.
 
+#include "xam_xdbf.h"
 #include "kernel_xboxkrnl_services.h"
 
 #include <time.h>
@@ -42,6 +43,7 @@ extern "C" __attribute__((weak)) uint32_t r360_guest_clock_deterministic() { ret
 #include <vector>
 
 #include "guest_fibers.h"
+#include "kernel_import_probe.h"
 #include "kernel_export_ordinals.h"
 
 // Weak defaults for builds that link the kernel services without the HIR
@@ -63,6 +65,9 @@ __attribute__((weak)) uint32_t TitleGpuTakePendingInterrupts(uint32_t* mask) { i
 
 #if defined(__wasm__)
 #include <wasi/api.h>
+#elif defined(R360_NATIVE)
+#include <cerrno>
+#include <unistd.h>
 #endif
 
 #if defined(__wasm__)
@@ -140,6 +145,7 @@ constexpr uint32_t X_ERROR_NOT_FOUND = 0x00000490u;
 constexpr uint32_t X_ERROR_NO_SUCH_USER = 0x00000525u;
 constexpr uint32_t X_E_SUCCESS = 0x00000000u;
 constexpr uint32_t X_E_INVALIDARG = 0x80070057u;
+constexpr uint32_t X_STATUS_DRIVER_ENTRYPOINT_NOT_FOUND = 0xC0000263u;
 constexpr uint32_t X_E_NO_SUCH_USER = 0x80070525u;
 constexpr uint32_t X_ERROR_INSUFFICIENT_BUFFER = 0x0000007Au;
 constexpr uint32_t X_ERROR_IO_INCOMPLETE = 0x000003E4u;
@@ -378,6 +384,22 @@ std::vector<std::string>& DebugLogEntries() {
 }
 constexpr size_t kMaxDebugLog = 64;
 uint32_t g_debug_log_total = 0;
+// XamShowMessageBoxUI waiting for the player (host dialog mode).
+struct MessageBox {
+  enum State { kIdle, kPending, kAnswered } state = kIdle;
+  uint32_t thread = 0, result_ptr = 0, overlapped = 0;
+  uint32_t active_button = 0, choice = 0;
+  std::string title, text;
+  std::vector<std::string> buttons;
+};
+MessageBox& PendingMessageBox() {
+  static MessageBox box;
+  return box;
+}
+bool g_dialog_host_answers = false;
+// Headless runs: a preset answer given inside the call, so the run does not
+// depend on when the host gets to answer (-1: none).
+int32_t g_dialog_auto_answer = -1;
 
 void DebugLog(std::string text) {
   if (text.size() > 512) text.resize(512);
@@ -623,6 +645,8 @@ std::map<uint32_t, PhysicalAllocation>& PhysicalByVirtual() {
   static std::map<uint32_t, PhysicalAllocation> allocations;
   return allocations;
 }
+// Bumped whenever the physical range tables change (GPU address cache).
+uint32_t g_physical_ranges_generation = 1;
 std::map<uint32_t, uint32_t>& PhysicalRanges() {  // physical base -> size
   static std::map<uint32_t, uint32_t> ranges;
   return ranges;
@@ -727,6 +751,7 @@ uint32_t AllocatePhysical(uint32_t size, uint32_t protect_bits,
         return 0;
       }
       PhysicalRanges()[physical] = adjusted_size;
+      ++g_physical_ranges_generation;
       PhysicalVirtualBases()[physical] = virtual_address;
       PhysicalByVirtual()[virtual_address] = {virtual_address, physical,
                                                 adjusted_size, page_size,
@@ -997,6 +1022,7 @@ void UpdateTimerByGuest(uint32_t guest) {
 
 uint32_t g_status = kKernelServiceSuccess;
 bool g_handled = true;
+
 
 uint32_t Terminal(uint32_t kind, uint32_t code, uint32_t module,
                   uint32_t ordinal, const uint32_t* args) {
@@ -1304,6 +1330,27 @@ uint32_t KernelModuleHandle(uint32_t index) {
     g_kernel_module_handles[index] = PoolAlloc(0x60u, 16u);
   }
   return g_kernel_module_handles[index];
+}
+
+// Xenia KernelModule::GetProcAddressByOrdinal: one guest trampoline per
+// xboxkrnl/XAM export, made on first request. Here it is a registered import
+// thunk, so calls through it reach the same service dispatcher as static
+// imports (an unimplemented export still fails closed when it is called).
+std::map<uint32_t, uint32_t>& ProcTrampolines() {  // (module << 16 | ordinal) -> guest address
+  static std::map<uint32_t, uint32_t> trampolines;
+  return trampolines;
+}
+uint32_t KernelExportTrampoline(uint32_t module_id, uint32_t ordinal) {
+  const uint32_t key = (module_id << 16) | (ordinal & 0xFFFFu);
+  auto it = ProcTrampolines().find(key);
+  if (it != ProcTrampolines().end()) return it->second;
+  const uint32_t address = PoolAlloc(8u, 8u);
+  if (!address || !Wr32(address, 0x4E800020u) || !Wr32(address + 4u, 0x4E800020u) ||  // blr
+      !RegisterKernelImportThunk(address, module_id, ordinal, false, 0)) {
+    return 0;
+  }
+  ProcTrampolines()[key] = address;
+  return address;
 }
 
 std::map<uint32_t, int32_t>& ThreadPriority() {
@@ -1668,6 +1715,32 @@ uint32_t ReadVfs(VfsEntry& entry, uint32_t entry_index, uint64_t offset,
       }
       if (!Wr(guest_buffer + done, chunk.data(), got)) return X_STATUS_ACCESS_VIOLATION;
       done += got;
+    }
+    *read = done;
+    ++g_vfs_reads;
+    g_vfs_bytes_read += done;
+    return X_STATUS_SUCCESS;
+  }
+#elif defined(R360_NATIVE)
+  // Native host: host_fd is a real POSIX descriptor opened by the app/runner.
+  if (entry.host_fd) {
+    std::vector<uint8_t> chunk(std::min<uint32_t>(count, 1u << 20));
+    uint32_t done = 0;
+    while (done < count) {
+      const uint32_t want = std::min<uint32_t>(count - done, uint32_t(chunk.size()));
+      const ssize_t got = ::pread(int(entry.host_fd), chunk.data(), want,
+                                  off_t(entry.host_offset + offset + done));
+      if (got <= 0) {
+        if (done) break;
+        g_host_io = {entry_index, offset, count, uint32_t(got < 0 ? errno : 0)};
+        g_wait = {};
+        g_wait.object = entry_index;
+        g_wait.reason = kWaitReasonHostIo;
+        g_status = kKernelServiceWouldBlock;
+        return 0;
+      }
+      if (!Wr(guest_buffer + done, chunk.data(), uint32_t(got))) return X_STATUS_ACCESS_VIOLATION;
+      done += uint32_t(got);
     }
     *read = done;
     ++g_vfs_reads;
@@ -2393,23 +2466,86 @@ uint32_t DeleteContent(uint32_t content_type, const std::string& file_name) {
   return X_ERROR_FILE_NOT_FOUND;
 }
 
+// XEX resource (Xenia UserModule::GetSection): name -> guest address, size.
+bool FindModuleSection(const std::string& name, uint32_t* address, uint32_t* size) {
+  uint32_t info = 0;
+  if (!XexOptionalHeader(kXexHeaderResourceInfo, &info) || !info) return false;
+  uint32_t info_size = 0;
+  if (!Rd32(info, &info_size) || info_size < 4u) return false;
+  const uint32_t count = (info_size - 4u) / 16u;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t entry = info + 4u + i * 16u;
+    char raw[9] = {};
+    if (!Rd(entry, raw, 8) || !Rd32(entry + 8u, address) || !Rd32(entry + 12u, size)) {
+      return false;
+    }
+    if (name == std::string(raw)) return true;
+  }
+  return false;
+}
+
+// Xenia KernelState::title_xdbf: the XDBF resource named by the title id.
+std::vector<uint8_t> TitleXdbf() {
+  uint32_t info = 0, title_id = 0;
+  if (!XexOptionalHeader(kXexHeaderExecutionInfo, &info) || !info ||
+      !Rd32(info + 0x0Cu, &title_id)) {
+    return {};
+  }
+  char name[9];
+  std::snprintf(name, sizeof(name), "%08X", title_id);
+  uint32_t address = 0, size = 0;
+  if (!FindModuleSection(name, &address, &size) || !size || size > (16u << 20)) return {};
+  std::vector<uint8_t> data(size);
+  if (!Rd(address, data.data(), size)) return {};
+  return data;
+}
+
 // XAM enumerators (Xenia XStaticEnumerator): fixed-size items handed out
 // items_per_enumerate at a time by XamEnumerate.
+struct XamAchievement {
+  uint32_t id = 0, image_id = 0, gamerscore = 0, flags = 0;
+  std::u16string label, description, unachieved;
+};
 struct XamEnumerator {
   uint32_t item_size = 0;
   uint32_t per_enumerate = 1;
   uint32_t current = 0;
   std::vector<uint8_t> items;
-  uint32_t count() const { return item_size ? uint32_t(items.size() / item_size) : 0; }
+  // Xenia XStaticAchievementEnumerator: X_ACHIEVEMENT_DETAILS records, then
+  // the strings the flags ask for (label 1, description 2, unachieved 4).
+  bool achievements = false;
+  uint32_t achievement_flags = 0;
+  std::vector<XamAchievement> achievement_items;
+  uint32_t count() const {
+    if (achievements) return uint32_t(achievement_items.size());
+    return item_size ? uint32_t(items.size() / item_size) : 0;
+  }
 };
 std::map<uint32_t, XamEnumerator>& XamEnumerators() {
   static std::map<uint32_t, XamEnumerator> enumerators;
   return enumerators;
 }
+// Xenia XEnumerator::Initialize: the guest-visible X_KENUMERATOR (app id,
+// open/close messages, user, items per enumerate, flags), optionally followed
+// by an extra block (XamGetPrivateEnumStructureFromHandle returns it).
+struct XamEnumeratorInit {
+  uint32_t user_index = 0xFF, app_id = 0xFE, open_message = 0, close_message = 0;
+  uint32_t flags = 0, extra_size = 0;
+};
 uint32_t CreateXamEnumerator(uint32_t item_size, uint32_t per_enumerate,
-                             std::vector<uint8_t> items) {
-  const uint32_t handle = CreateObject(ObjectType::kEnumerator, 0, false);
+                             std::vector<uint8_t> items, const XamEnumeratorInit& init = {},
+                             uint32_t* guest_out = nullptr) {
+  const uint32_t guest = PoolAlloc(0x18u + init.extra_size, 8u);
+  if (!guest) return 0;
+  for (uint32_t i = 0; i < 0x18u + init.extra_size; i += 4) Wr32(guest + i, 0);
+  if (!Wr32(guest + 0x00u, init.app_id) || !Wr32(guest + 0x04u, init.open_message) ||
+      !Wr32(guest + 0x08u, init.close_message) || !Wr32(guest + 0x0Cu, init.user_index) ||
+      !Wr32(guest + 0x10u, per_enumerate ? per_enumerate : 1u) || !Wr32(guest + 0x14u, init.flags)) {
+    return 0;
+  }
+  const uint32_t handle = CreateObject(ObjectType::kEnumerator, guest, true);
   if (!handle) return 0;
+  if (guest_out) *guest_out = guest;
   XamEnumerator e;
   e.item_size = item_size;
   e.per_enumerate = per_enumerate ? per_enumerate : 1u;
@@ -2857,31 +2993,36 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       if (r4 && !Wr32(r4, hmodule)) return Invalid();
       return hmodule ? X_ERROR_SUCCESS : X_ERROR_NOT_FOUND;
     }
+    case kx::XexGetProcedureAddress: {
+      // (hmodule, ordinal or name, function_ptr*): Xenia
+      // xboxkrnl_modules.cc. Kernel modules hand out export trampolines.
+      if (!r5) return Invalid();
+      const bool by_name = (r4 & 0xFFFF0000u) != 0;
+      uint32_t module_id = 0;
+      if (r3 && r3 == KernelModuleHandle(0)) module_id = kModuleXboxkrnl;
+      if (r3 && r3 == KernelModuleHandle(1)) module_id = kModuleXam;
+      if (!module_id && r3 && r3 != g_exe.hmodule) return X_STATUS_INVALID_HANDLE;
+      uint32_t address = 0;
+      if (module_id && !by_name) address = KernelExportTrampoline(module_id, r4);
+      if (!address) {
+        std::string name;
+        if (by_name) ReadCString(r4, &name, 128);
+        DebugLog("XexGetProcedureAddress not found: module " + std::to_string(module_id) +
+                 (by_name ? " name " + name : " ordinal " + std::to_string(r4)));
+        if (!Wr32(r5, 0)) return Invalid();
+        return X_STATUS_DRIVER_ENTRYPOINT_NOT_FOUND;
+      }
+      if (!Wr32(r5, address)) return Invalid();
+      return X_STATUS_SUCCESS;
+    }
     case kx::XexGetModuleSection: {
       if (!r3 || r3 != g_exe.hmodule) return X_STATUS_INVALID_HANDLE;
       std::string name;
       if (!ReadCString(r4, &name, 64)) return Invalid();
-      uint32_t info = 0;
-      if (!XexOptionalHeader(kXexHeaderResourceInfo, &info) || !info) {
-        return X_STATUS_NOT_FOUND;
-      }
-      uint32_t info_size = 0;
-      if (!Rd32(info, &info_size) || info_size < 4u) return X_STATUS_NOT_FOUND;
-      const uint32_t count = (info_size - 4u) / 16u;
-      for (uint32_t i = 0; i < count; ++i) {
-        const uint32_t entry = info + 4u + i * 16u;
-        char raw[9] = {};
-        uint32_t address = 0, size = 0;
-        if (!Rd(entry, raw, 8) || !Rd32(entry + 8u, &address) ||
-            !Rd32(entry + 12u, &size)) {
-          return Invalid();
-        }
-        if (name == std::string(raw)) {
-          if (!Wr32(r5, address) || !Wr32(r6, size)) return Invalid();
-          return X_STATUS_SUCCESS;
-        }
-      }
-      return X_STATUS_NOT_FOUND;
+      uint32_t address = 0, size = 0;
+      if (!FindModuleSection(name, &address, &size)) return X_STATUS_NOT_FOUND;
+      if (!Wr32(r5, address) || !Wr32(r6, size)) return Invalid();
+      return X_STATUS_SUCCESS;
     }
 
     // --- Time --------------------------------------------------------------
@@ -3327,11 +3468,24 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       const uint32_t kthread = CurrentKThread();
       const uint32_t native = NativeThreadForKThread(kthread);
       if (native && !r360_guest_thread_external(native)) {
+        std::fprintf(stderr, "R360_THREAD_EXIT thread=0x%08X kthread=0x%08X code=0x%08X lr=0x%08X\n",
+                     native, kthread, r3, g_caller_lr);
         MarkThreadExited(kthread, r3);
         r360_guest_thread_terminate(native, r3);
         return Terminal(kTerminalThreadExit, r3, kModuleXboxkrnl, ordinal, a);
       }
       // The primary thread leaving ends the title, as on the console.
+      {
+        uint32_t thread_id = 0, back = 0, lr = 0;
+        Rd32(kthread + 0x14Cu, &thread_id);
+        std::fprintf(stderr, "R360_PRIMARY_EXIT code=0x%08X kthread=0x%08X id=%u native=%u lr=0x%08X stack=",
+                     r3, kthread, thread_id, native, g_caller_lr);
+        uint32_t fp = g_caller_r1;
+        for (uint32_t n = 0; n < 16 && fp && Rd32(fp, &back) && back > fp; ++n, fp = back) {
+          if (Rd32(back - 8u, &lr)) std::fprintf(stderr, "0x%08X ", lr);
+        }
+        std::fprintf(stderr, "\n");
+      }
       MarkThreadExited(kthread, r3);
       return Terminal(kTerminalProcessExit, r3, kModuleXboxkrnl, ordinal, a);
     }
@@ -3859,6 +4013,7 @@ uint32_t DispatchXboxkrnl(uint32_t ordinal, const uint32_t* a) {
       auto it = PhysicalByVirtual().find(r4);
       if (it != PhysicalByVirtual().end()) {
         PhysicalRanges().erase(it->second.physical_address);
+        ++g_physical_ranges_generation;
         PhysicalVirtualBases().erase(it->second.physical_address);
         PhysicalByVirtual().erase(it);
       }
@@ -5085,6 +5240,74 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       if (!Wr32(a[4], handle)) return Invalid();
       return X_ERROR_SUCCESS;
     }
+    case xam::XamContentAggregateCreateEnumerator: {
+      // (xuid (qword), device_id, content_type, unknown, handle*): Xenia
+      // xam_content_aggregate.cc. XCONTENT_AGGREGATE_DATA items (0x148: the
+      // content data, a zero qword, the title id) for the HDD packages of
+      // the running title. Xenia's ODD test adds packages under
+      // game:\Content\0000000000000000, which title packages do not have.
+      const uint32_t device_id = r4, content_type = r5, handle_out = a[4];
+      if ((device_id && !FindDummyDevice(device_id)) || !handle_out) return X_E_INVALIDARG;
+      uint32_t info = 0, title_id = 0;
+      if (XexOptionalHeader(kXexHeaderExecutionInfo, &info) && info) Rd32(info + 0x0Cu, &title_id);
+      std::vector<uint8_t> items;
+      if (!device_id || device_id == 1u) {
+        for (const auto& package : ContentPackages()) {
+          if (package.content_type != content_type) continue;
+          std::array<uint8_t, 0x148> item{};
+          std::copy(package.data.begin(), package.data.end(), item.begin());
+          item[0] = 0; item[1] = 0; item[2] = 0; item[3] = 1;  // device_id = HDD
+          item[0x13C] = uint8_t(title_id >> 24); item[0x13D] = uint8_t(title_id >> 16);
+          item[0x13E] = uint8_t(title_id >> 8); item[0x13F] = uint8_t(title_id);
+          items.insert(items.end(), item.begin(), item.end());
+        }
+      }
+      // Initialize(0xFF, 0xFE, 0x2000E, 0x20010, 0) with an
+      // X_KENUMERATOR_CONTENT_AGGREGATE (kXObjSignature 'XEN\0', handle).
+      XamEnumeratorInit init;
+      init.open_message = 0x2000Eu;
+      init.close_message = 0x20010u;
+      init.extra_size = 8u;
+      uint32_t guest = 0;
+      const uint32_t handle = CreateXamEnumerator(0x148u, 1u, std::move(items), init, &guest);
+      if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(guest + 0x18u, 0x58454E00u) || !Wr32(guest + 0x1Cu, handle)) return Invalid();
+      if (!Wr32(handle_out, handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamTaskSchedule: {
+      // (callback, message, unknown, handle*): Xenia xam_task.cc runs the
+      // callback with the message on a new guest thread (the executable's
+      // stack size, 16 KiB minimum, 4 KiB aligned) and reports handle 12345.
+      if (!r3 || !a[3]) return X_STATUS_INVALID_PARAMETER;
+      if (!Wr32(a[3], 12345u)) return Invalid();
+      uint32_t stack_size = ExecutableStackSize();
+      stack_size = std::max<uint32_t>(0x4000u, (stack_size + 0xFFFu) & 0xFFFFF000u);
+      const uint32_t native = r360_guest_thread_create(r3, r4, stack_size, 0);
+      if (!native) return X_STATUS_NO_MEMORY;
+      const uint32_t kthread = PrepareThreadObjects(native, r3, 0, 0);
+      if (!kthread) {
+        r360_guest_thread_terminate(native, 0);
+        return X_STATUS_NO_MEMORY;
+      }
+      const uint32_t handle = CreateObject(ObjectType::kThread, kthread, false);
+      if (!handle) return X_STATUS_NO_MEMORY;
+      uint32_t slot = 0;
+      SlotForHandle(handle, &slot);
+      Objects()[slot].thread = native;
+      return X_STATUS_SUCCESS;
+    }
+    case xam::XamGetPrivateEnumStructureFromHandle: {
+      // (handle, object_ptr*): Xenia xam_enum.cc. The caller takes a
+      // reference (released by ObDereferenceObject).
+      KernelObject* object = ResolveHandle(r3);
+      if (!object || object->type != ObjectType::kEnumerator || !object->guest) {
+        return X_STATUS_INVALID_HANDLE;
+      }
+      ++object->handle_count;
+      if (r4 && !Wr32(r4, object->guest)) return Invalid();
+      return X_STATUS_SUCCESS;
+    }
     case xam::XamContentCreateEnumerator: {
       // (user, device_id, content_type, content_flags, items_per_enumerate,
       //  buffer_size*, handle*)
@@ -5104,8 +5327,44 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
           items.insert(items.end(), item.begin(), item.end());
         }
       }
-      const uint32_t handle = CreateXamEnumerator(0x134u, per, std::move(items));
+      XamEnumeratorInit init;  // Xenia xam_content.cc: Initialize(0xFF, 0xFE, 0x20005, 0x20007, 0)
+      init.open_message = 0x20005u;
+      init.close_message = 0x20007u;
+      const uint32_t handle = CreateXamEnumerator(0x134u, per, std::move(items), init);
       if (!handle) return X_STATUS_NO_MEMORY;
+      if (!Wr32(handle_out, handle)) return Invalid();
+      return X_ERROR_SUCCESS;
+    }
+    case xam::XamUserCreateAchievementEnumerator: {
+      // (title_id, user_index, xuid, flags, offset, count, buffer_size*,
+      //  handle*): Xenia's static enumerator over the title's XDBF
+      // achievement table, strings in the default user language (English).
+      const uint32_t flags = a[3], count = a[5], size_ptr = a[6], handle_out = a[7];
+      if (!count || !size_ptr || !handle_out || r4 >= 4u) return X_ERROR_INVALID_PARAMETER;
+      const uint32_t entry_size = 36u + ((flags & 7u) ? 464u : 0u);
+      if (!Wr32(size_ptr, entry_size * count)) return Invalid();
+      XamEnumeratorInit init;  // Xenia: Initialize(user_index, 0xFB, 0xB000A, 0xB000B, 0)
+      init.user_index = r4;
+      init.app_id = 0xFBu;
+      init.open_message = 0xB000Au;
+      init.close_message = 0xB000Bu;
+      const uint32_t handle = CreateXamEnumerator(entry_size, count, {}, init);
+      if (!handle) return X_STATUS_NO_MEMORY;
+      XamEnumerator& e = XamEnumerators()[handle];
+      e.achievements = true;
+      e.achievement_flags = flags;
+      const std::vector<uint8_t> xdbf = TitleXdbf();
+      for (auto& entry : ParseXdbfAchievements(xdbf.data(), xdbf.size())) {
+        XamAchievement item;
+        item.id = entry.id;
+        item.label = std::move(entry.label);
+        item.description = std::move(entry.description);
+        item.unachieved = std::move(entry.unachieved);
+        item.image_id = entry.image_id;
+        item.gamerscore = entry.gamerscore;
+        item.flags = entry.flags;
+        e.achievement_items.push_back(std::move(item));
+      }
       if (!Wr32(handle_out, handle)) return Invalid();
       return X_ERROR_SUCCESS;
     }
@@ -5125,6 +5384,34 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
         count = std::min(e.count() - e.current, e.per_enumerate);
         if (!count) {
           result = X_ERROR_NO_MORE_FILES;
+        } else if (e.achievements) {
+          constexpr uint32_t kDetailsSize = 36, kStringBufferSize = 464;
+          uint32_t string_ptr = r5 + e.per_enumerate * kDetailsSize;
+          uint32_t string_left = count * kStringBufferSize;
+          auto append = [&](const std::u16string& text) -> uint32_t {
+            const uint32_t bytes = uint32_t(text.size() + 1) * 2u;
+            if (bytes > string_left) return 0;
+            const uint32_t ptr = string_ptr;
+            for (size_t c = 0; c <= text.size(); ++c) {
+              if (!Wr16(ptr + uint32_t(c) * 2u, c < text.size() ? uint16_t(text[c]) : 0u)) return 0;
+            }
+            string_ptr += bytes;
+            string_left -= bytes;
+            return ptr;
+          };
+          for (uint32_t i = 0; i < count; ++i, ++e.current) {
+            const XamAchievement& item = e.achievement_items[e.current];
+            const uint32_t d = r5 + i * kDetailsSize;
+            const uint32_t f = e.achievement_flags;
+            if (!Wr32(d + 0, item.id) ||
+                !Wr32(d + 4, (f & 1u) ? append(item.label) : 0u) ||
+                !Wr32(d + 8, (f & 2u) ? append(item.description) : 0u) ||
+                !Wr32(d + 12, (f & 4u) ? append(item.unachieved) : 0u) ||
+                !Wr32(d + 16, item.image_id) || !Wr32(d + 20, item.gamerscore) ||
+                !Wr32(d + 24, 0) || !Wr32(d + 28, 0) || !Wr32(d + 32, item.flags)) {
+              return Invalid();
+            }
+          }
         } else {
           if (!Wr(r5, e.items.data() + size_t(e.current) * e.item_size, count * e.item_size)) {
             return Invalid();
@@ -5145,6 +5432,73 @@ uint32_t DispatchXam(uint32_t ordinal, const uint32_t* a) {
       BroadcastNotification(0x0Au, 1);
       BroadcastNotification(0x09u, 0);
       return X_ERROR_SUCCESS;
+    case xam::XamShowMessageBoxUI: {
+      // (user, title, text, button_count, button_ptrs, active_button, flags,
+      //  result_ptr, overlapped), bracketed by XN_SYS_UI. Without a host
+      // dialog this is Xenia's headless path (the focused button). With one
+      // (r360_xam_dialog_set_host_answers), the player chooses, as with
+      // Xenia's MessageBoxDialog: an overlapped call returns
+      // ERROR_IO_PENDING and completes on r360_xam_dialog_answer; a
+      // synchronous call blocks its thread until then.
+      uint32_t overlapped = 0;
+      if (!StackArg(8, &overlapped)) return Invalid();
+      const uint32_t result_ptr = a[7];
+      if (!result_ptr) return Invalid();
+      MessageBox& box = PendingMessageBox();
+      if (box.state == MessageBox::kAnswered && box.thread == r360_guest_thread_current() &&
+          !box.overlapped) {
+        // Retry of a blocked synchronous call: the player has answered.
+        const uint32_t choice = box.choice;
+        box = {};
+        if (!Wr32(result_ptr, choice)) return Invalid();
+        BroadcastNotification(0x09u, 0);
+        return X_ERROR_SUCCESS;
+      }
+      if (box.state != MessageBox::kIdle) {
+        // Another dialog is up (or this thread's is unanswered): wait.
+        return WouldBlock(kModuleXam, xam::XamShowMessageBoxUI, 0, 0, 1);
+      }
+      std::u16string title, text;
+      ReadU16String(r4, &title);
+      ReadU16String(r5, &text);
+      box.title = Utf16ToUtf8(title);
+      box.text = Utf16ToUtf8(text);
+      box.buttons.clear();
+      for (uint32_t i = 0; i < a[3] && i < 8u; ++i) {
+        uint32_t button = 0;
+        std::u16string label;
+        if (Rd32(a[4] + i * 4u, &button)) ReadU16String(button, &label);
+        box.buttons.push_back(Utf16ToUtf8(label));
+      }
+      box.active_button = a[5];
+      std::string log = "XamShowMessageBoxUI \"" + box.title + "\": " + box.text + " [";
+      for (size_t i = 0; i < box.buttons.size(); ++i) log += (i ? " | " : "") + box.buttons[i];
+      log += "] focused " + std::to_string(a[5]);
+      DebugLog(log);
+      std::fprintf(stderr, "R360_MESSAGE_BOX %s\n", log.c_str());
+      BroadcastNotification(0x09u, 1);
+      if (!g_dialog_host_answers || g_dialog_auto_answer >= 0) {
+        uint32_t choice = a[5];
+        if (g_dialog_auto_answer >= 0) {
+          choice = std::min<uint32_t>(uint32_t(g_dialog_auto_answer),
+                                      box.buttons.empty() ? 0u : uint32_t(box.buttons.size() - 1));
+          std::fprintf(stderr, "R360_MESSAGE_BOX answered %u (preset)\n", choice);
+        }
+        box = {};
+        if (!Wr32(result_ptr, choice)) return Invalid();
+        BroadcastNotification(0x09u, 0);
+        return FinishXamOverlapped(overlapped, X_ERROR_SUCCESS, 0);
+      }
+      box.state = MessageBox::kPending;
+      box.thread = r360_guest_thread_current();
+      box.result_ptr = result_ptr;
+      box.overlapped = overlapped;
+      if (overlapped) {
+        if (!Wr32(overlapped, X_ERROR_IO_PENDING)) return Invalid();
+        return X_ERROR_IO_PENDING;
+      }
+      return WouldBlock(kModuleXam, xam::XamShowMessageBoxUI, 0, 0, 1);
+    }
     case xam::XamShowDeviceSelectorUI: {
       // (user, content_type, content_flags, total_requested(qword),
       //  device_id*, overlapped): the dummy HDD, bracketed by XN_SYS_UI.
@@ -5345,6 +5699,7 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
   // make kernel calls) while this one is suspended in a wait.
   const uint32_t caller_r13 = g_caller_r13, caller_lr = g_caller_lr,
                  caller_r1 = g_caller_r1;
+  uint64_t idle_started_ns = 0;
   for (;;) {
     g_status = kKernelServiceSuccess;
     g_handled = true;
@@ -5373,6 +5728,26 @@ uint32_t DispatchExtendedKernelService(uint32_t module, uint32_t ordinal,
       g_caller_lr = caller_lr;
       g_caller_r1 = caller_r1;
       continue;
+    }
+    // Every guest thread is waiting (some may sleep until a deadline). On the
+    // console the CPU idles while vblank, audio and timers keep firing and
+    // eventually wake a thread: idle the guest clock, delivering interrupts,
+    // and retry. Ten seconds of guest time with no thread able to run is a
+    // real deadlock and is reported.
+    constexpr uint64_t kIdleStepNs = 4000000ull, kMaxIdleNs = 10000000000ull;
+    if (g_status == kKernelServiceWouldBlock && g_wait.reason >= 1 &&
+        g_wait.reason <= 3 && GuestFibersActive() && !GuestInterruptActive()) {
+      const uint64_t now = r360_guest_clock_ns();
+      if (!idle_started_ns) idle_started_ns = now;
+      // A thread waiting for the player's answer to a dialog is not
+      // deadlocked, however long it waits.
+      const bool player_wait = PendingMessageBox().state != MessageBox::kIdle;
+      if ((player_wait || now - idle_started_ns < kMaxIdleNs) && GuestFiberIdle(now + kIdleStepNs)) {
+        g_caller_r13 = caller_r13;
+        g_caller_lr = caller_lr;
+        g_caller_r1 = caller_r1;
+        continue;
+      }
     }
     if (g_status == kKernelServiceSuccess) {
       GuestFiberNoteProgress();
@@ -5546,8 +5921,13 @@ void DeliverGuestInterruptsNow() {
 
 bool FinishGuestThreadFiber(uint32_t native, bool returned, uint32_t exit_code) {
   if (g_terminal.kind == kTerminalThreadExit) {
+    // ExTerminateThread already marked and terminated it. The service state
+    // it left (terminal) is not the next fiber's: a thread resuming in the
+    // middle of its own call (a sleep or timed wait) must not inherit it.
     g_terminal = {};
-    return true;  // ExTerminateThread already marked and terminated it
+    g_status = kKernelServiceSuccess;
+    g_handled = true;
+    return true;
   }
   if (!returned) return false;
   MarkThreadExited(r360_guest_thread_kthread(native), exit_code);
@@ -5574,6 +5954,8 @@ void ResetExtendedKernelServices() {
   g_wait = {};
   g_timeout_spin = {};
   DebugLogEntries().clear();
+  PendingMessageBox() = {};
+  ProcTrampolines().clear();
   g_debug_log_total = 0;
   Input() = {};
   Input()[0].connected = true;
@@ -5582,6 +5964,7 @@ void ResetExtendedKernelServices() {
   g_pool_top = kPoolBase;
   PhysicalByVirtual().clear();
   PhysicalRanges().clear();
+  ++g_physical_ranges_generation;
   PhysicalVirtualBases().clear();
   Objects().clear();
   ThreadPriority().clear();
@@ -5723,7 +6106,7 @@ uint32_t r360_kernel_debug_log_count() {
 }
 // Copies debug log entry |index| into wasm memory at |out| (capacity bytes).
 R360_WASM_EXPORT("r360_kernel_debug_log_read")
-uint32_t r360_kernel_debug_log_read(uint32_t index, uint32_t out,
+uint32_t r360_kernel_debug_log_read(uint32_t index, uintptr_t out,
                                     uint32_t capacity) {
   if (index >= r360k::DebugLogEntries().size() || !out || !capacity) return 0;
   const std::string& text = r360k::DebugLogEntries()[index];
@@ -5733,6 +6116,65 @@ uint32_t r360_kernel_debug_log_read(uint32_t index, uint32_t out,
 }
 
 // Render360 controller -> XInput gamepad state for user_index.
+// Host dialog for XamShowMessageBoxUI: the page shows the pending message
+// box and passes back the chosen button.
+R360_WASM_EXPORT("r360_xam_dialog_set_host_answers")
+uint32_t r360_xam_dialog_set_host_answers(uint32_t on) {
+  r360k::g_dialog_host_answers = on != 0;
+  return r360k::g_dialog_host_answers ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_set_auto_answer")
+int32_t r360_xam_dialog_set_auto_answer(int32_t button) {
+  r360k::g_dialog_auto_answer = button < 0 ? -1 : button;
+  return r360k::g_dialog_auto_answer;
+}
+R360_WASM_EXPORT("r360_xam_dialog_pending")
+uint32_t r360_xam_dialog_pending() {
+  return r360k::PendingMessageBox().state == r360k::MessageBox::kPending ? 1u : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_button_count")
+uint32_t r360_xam_dialog_button_count() { return uint32_t(r360k::PendingMessageBox().buttons.size()); }
+R360_WASM_EXPORT("r360_xam_dialog_active_button")
+uint32_t r360_xam_dialog_active_button() { return r360k::PendingMessageBox().active_button; }
+// which: 0 title, 1 text, 2 + n button n. UTF-8, not terminated.
+static const std::string* DialogString(uint32_t which) {
+  const auto& box = r360k::PendingMessageBox();
+  if (which == 0) return &box.title;
+  if (which == 1) return &box.text;
+  if (which - 2u < box.buttons.size()) return &box.buttons[which - 2u];
+  return nullptr;
+}
+R360_WASM_EXPORT("r360_xam_dialog_string_ptr")
+uintptr_t r360_xam_dialog_string_ptr(uint32_t which) {
+  const std::string* s = DialogString(which);
+  return s ? (reinterpret_cast<uintptr_t>(s->data())) : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_string_len")
+uint32_t r360_xam_dialog_string_len(uint32_t which) {
+  const std::string* s = DialogString(which);
+  return s ? uint32_t(s->size()) : 0u;
+}
+R360_WASM_EXPORT("r360_xam_dialog_answer")
+uint32_t r360_xam_dialog_answer(uint32_t button) {
+  auto& box = r360k::PendingMessageBox();
+  if (box.state != r360k::MessageBox::kPending || button >= box.buttons.size()) return 0;
+  box.choice = button;
+  if (box.overlapped) {
+    // Xenia CompleteOverlappedDeferred: result, then XN_SYS_UI off.
+    const uint32_t result_ptr = box.result_ptr, overlapped = box.overlapped;
+    box = {};
+    if (!r360k::Wr32(result_ptr, button) ||
+        !r360k::CompleteOverlappedEx(overlapped, r360k::X_ERROR_SUCCESS, 0, 0)) {
+      return 0;
+    }
+    r360k::BroadcastNotification(0x09u, 0);
+  } else {
+    box.state = r360k::MessageBox::kAnswered;  // the blocked call's retry completes it
+  }
+  r360k::GuestFiberNoteProgress();
+  return 1;
+}
+
 R360_WASM_EXPORT("r360_input_set_gamepad")
 uint32_t r360_input_set_gamepad(uint32_t user_index, uint32_t connected,
                                 uint32_t buttons, uint32_t triggers,
@@ -5772,8 +6214,8 @@ void r360_vfs_reset() {
 }
 // 1 KiB scratch buffer in wasm memory for passing a UTF-8 guest path.
 R360_WASM_EXPORT("r360_vfs_path_buffer")
-uint32_t r360_vfs_path_buffer() {
-  return uint32_t(uintptr_t(r360k::g_vfs_path_buffer));
+uintptr_t r360_vfs_path_buffer() {
+  return (uintptr_t(r360k::g_vfs_path_buffer));
 }
 // Registers a file or directory relative to \Device\Cdrom0 (the game disc).
 // Returns the 1-based entry id. host_fd/host_offset let WASI fd_pread supply
@@ -5795,12 +6237,12 @@ uint32_t r360_vfs_register(uint32_t path_length, uint32_t size_lo,
 // Allocates an in-memory buffer holding the whole file for entry |id| and
 // returns its wasm address for the loader to fill (0 on failure).
 R360_WASM_EXPORT("r360_vfs_data_buffer")
-uint32_t r360_vfs_data_buffer(uint32_t id) {
+uintptr_t r360_vfs_data_buffer(uint32_t id) {
   auto* entry = r360k::VfsEntryAt(id);
   if (!entry || entry->size > 0x7FFFFFFFull) return 0;
   entry->data.assign(size_t(entry->size), 0);
   entry->has_data = true;
-  return entry->size ? uint32_t(uintptr_t(entry->data.data())) : 1u;
+  return entry->size ? (uintptr_t(entry->data.data())) : 1u;
 }
 R360_WASM_EXPORT("r360_vfs_entry_count")
 uint32_t r360_vfs_entry_count() { return uint32_t(r360k::VfsEntries().size()); }
@@ -5867,6 +6309,13 @@ uint32_t r360_audio_client_last_samples(uint32_t index) {
 R360_WASM_EXPORT("r360_kernel_gpu_address_to_virtual")
 uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
   if (address >= 0x20000000u) return address;
+  // The GPU command processor translates every word it reads; nearly all hit
+  // the same range as the previous call, so remember it (two map lookups
+  // were ~14% of a native Banjo-Tooie run).
+  static uint32_t cached_generation = 0, cached_base = 0, cached_size = 0, cached_virtual = 0;
+  if (cached_generation == r360k::g_physical_ranges_generation && address - cached_base < cached_size) {
+    return cached_virtual + (address - cached_base);
+  }
   auto& ranges = r360k::PhysicalRanges();
   auto it = ranges.upper_bound(address);
   if (it == ranges.begin()) return address;
@@ -5874,6 +6323,10 @@ uint32_t r360_kernel_gpu_address_to_virtual(uint32_t address) {
   if (address - it->first >= it->second) return address;
   auto base = r360k::PhysicalVirtualBases().find(it->first);
   if (base == r360k::PhysicalVirtualBases().end()) return address;
+  cached_generation = r360k::g_physical_ranges_generation;
+  cached_base = it->first;
+  cached_size = it->second;
+  cached_virtual = base->second;
   return base->second + (address - it->first);
 }
 R360_WASM_EXPORT("r360_kernel_vblank_interrupts")

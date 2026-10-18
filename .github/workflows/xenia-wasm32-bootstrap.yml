@@ -21,6 +21,7 @@ on:
       - 'test-title-gpu-runtime.mjs'
       - 'test-direct-call-sparse-window.mjs'
       - 'test-translation-window-consistency.mjs'
+      - 'test-xenos-predication.mjs'
       - 'render360-title-gpu-traffic.mjs'
       - 'test-xenos-semantic-foundation.mjs'
       - 'test-xenos-title-state-foundation.mjs'
@@ -191,6 +192,8 @@ jobs:
         run: node ./test-direct-call-sparse-window.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify translations do not depend on decoder-window history
         run: node ./test-translation-window-consistency.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Verify PM4 type-3 predication on tiling bins
+        run: node ./test-xenos-predication.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
       - name: Verify locked foundations and XEX bring-up
         run: |
           node ./test-xenia-ppc-translation-probe.mjs build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm

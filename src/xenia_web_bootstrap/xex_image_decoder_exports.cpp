@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include "xex_image_decoder.h"
 
-extern "C" uint32_t r360_io_ptr();
+extern "C" uintptr_t r360_io_ptr();
 extern "C" uint32_t r360_io_capacity();
 
 namespace {

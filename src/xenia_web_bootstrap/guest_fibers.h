@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // Guest threads for the native HIR compatibility executor.
@@ -37,6 +38,8 @@ uintptr_t GuestFiberStackLow();
 bool RunGuestInterrupt(uint32_t address, uint32_t r3, uint32_t r4,
                        uint32_t stack_top, uint32_t pcr);
 bool GuestInterruptActive();
+// Scheduler state as text, for diagnostics.
+void GuestFiberDiagnostic(char* out, size_t size);
 
 // Browser time slicing: when the host slice set by the driver
 // (r360_fiber_set_host_slice) has run out, unwinds the running guest thread

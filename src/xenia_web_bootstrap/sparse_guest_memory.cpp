@@ -16,6 +16,13 @@ extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0;
 extern "C" __attribute__((weak)) uint32_t r360_guest_thread_current() { return 0; }
 extern "C" __attribute__((weak)) uint32_t r360_hir_last_source() { return 0; }
 
+#if defined(R360_NATIVE) && defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <sys/mman.h>
+#define R360_FLAT_GUEST_MEMORY 1
+#endif
+
 namespace render360::xenia_web {
 namespace {
 
@@ -33,8 +40,73 @@ enum FaultCode : uint32_t {
   kFaultAlreadyMapped = 5,
 };
 
+#if defined(R360_FLAT_GUEST_MEMORY)
+// Native flat guest memory (Xenia's Memory layout, as XeniOS on 16 KiB-page
+// Apple hosts): the 4 GiB guest space plus 0x1000 is one reservation at
+// g_flat_base; 0x00000000-0x9FFFFFFF is plain host memory and the three
+// physical views 0xA0000000 / 0xC0000000 / 0xE0000000 map one 512 MiB
+// physical object. The E0 view's 4 KiB physical offset is applied on the CPU
+// side (Xenia's host_address_offset): guest E0000000+x lives at host
+// base + E0000000 + x + 0x1000. Every guest page then has a fixed host
+// address (base + address [+ 0x1000]), which statically recompiled code
+// (XenonRecomp: base + address) needs. Page table, protection and watches
+// are unchanged.
+uint8_t* g_flat_base = nullptr;
+constexpr uint64_t kFlatReserve = 0x100000000ull + 0x10000ull;
+constexpr uint64_t kPhysicalSize = 0x20000000ull;
+
+inline uint8_t* FlatHost(uint32_t address) {
+  return g_flat_base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
+}
+
+bool MapPhysicalView(mach_port_t entry, uint64_t guest) {
+  mach_vm_address_t at = mach_vm_address_t(g_flat_base + guest);
+  const kern_return_t kr = mach_vm_map(mach_task_self(), &at, kPhysicalSize, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                                       entry, 0, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE,
+                                       VM_INHERIT_NONE);
+  if (kr != KERN_SUCCESS) std::fprintf(stderr, "R360_FLAT_MEMORY view 0x%llX: mach_vm_map %d\n", (unsigned long long)guest, kr);
+  return kr == KERN_SUCCESS;
+}
+
+// (Re)creates the layout: fresh zeroed memory everywhere.
+bool CreateFlatGuestMemory() {
+  if (g_flat_base) munmap(g_flat_base, kFlatReserve);
+  g_flat_base = nullptr;
+  void* base = mmap(nullptr, kFlatReserve, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (base == MAP_FAILED) {
+    std::fprintf(stderr, "R360_FLAT_MEMORY reserve failed\n");
+    return false;
+  }
+  g_flat_base = static_cast<uint8_t*>(base);
+  // One named (shareable) memory object for the 512 MiB of physical memory.
+  memory_object_size_t size = kPhysicalSize;
+  mach_port_t entry = MACH_PORT_NULL;
+  const kern_return_t kr = mach_make_memory_entry_64(mach_task_self(), &size, 0,
+                                                     MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE, &entry,
+                                                     MACH_PORT_NULL);
+  if (kr != KERN_SUCCESS) {
+    std::fprintf(stderr, "R360_FLAT_MEMORY physical object: %d\n", kr);
+    return false;
+  }
+  const bool ok = MapPhysicalView(entry, 0xA0000000ull) && MapPhysicalView(entry, 0xC0000000ull) &&
+                  MapPhysicalView(entry, 0xE0000000ull);
+  mach_port_deallocate(mach_task_self(), entry);  // the views keep the object
+  if (!ok) std::fprintf(stderr, "R360_FLAT_MEMORY failed to map the physical views\n");
+  return ok;
+}
+
+// Zeroes guest pages that are no longer mapped (fresh backings start zeroed).
+void ZeroFlatPages(uint32_t address, uint32_t page_count) {
+  if (!g_flat_base) return;
+  std::memset(FlatHost(address), 0, size_t(page_count) * kPageSize);
+}
+#endif
+
 struct Backing {
+  // Browser build: the backing's own pages. Native flat build: unused (every
+  // guest page has its fixed host address), only page_count matters.
   std::vector<std::array<uint8_t, kPageSize>> pages;
+  uint32_t page_count = 0;
   // Number of executable virtual aliases of each backing page. Sized once at
   // allocation so page-table entries can hold stable pointers into it.
   std::vector<uint32_t> executable_aliases;
@@ -258,6 +330,9 @@ void ResetSparseGuestMemory() {
   }
   g_mapped_pages = 0;
   g_backings.clear();
+#if defined(R360_FLAT_GUEST_MEMORY)
+  if (g_flat_base) CreateFlatGuestMemory();
+#endif
   g_executable_aliases.clear();
   for (uint32_t*& table : g_executable_content_generations) {
     delete[] table;
@@ -273,8 +348,16 @@ uint32_t AllocateSparseGuestBacking(uint32_t page_count) {
     return 0;
   }
   Backing backing;
+  backing.page_count = page_count;
+#if defined(R360_FLAT_GUEST_MEMORY)
+  if (!g_flat_base && !CreateFlatGuestMemory()) {
+    Fault(0, kFaultInvalidArgument);
+    return 0;
+  }
+#else
   // resize() value-initializes: every page starts zero-filled.
   backing.pages.resize(page_count);
+#endif
   backing.executable_aliases.resize(page_count);
   backing.gpu_generation.assign(page_count, 1u);
   g_backings.push_back(std::move(backing));
@@ -291,7 +374,7 @@ bool MapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
   }
   Backing* backing = GetBacking(backing_id);
   if (!backing || uint64_t(backing_page_offset) + page_count >
-                      backing->pages.size()) {
+                      backing->page_count) {
     return Fault(virtual_address, kFaultInvalidArgument);
   }
   const uint32_t first_page = virtual_address >> kPageShift;
@@ -303,7 +386,14 @@ bool MapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count,
   for (uint32_t i = 0; i < page_count; ++i) {
     const uint32_t backing_page = backing_page_offset + i;
     PageEntry* entry = EnsurePageSlot(first_page + i);
+#if defined(R360_FLAT_GUEST_MEMORY)
+    entry->host = FlatHost((first_page + i) << kPageShift);
+    // A fresh backing reads zeros: clear plain memory and the first (A0)
+    // physical view; the C0 / E0 views of the same pages alias it.
+    if (((first_page + i) << kPageShift) < 0xC0000000u) std::memset(entry->host, 0, kPageSize);
+#else
     entry->host = backing->pages[backing_page].data();
+#endif
     entry->executable_aliases = &backing->executable_aliases[backing_page];
     entry->backing_id = backing_id;
     entry->backing_page = backing_page;
@@ -374,6 +464,11 @@ bool UnmapSparseGuestMemory(uint32_t virtual_address, uint32_t page_count) {
       InvalidateWasmBackendExecutableRange((first_page + i) << kPageShift,
                                            kPageSize);
     }
+#if defined(R360_FLAT_GUEST_MEMORY)
+    // Physical views alias: only plain virtual memory is cleared on unmap
+    // (the next allocation there must read zeros).
+    if (((first_page + i) << kPageShift) < 0xA0000000u) ZeroFlatPages((first_page + i) << kPageShift, 1);
+#endif
     entry = PageEntry{};
     --g_mapped_pages;
   }
@@ -514,7 +609,7 @@ uint32_t SparseGuestMappedPageCount() { return g_mapped_pages; }
 
 uint32_t SparseGuestBackingPageCount() {
   uint64_t total = 0;
-  for (const auto& backing : g_backings) total += backing.pages.size();
+  for (const auto& backing : g_backings) total += backing.page_count;
   return total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
 }
 
@@ -653,7 +748,16 @@ namespace render360::xenia_web {
 // Address of the two-level guest page directory (1024 PageEntry* slots, each
 // table 1024 x 20-byte entries: host, executable_aliases, backing id/page,
 // protection), for the guest JIT's inline loads and stores.
+#if defined(R360_FLAT_GUEST_MEMORY)
+uint8_t* SparseGuestFlatBase() { return g_flat_base; }
+#else
+uint8_t* SparseGuestFlatBase() { return nullptr; }
+#endif
 uint32_t SparseGuestPageDirectoryAddress() {
   return uint32_t(reinterpret_cast<uintptr_t>(g_page_directory.data()));
 }
 }  // namespace render360::xenia_web
+
+extern "C" uintptr_t r360_flat_guest_base() {
+  return reinterpret_cast<uintptr_t>(render360::xenia_web::SparseGuestFlatBase());
+}

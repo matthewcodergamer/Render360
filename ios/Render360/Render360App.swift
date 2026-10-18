@@ -182,10 +182,11 @@ struct PlayView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             MetalFrameView(frames: session.frames, perf: session.perf).ignoresSafeArea()
+            GPUFrameView(session: session).ignoresSafeArea().opacity(session.renderer == "software" ? 0 : 1)
             TouchControls(input: input).ignoresSafeArea()
             VStack {
                 HStack(alignment: .top) {
-                    if showOverlay { PerfOverlay(stats: session.stats, state: session.state, memory: memory) }
+                    if showOverlay { PerfOverlay(stats: session.stats, renderer: session.renderer, state: session.state, memory: memory) }
                     Spacer()
                     Button { showOverlay.toggle() } label: { Image(systemName: "speedometer") }.padding(6)
                     Button {
@@ -226,6 +227,7 @@ struct PlayView: View {
 
 struct PerfOverlay: View {
     let stats: PerfStats.Snapshot
+    var renderer = ""
     let state: EmulatorSession.State
     let memory: MemoryGuard
     var body: some View {
@@ -236,6 +238,7 @@ struct PerfOverlay: View {
                         memory.lowestAvailableMB.isFinite ? memory.lowestAvailableMB : MemoryGuard.availableMB))
             Text(String(format: "Guest %.0fM instructions · %.0f frames%@", Double(r360_hir_total_instructions_millions()),
                         Double(r360_title_gpu_vd_swap_calls()), r360_title_gpu_vd_swap_calls() == 0 ? " · booting (first frame takes a few minutes)" : ""))
+            Text("Renderer: \(renderer)")
             Text("30 FPS bar: \(stats.barPass ? "PASS" : "not met") · \(stateText) · thermal \(["nominal", "fair", "serious", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)])")
         }
         .font(.system(size: 11, design: .monospaced))

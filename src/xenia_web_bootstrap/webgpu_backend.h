@@ -89,6 +89,11 @@ struct WebGpuRenderTargetsKey {
   uint32_t depth_format;
 };
 
+// Pipeline vertex shader id of a pass-through vertex shader (low bits: the
+// interpolator count): the draw carries host clip-space vertices shaded on
+// the CPU after its index data (rectangle lists, webgpu_draws.cpp).
+constexpr uint32_t kPassthroughVertexShader = 0x80000000u;
+
 struct WebGpuDrawHeader {
   uint32_t pipeline;
   uint32_t viewport[4];  // x, y, width, height (pixels)

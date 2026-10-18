@@ -5,6 +5,7 @@
 // command buffer. Render targets follow Xenia's host render target path.
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 #include "webgpu_backend.h"
 #include "webgpu_textures.h"
 #include "xenos_soft_draw.h"
+#include "xenos_soft_renderer.h"
 #include "sparse_guest_memory.h"
 #include "xenia/base/math.h"
 #include "xenia/base/string_buffer.h"
@@ -466,6 +468,16 @@ void Resolve() {
     ++g_resolve_failures;
     return;
   }
+  if (getenv("R360_RESOLVE_LOG")) {
+    static uint32_t logged = 0;
+    if (logged++ < 3)
+      std::fprintf(stderr, "R360_RESOLVE_WGPU dest_base_reg=0x%08X adjusted=0x%08X extent=0x%08X+%u dest_off=%u,%u edram_off=%u,%u size=%ux%u\n",
+                   regs[XE_GPU_REG_RB_COPY_DEST_BASE], info.copy_dest_base, info.copy_dest_extent_start,
+                   info.copy_dest_extent_length, info.copy_dest_coordinate_info.offset_x_div_8 * 8u,
+                   info.copy_dest_coordinate_info.offset_y_div_8 * 8u, info.coordinate_info.edram_offset_x_div_8 * 8u,
+                   info.coordinate_info.edram_offset_y_div_8 * 8u, info.coordinate_info.width_div_8 * 8u,
+                   info.height_div_8 * 8u);
+  }
   if (!info.coordinate_info.width_div_8 || !info.height_div_8) return;
   ++g_resolves;
   if (g_mode & 2) {
@@ -594,15 +606,31 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
     if (!ps_id) return Skip(kSkipTranslation);
   }
 
+  // Rectangle lists: WebGPU has no geometry shaders (Xenia's Vulkan backend
+  // expands them in one), so the guest vertex shader runs on the CPU and the
+  // host draws the shaded vertices with a pass-through vertex shader
+  // (pipeline vertex shader id kPassthroughVertexShader | interpolator count).
+  reg::VGT_DRAW_INITIATOR draw_init;
+  draw_init.value = draw.draw_initiator;
+  const bool rectangle_list = draw_init.prim_type == xenos::PrimitiveType::kRectangleList;
+  const uint32_t interpolator_count = uint32_t(xe::bit_count(interpolator_mask));
+  std::vector<float> shaded;
+  uint32_t shaded_count = 0;
   Indices indices;
-  if (!BuildIndices(draw, indices)) return Skip(kSkipPrimitive);
+  if (rectangle_list) {
+    if (!ShadeXenosVertices(draw, shaded, &shaded_count)) return Skip(kSkipPrimitive);
+    if (shaded_count < 3) return true;
+    indices.host_topology = 3;
+  } else if (!BuildIndices(draw, indices)) {
+    return Skip(kSkipPrimitive);
+  }
 
   // Pipeline state (VulkanPipelineCache::GetCurrentStateDescription).
   const reg::RB_DEPTHCONTROL depth_control = draw_util::GetNormalizedDepthControl(regs);
   const uint32_t color_mask =
       pixel_shader ? draw_util::GetNormalizedColorMask(regs, pixel_shader->writes_color_targets()) : 0u;
   WebGpuPipelineDescription description{};
-  description.vertex_shader = vs_id;
+  description.vertex_shader = rectangle_list ? (kPassthroughVertexShader | interpolator_count) : vs_id;
   description.pixel_shader = ps_id;
   description.topology = indices.host_topology;
   auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
@@ -659,6 +687,7 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
 
   // Vertex data the shader fetches from shared memory.
   for (const auto& binding : vertex_shader->vertex_bindings()) {
+    if (rectangle_list) break;  // fetched by the CPU vertex shader
     const xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(binding.fetch_constant);
     if (fetch.type != xenos::FetchConstantType::kVertex) return Skip(kSkipVertexFetch);
     if (!GpuSharedMemory().RequestRange(fetch.address << 2, fetch.size << 2)) {
@@ -669,12 +698,12 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   // Textures (VulkanCommandProcessor::IssueDraw requests them before
   // updating the constants and bindings).
   const uint32_t used_texture_mask =
-      vertex_shader->GetUsedTextureMaskAfterTranslation() |
+      (rectangle_list ? 0u : vertex_shader->GetUsedTextureMaskAfterTranslation()) |
       (pixel_shader ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0u);
   WebGpuRequestTextures(regs, used_texture_mask);
   std::vector<uint32_t> binding_words;
   for (const SpirvShader* shader : {vertex_shader, pixel_shader}) {
-    if (!shader) continue;
+    if (!shader || (rectangle_list && shader == vertex_shader)) continue;
     for (const auto& t : shader->GetTextureBindingsAfterTranslation()) {
       binding_words.push_back(WebGpuTextureForBinding(t));
     }
@@ -694,6 +723,52 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   // vertex fetch constants (6 dwords each), as Xenia uploads them.
   constexpr uint32_t kBoolLoopWords = 8 + 32, kFetchWords = 32 * 6;
 
+  // Rectangle list: host clip-space vertices (CompleteVertexOrTessEvalShaderInMain's
+  // W / XY / Z conventions and NDC transform), then per rectangle the fourth
+  // corner v1 + v2 - v0 of the right-angle corner v0 (Xenia's primitive
+  // processor), as two triangles. Per host vertex: position, interpolators.
+  std::vector<float> host_vertices;
+  if (rectangle_list) {
+    const uint32_t floats_per_vertex = 4 + 4 * interpolator_count;
+    auto to_host = [&](uint32_t v, float* o) {
+      const float* g = &shaded[size_t(v) * 68];
+      float w = (system.flags & SpirvShaderTranslator::kSysFlag_WNotReciprocal) ? g[3] : 1.0f / g[3];
+      float xyz[3] = {g[0], g[1], g[2]};
+      if (system.flags & SpirvShaderTranslator::kSysFlag_XYDividedByW) { xyz[0] *= w; xyz[1] *= w; }
+      if (system.flags & SpirvShaderTranslator::kSysFlag_ZDividedByW) xyz[2] *= w;
+      for (int k = 0; k < 3; ++k) o[k] = xyz[k] * system.ndc_scale[k] + system.ndc_offset[k] * w;
+      o[3] = w;
+      uint32_t slot = 0, remaining = interpolator_mask, index;
+      while (xe::bit_scan_forward(remaining, &index)) {
+        remaining &= ~(1u << index);
+        std::memcpy(o + 4 + 4 * slot++, g + 4 + 4 * index, 16);
+      }
+    };
+    std::vector<float> corner(size_t(floats_per_vertex) * 4);
+    for (uint32_t i = 0; i + 2 < shaded_count; i += 3) {
+      float* c[4] = {&corner[0], &corner[floats_per_vertex], &corner[2 * floats_per_vertex],
+                     &corner[3 * floats_per_vertex]};
+      for (uint32_t k = 0; k < 3; ++k) to_host(i + k, c[k]);
+      auto sx = [&](const float* v) { return v[0] / v[3]; };
+      auto sy = [&](const float* v) { return v[1] / v[3]; };
+      auto len2 = [&](const float* a, const float* b) {
+        const float dx = sx(a) - sx(b), dy = sy(a) - sy(b);
+        return dx * dx + dy * dy;
+      };
+      // v0 is the right-angle corner: opposite the longest edge.
+      const float ab = len2(c[0], c[1]), bc = len2(c[1], c[2]), ca = len2(c[2], c[0]);
+      const float *p0 = c[0], *p1 = c[1], *p2 = c[2];
+      if (bc >= ab && bc >= ca) { p0 = c[0]; p1 = c[1]; p2 = c[2]; }
+      else if (ca >= ab && ca >= bc) { p0 = c[1]; p1 = c[2]; p2 = c[0]; }
+      else { p0 = c[2]; p1 = c[0]; p2 = c[1]; }
+      const float* p3 = c[3];
+      for (uint32_t k = 0; k < floats_per_vertex; ++k) c[3][k] = p1[k] + p2[k] - p0[k];
+      for (const float* v : {p0, p1, p2, p1, p3, p2}) host_vertices.insert(host_vertices.end(), v, v + floats_per_vertex);
+    }
+    indices.vertex_count = uint32_t(host_vertices.size() / floats_per_vertex);
+    if (!indices.vertex_count) return true;
+  }
+
   const uint32_t index_words =
       indices.values.empty() ? 0u
                              : (indices.use_32bit ? uint32_t(indices.values.size())
@@ -701,7 +776,8 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   const uint32_t system_words = sizeof(system) / 4;
   const uint32_t payload = sizeof(WebGpuDrawHeader) / 4 + system_words +
                            uint32_t(float_vertex.size() + float_pixel.size()) + kBoolLoopWords +
-                           kFetchWords + uint32_t(binding_words.size()) + index_words;
+                           kFetchWords + uint32_t(binding_words.size()) + index_words +
+                           uint32_t(host_vertices.size());
   const uint32_t pipeline_id = PipelineId(description);
   if ((g_mode & 2) && g_draws < 4000 && (g_draws % 50) == 0) {
     const auto window = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
@@ -736,7 +812,7 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
   header.fetch_words = kFetchWords;
   header.index_format = indices.values.empty() ? 0u : (indices.use_32bit ? 2u : 1u);
   header.vertex_count = indices.values.empty() ? indices.vertex_count : uint32_t(indices.values.size());
-  header.vertex_texture_mask = vertex_shader->GetUsedTextureMaskAfterTranslation();
+  header.vertex_texture_mask = rectangle_list ? 0u : vertex_shader->GetUsedTextureMaskAfterTranslation();
   header.pixel_texture_mask = pixel_shader ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0u;
   header.binding_words = uint32_t(binding_words.size());
   std::memcpy(w, &header, sizeof(header));
@@ -761,7 +837,11 @@ bool WebGpuIssueDraw(const XenosSoftDraw& draw) {
       for (size_t i = 0; i < indices.values.size(); ++i) h[i] = uint16_t(indices.values[i]);
       if (indices.values.size() & 1) h[indices.values.size()] = 0;
     }
+    w += index_words;
   }
+  // Pass-through draws: the host vertices follow (vertex_count x (4 + 4 x
+  // interpolator count) floats).
+  if (!host_vertices.empty()) std::memcpy(w, host_vertices.data(), host_vertices.size() * 4);
   ++g_draws;
   return true;
 }

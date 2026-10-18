@@ -37,6 +37,7 @@ constexpr uint64_t SHARED_MEMORY_BYTES = 512ull * 1024 * 1024;  // Xenia SharedM
 constexpr uint64_t STAGING_BYTES = 16ull * 1024 * 1024;
 constexpr uint32_t CONSTANT_WINDOW = 4096;
 constexpr uint32_t DRAW_HEADER_WORDS = 26;
+constexpr uint32_t kPassthroughVertexShader = 0x80000000u;  // webgpu_backend.h
 
 WGPUStringView S(const char* s) { return WGPUStringView{s, s ? std::strlen(s) : 0}; }
 WGPUStringView S(const std::string& s) { return WGPUStringView{s.data(), s.size()}; }
@@ -131,6 +132,42 @@ struct Binding {
   WGPUTextureViewDimension view = WGPUTextureViewDimension_2D;
   WGPUTextureSampleType sample = WGPUTextureSampleType_Float;
 };
+
+// WGSL interpolation attribute of each fragment input location (what the
+// pass-through vertex shader must declare to link with the pixel shader).
+std::map<uint32_t, std::string> ReflectInputInterpolation(const uint32_t* w, size_t n) {
+  std::unordered_map<uint32_t, uint32_t> location;
+  std::unordered_map<uint32_t, int> flat, noperspective, centroid, sample;
+  std::vector<uint32_t> inputs;
+  for (size_t i = 5; i < n;) {
+    const uint32_t count = w[i] >> 16, op = w[i] & 0xFFFF;
+    if (!count || i + count > n) break;
+    const uint32_t* a = w + i + 1;
+    if (op == 71) {
+      if (a[1] == 30) location[a[0]] = a[2];
+      else if (a[1] == 14) flat[a[0]] = 1;
+      else if (a[1] == 13) noperspective[a[0]] = 1;
+      else if (a[1] == 16) centroid[a[0]] = 1;
+      else if (a[1] == 17) sample[a[0]] = 1;
+    } else if (op == 59 && a[2] == 1) {
+      inputs.push_back(a[1]);
+    }
+    i += count;
+  }
+  std::map<uint32_t, std::string> out;
+  for (uint32_t v : inputs) {
+    if (!location.count(v)) continue;
+    std::string q;
+    if (flat[v]) q = "@interpolate(flat)";
+    else {
+      const char* type = noperspective[v] ? "linear" : "perspective";
+      const char* sampling = centroid[v] ? ", centroid" : sample[v] ? ", sample" : ", center";
+      q = std::string("@interpolate(") + type + sampling + ")";
+    }
+    out[location[v]] = q;
+  }
+  return out;
+}
 
 std::vector<Binding> ReflectBindings(const uint32_t* w, size_t n) {
   std::unordered_map<uint32_t, uint32_t> set, bind, var_type, var_class, ptr_pointee, load_of, si_sampler, si_image;
@@ -441,6 +478,7 @@ struct Ring {
 
 struct Shader {
   uint32_t id = 0, stage = 0;
+  std::map<uint32_t, std::string> input_interpolation;  // pixel shaders
   std::vector<uint32_t> textures, samplers;
   std::vector<Binding> bindings;
   WGPUShaderModule module = nullptr;
@@ -719,6 +757,7 @@ class BackendImpl final : public Backend {
     for (WGPUBuffer b : scratch_retired_) { wgpuBufferDestroy(b); wgpuBufferRelease(b); }
     scratch_retired_.clear();
     staging_offset_ = 0;
+    pre_shaded_offset_ = 0;
   }
 
   void EndPass() {
@@ -779,6 +818,7 @@ class BackendImpl final : public Backend {
     const uint32_t* spirv = p + 5 + tc + sc;
     if (5 + tc + sc + words > n) { s.error = "truncated"; shaders_[s.id] = s; return; }
     s.bindings = ReflectBindings(spirv, words);
+    if (s.stage) s.input_interpolation = ReflectInputInterpolation(spirv, words);
     // Xenia sets OpExecutionMode EarlyFragmentTests on pixel shaders without
     // depth writes or kills; wgpu rejects the capability. It is only a hint:
     // Metal tests depth early by itself for such shaders.
@@ -957,12 +997,17 @@ class BackendImpl final : public Backend {
       if (stats_.pipeline_failures <= 5) std::fprintf(stderr, "R360_WGPU pipeline %u: %s\n", id, e.c_str());
       pipelines_[id] = entry;
     };
-    auto vs_it = shaders_.find(d.vertex_shader);
-    const Shader* vs = vs_it == shaders_.end() ? nullptr : &vs_it->second;
     const Shader* ps = nullptr;
     if (d.pixel_shader) {
       auto it = shaders_.find(d.pixel_shader);
       ps = it == shaders_.end() ? nullptr : &it->second;
+    }
+    const Shader* vs = nullptr;
+    if (d.vertex_shader & kPassthroughVertexShader) {
+      vs = PassthroughVertexShader(d.vertex_shader & 0xFF, ps);
+    } else {
+      auto vs_it = shaders_.find(d.vertex_shader);
+      vs = vs_it == shaders_.end() ? nullptr : &vs_it->second;
     }
     if (!vs || !vs->module) return fail("vertex shader " + std::to_string(d.vertex_shader) + ": " + (vs ? vs->error : "missing"));
     if (d.pixel_shader && (!ps || !ps->module)) return fail("pixel shader " + std::to_string(d.pixel_shader) + ": " + (ps ? ps->error : "missing"));
@@ -1055,6 +1100,56 @@ class BackendImpl final : public Backend {
     ++stats_.pipelines;
     pipelines_[id] = entry;
   }
+
+  // Vertex shader for CPU-shaded vertices (rectangle lists): reads host
+  // clip-space position and `count` interpolators per vertex from group 2 and
+  // matches the pixel shader's interpolation qualifiers.
+  std::map<std::string, std::unique_ptr<Shader>> passthrough_;
+  const Shader* PassthroughVertexShader(uint32_t count, const Shader* ps) {
+    std::string quals;
+    for (uint32_t i = 0; i < count; ++i) {
+      auto it = ps ? ps->input_interpolation.find(i) : std::map<uint32_t, std::string>::const_iterator();
+      quals += (ps && it != ps->input_interpolation.end()) ? it->second : std::string("@interpolate(perspective, center)");
+      quals += ";";
+    }
+    const std::string key = std::to_string(count) + ":" + quals;
+    auto found = passthrough_.find(key);
+    if (found != passthrough_.end()) return found->second.get();
+    std::string wgsl = "@group(2) @binding(0) var<storage, read> xe_vertices: array<vec4<f32>>;\nstruct Out {\n  @builtin(position) position: vec4<f32>,\n";
+    size_t start = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      const size_t end = quals.find(';', start);
+      wgsl += "  @location(" + std::to_string(i) + ") " + quals.substr(start, end - start) + " i" + std::to_string(i) + ": vec4<f32>,\n";
+      start = end + 1;
+    }
+    wgsl += "}\n@vertex fn main(@builtin(vertex_index) v: u32) -> Out {\n  let b = v * " + std::to_string(1 + count) + "u;\n  var o: Out;\n  o.position = xe_vertices[b];\n";
+    for (uint32_t i = 0; i < count; ++i) wgsl += "  o.i" + std::to_string(i) + " = xe_vertices[b + " + std::to_string(1 + i) + "u];\n";
+    wgsl += "  return o;\n}\n";
+    auto shader = std::make_unique<Shader>();
+    shader->id = kPassthroughVertexShader | count;
+    shader->stage = 0;
+    Binding b;
+    b.group = 2;
+    b.binding = 0;
+    b.kind = Binding::kStorage;
+    b.write = false;
+    shader->bindings.push_back(b);
+    PushScope();
+    shader->module = WgslModule(wgsl, "Render360 pass-through vertex shader");
+    shader->error = PopScope();
+    if (!shader->error.empty()) {
+      std::fprintf(stderr, "R360_WGPU pass-through VS: %s\n%s\n", shader->error.c_str(), wgsl.c_str());
+      shader->module = nullptr;
+    }
+    const Shader* raw = shader.get();
+    passthrough_[key] = std::move(shader);
+    return raw;
+  }
+
+  // Storage ring for CPU-shaded vertices of pass-through draws.
+  WGPUBuffer pre_shaded_ = nullptr;
+  uint64_t pre_shaded_offset_ = 0;
+  static constexpr uint64_t kPreShadedBytes = 8ull * 1024 * 1024;
 
   void ParseRenderTargets(const uint32_t* w) {
     bound_.surface_pitch = w[0];
@@ -1194,7 +1289,16 @@ class BackendImpl final : public Backend {
     const uint32_t* index_data = p + o;
     const uint64_t index_bytes = index_format == 2 ? vertex_count * 4ull : vertex_count * 2ull;
     if (o + index_words > n) { ++stats_.skipped_draws; return; }
-    if (uniforms_.offset + total > uniforms_.limit || !indices_.Fits(index_bytes)) Submit();
+    const bool passthrough = (entry.d.vertex_shader & kPassthroughVertexShader) != 0;
+    const uint64_t pre_shaded_words = passthrough ? uint64_t(vertex_count) * (4 + 4 * (entry.d.vertex_shader & 0xFF)) : 0;
+    const uint32_t* pre_shaded = p + o + index_words;
+    if (o + index_words + pre_shaded_words > n) { ++stats_.skipped_draws; return; }
+    // Queue writes land before the whole submission runs, so every ring is
+    // reused only after a submit.
+    if (uniforms_.offset + total > uniforms_.limit || !indices_.Fits(index_bytes) ||
+        (passthrough && pre_shaded_offset_ + pre_shaded_words * 4 > kPreShadedBytes)) {
+      Submit();
+    }
     WGPURenderPassEncoder pass = BeginPass();
     if (!pass) { ++stats_.skipped_draws; return; }
     uint32_t offsets[5];
@@ -1211,6 +1315,19 @@ class BackendImpl final : public Backend {
     }
     WGPUBindGroup tg[2];
     TextureBindGroups(entry, binding, binding_words, tg);
+    WGPUBindGroup pre_shaded_group = nullptr;
+    if (passthrough) {
+      const uint64_t bytes = pre_shaded_words * 4;
+      if (!pre_shaded_) pre_shaded_ = MakeBuffer("Render360 CPU-shaded vertices", kPreShadedBytes,
+                                                 WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+      if (bytes > kPreShadedBytes) { ++stats_.skipped_draws; return; }
+
+      wgpuQueueWriteBuffer(queue_, pre_shaded_, pre_shaded_offset_, pre_shaded, bytes);
+      pre_shaded_group = BufferGroup(entry.layouts[2]->layout, pre_shaded_, pre_shaded_offset_, bytes);
+      pre_shaded_offset_ = (pre_shaded_offset_ + bytes + 255) & ~255ull;
+      tg[0] = pre_shaded_group;
+      pass_state_.groups[2] = nullptr;
+    }
     for (uint32_t g = 0; g < 4; ++g) {
       WGPUBindGroup group = g >= 2 ? tg[g - 2] : entry.layouts[g]->group;
       if (g == 1) {
@@ -1227,6 +1344,7 @@ class BackendImpl final : public Backend {
     wgpuRenderPassEncoderSetStencilReference(pass, p[11]);
     WGPUColor blend{F(p[12]), F(p[13]), F(p[14]), F(p[15])};
     wgpuRenderPassEncoderSetBlendConstant(pass, &blend);
+    if (pre_shaded_group) wgpuBindGroupRelease(pre_shaded_group);  // the pass keeps it alive
     if (index_format) {
       const uint32_t offset = indices_.Push(index_data, index_bytes);
       wgpuRenderPassEncoderSetIndexBuffer(pass, indices_.buffer,
@@ -1244,6 +1362,7 @@ class BackendImpl final : public Backend {
     uint32_t o = 0;
     for (uint32_t g = 2; g < 4; ++g) {
       const uint32_t sid = g == 2 ? entry.d.vertex_shader : entry.d.pixel_shader;
+      if (g == 2 && (sid & kPassthroughVertexShader)) { out[0] = entry.layouts[2]->group; continue; }
       auto sit = shaders_.find(sid);
       const Shader* shader = (sid || g == 2) && sit != shaders_.end() ? &sit->second : nullptr;
       GroupLayout* layout = entry.layouts[g];
@@ -1906,6 +2025,17 @@ class BackendImpl final : public Backend {
       const auto* m = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(read, 0, uint64_t(bpr) * h));
       rgba->resize(size_t(w) * h * 4);
       for (uint32_t y = 0; y < h; ++y) std::memcpy(rgba->data() + size_t(y) * w * 4, m + size_t(y) * bpr, w * 4);
+      // Apply the swap swizzle as the present shader does (3 bits per
+      // component: 0-3 RGBA, 4 zero, 5 one).
+      const uint32_t sw = front_swizzle_;
+      for (size_t i = 0; i < rgba->size(); i += 4) {
+        uint8_t t[4] = {(*rgba)[i], (*rgba)[i + 1], (*rgba)[i + 2], (*rgba)[i + 3]};
+        for (int c = 0; c < 3; ++c) {
+          const uint32_t sel = (sw >> (3 * c)) & 7;
+          (*rgba)[i + c] = sel >= 5 ? 255 : sel == 4 ? 0 : t[sel];
+        }
+        (*rgba)[i + 3] = 255;
+      }
       wgpuBufferUnmap(read);
       *width = w;
       *height = h;
@@ -1929,7 +2059,8 @@ std::unique_ptr<Backend> Backend::Create(void* metal_layer, std::string* error) 
 }
 
 void EnableCoreRecording(bool on) {
-  r360_gpu_set_mode(on ? 1 : 0);
+  // R360_GPU_DEBUG: recorder debug logging (mode bit 2), as the web runner.
+  r360_gpu_set_mode(on ? (getenv("R360_GPU_DEBUG") ? 3 : 1) : 0);
   r360_xenos_soft_set_rasterize(on ? 0 : 1);
 }
 

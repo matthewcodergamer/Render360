@@ -91,3 +91,33 @@ struct MetalFrameView: UIViewRepresentable {
         }
     }
 }
+
+/// Surface for the native Xenos GPU renderer (wgpu-native on Metal): the
+/// guest thread presents into this layer directly.
+final class GPULayerView: UIView {
+    override class var layerClass: AnyClass { CAMetalLayer.self }
+    var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+    var onSize: ((CGSize) -> Void)?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let scale = window?.screen.nativeScale ?? UIScreen.main.nativeScale
+        contentScaleFactor = scale
+        let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        metalLayer.drawableSize = size
+        onSize?(size)
+    }
+}
+
+struct GPUFrameView: UIViewRepresentable {
+    let session: EmulatorSession
+    func makeUIView(context: Context) -> GPULayerView {
+        let v = GPULayerView()
+        v.backgroundColor = .black
+        v.metalLayer.pixelFormat = .bgra8Unorm
+        v.metalLayer.framebufferOnly = true
+        v.onSize = { [weak session] size in session?.setDrawableSize(size) }
+        session.gpuLayer = v.metalLayer
+        return v
+    }
+    func updateUIView(_ uiView: GPULayerView, context: Context) {}
+}

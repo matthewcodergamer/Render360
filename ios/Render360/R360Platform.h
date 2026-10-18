@@ -12,3 +12,9 @@ void r360_breadcrumb_open(const char* path);
 void r360_breadcrumb(const char* line);
 // Installs signal handlers that write a final breadcrumb on a crash.
 void r360_install_crash_handlers(void);
+
+// Native Xenos GPU renderer (native/gpu, wgpu-native on Metal).
+int r360_gpu_backend_start(void* metal_layer);
+int r360_gpu_backend_frame(int present, unsigned width, unsigned height);
+const char* r360_gpu_backend_error(void);
+unsigned r360_gpu_backend_errors(void);

@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
@@ -815,6 +816,16 @@ bool Resolve() {
   if (!xe::gpu::draw_util::GetResolveInfo(regs, *memory, trace_writer, 1, 1, false, false, info)) {
     return Skip(kSkipResolveInfo);
   }
+  if (getenv("R360_RESOLVE_LOG")) {
+    static uint32_t logged = 0;
+    if (logged++ < 3)
+      std::fprintf(stderr, "R360_RESOLVE_SOFT dest_base_reg=0x%08X adjusted=0x%08X extent=0x%08X+%u dest_off=%u,%u edram_off=%u,%u size=%ux%u\n",
+                   regs[XE_GPU_REG_RB_COPY_DEST_BASE], info.copy_dest_base, info.copy_dest_extent_start,
+                   info.copy_dest_extent_length, info.copy_dest_coordinate_info.offset_x_div_8 * 8u,
+                   info.copy_dest_coordinate_info.offset_y_div_8 * 8u, info.coordinate_info.edram_offset_x_div_8 * 8u,
+                   info.coordinate_info.edram_offset_y_div_8 * 8u, info.coordinate_info.width_div_8 * 8u,
+                   info.height_div_8 * 8u);
+  }
   const bool copying_depth = info.IsCopyingDepth();
   const auto& edram_info = copying_depth ? info.depth_edram_info : info.color_edram_info;
   const uint32_t width = info.coordinate_info.width_div_8 * 8u;
@@ -1259,6 +1270,45 @@ void ResetXenosSoftRenderer() {
   std::fill(Edram().begin(), Edram().end(), 0u);
   g_draws_rendered = g_draws_skipped = g_resolves = g_pixels_shaded = 0;
   g_last_skip_reason = g_texture_fetch_failures = g_last_texture_format = 0;
+}
+
+// Rectangle lists for the GPU backend (webgpu_draws.cpp): WebGPU has no
+// geometry shaders, so the guest vertex shader runs here on Xenia's
+// ShaderInterpreter (as for the software renderer) and the host draws the
+// shaded vertices. Fills 4 + 64 floats per guest vertex: position, then the
+// 16 interpolators.
+bool ShadeXenosVertices(const XenosSoftDraw& draw, std::vector<float>& out, uint32_t* vertex_count) {
+  RegisterFile& regs = Registers();
+  const uint32_t count_regs = std::min<uint32_t>(draw.register_count, RegisterFile::kRegisterCount);
+  std::memcpy(regs.values, draw.registers, count_regs * sizeof(uint32_t));
+  reg::VGT_DRAW_INITIATOR init;
+  init.value = draw.draw_initiator;
+  const uint32_t count = init.num_indices;
+  *vertex_count = 0;
+  auto* vs = GetShader(xenos::ShaderType::kVertex, draw.vertex_shader, draw.vertex_shader_dwords,
+                       draw.vertex_shader_hash);
+  if (!vs || !xe::gpu::ShaderInterpreter::CanInterpretShader(*vs)) return false;
+  xe::Memory* memory = ActiveProbeMemory();
+  if (!memory) return false;
+  out.assign(size_t(count) * 68, 0.0f);
+  xe::gpu::ShaderInterpreter interpreter(regs, *memory);
+  VertexExportSink sink;
+  interpreter.SetExportSink(&sink);
+  interpreter.SetShader(*vs);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t index = 0;
+    if (!ReadIndex(draw, init, i, &index)) return false;
+    std::fill(interpreter.temp_registers(),
+              interpreter.temp_registers() + xenos::kMaxShaderTempRegisters * 4, 0.0f);
+    interpreter.temp_registers()[0] = float(index);
+    VertexOut v;
+    sink.out = &v;
+    interpreter.Execute();
+    std::memcpy(&out[size_t(i) * 68], v.position, sizeof(v.position));
+    std::memcpy(&out[size_t(i) * 68 + 4], v.interpolators, sizeof(v.interpolators));
+  }
+  *vertex_count = count;
+  return true;
 }
 
 }  // namespace render360::xenia_web

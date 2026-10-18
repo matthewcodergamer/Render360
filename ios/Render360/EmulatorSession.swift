@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import QuartzCore
 
 /// Latest guest frame (RGBA8), handed from the guest thread to the Metal view.
 final class FrameStore {
@@ -52,6 +53,17 @@ final class EmulatorSession: ObservableObject {
     private var statsTimer: Timer?
     private(set) var bootResult = R360BootResult()
     var memory: MemoryGuard?
+    /// Metal layer of the GPU renderer (GPUFrameView); nil: software frames.
+    var gpuLayer: CAMetalLayer?
+    @Published private(set) var renderer = "starting"
+    private var useGPU = false
+    private var drawableLock = NSLock()
+    private var drawable = (w: UInt32(0), h: UInt32(0))
+    private var lastPresent = 0.0
+
+    func setDrawableSize(_ size: CGSize) {
+        drawableLock.lock(); drawable = (UInt32(size.width), UInt32(size.height)); drawableLock.unlock()
+    }
 
     struct GuestDialog: Identifiable {
         let id = UUID()
@@ -93,6 +105,14 @@ final class EmulatorSession: ObservableObject {
     }
 
     private func runCore(_ game: GameEntry) {
+        // GPU renderer when the view's layer exists (wait briefly for layout).
+        for _ in 0..<40 where gpuLayer == nil { Thread.sleep(forTimeInterval: 0.05) }
+        if let layer = gpuLayer, UserDefaults.standard.object(forKey: "r360.softwareRenderer") as? Bool != true {
+            useGPU = r360_gpu_backend_start(Unmanaged.passUnretained(layer).toOpaque()) == 1
+            let why = useGPU ? "" : String(cString: r360_gpu_backend_error())
+            Breadcrumbs.shared.log("renderer \(useGPU ? "gpu (wgpu/Metal)" : "software: \(why)")")
+        }
+        DispatchQueue.main.async { self.renderer = self.useGPU ? "Metal GPU" : "software" }
         let paths = game.discURLs.map { $0.path }
         var cStrings = paths.map { strdup($0) }
         defer { cStrings.forEach { free($0) } }
@@ -133,7 +153,15 @@ final class EmulatorSession: ObservableObject {
         // Frames: decode the VdSwap frontbuffer (as render360-title-frontbuffer.mjs).
         let swaps = r360_title_gpu_vd_swap_calls()
         perf.submitted(t, frames: swaps)
-        if swaps != lastFrames {
+        if useGPU {
+            // Replay every slice; present new guest frames at most 30 per second.
+            let due = swaps != lastFrames && t - lastPresent >= 33
+            drawableLock.lock(); let d = drawable; drawableLock.unlock()
+            if r360_gpu_backend_frame(due ? 1 : 0, d.w, d.h) == 1, due {
+                lastFrames = swaps; lastPresent = t
+                perf.framePresented(t)
+            }
+        } else if swaps != lastFrames {
             lastFrames = swaps
             if r360_xenos_frontbuffer_snapshot_capture() == 1,
                let ptr = UnsafeRawPointer(bitPattern: r360_xenos_frontbuffer_snapshot_buffer()) {

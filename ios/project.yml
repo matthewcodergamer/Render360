@@ -30,6 +30,9 @@ targets:
       - path: Render360
         excludes:
           - "*.entitlements"
+      # Native Xenos GPU renderer (wgpu-native: ~/r360-deps/wgpu, docs/IOS_APP.md).
+      - path: ../native/gpu/xenos_wgpu.cpp
+      - path: ../native/gpu/xenos_wgpu_c.cpp
     info:
       path: Render360/Info.plist
       properties:
@@ -67,11 +70,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(R360_BUNDLE_ID)
         SWIFT_OBJC_BRIDGING_HEADER: Render360/Render360-Bridging-Header.h
-        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../native/include"]
-        LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/../build/native-ios-arm64"]
-        OTHER_LDFLAGS: ["-lrender360core", "-lc++", "-Wl,-dead_strip"]
+        R360_WGPU_DIR: $(HOME)/r360-deps/wgpu/ios-aarch64-release
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../native/include", "$(R360_WGPU_DIR)/include"]
+        LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/../build/native-ios-arm64", "$(R360_WGPU_DIR)/lib"]
+        OTHER_LDFLAGS: ["-lrender360core", "$(R360_WGPU_DIR)/lib/libwgpu_native.a", "-lc++", "-Wl,-dead_strip"]
     dependencies:
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - sdk: GameController.framework
       - sdk: Network.framework
+      - sdk: QuartzCore.framework

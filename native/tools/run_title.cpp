@@ -220,6 +220,17 @@ int main(int argc, char** argv) {
         }
       }
       std::printf("  compare frontbuffer 0x%08X +%u: %u words differ, non-white cpu %u gpu %u\n", src, bytes, diff, cpu_nonwhite, gpu_nonwhite);
+      // Decode the GPU-resolved bytes with the software frontbuffer decoder.
+      if (shared.size() >= bytes) {
+        for (uint32_t i = 0; i < bytes; ++i) r360_sparse_guest_memory_write_u8(src + i, shared[i]);
+        if (r360_xenos_frontbuffer_snapshot_capture() == 1) {
+          const uint32_t w = r360_xenos_frontbuffer_snapshot_width(), h = r360_xenos_frontbuffer_snapshot_height();
+          const auto* px = reinterpret_cast<const uint8_t*>(r360_xenos_frontbuffer_snapshot_buffer());
+          std::vector<uint8_t> rgba(px, px + size_t(w) * h * 4);
+          WritePng("/tmp/gpu-mem-decoded.png", rgba, w, h);
+          std::printf("  GPU memory decoded by the software path -> /tmp/gpu-mem-decoded.png\n");
+        }
+      }
     }
     std::printf("  core GPU recorder: draws %u skips noVS %u translation %u primitive %u indices %u vfetch %u · "
                 "textures %u created %u loads %u load failures %u · resolves %u (%u failed)\n",

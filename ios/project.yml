@@ -62,12 +62,17 @@ targets:
             UTTypeConformsTo: [public.data]
             UTTypeTagSpecification:
               public.filename-extension: [iso, xex, god, stfs, con]
+    preBuildScripts:
+      - name: Bundle the Render360 website UI
+        script: bash "$SRCROOT/bundle-web.sh"
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Render360/Render360.entitlements
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         PRODUCT_BUNDLE_IDENTIFIER: $(R360_BUNDLE_ID)
         SWIFT_OBJC_BRIDGING_HEADER: Render360/Render360-Bridging-Header.h
         R360_WGPU_DIR: $(HOME)/r360-deps/wgpu/ios-aarch64-release

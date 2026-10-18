@@ -84,6 +84,18 @@ size_t r360_native_report_json(const R360BootResult* result, char* out, size_t c
 // 1 = xboxkrnl.exe, 2 = xam.xex. Falls back to "module!0xORDINAL".
 const char* r360_native_kernel_export_name(uint32_t module, uint32_t ordinal, char* buf, size_t size);
 
+// Library metadata of a game file without booting it (the web UI's
+// inspectFile): display name, title / media id, container kind.
+typedef struct R360GameInfo {
+  char name[128];
+  char display_type[48];   // "STFS CON", "Xbox 360 Disc / XDVDFS", "XEX2"...
+  char source_type[8];     // "con", "live", "pirs", "iso", "xex"
+  uint32_t title_id, media_id;
+  uint64_t size;
+  char error[160];
+} R360GameInfo;
+uint32_t r360_native_inspect(const char* path, R360GameInfo* info);
+
 // Multi-disc titles: re-registers \Device\Cdrom0 with disc `index` of the
 // last boot's disc list (the title's next file open sees the new disc).
 uint32_t r360_native_select_disc(uint32_t index);

@@ -114,7 +114,12 @@ final class GameLibrary: ObservableObject {
             let dest = folder.appendingPathComponent(url.lastPathComponent)
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
             // Inbox files (AirDrop/open-in) can be moved; picked files are copied.
-            if url.path.contains("/Inbox/") { try fm.moveItem(at: url, to: dest) } else { try fm.copyItem(at: url, to: dest) }
+            // Inbox (AirDrop / open-in) and picker copies (tmp) are ours to move.
+            if url.path.contains("/Inbox/") || url.path.hasPrefix(fm.temporaryDirectory.path) || url.path.contains("/tmp/") {
+                try fm.moveItem(at: url, to: dest)
+            } else {
+                try fm.copyItem(at: url, to: dest)
+            }
             names.append(dest.lastPathComponent)
             Breadcrumbs.shared.log("import \(dest.lastPathComponent)")
         }

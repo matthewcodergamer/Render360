@@ -37,62 +37,36 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationWillTerminate(_ application: UIApplication) { Breadcrumbs.shared.endSession() }
 }
 
+/// The website's UI (WebUIView) over the native game views. The library,
+/// details, settings, touch controller and HUD are the website's own; the
+/// emulator, game storage and Metal rendering are native.
 struct RootView: View {
     @EnvironmentObject var library: GameLibrary
     @EnvironmentObject var input: InputHub
-    @State private var playing: GameEntry?
-    @State private var showImport = false
-    @State private var showSettings = false
-    @State private var showCrash = Breadcrumbs.shared.previousRunCrashed
+    @StateObject private var session = EmulatorSession()
+    @State private var bridge: WebBridge?
+    private let memory = MemoryGuard()
 
     var body: some View {
-        NavigationStack {
-            List {
-                if let days = SigningInfo.daysLeft, days <= 2 {
-                    Label(days <= 0 ? "This build has expired. Rebuild and reinstall from the Mac (docs/IOS_APP.md)."
-                                    : "This build expires in \(days) day\(days == 1 ? "" : "s"). Re-sign from the Mac to keep playing.",
-                          systemImage: "clock.badge.exclamationmark")
-                        .foregroundStyle(.orange)
-                }
-                if library.games.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("No games yet").font(.headline)
-                        Text("Import your own dumped games from the Files app, AirDrop, or your Mac over Wi-Fi.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }.padding(.vertical, 8)
-                }
-                ForEach(library.games) { game in
-                    Button { playing = game } label: { GameRow(game: game) }
-                        .swipeActions {
-                            Button(role: .destructive) { library.delete(game) } label: { Label("Delete", systemImage: "trash") }
-                        }
-                        .contextMenu {
-                            Button(game.ownedFullLicense ? "Mark as trial" : "I own the full game") {
-                                var g = game; g.ownedFullLicense.toggle(); library.update(g)
-                            }
-                        }
-                }
-            }
-            .navigationTitle("Render360")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { showSettings = true } label: { Image(systemName: "gearshape") } }
-                ToolbarItem(placement: .topBarTrailing) { Button { showImport = true } label: { Label("Import game", systemImage: "plus") } }
-            }
-            .sheet(isPresented: $showImport) { ImportView().environmentObject(library) }
-            .sheet(isPresented: $showSettings) { SettingsView() }
-            .alert("The last session ended unexpectedly", isPresented: $showCrash) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text((Breadcrumbs.shared.previousTail.suffix(4)).joined(separator: "\n"))
-            }
+        ZStack {
+            Color.black.ignoresSafeArea()
+            MetalFrameView(frames: session.frames, perf: session.perf).ignoresSafeArea()
+                .opacity(session.renderer == "software" ? 1 : 0)
+            GPUFrameView(session: session).ignoresSafeArea()
+                .opacity(session.renderer == "software" ? 0 : 1)
+            if let bridge { WebUIView(bridge: bridge).ignoresSafeArea() }
         }
         .onAppear {
-            // Test hooks (devicectl launch -e): start a game / point telemetry at the Mac.
-            let env = ProcessInfo.processInfo.environment
-            if let url = env["R360_TELEMETRY"] { UserDefaults.standard.set(url, forKey: "r360.telemetryServer") }
-            if let id = env["R360_AUTOPLAY"], playing == nil { playing = library.games.first { $0.id == id } }
+            if bridge == nil { bridge = WebBridge(session: session, input: input) }
+            session.memory = memory
+            Telemetry.shared.emulator = session
+            Telemetry.shared.memory = memory
+            UIApplication.shared.isIdleTimerDisabled = true
+            // Test hook (devicectl launch -e): telemetry to the Mac.
+            if let url = ProcessInfo.processInfo.environment["R360_TELEMETRY"] {
+                UserDefaults.standard.set(url, forKey: "r360.telemetryServer")
+            }
         }
-        .fullScreenCover(item: $playing) { game in PlayView(game: game).environmentObject(input) }
     }
 }
 

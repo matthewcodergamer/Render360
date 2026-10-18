@@ -56,6 +56,12 @@ uint32_t r360pkg_stfs_extract_bytes_done();
 uint32_t r360pkg_stfs_extract_bytes_total();
 void r360pkg_stfs_extract_reset();
 uint32_t r360pkg_xex_decode(uint32_t length);
+uint32_t r360pkg_inspect_xex(uint32_t length);
+uint32_t r360pkg_xex_title_id();
+uint32_t r360pkg_xex_media_id();
+uint32_t r360pkg_stfs_title_id();
+uint32_t r360pkg_stfs_media_id();
+uint32_t r360pkg_stfs_package_kind();
 uint32_t r360pkg_xex_decode_encryption_type();
 uint32_t r360pkg_xex_decode_compression_type();
 uint32_t r360pkg_xex_decode_image_size();
@@ -1437,4 +1443,55 @@ extern "C" size_t r360_native_report_json(const R360BootResult* r, char* out, si
     out[n] = 0;
   }
   return j.size();
+}
+
+extern "C" uint32_t r360_native_inspect(const char* path, R360GameInfo* info) {
+  *info = R360GameInfo{};
+  try {
+    const HostFile* file = OpenHostFile(path);
+    info->size = file->size;
+    std::string base = path;
+    base = base.substr(base.find_last_of('/') + 1);
+    std::snprintf(info->name, sizeof(info->name), "%s", base.c_str());
+    uint8_t magic[4] = {};
+    if (file->size >= 4) file->Read(0, magic, 4);
+    auto inspect_xex = [&](const Bytes& xex) {
+      const size_t n = std::min<size_t>(xex.size(), r360pkg_io_capacity());
+      coreStage(xex.data(), n);
+      if (r360pkg_inspect_xex(uint32_t(n)) >= 1) {
+        info->title_id = r360pkg_xex_title_id();
+        info->media_id = r360pkg_xex_media_id();
+      }
+    };
+    if (!std::memcmp(magic, "XEX2", 4)) {
+      std::snprintf(info->display_type, sizeof(info->display_type), "XEX2");
+      std::snprintf(info->source_type, sizeof(info->source_type), "xex");
+      inspect_xex(file->ReadBytes(0, size_t(std::min<uint64_t>(file->size, r360pkg_io_capacity()))));
+    } else if (!std::memcmp(magic, "LIVE", 4) || !std::memcmp(magic, "PIRS", 4) || !std::memcmp(magic, "CON ", 4)) {
+      const char* kind = magic[0] == 'L' ? "live" : magic[0] == 'P' ? "pirs" : "con";
+      std::snprintf(info->source_type, sizeof(info->source_type), "%s", kind);
+      std::snprintf(info->display_type, sizeof(info->display_type), "STFS %s", magic[0] == 'L' ? "LIVE" : magic[0] == 'P' ? "PIRS" : "CON");
+      const std::string name = mountStfs(file);
+      if (!name.empty()) std::snprintf(info->name, sizeof(info->name), "%s", name.c_str());
+      info->title_id = r360pkg_stfs_title_id();
+      info->media_id = r360pkg_stfs_media_id();
+    } else {
+      std::snprintf(info->source_type, sizeof(info->source_type), "iso");
+      std::snprintf(info->display_type, sizeof(info->display_type), "Xbox 360 Disc / XDVDFS");
+      const XdvdfsVolume volume = mountXdvdfs(file);
+      std::vector<VfsFile> files;
+      listXdvdfsVfsFiles(volume, volume.root_sector, volume.root_size, "", files);
+      for (const auto& f : files) {
+        std::string lower = f.path;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "default.xex" && !f.directory) {
+          inspect_xex(file->ReadBytes(f.host_offset, size_t(std::min<uint64_t>(f.size, r360pkg_io_capacity()))));
+        }
+      }
+    }
+    return 1;
+  } catch (const std::exception& e) {
+    std::snprintf(info->error, sizeof(info->error), "%s", e.what());
+    return 0;
+  }
 }

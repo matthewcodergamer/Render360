@@ -81,7 +81,14 @@ final class EmulatorSession: ObservableObject {
         dialog = nil
     }
 
-    func stop() { stopRequested = true }
+    func stop() { stopRequested = true; setPaused(false) }
+
+    /// Pause holds the guest thread at its next host slice (the website's Pause).
+    private let pauseCondition = NSCondition()
+    private var paused = false
+    func setPaused(_ on: Bool) {
+        pauseCondition.lock(); paused = on; pauseCondition.broadcast(); pauseCondition.unlock()
+    }
 
     /// The core holds one title per process (a stopped run leaves parked
     /// guest threads), so boot exactly once even if the view appears twice.
@@ -194,6 +201,9 @@ final class EmulatorSession: ObservableObject {
             DispatchQueue.main.async { if self.dialog == nil { self.dialog = d } }
         }
         memory?.check()
+        pauseCondition.lock()
+        while paused && !stopRequested { pauseCondition.wait() }
+        pauseCondition.unlock()
         return stopRequested ? 1 : 0
     }
 }

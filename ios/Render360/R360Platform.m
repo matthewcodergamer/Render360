@@ -63,3 +63,15 @@ void r360_install_crash_handlers(void) {
   const int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGTRAP};
   for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) signal(signals[i], crash_handler);
 }
+
+#include <sys/mman.h>
+// Probe for static recompilation (XenonRecomp's flat guest memory): can this
+// process reserve Xenia's 4.5 GiB guest address range? Reserve only (no RAM).
+uint64_t r360_platform_probe_flat_reserve(void) {
+  const uint64_t sizes[] = {0x120000000ull, 0x100000000ull, 0xC0000000ull, 0x80000000ull};
+  for (unsigned i = 0; i < 4; ++i) {
+    void* p = mmap(NULL, sizes[i], PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (p != MAP_FAILED) { munmap(p, sizes[i]); return sizes[i]; }
+  }
+  return 0;
+}

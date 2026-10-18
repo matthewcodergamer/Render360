@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // the result is reported in telemetry and Settings.
         Breadcrumbs.shared.log("jit probe start")
         Breadcrumbs.shared.log("jit available=\(r360_native_jit_available())")
+        Breadcrumbs.shared.log(String(format: "flat guest reserve: %.2f GiB", Double(r360_platform_probe_flat_reserve()) / 1073741824))
         Telemetry.shared.start()
         if Breadcrumbs.shared.previousRunCrashed { Telemetry.shared.sendCrashReport(Breadcrumbs.shared.previousTail) }
         return true

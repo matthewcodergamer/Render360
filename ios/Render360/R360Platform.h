@@ -18,3 +18,6 @@ int r360_gpu_backend_start(void* metal_layer);
 int r360_gpu_backend_frame(int present, unsigned width, unsigned height);
 const char* r360_gpu_backend_error(void);
 unsigned r360_gpu_backend_errors(void);
+
+// Largest flat guest address range this process can reserve (bytes).
+uint64_t r360_platform_probe_flat_reserve(void);

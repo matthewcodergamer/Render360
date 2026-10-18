@@ -99,8 +99,16 @@ echo "built $OUT/librender360core.a"
 
 case "$TARGET" in
   macos-*)
+    # Optional GPU path: wgpu-native release (https://github.com/gfx-rs/wgpu-native)
+    # unpacked at R360_WGPU_DIR (default ~/r360-deps/wgpu/<target>-release).
+    WGPU_DIR="${R360_WGPU_DIR:-$HOME/r360-deps/wgpu/macos-$(uname -m)-release}"
+    GPU_ARGS=()
+    if [ -f "$WGPU_DIR/lib/libwgpu_native.a" ]; then
+      GPU_ARGS=(-DR360_WITH_WGPU=1 -I"$WGPU_DIR/include" "$ROOT/native/gpu/xenos_wgpu.cpp" "$WGPU_DIR/lib/libwgpu_native.a"
+        -lz -framework Metal -framework QuartzCore -framework Foundation -framework CoreGraphics -framework IOKit)
+    fi
     "$CXX" -std=c++20 "$R360_OPT" -g "${ARCHFLAGS[@]}" -isysroot "$SYSROOT" -I"$ROOT/native/include" \
-      "$ROOT/native/tools/run_title.cpp" "$OUT/librender360core.a" -Wl,-dead_strip -o "$OUT/run-title"
+      "$ROOT/native/tools/run_title.cpp" "$OUT/librender360core.a" ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} -Wl,-dead_strip -o "$OUT/run-title"
     echo "built $OUT/run-title"
     ;;
 esac

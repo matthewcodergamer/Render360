@@ -87,6 +87,16 @@ struct NativeShell: View {
             }
         }
         .preferredColorScheme(.dark)
+        // iOS kills apps that keep the CPU busy in the background: pause the
+        // guest while Render360 is not in the foreground.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            Breadcrumbs.shared.log("background: paused")
+            session.setPaused(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            Breadcrumbs.shared.log("foreground")
+            if playing != nil { session.setPaused(false) }
+        }
         .onAppear {
             session.memory = memory
             Telemetry.shared.emulator = session

@@ -18,7 +18,6 @@ extern "C" __attribute__((weak)) uint32_t r360_hir_last_source() { return 0; }
 
 #if defined(R360_NATIVE) && defined(__APPLE__)
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <sys/mman.h>
 #define R360_FLAT_GUEST_MEMORY 1
 #endif
@@ -60,8 +59,9 @@ inline uint8_t* FlatHost(uint32_t address) {
 }
 
 bool MapPhysicalView(mach_port_t entry, uint64_t guest) {
-  mach_vm_address_t at = mach_vm_address_t(g_flat_base + guest);
-  const kern_return_t kr = mach_vm_map(mach_task_self(), &at, kPhysicalSize, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+  // vm_map (mach_vm_map is not in the iOS SDK; addresses are 64-bit on arm64).
+  vm_address_t at = vm_address_t(g_flat_base + guest);
+  const kern_return_t kr = vm_map(mach_task_self(), &at, vm_size_t(kPhysicalSize), 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
                                        entry, 0, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE,
                                        VM_INHERIT_NONE);
   if (kr != KERN_SUCCESS) std::fprintf(stderr, "R360_FLAT_MEMORY view 0x%llX: mach_vm_map %d\n", (unsigned long long)guest, kr);

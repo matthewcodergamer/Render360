@@ -330,7 +330,7 @@ struct PlayScreen: View {
                     .opacity(session.renderer == "software" ? 1 : 0)
                 GPUFrameView(session: session).opacity(session.renderer == "software" ? 0 : 1)
                 if !session.firstFrame { BootCard(game: game, session: session) }
-                ControllerLayer(size: geo.size, input: input, onPause: { session.setPaused(true); pauseSheet = true })
+                XeniOSControls(size: geo.size, input: input, onPause: { session.setPaused(true); pauseSheet = true })
                     .opacity(input.controllerName == nil ? 1 : 0)
                 HUD(session: session).position(x: geo.size.width - (geo.size.width > geo.size.height ? 175 : 125),
                                                y: geo.size.width > geo.size.height ? 60 : 210)
@@ -508,5 +508,132 @@ struct MovePad: View {
                 }
                 .onEnded { _ in value = .zero; onChange() })
         }
+    }
+}
+
+// MARK: - XeniOS touch controls (port of xenios-jp/XeniOS
+// src/xenia/hid/touch/touch_layout_ios_defaults.cc, BSD-3, "FPS Compact")
+
+struct XeniOSControls: View {
+    let size: CGSize
+    @ObservedObject var input: InputHub
+    let onPause: () -> Void
+    @State private var held: Set<String> = []
+    @State private var move = CGSize.zero
+    @State private var look = CGSize.zero
+    @State private var lastMoveTap = Date.distantPast
+    @State private var thumbs: Set<String> = []
+
+    // Normalized frames {x, y, width, height} (top-left origin), XeniOS defaults.
+    private struct Button360 { let id, label, key: String; let frame: CGRect }
+    private let buttons: [Button360] = [
+        .init(id: "back_button", label: "Back", key: "BACK", frame: CGRect(x: 0.390, y: 0.045, width: 0.080, height: 0.112)),
+        .init(id: "start_button", label: "Start", key: "START", frame: CGRect(x: 0.495, y: 0.045, width: 0.085, height: 0.112)),
+        .init(id: "lb", label: "LB", key: "LB", frame: CGRect(x: 0.660, y: 0.050, width: 0.085, height: 0.112)),
+        .init(id: "rb", label: "RB", key: "RB", frame: CGRect(x: 0.765, y: 0.050, width: 0.085, height: 0.112)),
+        .init(id: "aim_button", label: "LT", key: "LT", frame: CGRect(x: 0.095, y: 0.405, width: 0.120, height: 0.110)),
+        .init(id: "swap_button", label: "Y", key: "Y", frame: CGRect(x: 0.760, y: 0.455, width: 0.065, height: 0.115)),
+        .init(id: "reload_button", label: "X", key: "X", frame: CGRect(x: 0.700, y: 0.585, width: 0.065, height: 0.115)),
+        .init(id: "melee_button", label: "B", key: "B", frame: CGRect(x: 0.820, y: 0.585, width: 0.065, height: 0.115)),
+        .init(id: "jump_button", label: "A", key: "A", frame: CGRect(x: 0.760, y: 0.715, width: 0.065, height: 0.115)),
+        .init(id: "fire_button", label: "RT", key: "RT", frame: CGRect(x: 0.860, y: 0.405, width: 0.120, height: 0.110)),
+    ]
+    private let pauseFrame = CGRect(x: 0.040, y: 0.045, width: 0.120, height: 0.112)
+    private let moveFrame = CGRect(x: 0.055, y: 0.56, width: 0.190, height: 0.315)
+
+    private func rect(_ f: CGRect) -> CGRect {
+        CGRect(x: f.minX * size.width, y: f.minY * size.height, width: f.width * size.width, height: f.height * size.height)
+    }
+
+    var body: some View {
+        ZStack {
+            // look_zone: swipe anywhere else to look (right stick), lowest priority.
+            Color.clear.contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 2)
+                    .onChanged { v in
+                        look = CGSize(width: max(-1, min(1, v.translation.width / 70)),
+                                      height: max(-1, min(1, v.translation.height / 70)))
+                        sync()
+                    }
+                    .onEnded { _ in look = .zero; sync() })
+            let p = rect(pauseFrame)
+            Button(action: onPause) {
+                Image(systemName: "pause.fill").font(.system(size: min(p.height * 0.4, 22)))
+                    .frame(width: p.width, height: p.height)
+                    .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: p.height / 3, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: p.height / 3, style: .continuous).stroke(.white.opacity(0.35)))
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            .position(x: p.midX, y: p.midY)
+            ForEach(buttons, id: \.id) { b in
+                let r = rect(b.frame)
+                let d = min(r.width, r.height)
+                let down = held.contains(b.key)
+                Text(b.label).font(.system(size: d * 0.36, weight: .bold)).foregroundStyle(.white.opacity(0.92))
+                    .frame(width: r.width, height: r.height)
+                    .background(Ellipse().fill(.black.opacity(down ? 0.65 : 0.40)))
+                    .overlay(Ellipse().stroke(.white.opacity(down ? 0.7 : 0.35), lineWidth: 1.5))
+                    .scaleEffect(down ? 0.93 : 1)
+                    .opacity(0.92)
+                    .contentShape(Ellipse())
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            guard !held.contains(b.key) else { return }
+                            held.insert(b.key); sync()
+                            // melee_button: hold for right thumbstick click.
+                            if b.key == "B" {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                                    if held.contains("B") { thumbs.insert("RS"); sync() }
+                                }
+                            }
+                        }
+                        .onEnded { _ in held.remove(b.key); if b.key == "B" { thumbs.remove("RS") }; sync() })
+                    .position(x: r.midX, y: r.midY)
+            }
+            let m = rect(moveFrame)
+            let md = min(m.width, m.height)
+            ZStack {
+                Circle().fill(.black.opacity(0.32)).overlay(Circle().stroke(.white.opacity(0.30), lineWidth: 1.5))
+                // move_with_dpad_ring
+                ForEach(0..<4) { i in
+                    Image(systemName: "chevron.up").font(.system(size: md * 0.11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45)).offset(y: -md * 0.40).rotationEffect(.degrees(Double(i) * 90))
+                }
+                Circle().fill(.white.opacity(0.55)).frame(width: md * 0.38, height: md * 0.38)
+                    .offset(x: move.width * md * 0.30, y: move.height * md * 0.30)
+            }
+            .frame(width: md, height: md)
+            .opacity(0.80)
+            .contentShape(Circle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    if v.translation == .zero {
+                        // double-tap forward: left thumbstick click
+                        if Date().timeIntervalSince(lastMoveTap) < 0.30 { thumbs.insert("LS") }
+                        lastMoveTap = Date()
+                    }
+                    var dx = (v.location.x - md / 2) / (md * 0.48), dy = (v.location.y - md / 2) / (md * 0.48)
+                    let len = (dx * dx + dy * dy).squareRoot()
+                    if len > 1 { dx /= len; dy /= len }
+                    // deadzone 0.14
+                    move = len < 0.14 ? .zero : CGSize(width: dx, height: dy)
+                    sync()
+                }
+                .onEnded { _ in move = .zero; thumbs.remove("LS"); sync() })
+            .position(x: m.midX, y: m.midY)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    private func sync() {
+        var pad = PadState()
+        let bits: [String: UInt32] = ["A": 0x1000, "B": 0x2000, "X": 0x4000, "Y": 0x8000, "LB": 0x100, "RB": 0x200,
+                                      "START": 0x10, "BACK": 0x20, "LS": 0x40, "RS": 0x80]
+        for key in held.union(thumbs) { pad.buttons |= bits[key] ?? 0 }
+        pad.leftTrigger = held.contains("LT") ? 255 : 0
+        pad.rightTrigger = held.contains("RT") ? 255 : 0
+        pad.lx = Float(move.width); pad.ly = Float(-move.height)
+        pad.rx = Float(look.width); pad.ry = Float(-look.height)
+        input.touch = pad
     }
 }

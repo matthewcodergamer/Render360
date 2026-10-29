@@ -318,6 +318,87 @@ expect(k('NtWaitForSingleObjectEx',sys,1,0,P+0x8F0)===0x102,'drained listener sh
 const second=x('XamNotifyCreateListener',0x1,10);expect(x('XNotifyGetNext',second,0,P+0x900,P+0x904)===0&&r32(P+0x900)===0,'startup notifications must only go to the first system listener');
 console.log('XAM_NOTIFY_LISTENER_XENIA=PASS');
 
+// --- XamShowMessageBoxUI (Xenia xam_ui.cc headless: focused button) --------------
+utf16(P+0xA00,'Title');utf16(P+0xA40,'Continue?');utf16(P+0xA80,'Yes');utf16(P+0xA90,'No');
+w32(P+0xAA0,P+0xA80);w32(P+0xAA4,P+0xA90);w32(P+0xAB0,0xFFFFFFFF);
+w32(P+0xF000+0x54,0);  // ninth argument (overlapped) on the caller's stack
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,1,0,P+0xAB0)===0&&status()===1,'synchronous XamShowMessageBoxUI should succeed');
+expect(r32(P+0xAB0)===1,`message box should report the focused button, got ${r32(P+0xAB0)}`);
+const uiSeen=[];while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1)uiSeen.push(`${r32(P+0x900).toString(16)}:${r32(P+0x904)}`);
+expect(JSON.stringify(uiSeen)===JSON.stringify(['9:1','9:0']),`message box should bracket XN_SYS_UI, got ${uiSeen}`);
+w32(P+0xAB0,0xFFFFFFFF);for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0);w32(P+0xAC0,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===997&&status()===1,'overlapped XamShowMessageBoxUI should return ERROR_IO_PENDING');
+expect(r32(P+0xAB0)===0&&r32(P+0xAC0)===0,'overlapped message box should complete with the focused button and success');
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+w32(P+0xF000+0x54,0);
+console.log('XAM_MESSAGE_BOX_XENIA=PASS');
+
+// Host dialog mode: the player answers (Xenia MessageBoxDialog).
+expect((need('r360_xam_dialog_set_host_answers')(1)>>>0)===1,'host dialog mode not enabled');
+const dlgStr=w=>Buffer.from(new Uint8Array(e.memory.buffer,need('r360_xam_dialog_string_ptr')(w)>>>0,need('r360_xam_dialog_string_len')(w)>>>0)).toString('utf8');
+for(let i=0;i<28;i+=4)w32(P+0xAC0+i,0);w32(P+0xAB0,0xFFFFFFFF);w32(P+0xF000+0x54,P+0xAC0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===997&&r32(P+0xAC0)===997,'overlapped host dialog should stay pending');
+expect((need('r360_xam_dialog_pending')()>>>0)===1&&dlgStr(0)==='Title'&&dlgStr(1)==='Continue?'&&dlgStr(3)==='No'&&(need('r360_xam_dialog_button_count')()>>>0)===2,'pending dialog not exposed to the host');
+expect(r32(P+0xAB0)===0xFFFFFFFF,'unanswered dialog must not write a result');
+expect((need('r360_xam_dialog_answer')(5)>>>0)===0,'out-of-range answer must be rejected');
+expect((need('r360_xam_dialog_answer')(1)>>>0)===1&&r32(P+0xAB0)===1&&r32(P+0xAC0)===0&&(need('r360_xam_dialog_pending')()>>>0)===0,'answer should complete the overlapped dialog with the chosen button');
+w32(P+0xF000+0x54,0);w32(P+0xAB0,0xFFFFFFFF);
+x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0);
+expect(status()===5&&r32(P+0xAB0)===0xFFFFFFFF,'synchronous host dialog should block until answered');
+x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0);
+expect(status()===5,'retry before the answer should still block');
+expect((need('r360_xam_dialog_answer')(1)>>>0)===1,'answer to synchronous dialog rejected');
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===0&&status()===1&&r32(P+0xAB0)===1,'retry after the answer should return the chosen button');
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+need('r360_xam_dialog_set_host_answers')(0);
+console.log('XAM_MESSAGE_BOX_HOST_DIALOG=PASS');
+expect((need('r360_xam_dialog_set_auto_answer')(1)|0)===1,'preset answer not set');
+w32(P+0xAB0,0xFFFFFFFF);w32(P+0xF000+0x54,0);
+expect(x('XamShowMessageBoxUI',0,P+0xA00,P+0xA40,2,P+0xAA0,0,0,P+0xAB0)===0&&status()===1&&r32(P+0xAB0)===1,'preset answer should complete the dialog inside the call');
+need('r360_xam_dialog_set_auto_answer')(-1);
+while(x('XNotifyGetNext',sys,0,P+0x900,P+0x904)===1);
+console.log('XAM_MESSAGE_BOX_PRESET_ANSWER=PASS');
+
+// --- XamUserCreateAchievementEnumerator (Xenia XStaticAchievementEnumerator) ------
+expect(x('XamUserCreateAchievementEnumerator',0,0,0,7,0,4,P+0xB00,P+0xB04)===0&&status()===1,'achievement enumerator not created');
+expect(r32(P+0xB00)===(36+464)*4,`achievement buffer size ${r32(P+0xB00)}`);
+expect(x('XamUserCreateAchievementEnumerator',0,4,0,7,0,4,P+0xB00,P+0xB04)===0x57,'bad user index must be rejected');
+w32(P+0xB08,0xFFFFFFFF);
+expect(x('XamEnumerate',r32(P+0xB04),0,P+0xC000,(36+464)*4,P+0xB08,0)===0x12&&r32(P+0xB08)===0,'title without an XDBF achievement table should enumerate nothing');
+console.log('XAM_ACHIEVEMENT_ENUMERATOR_XENIA=PASS');
+
+// --- XexGetProcedureAddress (Xenia KernelModule::GetProcAddressByOrdinal) -------
+ascii(P+0xB40,'xam.xex');
+expect(k('XexGetModuleHandle',P+0xB40,P+0xB60)===0&&r32(P+0xB60)!==0,'xam.xex module handle missing');
+const xamModule=r32(P+0xB60);
+expect(k('XexGetProcedureAddress',xamModule,0x279,P+0xB64)===0&&status()===1&&r32(P+0xB64)!==0,'XAM export trampoline not created');
+const trampoline=r32(P+0xB64);
+expect(k('XexGetProcedureAddress',xamModule,0x279,P+0xB68)===0&&r32(P+0xB68)===trampoline,'repeated lookup should return the same trampoline');
+expect(k('XexGetProcedureAddress',xamModule,0x2CA,P+0xB68)===0&&r32(P+0xB68)!==trampoline,'another ordinal should get its own trampoline');
+expect(k('XexGetProcedureAddress',0x12345678,0x279,P+0xB68)===0xC0000008,'bad module handle must be rejected');
+ascii(P+0xB80,'XamSomething');
+expect(k('XexGetProcedureAddress',xamModule,P+0xB80,P+0xB68)===0xC0000263&&r32(P+0xB68)===0,'lookup by name should report the entry point as not found');
+console.log('XEX_GET_PROCEDURE_ADDRESS_XENIA=PASS');
+
+// --- XamContentAggregateCreateEnumerator (Xenia xam_content_aggregate.cc) ---------
+expect(x('XamContentAggregateCreateEnumerator',0,0,1,0,P+0xBA0)===0&&status()===1,'aggregate content enumerator not created');
+expect(x('XamContentAggregateCreateEnumerator',0,99,1,0,P+0xBA4)===0x80070057,'unknown device must be rejected');
+w32(P+0xBA8,0xFFFFFFFF);
+expect(x('XamEnumerate',r32(P+0xBA0),0,P+0xC000,0x148,P+0xBA8,0)===0x12&&r32(P+0xBA8)===0,'no saved content should enumerate nothing');
+expect(x('XamGetPrivateEnumStructureFromHandle',r32(P+0xBA0),P+0xBAC)===0&&status()===1,'private enum structure lookup failed');
+const enumObject=r32(P+0xBAC);
+expect(r32(enumObject)===0xFE&&r32(enumObject+4)===0x2000E&&r32(enumObject+8)===0x20010&&r32(enumObject+0xC)===0xFF&&r32(enumObject+0x10)===1,'X_KENUMERATOR header mismatch');
+expect(r32(enumObject+0x18)===0x58454E00&&r32(enumObject+0x1C)===r32(P+0xBA0),'aggregate extra block should hold the XEN signature and handle');
+expect(x('XamGetPrivateEnumStructureFromHandle',0x12345678,P+0xBAC)===0xC0000008,'bad enumerator handle must be rejected');
+console.log('XAM_CONTENT_AGGREGATE_XENIA=PASS');
+
+// --- XamTaskSchedule (Xenia xam_task.cc: the callback runs on a new thread) -------
+w32(P+0xC14,0);
+expect(x('XamTaskSchedule',0x82400000,P+0xC00,0,P+0xC14)===0&&status()===1&&r32(P+0xC14)===12345,'XamTaskSchedule should start the task thread and report handle 12345');
+expect(x('XamTaskSchedule',0,P+0xC00,0,P+0xC14)===0xC000000D,'a task without a callback must be rejected');
+expect(x('XamTaskShouldExit',0)===0,'XamTaskShouldExit mismatch');
+console.log('XAM_TASK_SCHEDULE_XENIA=PASS');
+
 // --- Diagnostics / boundaries ------------------------------------------------------
 ascii(P+0xD00,'Braid: hello from DbgPrint');k('DbgPrint',P+0xD00);
 const logOut=need('r360_kernel_pool_alloc')(64,16)>>>0;

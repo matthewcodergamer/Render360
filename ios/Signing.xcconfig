@@ -1,0 +1,6 @@
+// Shared signing settings. Personal values go in Signing.local.xcconfig
+// (git-ignored): DEVELOPMENT_TEAM = <your Personal Team ID> and
+// R360_BUNDLE_ID = com.<something unique>.render360 (free teams need a
+// bundle ID nobody else registered).
+R360_BUNDLE_ID = com.render360.app
+#include? "Signing.local.xcconfig"

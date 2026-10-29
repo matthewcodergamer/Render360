@@ -35,8 +35,8 @@ bool PreparedPeGuestFindRuntimeFunction(uint32_t address, uint32_t* begin,
 
 extern "C" {
 void r360_pe_guest_reset();
-uint32_t r360_pe_guest_load(uint32_t source_ptr, uint32_t length);
-uint32_t r360_pe_guest_load_at_entry(uint32_t source_ptr, uint32_t length,
+uint32_t r360_pe_guest_load(uintptr_t source_ptr, uint32_t length);
+uint32_t r360_pe_guest_load_at_entry(uintptr_t source_ptr, uint32_t length,
                                       uint32_t entry_address);
 uint32_t r360_pe_guest_status();
 uint32_t r360_pe_guest_entry_address();

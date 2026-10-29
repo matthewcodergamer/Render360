@@ -6,14 +6,20 @@
 // PPCContext, so guest calls, returns, memory, MMIO and atomics behave exactly
 // as in ExecuteBuilder above.
 // ---------------------------------------------------------------------------
+extern "C" uint32_t r360_guest_thread_current();
 namespace render360::xenia_web {
 namespace {
 xe::Memory* g_jit_memory = nullptr;
-uint32_t g_jit_fault = 0;
+// Fault state of the running generated function, per guest thread: a guest
+// interrupt (RunGuestInterrupt swaps the fiber-local section) or another
+// fiber can run nested JIT code that fails, and must not leave the fault set
+// for the interrupted code's next FaultCheck. Generated code reads it at a
+// fixed address, which the section swap keeps valid.
+R360_FIBER_LOCAL uint32_t g_jit_fault = 0;
 // Operand/result exchange for r360_jit_h_exec: three 16-byte operand slots
 // and the result slot.
 alignas(16) uint8_t g_jit_scratch[64] = {};
-uint32_t g_jit_fail_kind = 0, g_jit_fail_opcode = 0, g_jit_fail_address = 0;
+R360_FIBER_LOCAL uint32_t g_jit_fail_kind = 0, g_jit_fail_opcode = 0, g_jit_fail_address = 0;
 
 // Blocker for a failed helper, preferring a nested callee's blocker as the
 // executor does after a failed call.
@@ -87,6 +93,24 @@ uint32_t JitInstructionCounterAddress() {
 uint32_t JitDebugWatchAddress() { return g_debug_watch_address; }
 uint32_t JitFaultAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_fault)); }
 uint32_t JitScratchAddress() { return uint32_t(reinterpret_cast<uintptr_t>(g_jit_scratch)); }
+uint32_t g_jit_entry_segment = 0;
+uint32_t g_jit_poll_source = 0;
+uint32_t JitPollSourceAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_poll_source)); }
+// r360_jit_diag: a line every 2^27 guest instructions (where the guest runs
+// when it never returns to the host, e.g. inside back-to-back interrupts).
+bool g_jit_diag = false;
+uint64_t g_jit_diag_next = 0;
+void JitDiagnosticPoll() {
+  if (!g_jit_diag || g_total_instructions < g_jit_diag_next) return;
+  g_jit_diag_next = (g_total_instructions | ((uint64_t(1) << 27) - 1)) + 1;
+  char fibers[512];
+  GuestFiberDiagnostic(fibers, sizeof(fibers));
+  std::fprintf(stderr, "R360_DIAG minstr=%llu interrupt=%u active=%u thread=0x%08X source=0x%08X loop=0x%08X %s\n",
+               (unsigned long long)(g_total_instructions / 1000000u), GuestInterruptActive() ? 1u : 0u,
+               GuestFibersActive() ? 1u : 0u, r360_guest_thread_current(), g_current_source_address,
+               g_jit_poll_source, fibers);
+}
+uint32_t JitEntrySegmentAddress() { return uint32_t(reinterpret_cast<uintptr_t>(&g_jit_entry_segment)); }
 uint32_t JitReturnAddressSlot() {
   return uint32_t(reinterpret_cast<uintptr_t>(&g_next_guest_return_address));
 }
@@ -119,17 +143,60 @@ void JitProfileInterpreted(xe::cpu::hir::HIRBuilder* builder, uint32_t reason, u
   ++e.runs;
 }
 
+// Runs the compiled `function` from dispatcher segment `entry` and maps its
+// status to an executor result.
+void JitRun(uint32_t function, uint32_t entry, xe::Memory* memory,
+            xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result);
+
 // Runs `builder` as compiled code when it has some (ExecuteHIRCorrectnessProbe
 // calls this in place of ExecuteBuilder for plain function entries).
 bool JitTryExecute(xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory,
                    xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
   const uint32_t function = JitTakeFunction(builder);
   if (!function) return false;
+  JitRun(function, 0, memory, context, result);
+  return true;
+}
+
+uint32_t JitBlockSource(const xe::cpu::hir::Block* block) {
+  for (auto* i = block->instr_head; i; i = i->next) {
+    if (i->opcode && i->opcode->num == xe::cpu::hir::OPCODE_SOURCE_OFFSET) return uint32_t(i->src1.offset);
+  }
+  return 0;
+}
+
+// ExecuteBuilder hands a run over to compiled code at the head of `block`
+// (JitOsrFunction); false keeps interpreting.
+uint64_t g_jit_osr_entries = 0;
+bool JitTryOsr(xe::cpu::hir::HIRBuilder* builder, JitSlot* slot,
+               const xe::cpu::hir::Block* block, bool hot, xe::Memory* memory,
+               xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
+  const uint32_t function = JitOsrFunction(builder, slot, hot);
+  if (!function) return false;
+  const uint32_t segment = JitSegmentOfBlock(builder, block);
+  if (segment == 0xFFFFFFFFu) return false;
+  ++g_jit_osr_entries;
+  JitRun(function, segment, memory, context, result);
+  if (!result->supported) {
+    std::fprintf(stderr, "R360_OSR_FAILED block_source=0x%08X segment=%u hot=%u blocker=%u@0x%08X\n",
+                 JitBlockSource(block), segment, hot ? 1u : 0u, result->blocker_kind,
+                 result->blocker_address);
+  }
+  return true;
+}
+
+void JitRun(uint32_t function, uint32_t entry, xe::Memory* memory,
+            xe::cpu::ppc::PPCContext& context, HIRCorrectnessResult* result) {
+  g_jit_entry_segment = entry;
   g_jit_memory = memory;
+  // A caller in generated code learns of this run's failure from its
+  // helper's return value; its own fault flag stays as it was.
+  const uint32_t caller_fault = g_jit_fault;
   g_jit_fault = 0;
   g_jit_fail_kind = g_jit_fail_opcode = g_jit_fail_address = 0;
   const uint32_t status = reinterpret_cast<uint32_t (*)(uint32_t)>(uintptr_t(function))(
       uint32_t(reinterpret_cast<uintptr_t>(&context)));
+  g_jit_fault = caller_fault;
   *result = HIRCorrectnessResult{};
   result->r3 = context.r[3];
   switch (status) {
@@ -149,7 +216,6 @@ bool JitTryExecute(xe::cpu::hir::HIRBuilder* builder, xe::Memory* memory,
       result->blocker_address = g_jit_fail_address;
       break;
   }
-  return true;
 }
 
 }  // namespace render360::xenia_web
@@ -209,6 +275,7 @@ R360_JIT_HELPER(st64) void r360_jit_h_st64(uint32_t a, uint64_t v, uint32_t s) {
 // Loops in generated code poll here: guest interrupts, preemption and host
 // time slices (may unwind), and the --max-minstr budget.
 R360_JIT_HELPER(poll) uint32_t r360_jit_h_poll() {
+  rxj::JitDiagnosticPoll();
   rxj::DeliverGuestInterruptsNow();
   if (rxj::g_total_instruction_budget &&
       rxj::g_total_instructions > rxj::g_total_instruction_budget) {
@@ -278,6 +345,10 @@ R360_JIT_HELPER(mulhi64) uint64_t r360_jit_h_mulhi64(uint64_t a, uint64_t b, uin
   return is_unsigned ? uint64_t((unsigned __int128)a * (unsigned __int128)b >> 64)
                      : uint64_t(((__int128)int64_t(a) * (__int128)int64_t(b)) >> 64);
 }
+__attribute__((used, export_name("r360_jit_diag")))
+uint32_t r360_jit_diag(uint32_t on) { rxj::g_jit_diag = on != 0; return on; }
+__attribute__((used, export_name("r360_jit_osr_entries")))
+uint32_t r360_jit_osr_entries() { return uint32_t(rxj::g_jit_osr_entries); }
 __attribute__((used, export_name("r360_jit_profile")))
 uint32_t r360_jit_profile(uint32_t command) {
   if (command == 1) { rxj::g_jit_profile = true; rxj::g_jit_profile_entries.clear(); return 1; }

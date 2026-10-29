@@ -51,11 +51,13 @@ replacement = '''Arena::Chunk::Chunk(size_t chunk_size)
   assert_not_null(buffer);
   assert_true((reinterpret_cast<size_t>(buffer) & size_t(15)) == 0,
               "16 byte alignment required");
+  g_r360_arena_live_bytes += capacity;
 }
 
 Arena::Chunk::~Chunk() {
   if (buffer) {
     free(buffer);
+    g_r360_arena_live_bytes -= capacity;
   }
 }
 '''
@@ -97,6 +99,13 @@ for a, b, name in ((ctor_anchor, ctor_new, "constructor"), (grow_anchor, grow_ne
     if text.count(a) != 1:
         raise SystemExit(f"Upstream Arena {name} drifted")
     text = text.replace(a, b, 1)
+
+# Live bytes held by all arena chunks. Retained HIR builders are most of it,
+# so the translation cache budgets against this (probe_backend.cpp).
+ns_anchor = "namespace xe {\n"
+if text.count(ns_anchor) != 1:
+    raise SystemExit("Upstream Arena namespace drifted")
+text = text.replace(ns_anchor, ns_anchor + "\nsize_t g_r360_arena_live_bytes = 0;\n", 1)
 
 DEST.parent.mkdir(parents=True, exist_ok=True)
 DEST.write_text(text)

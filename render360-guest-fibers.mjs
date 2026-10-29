@@ -4,6 +4,8 @@
 // blocks in the kernel, the core snapshots it and unwinds the wasm stack back
 // here (Binaryen Asyncify); this loop then starts or rewinds the next guest
 // thread on its own C stack until the title's primary thread returns.
+
+import {PerfStats,createPerfOverlay} from './render360-perf-overlay.mjs';
 const pick=(bootstrap,name)=>bootstrap?.exports?.[name]??bootstrap?.exports?.[`_${name}`];
 
 export function hasGuestFibers(bootstrap){
@@ -76,7 +78,7 @@ export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,
 // Browser options for a continuous title run: ~25 ms host slices, Stop through
 // globalThis.render360GuestRun.stop() (aborts at the next slice), and a
 // progress line about twice a second.
-export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,sliceMs=25}={}){
+export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,gpuFrameMs=null,sliceMs=25}={}){
   let lastFrames=-1;
   globalThis.render360GuestRun?.stop?.();
   const controller=new AbortController();
@@ -85,17 +87,72 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,s
   let lastReport=0;
   globalThis.render360GuestRun={stop:()=>controller.abort(),signal:controller.signal};
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
+  // System message boxes (XamShowMessageBoxUI) are answered by the player.
+  if(globalThis.document)bootstrap?.exports?.r360_xam_dialog_set_host_answers?.(1);
+  // FPS / frame-time overlay: time inside the emulator per slice, the GPU
+  // renderer's share of it, page-side present time, submitted vs presented.
+  const perf=new PerfStats();
+  const overlay=globalThis.document?createPerfOverlay():null;
+  let sliceExit=now(),lastRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
-    pushGuestControllerState(bootstrap);
     const t=now();
+    const renderUs=read('r360_xenos_soft_render_us');
+    const gpuMs=((renderUs-lastRenderUs)>>>0)/1000;lastRenderUs=renderUs;
+    pushGuestControllerState(bootstrap);
+    showGuestDialog(bootstrap);
+    try{onSlice?.();}catch{}
+    const frames=read('r360_title_gpu_vd_swap_calls');
+    perf.submitted(t,frames);
+    // Present every new guest frame (software Xenos backend output).
+    let presentMs=0;
+    if(onFrame&&frames!==lastFrames){lastFrames=frames;const p0=now();try{onFrame();}catch{}presentMs=now()-p0;perf.framePresented(now());}
+    perf.slice(t,t-sliceExit,gpuMs,presentMs);
+    const counter=bootstrap?.exports?.r360_perf_counter,idle=bootstrap?.exports?.r360_fiber_idle_ms;
+    if(typeof counter==='function')perf.counters(t,counter(0),counter(1),typeof idle==='function'?idle():0);
+    const gpuFrame=gpuFrameMs?.();
+    if(gpuFrame!==null&&gpuFrame!==undefined)perf.gpuFrame(t,gpuFrame);
+    perf.record(t);
+    if(overlay&&t-lastOverlay>=1000){lastOverlay=t;overlay.update(perf.snapshot(t));}
+    globalThis.render360Perf=perf;
+    sliceExit=now();
     if(t-lastReport<500)return;
     lastReport=t;
-    const frames=read('r360_title_gpu_vd_swap_calls'),draws=read('r360_xenos_draws');
-    // Show the newest swapped frontbuffer (software Xenos backend output).
-    if(onFrame&&frames!==lastFrames){lastFrames=frames;try{onFrame();}catch{}}
+    const draws=read('r360_xenos_draws');
     const seconds=Math.max(0.001,(t-started)/1000);
     onProgress?.(`Running · ${frames.toLocaleString()} frames presented (${(frames/seconds).toFixed(1)}/s) · ${draws.toLocaleString()} GPU draws · ${s.threads} guest threads`,{frames,draws,slices:s.slices});
   }};
+}
+
+
+// Shows a pending XamShowMessageBoxUI as a page dialog (the console's system
+// UI); the chosen button goes back to the title through r360_xam_dialog_answer.
+let shownDialog=null;
+export function showGuestDialog(bootstrap,doc=globalThis.document){
+  const e=bootstrap?.exports;
+  if(!doc||typeof e?.r360_xam_dialog_pending!=='function')return false;
+  if(!(e.r360_xam_dialog_pending()>>>0)){if(shownDialog){shownDialog.remove();shownDialog=null;}return false;}
+  if(shownDialog)return true;
+  const str=w=>new TextDecoder().decode(new Uint8Array(e.memory.buffer,e.r360_xam_dialog_string_ptr(w)>>>0,e.r360_xam_dialog_string_len(w)>>>0).slice());
+  const count=e.r360_xam_dialog_button_count()>>>0,focused=e.r360_xam_dialog_active_button()>>>0;
+  const box=doc.createElement('div');
+  box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');
+  box.style.cssText='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:9999;padding:16px';
+  const panel=doc.createElement('div');
+  panel.style.cssText='max-width:520px;width:100%;background:#1d1f24;color:#f2f2f2;border-radius:10px;padding:20px;font:15px/1.45 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.5)';
+  const title=doc.createElement('h2');title.textContent=str(0)||'Message';title.style.cssText='margin:0 0 8px;font-size:18px';
+  const text=doc.createElement('p');text.textContent=str(1);text.style.cssText='margin:0 0 16px;white-space:pre-wrap';
+  const row=doc.createElement('div');row.style.cssText='display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end';
+  let focus=null;
+  for(let i=0;i<count;i++){
+    const b=doc.createElement('button');b.type='button';b.textContent=str(2+i);
+    b.style.cssText='padding:8px 14px;border-radius:6px;border:1px solid #5a5f6b;background:'+(i===focused?'#2f6f3e':'#2a2d34')+';color:inherit;font:inherit;cursor:pointer';
+    b.addEventListener('click',()=>{e.r360_xam_dialog_answer(i);box.remove();shownDialog=null;});
+    if(i===focused)focus=b;
+    row.append(b);
+  }
+  panel.append(title,text,row);box.append(panel);doc.body.append(box);
+  shownDialog=box;focus?.focus();
+  return true;
 }
 
 // XInput gamepad bits (XINPUT_GAMEPAD_*) for the Render360 controller keys.

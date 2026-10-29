@@ -16,6 +16,8 @@ extern "C" __attribute__((weak)) uint32_t r360_debug_watch_address() { return 0;
 // standalone Xenos foundation keeps its bounded bring-up raster.
 namespace render360::xenia_web {
 __attribute__((weak)) bool RenderXenosDraw(const XenosSoftDraw&) { return false; }
+// The WebGPU backend (webgpu_draws.cpp) records the swap's front buffer.
+__attribute__((weak)) void WebGpuSwap(const uint32_t*) {}
 }
 
 namespace render360::xenia_web {
@@ -439,12 +441,20 @@ bool ExecuteBuffer(const uint32_t* words, uint32_t word_count, uint32_t depth) {
     if (type != 3) { SetFault(header_index, depth, kStatusUnsupported); return false; }
     const uint32_t count = ((header >> 16) & 0x3FFFu) + 1u, opcode = (header >> 8) & 0x7Fu;
     if (count > word_count - i) { SetFault(header_index, depth, kStatusInvalid); return false; }
+    // CommandProcessor::ExecutePacketType3: bit 0 predicates the packet on the
+    // tiling bin (SET_BIN_MASK/SELECT); predicated swaps are always skipped.
+    // Predicated tiling replays one IB per bin, so a packet meant for a single
+    // bin must not run in every pass.
+    if ((header & 1u) && (!(g_bin_select & g_bin_mask) || opcode == kPm4XeSwap)) {
+      i += count; continue;
+    }
     const uint32_t* p = words + i; g_last_opcode = opcode; bool handled = true;
     switch (opcode) {
       case kPm4Nop: case kPm4MeInit: case kPm4WaitForIdle: break;
       case kPm4DrawIndx: case kPm4DrawIndx2: handled = ExecuteDraw(opcode, p, count); break;
       case kPm4XeSwap:
         for (uint32_t w = 0; w < 6u; ++w) g_swap_fetch[w] = g_regs[0x4800u + w];
+        WebGpuSwap(g_swap_fetch.data());
         handled = ExecuteSwap(p, count); break;
       case kPm4RegRmw: {
         if (count != 3u) { handled = false; g_status = kStatusInvalid; break; }
@@ -682,7 +692,7 @@ const ShaderCapture* ShaderForExport(uint32_t type) {
 
 extern "C" {
 void r360_xenos_reset(){render360::xenia_web::Reset();}
-uint32_t r360_xenos_ring_buffer(){return uint32_t(reinterpret_cast<uintptr_t>(render360::xenia_web::g_ring.data()));}
+uintptr_t r360_xenos_ring_buffer(){return (reinterpret_cast<uintptr_t>(render360::xenia_web::g_ring.data()));}
 uint32_t r360_xenos_ring_capacity(){return render360::xenia_web::kRingCapacity;}
 uint32_t r360_xenos_submit(uint32_t n){if(n>render360::xenia_web::kRingCapacity){render360::xenia_web::g_status=render360::xenia_web::kStatusInvalid;return 0;}render360::xenia_web::g_ring_words=n;return render360::xenia_web::Execute()?1u:0u;}
 uint32_t r360_xenos_status(){return render360::xenia_web::g_status;}
@@ -719,7 +729,7 @@ uint32_t r360_xenos_frame_provenance(){return render360::xenia_web::FrameProvena
 uint32_t r360_xenos_real_title_frame_ready(){const uint32_t need=render360::xenia_web::kFrameProvSwap|render360::xenia_web::kFrameProvVertexShader|render360::xenia_web::kFrameProvPixelShader|render360::xenia_web::kFrameProvFetchResources;const uint32_t p=render360::xenia_web::FrameProvenance();return((p&need)==need&&!(p&render360::xenia_web::kFrameProvBoundedRaster))?1u:0u;}
 uint32_t r360_xenos_register(uint32_t i){return i<render360::xenia_web::g_regs.size()?render360::xenia_web::g_regs[i]:0u;}
 uint32_t r360_xenos_set_register(uint32_t i,uint32_t v){if(i>=render360::xenia_web::g_regs.size())return 0;render360::xenia_web::g_regs[i]=v;return 1;}
-uint32_t r360_xenos_shader_buffer(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?uint32_t(reinterpret_cast<uintptr_t>(s->words.data())):0u;}
+uintptr_t r360_xenos_shader_buffer(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?(reinterpret_cast<uintptr_t>(s->words.data())):0u;}
 uint32_t r360_xenos_shader_dwords(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->dword_count:0u;}
 uint32_t r360_xenos_shader_hash(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->hash:0u;}
 uint32_t r360_xenos_shader_guest_address(uint32_t t){const auto*s=render360::xenia_web::ShaderForExport(t);return s?s->guest_address:0u;}
@@ -728,7 +738,7 @@ uint32_t r360_xenos_debug_draws(uint32_t n){render360::xenia_web::g_draw_log_rem
 uint32_t r360_xenos_swap_fetch_word(uint32_t w){return w<6u?render360::xenia_web::g_swap_fetch[w]:0u;}
 uint32_t r360_xenos_fetch_constant_word(uint32_t g,uint32_t w){if(w>=6u)return 0u;const uint64_t i=0x4800ull+uint64_t(g)*6u+w;return i<render360::xenia_web::g_regs.size()?render360::xenia_web::g_regs[uint32_t(i)]:0u;}
 uint32_t r360_xenos_edram_tile_address(uint32_t b,uint32_t p,uint32_t x,uint32_t y){return render360::xenia_web::EdramTileAddress(b,p,x,y);}
-uint32_t r360_xenos_frame_buffer(){return uint32_t(reinterpret_cast<uintptr_t>(render360::xenia_web::g_frame.data()));}
+uintptr_t r360_xenos_frame_buffer(){return (reinterpret_cast<uintptr_t>(render360::xenia_web::g_frame.data()));}
 uint32_t r360_xenos_frame_size(){return render360::xenia_web::kFrameBytes;}
 uint32_t r360_xenos_frame_width(){return render360::xenia_web::kFrameWidth;}
 uint32_t r360_xenos_frame_height(){return render360::xenia_web::kFrameHeight;}

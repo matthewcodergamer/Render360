@@ -87,7 +87,7 @@ export function wrapCoreTrap(error,bootstrap,{onPoisoned=null,context=''}={}){
   const wrapped=new Error(describeTrap(report,error)+' [FAIL_CLOSED_CORE_TRAP]');
   wrapped.code='R360_CORE_TRAP';
   wrapped.cause=error;
-  wrapped.render360={kind:'core-trap',context,trap:report,original:String(error?.message||error)};
+  wrapped.render360={kind:'core-trap',context,trap:report,original:String(error?.message||error),stack:String(error?.stack||'').split('\n').slice(0,40).join('\n')};
   return wrapped;
 }
 

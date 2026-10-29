@@ -1,5 +1,6 @@
 #include "guest_fibers.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
@@ -20,10 +21,28 @@ extern "C" char __stack_low;
 // The R360_FIBER_LOCAL section bounds (wasm-ld start/stop symbols).
 extern "C" char __start_r360_fiber[];
 extern "C" char __stop_r360_fiber[];
+#define R360_FIBER_SWITCHING 1
+#elif defined(R360_NATIVE)
+// Native build (native/build-native.sh): every guest thread is a pthread, and
+// a baton (one mutex + condition variable) lets exactly one of them run at a
+// time, so scheduling stays cooperative and deterministic like the browser's.
+// What the JS driver (render360-guest-fibers.mjs) does after an Asyncify
+// unwind is done in place by the thread that leaves (NativeDriveSwitch), and
+// a resumed thread re-enters the function it left from, exactly as an
+// Asyncify rewind would. The R360_FIBER_LOCAL block is a Mach-O section that
+// is swapped the same way as the wasm section.
+#include <pthread.h>
+#include <condition_variable>
+#include <mutex>
+extern "C" char __start_r360_fiber[] __asm("section$start$__DATA$r360_fiber");
+extern "C" char __stop_r360_fiber[] __asm("section$end$__DATA$r360_fiber");
+#define R360_FIBER_SWITCHING 1
 #endif
 
 extern "C" {
 uint32_t r360_guest_thread_current();
+uint32_t r360_kernel_thread_wait(uint32_t thread, uint32_t field);
+uint32_t r360_guest_thread_kthread(uint32_t handle);
 uint32_t r360_guest_thread_set_current(uint32_t handle);
 uint32_t r360_guest_thread_runnable_list(uint32_t* out, uint32_t capacity);
 uint32_t r360_guest_thread_entry(uint32_t handle);
@@ -108,19 +127,19 @@ uint64_t HostMillis() {
 }
 
 size_t LocalsSize() {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   return size_t(__stop_r360_fiber - __start_r360_fiber);
 #else
   return 0;
 #endif
 }
 void SaveLocals(Fiber& fiber) {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   fiber.locals.assign(__start_r360_fiber, __stop_r360_fiber);
 #endif
 }
 void RestoreLocals(const Fiber& fiber) {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   const auto& image = fiber.locals.empty() ? g_pristine_locals : fiber.locals;
   if (image.size() == LocalsSize()) {
     std::memcpy(__start_r360_fiber, image.data(), image.size());
@@ -198,14 +217,31 @@ bool PickTarget(uint32_t from, uint32_t* target, bool preempting = false) {
       from >= n ? 0
                 : g_fibers[from].vruntime +
                       (from == g_current ? HIRTotalInstructions() - g_run_start : 0);
+  // Bounded lag (as CFS bounds it): a thread that has run far more than the
+  // others is passed over for at most kMaxLag instructions of theirs. On the
+  // console every thread runs on its own hardware thread, so a busy thread is
+  // never starved by an idle-looping one (Banjo-Tooie's main thread waited
+  // ~50B instructions for a lock while a timer thread spun Sleep(0)).
+  constexpr uint64_t kMaxLag = 8ull * kPreemptQuantum;
+  bool any = false;
+  uint64_t min_count = 0;
+  for (uint32_t index = 0; index < n; ++index) {
+    if (index == from) continue;
+    const Fiber& fiber = g_fibers[index];
+    if (!Eligible(fiber) || (index != 0 && !ThreadRunnable(fiber.thread))) continue;
+    if (!any || fiber.vruntime < min_count) min_count = fiber.vruntime;
+    any = true;
+  }
+  if (any && from < n && from_count < min_count) min_count = from_count;
   bool found = false;
   uint32_t best = 0;
   for (uint32_t step = 1; step <= n; ++step) {
     const uint32_t index = (from + step) % n;
     if (index == from) continue;
-    const Fiber& fiber = g_fibers[index];
+    Fiber& fiber = g_fibers[index];
     if (!Eligible(fiber)) continue;
     if (index != 0 && !ThreadRunnable(fiber.thread)) continue;
+    if (fiber.vruntime > min_count + kMaxLag) fiber.vruntime = min_count + kMaxLag;
     if (!found || fiber.vruntime < g_fibers[best].vruntime) best = index;
     found = true;
   }
@@ -221,6 +257,12 @@ bool PickTarget(uint32_t from, uint32_t* target, bool preempting = false) {
 }
 
 bool EnsureFiberMemory(Fiber& fiber, bool needs_stack) {
+#if defined(R360_NATIVE)
+  // Each native fiber is a pthread with its own stack; no Asyncify buffer.
+  (void)fiber;
+  (void)needs_stack;
+  return true;
+#endif
   if (!fiber.asyncify) {
     fiber.asyncify = static_cast<uint8_t*>(std::malloc(kFiberAsyncifyBytes));
     if (!fiber.asyncify) return false;
@@ -237,6 +279,153 @@ void ArmAsyncifyBuffer(Fiber& fiber) {
   header[0] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fiber.asyncify + 8));
   header[1] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fiber.asyncify + kFiberAsyncifyBytes));
 }
+
+#if defined(R360_NATIVE)
+// --- Native baton (see the comment at the top of this file) ---------------
+inline void r360_asyncify_stop_rewind() {}
+}  // namespace
+}  // namespace render360::xenia_web
+extern "C" uint32_t r360_fiber_prepare();
+extern "C" uint32_t r360_fiber_entry();
+namespace render360::xenia_web {
+namespace {
+// Guest call chains live on the host stack (the browser gives each fiber its
+// own C stack); native frames are larger, so give every guest thread plenty.
+// Pages are only committed when touched.
+constexpr size_t kNativeFiberStackBytes = 64u * 1024u * 1024u;
+std::mutex g_native_mutex;
+std::condition_variable g_native_cv;
+uint32_t g_native_baton = 0;        // fiber index allowed to run
+uint64_t g_native_generation = 0;   // one per title run
+bool g_native_run_done = false;
+uint32_t g_native_run_result = 0;
+uint32_t g_native_run_stopped = 0;
+uint32_t g_native_slice_ms = 0;
+uint32_t (*g_native_on_slice)(void*) = nullptr;
+void* g_native_slice_user = nullptr;
+
+// Blocks until fiber `index` holds the baton in run `generation`. A thread
+// left behind when a run ends never wakes again (its generation is over).
+void NativeWaitForBaton(uint32_t index, uint64_t generation) {
+  std::unique_lock<std::mutex> lock(g_native_mutex);
+  g_native_cv.wait(lock, [&] {
+    return g_native_generation == generation && g_native_baton == index && !g_native_run_done;
+  });
+}
+
+void NativeEndRun(uint32_t result, uint32_t stopped) {
+  std::lock_guard<std::mutex> lock(g_native_mutex);
+  g_native_run_done = true;
+  g_native_run_result = result;
+  g_native_run_stopped = stopped;
+  g_native_baton = UINT32_MAX;
+  g_native_cv.notify_all();
+}
+
+void NativePassBaton(uint32_t index) {
+  std::lock_guard<std::mutex> lock(g_native_mutex);
+  g_native_baton = index;
+  g_native_cv.notify_all();
+}
+
+struct NativeThreadStart {
+  uint32_t index;
+  uint64_t generation;
+  uint32_t (*primary)(void*);
+  void* user;
+};
+
+bool NativeSpawn(NativeThreadStart* start, void* (*body)(void*)) {
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, kNativeFiberStackBytes);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  pthread_t thread;
+  const bool ok = pthread_create(&thread, &attr, body, start) == 0;
+  pthread_attr_destroy(&attr);
+  return ok;
+}
+
+void NativeDriveSwitch();
+
+// Root of a title-created guest thread (the JS driver's r360_fiber_entry call).
+void* NativeFiberThreadMain(void* raw) {
+  auto* start = static_cast<NativeThreadStart*>(raw);
+  const uint32_t index = start->index;
+  const uint64_t generation = start->generation;
+  delete start;
+  pthread_setname_np("r360-guest");
+  NativeWaitForBaton(index, generation);
+  const uint32_t result = r360_fiber_entry();
+  // As in the JS driver: a title thread that finished queued the next fiber;
+  // one that stopped on a blocker ends the run.
+  if (g_current == 0 || !g_switch_pending) {
+    NativeEndRun(result, 0);
+    return nullptr;
+  }
+  NativeDriveSwitch();
+  return nullptr;
+}
+
+// The JS driver's step after an unwind: prepare the switch target and start
+// (fresh fiber: a new thread) or resume it (pass the baton).
+void NativeDriveSwitch() {
+  const uint32_t kind = r360_fiber_prepare();
+  if (kind == 0) {
+    std::fprintf(stderr, "R360_FIBER_STOP native: switch without a target\n");
+    NativeEndRun(0, 2);
+    return;
+  }
+  const uint32_t next = g_current;
+  if (kind == 1) {
+    {
+      std::lock_guard<std::mutex> lock(g_native_mutex);
+      g_native_baton = next;
+    }
+    auto* start = new NativeThreadStart{next, g_native_generation, nullptr, nullptr};
+    if (!NativeSpawn(start, NativeFiberThreadMain)) {
+      delete start;
+      std::fprintf(stderr, "R360_FIBER_STOP native: pthread_create failed\n");
+      NativeEndRun(0, 2);
+    }
+    return;
+  }
+  NativePassBaton(next);
+}
+
+// Called by the running guest thread when it leaves (SwitchTo): gives the
+// host its slice callback if a host yield is due, hands over, and waits until
+// it is scheduled again. Returns with this fiber's state restored.
+void NativeLeave() {
+  const uint32_t me = g_current;
+  const uint64_t generation = g_native_generation;
+  if (g_host_yield) {
+    g_host_yield = false;
+    if (g_native_on_slice && g_native_on_slice(g_native_slice_user)) {
+      // The host stopped the run. This thread is abandoned mid-call.
+      NativeEndRun(0, 1);
+      NativeWaitForBaton(me, generation);
+      return;
+    }
+    if (g_native_slice_ms) g_host_slice_deadline_ms = HostMillis() + g_native_slice_ms;
+  }
+  NativeDriveSwitch();
+  NativeWaitForBaton(me, generation);
+}
+
+void* NativePrimaryThreadMain(void* raw) {
+  auto* start = static_cast<NativeThreadStart*>(raw);
+  const uint64_t generation = start->generation;
+  uint32_t (*primary)(void*) = start->primary;
+  void* user = start->user;
+  delete start;
+  pthread_setname_np("r360-guest-primary");
+  NativeWaitForBaton(0, generation);
+  const uint32_t result = primary(user);
+  NativeEndRun(result, 0);
+  return nullptr;
+}
+#endif
 
 // Leaves the current fiber for `target`: snapshot its state and unwind the
 // wasm stack back to the JS driver, which then starts or rewinds the target.
@@ -259,6 +448,22 @@ void SwitchTo(uint32_t target, FiberState leaving_state, uint32_t kind) {
   g_switch_pending = true;
   ++g_switches;
   r360_asyncify_start_unwind(current.asyncify);
+#elif defined(R360_NATIVE)
+  Fiber& current = g_fibers[g_current];
+  current.leave_kind = kind;
+  if (kind < 5) ++current.leave_counts[kind];
+  current.leave_pc = HIRLastSourceAddress();
+  current.leave_call = (r360_kernel_import_last_module() << 16) |
+                       (r360_kernel_import_last_ordinal() & 0xFFFFu);
+  current.instructions += HIRTotalInstructions() - g_run_start;
+  current.vruntime += HIRTotalInstructions() - g_run_start;
+  current.state = leaving_state;
+  current.progress_mark = g_progress;
+  SaveLocals(current);
+  g_target = target;
+  g_switch_pending = true;
+  ++g_switches;
+  NativeLeave();
 #else
   (void)target;
   (void)leaving_state;
@@ -275,13 +480,16 @@ void GuestFiberNoteProgress() { ++g_progress; }
 uintptr_t GuestFiberStackLow() {
 #if defined(__wasm__)
   return g_stack_low ? g_stack_low : reinterpret_cast<uintptr_t>(&__stack_low);
+#elif defined(R360_NATIVE)
+  pthread_t self = pthread_self();
+  return reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(self)) - pthread_get_stacksize_np(self);
 #else
   return 0;
 #endif
 }
 
 bool GuestFiberYield(bool blocked) {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   if (g_rewinding) {
     // Resumed: the driver restored this fiber's state and rewound into here.
     g_rewinding = false;
@@ -301,6 +509,9 @@ bool GuestFiberYield(bool blocked) {
     return false;
   }
   SwitchTo(target, blocked ? kFiberBlocked : kFiberReady, blocked ? 1u : 2u);
+#if defined(R360_NATIVE)
+  return GuestFiberYield(blocked);  // resumed: re-enter as a rewind would
+#endif
   return false;  // unwinding; the value is not observed
 #else
   (void)blocked;
@@ -310,12 +521,35 @@ bool GuestFiberYield(bool blocked) {
 
 bool GuestInterruptActive() { return g_in_interrupt; }
 
+// Scheduler state for diagnostics (r360_jit_diag).
+void GuestFiberDiagnostic(char* out, size_t size) {
+  uint32_t ready = 0, blocked = 0;
+  for (const auto& f : g_fibers) {
+    if (f.state == kFiberReady) ++ready;
+    if (f.state == kFiberBlocked) ++blocked;
+  }
+  int n = std::snprintf(out, size, "fibers=%u current=%u ready=%u blocked=%u clock_ms=%llu |",
+                        uint32_t(g_fibers.size()), g_current, ready, blocked,
+                        (unsigned long long)(GuestClockNanoseconds() / 1000000ull));
+  // Per fiber: state, last kernel call (module<<16|ordinal), wake deadline,
+  // guest PC when it left.
+  for (size_t i = 0; i < g_fibers.size() && n > 0 && size_t(n) < size; ++i) {
+    const Fiber& f = g_fibers[i];
+    // Kernel wait record: object, reason, caller.
+    n += std::snprintf(out + n, size - size_t(n), " %u:kt=%08x:%u/%llu/obj=%08x/r=%u/lr=%08x", uint32_t(i),
+                       r360_guest_thread_kthread(f.thread),
+                       uint32_t(f.state), (unsigned long long)(f.wake_ns / 1000000ull),
+                       r360_kernel_thread_wait(f.thread, 1), r360_kernel_thread_wait(f.thread, 4),
+                       r360_kernel_thread_wait(f.thread, 5));
+  }
+}
+
 // Xenia blocks a sleeping or timed-waiting XThread on a host wait until its
 // deadline; here the fiber blocks with a guest-clock deadline and another
 // fiber runs. Returns true when resumed (the caller re-checks its condition),
 // false when no other fiber can run now (the caller idles: GuestFiberIdle).
 bool GuestFiberSleepUntil(uint64_t deadline_ns) {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   if (g_rewinding) {
     g_rewinding = false;
     r360_asyncify_stop_rewind();
@@ -335,6 +569,9 @@ bool GuestFiberSleepUntil(uint64_t deadline_ns) {
     return false;
   }
   SwitchTo(target, kFiberBlocked, 1u);
+#if defined(R360_NATIVE)
+  return GuestFiberSleepUntil(deadline_ns);  // resumed
+#endif
   return false;  // unwinding; the value is not observed
 #else
   (void)deadline_ns;
@@ -347,6 +584,9 @@ bool GuestFiberSleepUntil(uint64_t deadline_ns) {
 // steps no longer than a vblank period, delivering the interrupts that fall
 // in between (their handlers may wake a thread). Returns false if idling is
 // not possible here.
+// Guest time spent idle (nothing runnable): the emulator was ahead of the
+// guest's real-time needs (render360-perf-overlay.mjs headroom).
+uint64_t g_idle_ns = 0;
 bool GuestFiberIdle(uint64_t deadline_ns) {
   if (!g_enabled || g_in_interrupt) return false;
   const uint64_t now = GuestClockNanoseconds();
@@ -359,12 +599,21 @@ bool GuestFiberIdle(uint64_t deadline_ns) {
   constexpr uint64_t kMaxIdleStepNs = 4000000ull;  // 4 ms
   if (until > now + kMaxIdleStepNs) until = now + kMaxIdleStepNs;
   if (!GuestClockIdleUntil(until)) return false;
+  g_idle_ns += until - now;
   DeliverGuestInterruptsNow();
   return true;
 }
 
+// Verbose runtime tracing from an instruction count on (r360_trace_verbose_from):
+// checked here because a stuck guest may never return to the host to turn it on.
+uint64_t g_trace_from_instructions = 0;
+
 void GuestFiberHostYieldIfDue() {
-#if defined(__wasm__)
+  if (g_trace_from_instructions && HIRTotalInstructions() >= g_trace_from_instructions) {
+    g_trace_from_instructions = 0;
+    g_r360_verbose_trace = true;
+  }
+#if defined(R360_FIBER_SWITCHING)
   if (g_rewinding) {
     // Resumed after the page got its turn.
     g_rewinding = false;
@@ -382,9 +631,15 @@ void GuestFiberHostYieldIfDue() {
         EnsureFiberMemory(g_fibers[target], target != 0)) {
       ++g_preemptions;
       SwitchTo(target, kFiberReady, 3u);
+#if defined(R360_NATIVE)
+      GuestFiberHostYieldIfDue();  // resumed
+#endif
       return;
     }
   }
+  R360_VERBOSE_TRACE("R360_HOST_YIELD_CHECK fiber=%u interrupt=%u deadline=%llu now=%llu\n",
+                     g_current, g_in_interrupt ? 1u : 0u,
+                     (unsigned long long)g_host_slice_deadline_ms, (unsigned long long)HostMillis());
   if (!g_enabled || g_in_interrupt || !g_host_slice_deadline_ms ||
       g_current >= g_fibers.size() || HostMillis() < g_host_slice_deadline_ms) {
     return;
@@ -393,12 +648,15 @@ void GuestFiberHostYieldIfDue() {
   g_host_yield = true;
   ++g_host_yields;
   SwitchTo(g_current, kFiberReady, 4u);
+#if defined(R360_NATIVE)
+  GuestFiberHostYieldIfDue();  // resumed after the host's turn
+#endif
 #endif
 }
 
 bool RunGuestInterrupt(uint32_t address, uint32_t r3, uint32_t r4,
                        uint32_t stack_top, uint32_t pcr) {
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   if (!g_enabled || g_in_interrupt || g_pristine_locals.size() != LocalsSize() ||
       !address || !stack_top) {
     return false;
@@ -452,7 +710,7 @@ uint32_t r360_fiber_reset(uint32_t enable) {
   rx::g_preemptions = 0;
   rx::g_enabled = enable != 0;
   if (!rx::g_enabled) return 0;
-#if defined(__wasm__)
+#if defined(R360_FIBER_SWITCHING)
   rx::g_pristine_locals.assign(__start_r360_fiber, __stop_r360_fiber);
 #endif
   rx::Fiber primary;
@@ -472,6 +730,11 @@ uint32_t r360_fiber_set_host_slice(uint32_t milliseconds) {
   rx::g_host_slice_deadline_ms = milliseconds ? rx::HostMillis() + milliseconds : 0;
   return milliseconds;
 }
+__attribute__((used, export_name("r360_trace_verbose_from")))
+uint32_t r360_trace_verbose_from(uint32_t millions) {
+  rx::g_trace_from_instructions = uint64_t(millions) * 1000000ull;
+  return millions;
+}
 // 1 when the last unwind was a host time-slice yield (consumed by this call).
 uint32_t r360_fiber_take_host_yield() {
   const bool yielded = rx::g_host_yield;
@@ -480,6 +743,8 @@ uint32_t r360_fiber_take_host_yield() {
 }
 uint32_t r360_fiber_host_yields() { return rx::g_host_yields; }
 uint32_t r360_fiber_preemptions() { return rx::g_preemptions; }
+__attribute__((used, export_name("r360_fiber_idle_ms")))
+double r360_fiber_idle_ms() { return double(rx::g_idle_ns) / 1e6; }
 // Guest JIT frames (hir_wasm_jit.cpp) save their locals in the current
 // fiber's Asyncify buffer like Binaryen-instrumented functions: pushed on
 // unwind (after their callees), popped on rewind (before them).
@@ -567,6 +832,8 @@ uint32_t r360_fiber_entry() {
   if (rx::g_current == 0 || rx::g_current >= rx::g_fibers.size()) return 0;
   const uint32_t handle = rx::g_fibers[rx::g_current].thread;
   const uint32_t entry = r360_guest_thread_entry(handle);
+  std::fprintf(stderr, "R360_FIBER_START fiber=%u thread=0x%08X entry=0x%08X minstr=%llu\n", rx::g_current,
+               handle, entry, static_cast<unsigned long long>(rx::HIRTotalInstructions() / 1000000ull));
   rx::ResetHIRCorrectnessInitialState();
   rx::ClearHIRCorrectnessInitialRegisterStrings();
   rx::SetHIRCorrectnessInitialGPR(1, r360_guest_thread_stack_top(handle));
@@ -583,7 +850,12 @@ uint32_t r360_fiber_entry() {
   const bool returned = hir && r360_ppc_probe_correctness_status() == 3u;
   const bool exited = rx::FinishGuestThreadFiber(
       handle, returned, uint32_t(rx::GetHIRCorrectnessLastGPR(3)));
-  if (!exited) return hir ? hir : 1u;  // stopped on a blocker: end the run
+  if (!exited) {
+    // Stopped on a blocker: end the run.
+    std::fprintf(stderr, "R360_FIBER_STOP fiber=%u thread=0x%08X hir=%u status=%u returned=%u\n",
+                 rx::g_current, handle, hir, r360_ppc_probe_correctness_status(), returned ? 1u : 0u);
+    return hir ? hir : 1u;
+  }
   fiber.state = rx::kFiberDone;
   rx::GuestFiberNoteProgress();
   uint32_t target = 0;
@@ -593,12 +865,63 @@ uint32_t r360_fiber_entry() {
     target = 0;
     rx::g_force_fail = rx::g_fibers[0].state == rx::kFiberBlocked ||
                        rx::g_fibers[0].state == rx::kFiberReady;
-    if (!rx::g_force_fail) return hir ? hir : 1u;
+    if (!rx::g_force_fail) {
+      std::fprintf(stderr, "R360_FIBER_STOP no-target fiber=%u primary_state=%u\n", rx::g_current,
+                   uint32_t(rx::g_fibers[0].state));
+      return hir ? hir : 1u;
+    }
   }
   rx::g_target = target;
   rx::g_switch_pending = true;
   ++rx::g_switches;
   return hir ? hir : 1u;
 }
+
+#if defined(R360_NATIVE)
+// Native equivalent of runWithGuestFibers (render360-guest-fibers.mjs): runs
+// `primary` (enters the title's primary thread) with guest-thread scheduling
+// and returns its result, or the root result of the title thread the run
+// ended on. slice_ms > 0 calls on_slice about every slice_ms of host time on
+// the running guest thread (frames, input, telemetry); a nonzero return stops
+// the run (*stopped = 1). Threads of a stopped run are abandoned, so the host
+// should end the process before booting another title.
+uint32_t r360_native_run_with_fibers(uint32_t (*primary)(void*), void* user, uint32_t slice_ms,
+                                     uint32_t (*on_slice)(void*), void* slice_user,
+                                     uint32_t* stopped) {
+  r360_fiber_reset(1);
+  uint64_t generation;
+  {
+    std::lock_guard<std::mutex> lock(rx::g_native_mutex);
+    generation = ++rx::g_native_generation;
+    rx::g_native_baton = 0;
+    rx::g_native_run_done = false;
+    rx::g_native_run_result = 0;
+    rx::g_native_run_stopped = 0;
+  }
+  rx::g_native_slice_ms = on_slice ? slice_ms : 0;
+  rx::g_native_on_slice = on_slice;
+  rx::g_native_slice_user = slice_user;
+  r360_fiber_set_host_slice(rx::g_native_slice_ms);
+  auto* start = new rx::NativeThreadStart{0, generation, primary, user};
+  if (!rx::NativeSpawn(start, rx::NativePrimaryThreadMain)) {
+    delete start;
+    r360_fiber_reset(0);
+    if (stopped) *stopped = 2;
+    return 0;
+  }
+  uint32_t result;
+  {
+    std::unique_lock<std::mutex> lock(rx::g_native_mutex);
+    rx::g_native_cv.wait(lock, [] { return rx::g_native_run_done; });
+    result = rx::g_native_run_result;
+    if (stopped) *stopped = rx::g_native_run_stopped;
+  }
+  r360_fiber_set_host_slice(0);
+  rx::g_native_on_slice = nullptr;
+  // Fiber bookkeeping stays readable (r360_fiber_*) until the next reset.
+  return result;
+}
+uint32_t r360_native_fiber_finish() { return r360_fiber_reset(0); }
+#endif
 
 }  // extern "C"

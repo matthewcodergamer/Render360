@@ -10,6 +10,7 @@
 //
 // Not covered here: VMX128 files stock binutils cannot assemble (Xenia uses a
 // patched binutils for those) and the MEMORY_IN/OUT store tests.
+import './test-node-wasi-safe.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

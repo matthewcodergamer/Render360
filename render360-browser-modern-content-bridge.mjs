@@ -9,6 +9,7 @@ import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs'
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
 import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
 import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
+import {createXenosWebGpuPlayPath,webGpuPlayPathRequested} from './render360-webgpu-play.mjs';
 import {browserPerformanceDefaults,createAdaptivePerformancePolicy} from './render360-performance-policy.mjs';
 import {prepareStfsGuestVfs,prepareXexGuestVfs,runWithGuestVfsRetries} from './render360-guest-vfs.mjs';
 
@@ -22,7 +23,27 @@ let activePresenter=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
 function guestRunOptions(bootstrap,onStage){
-  return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),onFrame:()=>{const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);}});
+  // WebGPU play path (render360-webgpu-play.mjs) when requested; frames
+  // come from the software renderer until it is ready or if it fails.
+  const play={path:null,pending:false,failed:false};
+  if(webGpuPlayPathRequested(null)&&globalThis.navigator?.gpu){
+    play.pending=true;
+    createXenosWebGpuPlayPath(bootstrap,ensureTitleWebGPUCanvas()).then(path=>{
+      play.path=path;activePresenter=path;
+      stage(onStage,'renderer','WebGPU Xenos renderer active (port of Xenia’s Vulkan backend)');
+    },error=>{
+      play.failed=true;
+      console.warn('[Render360] WebGPU Xenos renderer unavailable:',error);
+      stage(onStage,'renderer',`WebGPU Xenos renderer unavailable: ${error?.message||error}`);
+    }).finally(()=>{play.pending=false;});
+  }
+  return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),
+    onSlice:()=>play.path?.slice(),
+    gpuFrameMs:()=>play.path?.takeGpuMs?.()??null,
+    onFrame:()=>{
+      if(play.path&&!play.path.lost){play.path.frame();return;}
+      const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);
+    }});
 }
 async function getBootstrap(onStage=null){
   const wasCached=Boolean(globalThis.render360PpcRuntimeIdentity?.verified);

@@ -44,7 +44,7 @@ needle = "  // Value of last reserved load\n  uint64_t reserved_val;\n"
 if needle not in text:
     raise SystemExit("Upstream PPCContext layout drifted: reserved_val anchor not found")
 replacement = needle + (
-    "\n#if defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)\n"
+    "\n#if (defined(__EMSCRIPTEN__) || defined(XE_ARCH_WASM32)) && !defined(R360_NATIVE)\n"
     "  // Render360 web ABI: compensate for 32-bit host pointers without\n"
     "  // moving any existing PPCContext field. Keep this as tail padding.\n"
     "  uint8_t render360_wasm32_tail_padding[16];\n"
@@ -274,6 +274,18 @@ desktop_body_without_close = desktop_body[:last_close]
 wasm_init += desktop_body_without_close + "#endif\n}\n\n"
 memory_cc = memory_cc[:init_start] + wasm_init + memory_cc[map_info_start:]
 MEMORY_DEST.parent.mkdir(parents=True, exist_ok=True)
+# The portable host never installs an MMIOHandler (no host page faults), but
+# the HIR constant-propagation pass still asks for MMIO ranges. Upstream
+# dereferences the null handler; wasm32 happened to read zeros at address 0x20,
+# a 64-bit native host faults. Report "no range" instead.
+lookup_anchor = "  return mmio_handler_->LookupRange(virtual_address);\n"
+if lookup_anchor not in memory_cc:
+    raise SystemExit("Upstream Memory::LookupVirtualMappedRange drifted")
+memory_cc = memory_cc.replace(
+    lookup_anchor,
+    "  if (!mmio_handler_) return nullptr;  // Render360 portable host\n" + lookup_anchor,
+    1,
+)
 MEMORY_DEST.write_text(memory_cc)
 
 # processor.cc: the debugger exception-resume path knows how to restore a

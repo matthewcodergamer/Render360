@@ -14,13 +14,13 @@ function casesInSwitch(source, marker, endMarker) {
   if(start<0)throw new Error(`Cannot find switch marker: ${marker}`);
   const end=source.indexOf(endMarker,start);
   if(end<0)throw new Error(`Cannot find switch end marker: ${endMarker}`);
-  return new Set([...source.slice(start,end).matchAll(/\\bcase\\s+(OPCODE_[A-Z0-9_]+)\\s*:/g)].map(m=>m[1]));
+  return new Set([...source.slice(start,end).matchAll(/\bcase\s+(OPCODE_[A-Z0-9_]+)\s*:/g)].map(m=>m[1]));
 }
 
 const interpreter=casesInSwitch(
   executor,
   'bool ExecuteVectorOperation(',
-  '    default:\n  *supported = false;',
+  '    default:\n      return false;\n  }\n  *supported = false;',
 );
 const native=casesInSwitch(
   jit,

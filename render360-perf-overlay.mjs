@@ -70,7 +70,9 @@ export class PerfStats {
   }
 
   // Host time of one slice: total time inside the emulator, the part of it
-  // spent in the GPU renderer, and the page-side present time (all ms).
+  // spent in the software Xenos rasterizer (all ms), and page-side present time.
+  // This counter is NOT WebGPU device execution time; WebGPU completion is
+  // sampled separately through gpuFrame().
   slice(t, emulationMs, gpuMs, presentMs) {
     this.slices.push([t, Math.max(0, emulationMs - gpuMs), gpuMs + presentMs]);
     this.trim(t);
@@ -160,7 +162,7 @@ export class PerfStats {
       low1Fps: low1,
       cpuMsPerSecond: cpuMs,
       gpuMsPerSecond: gpuMs,
-      bottleneck: cpuMs === 0 && gpuMs === 0 ? '—' : cpuMs >= gpuMs ? 'CPU emulation' : 'GPU rendering',
+      bottleneck: cpuMs === 0 && gpuMs === 0 ? '—' : cpuMs >= gpuMs ? 'CPU emulation' : 'Software Xenos rasterizer',
       submittedPerSecond: submittedLastSecond,
       presentedPerSecond: current,
       totalSubmitted: this.totalSubmitted,
@@ -191,14 +193,14 @@ export function formatPerf(s) {
   const game = s.gameFps === undefined ? [] : [
     `Game FPS ${f(s.gameFps, 0)}   avg ${f(s.gameAverageFps)}   1% low ${f(s.gameLow1Fps)}   stutters ${f(s.stuttersPerMinute, 1)}/min`,
     `Emulation speed ${f(s.emulationSpeedPercent, 0)}%   idle ${f(s.idlePercent, 0)}%   ${f(s.mips, 0)} MIPS   interpreted ${f(s.interpretedPercent, 2)}%`,
-    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   GPU ${s.gpuMsPerFrame === null ? '—' : f(s.gpuMsPerFrame) + ' ms/frame'}`,
+    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   WebGPU submit→complete ${s.gpuMsPerFrame === null ? '—' : f(s.gpuMsPerFrame) + ' ms/frame'}`,
     `30 FPS bar: ${s.bar.pass ? 'PASS' : 'not met'}  avg${mark(s.bar.average)} low${mark(s.bar.low1)} speed${mark(s.bar.speed)} stutter${mark(s.bar.stutter)}`,
   ];
   return [
     ...game,
     `FPS ${f(s.fps, 0)}   avg ${f(s.averageFps)}   1% low ${f(s.low1Fps)}`,
     `Frame time ${f(s.frameMs)} ms`,
-    `CPU emulation ${f(s.cpuMsPerSecond, 0)} ms/s   GPU rendering ${f(s.gpuMsPerSecond, 0)} ms/s`,
+    `CPU emulation ${f(s.cpuMsPerSecond, 0)} ms/s   Software Xenos rasterizer ${f(s.gpuMsPerSecond, 0)} ms/s`,
     `Bottleneck: ${s.bottleneck}`,
     `Frames submitted ${f(s.submittedPerSecond, 0)}/s   presented ${f(s.presentedPerSecond, 0)}/s`,
     'Audio: not implemented (no XMA yet)',

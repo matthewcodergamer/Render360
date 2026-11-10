@@ -304,6 +304,8 @@ if(generatedSession.functionCount>0&&config.renderer==='webgpu-xenos'){
     rendererOverride='software';
     stage(onStage,'renderer',`WebGPU Xenos unavailable; using Software Renderer: ${error?.message||error}`);
   }
+}else if(generatedSession.functionCount>0){
+  stage(onStage,'renderer',`Software Xenos rasterizer active (${config.renderer||'auto'}). Select WebGPU Renderer (experimental) in Settings to try native Xenos command-stream rendering.`);
 }
 if(generatedSession.functionCount>0){
   const tiers=generatedSession.functionTiers||[];

@@ -68,6 +68,7 @@ JitSlot* g_candidate_slot = nullptr;
 // Telemetry.
 uint32_t g_compiled = 0, g_rejected = 0, g_compile_failures = 0;
 uint64_t g_jit_calls = 0;
+uint32_t g_generic_instructions = 0;
 uint32_t g_last_reject_opcode = 0;
 uint32_t g_reject_histogram[256] = {};
 std::unordered_map<const HIRBuilder*, uint32_t> g_reject_by_builder;
@@ -937,6 +938,7 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
 
 // One instruction through the executor's own dispatch (r360_jit_h_exec).
 bool Emitter::EmitGeneric(Instr* instr, uint32_t source) {
+  ++g_generic_instructions;
   using namespace xe::cpu::hir;
   const auto& sig = instr->opcode->signature;
   const Value* operands[3] = {
@@ -2141,6 +2143,7 @@ uint32_t r360_jit_stat(uint32_t which) {
     case 4: return rx::g_last_reject_opcode;
     case 5: return uint32_t(rx::g_code_bytes / 1024u);
     case 6: return uint32_t(rx::g_pending.size());
+    case 7: return rx::g_generic_instructions;
     default: return 0;
   }
 }

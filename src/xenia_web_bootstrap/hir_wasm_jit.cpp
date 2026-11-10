@@ -729,6 +729,14 @@ bool Emitter::EmitVector(Instr* instr, uint32_t source) {
       Simd(0x6E);   // i8x16.add
       return SetDest(instr);
     }
+    case OPCODE_VECTOR_CONVERT_F2I:
+      // Match vector_semantics::VectorConvertF2I: truncation toward zero,
+      // NaN -> 0, and saturation at the signed/unsigned 32-bit bounds.
+      // WebAssembly SIMD's trunc_sat instructions have those exact semantics.
+      if (!is_vec(d) || !is_vec(a)) return Reject(instr);
+      Push(a);
+      Simd((instr->flags & ARITHMETIC_UNSIGNED) ? 0xF9 : 0xF8);
+      return SetDest(instr);
     case OPCODE_VECTOR_ADD: case OPCODE_VECTOR_SUB: {
       if (!is_vec(d) || !is_vec(a) || !is_vec(b)) return Reject(instr);
       const auto part = TypeName(instr->flags & 0xFF);

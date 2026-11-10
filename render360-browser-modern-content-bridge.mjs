@@ -308,7 +308,13 @@ if(generatedSession.functionCount>0){
   const tiers=generatedSession.functionTiers||[];
   const cfgCount=tiers.filter(item=>item?.tier==='cfg-fallback').length;
   stage(onStage,'execute',`Generated-WASM session ready · ${generatedSession.functionCount} function${generatedSession.functionCount===1?'':'s'}${cfgCount?` · ${cfgCount} resumable CFG`:''}`);
-  threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
+  try{
+    threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
+  }catch(error){
+    try{xenosPlayPath?.destroy?.();}catch{}
+    if(activePresenter===xenosPlayPath)activePresenter=null;
+    throw error;
+  }
 }else{
   console.warn(`[Render360] Generated-WASM callable/CFG session produced 0 runnable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
   result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage,vfs:guestVfs,config});

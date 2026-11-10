@@ -42,6 +42,12 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
       if(lost)return false;
       const t0=performance.now();
       backend.replay();
+      // definePipeline records shader / layout / WebGPU validation failures and
+      // draw() otherwise skips those pipelines silently. Do not present a
+      // misleading blank frame as a successful GPU renderer: surface the
+      // first concrete failure so the caller can restore software rendering.
+      const failedPipeline=[...backend.pipelines.entries()].find(([,entry])=>entry?.error);
+      if(failedPipeline)throw new Error(`WebGPU pipeline ${failedPipeline[0]} failed: ${failedPipeline[1].error}`);
       const front=backend.frontTexture;
       if(front&&(canvas.width!==front.width||canvas.height!==front.height)){canvas.width=front.width;canvas.height=front.height;}
       canvas.style.display='block';

@@ -24,13 +24,13 @@ expect(near(s.frameMs, 1000 / 30, 1), `frame time ${s.frameMs}`);
 // Slowest 1% of 299 intervals = 3 frames: the 200 ms hitch and two 33 ms ones.
 expect(near(s.low1Fps, 3000 / (200 + 2000 / 30), 0.2), `1% low should reveal the 200 ms hitch, got ${s.low1Fps}`);
 expect(near(s.cpuMsPerSecond, 15 * 30, 20) && near(s.gpuMsPerSecond, 8 * 30, 20),
-       `CPU/GPU split ${s.cpuMsPerSecond}/${s.gpuMsPerSecond}`);
+       `CPU/software-rasterizer split ${s.cpuMsPerSecond}/${s.gpuMsPerSecond}`);
 expect(s.bottleneck === 'CPU emulation', `bottleneck ${s.bottleneck}`);
 expect(near(s.submittedPerSecond, 60, 2) && near(s.presentedPerSecond, 30, 1),
        `submitted/presented ${s.submittedPerSecond}/${s.presentedPerSecond}`);
 expect(s.totalSubmitted === 600 && s.totalPresented === 300, 'totals');
 const text = formatPerf(s);
-for (const label of ['FPS', 'avg', '1% low', 'Frame time', 'CPU emulation', 'GPU rendering', 'submitted', 'presented']) {
+for (const label of ['FPS', 'avg', '1% low', 'Frame time', 'CPU emulation', 'Software Xenos rasterizer', 'WebGPU submit→complete', 'submitted', 'presented']) {
   expect(text.includes(label), `overlay text missing ${label}`);
 }
 

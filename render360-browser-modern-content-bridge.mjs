@@ -41,7 +41,8 @@ function guestRunOptions(bootstrap,onStage,config={}){
     onSlice:()=>play.path?.slice(),
     gpuFrameMs:()=>play.path?.takeGpuMs?.()??null,
     onFrame:()=>{
-      if(play.path&&!play.path.lost){play.path.frame();return;}
+      if(play.path?.lost){try{play.path.destroy?.();}catch{}play.path=null;}
+      if(play.path){if(play.path.frame())return;}
       const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);
     }});
 }

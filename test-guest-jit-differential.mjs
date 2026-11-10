@@ -98,10 +98,17 @@ for(let i=0;i<program.length;i++){
     const inputs=p.vec?[['v4',vec()],['v5',vec()],['v6',vec()],['r4',String(rand32()&0xFFFF)]]
                       :[['r4',`0x${hex(word())}`],['r5',`0x${hex(word())}`]];
     if(p.lvs)inputs.push(['r4',String(rand32()&0xFFFF)]);
-    const a=run(interp,i,inputs,p.lvs),b=run(jit,i,inputs,p.lvs);
+    const a=run(interp,i,inputs,p.lvs);
+    const genericBefore=jit.r360_jit_stat?jit.r360_jit_stat(7)>>>0:0;
+    const b=run(jit,i,inputs,p.lvs);
+    const genericAfter=jit.r360_jit_stat?jit.r360_jit_stat(7)>>>0:genericBefore;
     checked++;
     if(process.env.SHOW&&n===0&&i<3)console.log(p.name,JSON.stringify(inputs),'->',a,'|',b);
     if(a!==b){failures.push(`${p.name} ${JSON.stringify(inputs)}\n    executor: ${a}\n    jit:      ${b}`);break;}
+    if((p.name==='vctsxs'||p.name==='vctuxs')&&genericAfter>genericBefore){
+      failures.push(`${p.name} used ${genericAfter-genericBefore} generic kHExec lowering(s); expected native SIMD`);
+      break;
+    }
   }
 }
 const telemetry=jit.r360_jit_stat?{functions:jit.r360_jit_stat(0)>>>0,rejected:jit.r360_jit_stat(1)>>>0}:{};

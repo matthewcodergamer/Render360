@@ -189,10 +189,11 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
   let shaderRuntime=null;
   try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
   let shaderWebGPU=state.shaderWebGPU??null;
-  if(state.config?.renderer!=='webgl2'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
+  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
   let frontbufferFrame=state.frontbufferFrame??null,presentation=state.presentation??null;
   const swaps=gpuTraffic?.swaps||0;
   if(swaps>0&&(forceFrontbuffer||swaps!==state.lastSwapCount)){
+    if(state.xenosPlayPath?.lost){try{state.xenosPlayPath.destroy?.();}catch{}state.xenosPlayPath=null;state.config.renderer='software';stage(state.onStage,'renderer','WebGPU device lost; returned to Software Renderer');}
     if(state.xenosPlayPath&&!state.xenosPlayPath.lost){
       try{
         state.xenosPlayPath.slice();
@@ -207,6 +208,7 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
       }catch(error){
         try{state.xenosPlayPath.destroy?.();}catch{}
         state.xenosPlayPath=null;
+        state.config.renderer='software';
         state.xenosPlayError=error?.message||String(error);
         stage(state.onStage,'renderer',`WebGPU Xenos failed; returning to Software Renderer: ${state.xenosPlayError}`);
       }
@@ -216,7 +218,7 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
       frontbufferFrame=captureTitleFrontbuffer({bootstrap:state.bootstrap});
       if(frontbufferFrame.captured){
         let webgpuError=null;
-        if(state.config?.renderer!=='webgl2'&&globalThis.navigator?.gpu){
+        if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&state.config?.renderer!=='webgpu-xenos'&&globalThis.navigator?.gpu){
           try{
             if(!state.webgpuPresenter){
               const canvas=ensureTitleWebGPUCanvas();

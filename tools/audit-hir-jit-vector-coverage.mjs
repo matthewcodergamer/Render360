@@ -20,12 +20,12 @@ function casesInSwitch(source, marker, endMarker) {
 const interpreter=casesInSwitch(
   executor,
   'bool ExecuteVectorOperation(',
-  '    default:',
+  '    default:\n  *supported = false;',
 );
 const native=casesInSwitch(
   jit,
   'bool Emitter::EmitVector(',
-  '    default:',
+  '    default:\n      return Reject(instr);\n  }\n}',
 );
 const fallback=[...interpreter].filter(op=>!native.has(op)).sort();
 console.log(`HIR vector operations recognized by interpreter: ${interpreter.size}`);

@@ -290,8 +290,20 @@ async function runModernXboxContentInner({core,file,type,onStage=null,config={}}
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
   const guestVfs=await prepareGuestVfs({core,bootstrap,file,prepared,onStage});if(run!==activeRun)return null;
 let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
-let threaded=null;
+let threaded=null,xenosPlayPath=null,xenosCanvas=null,rendererOverride=null;
 const generatedSession=await createBrowserTitlePpcSession({bootstrap,clearContext:true});
+if(generatedSession.functionCount>0&&config.renderer==='webgpu-xenos'){
+  try{
+    xenosCanvas=ensureTitleWebGPUCanvas();
+    if(!xenosCanvas)throw new Error('WebGPU title canvas unavailable');
+    xenosPlayPath=await createXenosWebGpuPlayPath(bootstrap,xenosCanvas);
+    activePresenter=xenosPlayPath;
+    stage(onStage,'renderer','WebGPU Xenos renderer active (experimental; direct command-stream replay)');
+  }catch(error){
+    rendererOverride='software';
+    stage(onStage,'renderer',`WebGPU Xenos unavailable; using Software Renderer: ${error?.message||error}`);
+  }
+}
 if(generatedSession.functionCount>0){
   const tiers=generatedSession.functionTiers||[];
   const cfgCount=tiers.filter(item=>item?.tier==='cfg-fallback').length;
@@ -306,19 +318,7 @@ const perfDefaults=browserPerformanceDefaults();
 const effectiveConfig={...config,targetFps:Number(config.targetFps||perfDefaults.targetFps),resolutionScale:Number(config.resolutionScale??perfDefaults.initialScale)};
 const performancePolicy=createAdaptivePerformancePolicy({targetFps:effectiveConfig.targetFps,initialScale:effectiveConfig.resolutionScale,minScale:Number(config.minResolutionScale??perfDefaults.minScale),maxScale:Number(config.maxResolutionScale??perfDefaults.maxScale)});
 effectiveConfig.resolutionScale=performancePolicy.resolutionScale;
-let xenosPlayPath=null,xenosCanvas=null;
-if(threaded?.scheduler&&effectiveConfig.renderer==='webgpu-xenos'){
-  try{
-    xenosCanvas=ensureTitleWebGPUCanvas();
-    if(!xenosCanvas)throw new Error('WebGPU title canvas unavailable');
-    xenosPlayPath=await createXenosWebGpuPlayPath(bootstrap,xenosCanvas);
-    activePresenter=xenosPlayPath;
-    stage(onStage,'renderer','WebGPU Xenos renderer active (experimental; direct command-stream replay)');
-  }catch(error){
-    effectiveConfig.renderer='software';
-    stage(onStage,'renderer',`WebGPU Xenos unavailable; using Software Renderer: ${error?.message||error}`);
-  }
-}
+if(rendererOverride)effectiveConfig.renderer=rendererOverride;
 const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config:effectiveConfig,onStage,performancePolicy,performanceSample:performancePolicy.snapshot(),lastPerformanceSampleAt:NaN,lastPerformanceSwapCount:-1,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,xenosPlayPath,xenosCanvas,lastSwapCount:-1};
 updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
 else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});

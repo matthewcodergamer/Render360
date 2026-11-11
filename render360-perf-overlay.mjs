@@ -167,7 +167,7 @@ export class PerfStats {
       softRasterizerMsPerSecond: softRasterizerMs,
       jsReplayMsPerSecond: jsReplayMs,
       presentCpuMsPerSecond: presentCpuMs,
-      gpuMsPerSecond: this.gpuFrames.filter(([time]) => time >= t - 1000).reduce((a, [, ms]) => a + ms, 0),
+      gpuMsPerSecond: gpuRecent.length ? gpuRecent.reduce((a, [, ms]) => a + ms, 0) : null,
       bottleneck: cpuMs === 0 && softRasterizerMs === 0 && jsReplayMs === 0 ? '—' :
         [['CPU emulation', cpuMs], ['Software Xenos rasterizer', softRasterizerMs], ['WebGPU JS replay', jsReplayMs]]
           .sort((a, b) => b[1] - a[1])[0][0],

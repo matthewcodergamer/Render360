@@ -39,11 +39,16 @@ function guestRunOptions(bootstrap,onStage,config={}){
   }
   return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),
     onSlice:()=>play.path?.slice(),
-    gpuFrameMs:()=>play.path?.takeGpuMs?.()??null,
+    gpuFrameMs:()=>play.path?.takeGpuTimestampMs?.()??null,
     onFrame:()=>{
       if(play.path?.lost){try{play.path.destroy?.();}catch{}play.path=null;}
-      if(play.path){if(play.path.frame())return;}
-      const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);
+      if(play.path){
+        if(play.path.frame())return play.path.takeFrameMetrics?.()??null;
+      }
+      const frame=captureTitleFrontbuffer({bootstrap});
+      const p0=globalThis.performance?.now?.()??Date.now();
+      if(frame?.captured)presentTitleFrontbuffer(frame);
+      return {presentCpuMs:(globalThis.performance?.now?.()??Date.now())-p0,jsReplayMs:0};
     }});
 }
 async function getBootstrap(onStage=null){

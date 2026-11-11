@@ -39,7 +39,7 @@ function guestRunOptions(bootstrap,onStage,config={}){
   }
   return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),
     onSlice:()=>play.path?.slice(),
-    gpuFrameMs:()=>play.path?.takeGpuTimestampMs?.()??null,
+    gpuTimestampMs:()=>play.path?.takeGpuTimestampMs?.()??null,
     onFrame:()=>{
       if(play.path?.lost){try{play.path.destroy?.();}catch{}play.path=null;}
       if(play.path){

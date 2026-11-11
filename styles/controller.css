@@ -297,3 +297,13 @@
 @media (orientation:landscape) and (max-height:360px){
   .controller-layer{transform:scale(.88)!important;transform-origin:center center!important;width:113.636%!important;height:113.636%!important;left:-6.818%!important;top:-6.818%!important}
 }
+
+
+/* Desktop/laptop input: hide the touch gamepad when the primary pointer is
+   a precise hover-capable device (mouse/trackpad). Keyboard and Gamepad API
+   input remain active; touch-first devices keep the on-screen controls. */
+@media (hover: hover) and (pointer: fine) {
+  #runtimeView #controllerLayer {
+    display: none !important;
+  }
+}

@@ -97,10 +97,10 @@ export class XenosWebGpuBackend{
     return this;
   }
 
-  encoderForCommands(){
+  encoderForCommands(timestamp=true){
     if(!this.encoder){
       this.encoder=this.device.createCommandEncoder({label:'Render360 Xenos'});
-      if(this.timestampQueries){
+      if(this.timestampQueries&&timestamp){
         const querySet=this.device.createQuerySet({type:'timestamp',count:2});
         const resolve=this.device.createBuffer({size:16,usage:BUFFER_USAGE.QUERY_RESOLVE|BUFFER_USAGE.COPY_SRC});
         const read=this.device.createBuffer({size:16,usage:BUFFER_USAGE.MAP_READ|BUFFER_USAGE.COPY_DST});
@@ -719,7 +719,7 @@ export class XenosWebGpuBackend{
         {binding:2,resource:{buffer:this.presentSwizzleBuffer}}]});
       this.presentSource=front.texture;this.presentPipeline=pipeline;
     }
-    const encoder=this.encoderForCommands();
+    const encoder=this.encoderForCommands(false);
     this.endPass();
     const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),loadOp:'clear',clearValue:{r:0,g:0,b:0,a:1},storeOp:'store'}]});
     pass.setPipeline(pipeline);pass.setBindGroup(0,this.presentGroup);pass.draw(3);pass.end();

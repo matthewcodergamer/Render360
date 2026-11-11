@@ -13,8 +13,8 @@ for (let frame = 0; frame < 300; ++frame) {
   submitted += 2;
   stats.submitted(t, submitted);
   stats.framePresented(t);
-  // Each 33 ms frame: 20 ms inside the emulator, 5 of them in the GPU
-  // renderer, plus 3 ms presenting -> CPU 15 ms, GPU 8 ms.
+  // Each sample: 20 ms guest slice (5 ms software rasterizer), 2 ms JS
+  // replay, and 3 ms synchronous presentation -> CPU 15 ms.
   stats.slice(t, 20, 5, 3, 2);
 }
 const s = stats.snapshot(t);

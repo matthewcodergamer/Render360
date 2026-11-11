@@ -42,7 +42,6 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
     takeFrameMetrics(){const m=frameMetrics;frameMetrics={jsReplayMs:0,presentCpuMs:0};return m;},
     frame(){
       if(lost)return false;
-      const replayStart=performance.now();
       backend.replay();
       const jsReplayMs=backend.takeReplayCpuMs();
       // definePipeline records shader / layout / WebGPU validation failures and

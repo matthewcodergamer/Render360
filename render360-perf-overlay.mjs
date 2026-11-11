@@ -26,7 +26,7 @@ export class PerfStats {
     this.windowMs = windowMs;
     this.presentTimes = [];   // performance.now() of each presented frame
     this.submitEvents = [];   // [time, count] of guest submissions
-    this.slices = [];         // [time, emulationMs, gpuMs, presentMs]
+    this.slices = [];         // [time, cpuMs, softRasterizerMs, jsReplayMs, presentCpuMs]
     this.lastSubmitted = null;
     this.totalPresented = 0;
     this.totalSubmitted = 0;
@@ -69,12 +69,12 @@ export class PerfStats {
     this.trim(t);
   }
 
-  // Host time of one slice: total time inside the emulator, the part of it
-  // spent in the software Xenos rasterizer (all ms), and page-side present time.
-  // This counter is NOT WebGPU device execution time; WebGPU completion is
-  // sampled separately through gpuFrame().
-  slice(t, emulationMs, gpuMs, presentMs) {
-    this.slices.push([t, Math.max(0, emulationMs - gpuMs), gpuMs + presentMs]);
+  // Host time buckets. emulationMs is guest-slice wall time; softRasterizerMs
+  // is the core's software-renderer counter. Replay/present are measured in
+  // the host callback and are deliberately not folded into guest CPU time.
+  slice(t, emulationMs, softRasterizerMs, presentCpuMs = 0, jsReplayMs = 0) {
+    this.slices.push([t, Math.max(0, emulationMs - softRasterizerMs),
+      Math.max(0, softRasterizerMs), Math.max(0, jsReplayMs), Math.max(0, presentCpuMs)]);
     this.trim(t);
   }
 
@@ -110,7 +110,9 @@ export class PerfStats {
       .filter(([time]) => time >= t - 1000).reduce((a, [, n]) => a + n, 0);
     const recent = this.slices.filter(([time]) => time >= t - 1000);
     const cpuMs = recent.reduce((a, s) => a + s[1], 0);
-    const gpuMs = recent.reduce((a, s) => a + s[2], 0);
+    const softRasterizerMs = recent.reduce((a, s) => a + s[2], 0);
+    const jsReplayMs = recent.reduce((a, s) => a + s[3], 0);
+    const presentCpuMs = recent.reduce((a, s) => a + s[4], 0);
     // Game FPS from guest frames: last second, 60 s average, 1% low,
     // frames over 50 ms in the last minute.
     const g = this.guestFrameTimes;
@@ -154,15 +156,21 @@ export class PerfStats {
     bar.pass = bar.average && bar.low1 && bar.speed && bar.stutter && gSpan >= 10000;
     return {
       gameFps, gameAverageFps, gameLow1Fps, stuttersPerMinute, emulationSpeedPercent, idlePercent,
-      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerFrame, bar,
+      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerFrame, softRasterizerMsPerSecond: softRasterizerMs,
+      jsReplayMsPerSecond: jsReplayMs, presentCpuMsPerSecond: presentCpuMs, bar,
       frameTimes: gDeltas.slice(-120),
       fps: current,
       averageFps: average,
       frameMs,
       low1Fps: low1,
       cpuMsPerSecond: cpuMs,
-      gpuMsPerSecond: gpuMs,
-      bottleneck: cpuMs === 0 && gpuMs === 0 ? '—' : cpuMs >= gpuMs ? 'CPU emulation' : 'Software Xenos rasterizer',
+      softRasterizerMsPerSecond: softRasterizerMs,
+      jsReplayMsPerSecond: jsReplayMs,
+      presentCpuMsPerSecond: presentCpuMs,
+      gpuMsPerSecond: this.gpuFrames.filter(([time]) => time >= t - 1000).reduce((a, [, ms]) => a + ms, 0),
+      bottleneck: cpuMs === 0 && softRasterizerMs === 0 && jsReplayMs === 0 ? '—' :
+        [['CPU emulation', cpuMs], ['Software Xenos rasterizer', softRasterizerMs], ['WebGPU JS replay', jsReplayMs]]
+          .sort((a, b) => b[1] - a[1])[0][0],
       submittedPerSecond: submittedLastSecond,
       presentedPerSecond: current,
       totalSubmitted: this.totalSubmitted,
@@ -200,7 +208,9 @@ export function formatPerf(s) {
     ...game,
     `FPS ${f(s.fps, 0)}   avg ${f(s.averageFps)}   1% low ${f(s.low1Fps)}`,
     `Frame time ${f(s.frameMs)} ms`,
-    `CPU emulation ${f(s.cpuMsPerSecond, 0)} ms/s   Software Xenos rasterizer ${f(s.gpuMsPerSecond, 0)} ms/s`,
+    `CPU emulation ${f(s.cpuMsPerSecond, 0)} ms/s   Software Xenos rasterizer ${f(s.softRasterizerMsPerSecond, 0)} ms/s`,
+    `WebGPU JS replay ${f(s.jsReplayMsPerSecond, 1)} ms/s   Present CPU ${f(s.presentCpuMsPerSecond, 1)} ms/s`,
+    `GPU timestamp ${s.gpuMsPerSecond === null ? 'unavailable' : f(s.gpuMsPerSecond, 1) + ' ms/s'}`,
     `Bottleneck: ${s.bottleneck}`,
     `Frames submitted ${f(s.submittedPerSecond, 0)}/s   presented ${f(s.presentedPerSecond, 0)}/s`,
     'Audio: not implemented (no XMA yet)',

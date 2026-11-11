@@ -115,8 +115,8 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,o
     perf.slice(t,t-sliceExit,softRasterizerMs,presentMs,jsReplayMs);
     const counter=bootstrap?.exports?.r360_perf_counter,idle=bootstrap?.exports?.r360_fiber_idle_ms;
     if(typeof counter==='function')perf.counters(t,counter(0),counter(1),typeof idle==='function'?idle():0);
-    const gpuFrame=gpuTimestampMs?.();
-    if(gpuFrame!==null&&gpuFrame!==undefined)perf.gpuTimestamp(t,gpuFrame);
+    const gpuTimestamp=gpuTimestampMs?.();
+    if(gpuTimestamp!==null&&gpuTimestamp!==undefined)perf.gpuTimestamp(t,gpuTimestamp);
     perf.record(t);
     if(overlay&&t-lastOverlay>=1000){lastOverlay=t;overlay.update(perf.snapshot(t));}
     globalThis.render360Perf=perf;

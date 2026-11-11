@@ -5,11 +5,11 @@
 //   - presented frames: frames actually drawn to the page canvas;
 //   - submitted frames: the guest's VdSwap count (frames the game handed to
 //     the GPU);
-//   - host time spent inside the emulator, the part of it spent in the GPU
-//     renderer, and the time spent presenting frames on the page.
+//   - guest CPU time, software rasterizer time, WebGPU JS replay time,
+//     timestamp-query GPU duration, and synchronous page/present CPU time.
 //
 // Shown: current FPS (last second), average FPS (last 60 s), frame time, 1%
-// low FPS, CPU emulation vs GPU rendering time, submitted vs presented.
+// low FPS, renderer phase timings, submitted vs presented.
 //
 // The 30 FPS bar (PROGRESS.md "30 FPS bar"), judged on guest frames (VdSwap
 // presents per second, "game FPS"): average >= 30 and 1% low >= 25 over the

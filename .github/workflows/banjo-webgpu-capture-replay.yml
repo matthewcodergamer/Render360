@@ -68,9 +68,10 @@ jobs:
           set -euo pipefail
           CAPTURE="$RUNNER_TEMP/banjo-tooie-first-swap.bin"
           CPU_REPORT="$RUNNER_TEMP/banjo-tooie-cpu-report.json"
-          # Capture starts at the first guest slice and stops after one actual
-          # VdSwap. The instruction ceiling is a safety bound, not a claimed
-          # capture threshold; the capture metadata proves whether a swap ran.
+          # Start capture at the first guest slice and stop after one actual VdSwap.
+          # --max-minstr is expressed in MILLIONS of guest instructions:
+          # 120000 = 120 billion instructions. This is only a ceiling, not a
+          # claim that the title will reach a swap within that budget.
           timeout 25m node tools/run-title.mjs "$GAME_PATH" \
             --license full \
             --progress \
@@ -85,9 +86,16 @@ jobs:
           import fs from 'node:fs';
           const capture=process.argv[2];
           const meta=JSON.parse(fs.readFileSync(capture+'.json','utf8'));
-          if(meta.swaps < 1) throw new Error('capture did not record a real GPU swap');
-          if(!meta.frame?.captured) throw new Error('software reference frame was not captured');
+          if(!Number.isInteger(meta.swaps) || meta.swaps < 1) throw new Error('capture metadata confirms no VdSwap was recorded');
+          // Successful saveFramePng() returns width/height/hash/format/
+          // nonBlackPixels. A failure returns {captured:false, reason}.
+          // There is no "captured:true" field on success.
+          if(!Number.isInteger(meta.frame?.width) || !Number.isInteger(meta.frame?.height) ||
+             meta.frame.width < 1 || meta.frame.height < 1) {
+            throw new Error('software reference frame was not captured: '+(meta.frame?.reason ?? 'missing dimensions'));
+          }
           if(fs.statSync(capture).size < 4) throw new Error('GPU capture is empty');
+          if(!Number.isInteger(meta.draws) || meta.draws < 1) throw new Error('capture contains no recorded draw calls');
           console.log('CAPTURE_VALID', JSON.stringify({swaps:meta.swaps,minstr:meta.minstr,draws:meta.draws,bytes:fs.statSync(capture).size,reference:meta.frame}));
           NODE
           echo "R360_CAPTURE_PATH=$CAPTURE" >> "$GITHUB_ENV"

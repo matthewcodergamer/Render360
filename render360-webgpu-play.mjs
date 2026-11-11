@@ -26,7 +26,7 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
   const format=navigator.gpu.getPreferredCanvasFormat();
   context.configure({device,format,alphaMode:'opaque'});
   const backend=await new XenosWebGpuBackend(device,e).init();
-  let lost=null,gpuCompletionMs=null,pendingGpu=false;
+  let lost=null;
   let frameMetrics={jsReplayMs:0,presentCpuMs:0};
   device.lost.then(info=>{lost=info?.message||'device lost';});
   e.r360_gpu_set_mode(1);
@@ -38,8 +38,6 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
     backend,
     get lost(){return lost;},
     slice(){if(!lost&&(e.r360_gpu_stream_words()>>>0)>maxPendingWords)backend.replay();},
-    // Browser queue completion latency (not GPU execution duration).
-    takeGpuCompletionMs(){const ms=gpuCompletionMs;gpuCompletionMs=null;return ms;},
     takeGpuTimestampMs(){return backend.takeGpuTimestampMs();},
     takeFrameMetrics(){const m=frameMetrics;frameMetrics={jsReplayMs:0,presentCpuMs:0};return m;},
     frame(){
@@ -53,16 +51,15 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
       // first concrete failure so the caller can restore software rendering.
       const failedPipeline=[...backend.pipelines.entries()].find(([,entry])=>entry?.error);
       if(failedPipeline)throw new Error(`WebGPU pipeline ${failedPipeline[0]} failed: ${failedPipeline[1].error}`);
+      // Close any remaining guest command buffer before the un-timestamped
+      // canvas blit so GPU timestamps represent guest GPU work only.
+      backend.submit();
+      const presentStart=performance.now();
       const front=backend.frontTexture;
       if(front&&(canvas.width!==front.width||canvas.height!==front.height)){canvas.width=front.width;canvas.height=front.height;}
       canvas.style.display='block';
-      const presentStart=performance.now();
       const presented=backend.present(context,format);
       frameMetrics={jsReplayMs,presentCpuMs:performance.now()-presentStart};
-      if(!pendingGpu){
-        pendingGpu=true;
-        device.queue.onSubmittedWorkDone().then(()=>{gpuCompletionMs=performance.now()-replayStart;pendingGpu=false;},()=>{pendingGpu=false;});
-      }
       return presented;
     },
     destroy(){

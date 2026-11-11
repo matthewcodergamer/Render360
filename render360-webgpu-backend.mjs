@@ -129,7 +129,8 @@ export class XenosWebGpuBackend{
       if(timing){
         timing.read.mapAsync(1).then(()=>{
           const values=new BigUint64Array(timing.read.getMappedRange());
-          const elapsed=Number(values[1]-values[0])/1e6;\n          this.gpuTimestampMs=(this.gpuTimestampMs??0)+elapsed;
+          const elapsed=Number(values[1]-values[0])/1e6;
+          this.gpuTimestampMs=(this.gpuTimestampMs??0)+elapsed;
           timing.read.unmap();
           timing.querySet.destroy();timing.resolve.destroy();timing.read.destroy();
         }).catch(()=>{try{timing.querySet.destroy();timing.resolve.destroy();timing.read.destroy();}catch{}});

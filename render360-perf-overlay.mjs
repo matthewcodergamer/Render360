@@ -32,7 +32,7 @@ export class PerfStats {
     this.totalSubmitted = 0;
     this.guestFrameTimes = [];  // time of each guest frame (VdSwap)
     this.counterSamples = [];   // [time, instructions, interpreted, idleMs]
-    this.gpuFrames = [];        // [time, GPU timestamp duration ms] (WebGPU path)
+    this.gpuFrames = [];        // [time, GPU timestamp duration ms per completed submit]
     this.log = [];              // one record per second (exportLog)
     this.lastLogAt = 0;
   }
@@ -44,7 +44,7 @@ export class PerfStats {
     this.trim(t);
   }
 
-  // GPU execution duration measured with WebGPU timestamp queries (ms).
+  // GPU execution duration accumulated from completed WebGPU submit timestamps (ms).
   gpuFrame(t, ms) {
     this.gpuFrames.push([t, ms]);
     this.trim(t);
@@ -146,7 +146,7 @@ export class PerfStats {
     const emulationSpeedPercent = idlePercent > 0 ? 100 / Math.max(0.01, 1 - idlePercent / 100)
                                                   : Math.min(100, 100 * gameFps / 30);
     const gpuRecent = this.gpuFrames.filter(([time]) => time >= t - 1000);
-    const gpuMsPerFrame = gpuRecent.length ? gpuRecent.reduce((a, [, ms]) => a + ms, 0) / gpuRecent.length : null;
+    const gpuMsPerSample = gpuRecent.length ? gpuRecent.reduce((a, [, ms]) => a + ms, 0) / gpuRecent.length : null;
     const cpuMsPerGuestFrame = gameFps ? cpuMs / gameFps : null;
     const stuttersPerMinute = stutters / minutes;
     const bar = {
@@ -156,7 +156,7 @@ export class PerfStats {
     bar.pass = bar.average && bar.low1 && bar.speed && bar.stutter && gSpan >= 10000;
     return {
       gameFps, gameAverageFps, gameLow1Fps, stuttersPerMinute, emulationSpeedPercent, idlePercent,
-      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerFrame, bar,
+      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerSample, bar,
       frameTimes: gDeltas.slice(-120),
       fps: current,
       averageFps: average,
@@ -200,7 +200,7 @@ export function formatPerf(s) {
   const game = s.gameFps === undefined ? [] : [
     `Game FPS ${f(s.gameFps, 0)}   avg ${f(s.gameAverageFps)}   1% low ${f(s.gameLow1Fps)}   stutters ${f(s.stuttersPerMinute, 1)}/min`,
     `Emulation speed ${f(s.emulationSpeedPercent, 0)}%   idle ${f(s.idlePercent, 0)}%   ${f(s.mips, 0)} MIPS   interpreted ${f(s.interpretedPercent, 2)}%`,
-    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   WebGPU GPU timestamp ${s.gpuMsPerFrame === null ? 'unavailable' : f(s.gpuMsPerFrame) + ' ms/frame'}`,
+    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   WebGPU timestamp ${s.gpuMsPerSample === null ? 'unavailable' : f(s.gpuMsPerSample) + ' ms/sample'}`,
     `30 FPS bar: ${s.bar.pass ? 'PASS' : 'not met'}  avg${mark(s.bar.average)} low${mark(s.bar.low1)} speed${mark(s.bar.speed)} stutter${mark(s.bar.stutter)}`,
   ];
   return [

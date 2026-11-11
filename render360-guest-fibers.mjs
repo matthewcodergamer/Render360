@@ -93,11 +93,11 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,o
   // and synchronous page/present work; these are distinct measurements.
   const perf=new PerfStats();
   const overlay=globalThis.document?createPerfOverlay():null;
-  let sliceExit=now(),lastRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
+  let sliceExit=now(),lastSoftRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
     const t=now();
     const renderUs=read('r360_xenos_soft_render_us');
-    const gpuMs=((renderUs-lastRenderUs)>>>0)/1000;lastRenderUs=renderUs;
+    const softRasterizerMs=((renderUs-lastSoftRenderUs)>>>0)/1000;lastSoftRenderUs=renderUs;
     pushGuestControllerState(bootstrap);
     showGuestDialog(bootstrap);
     try{onSlice?.();}catch{}
@@ -112,7 +112,7 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,o
       jsReplayMs=Number(frameResult?.jsReplayMs??0);
       perf.framePresented(now());
     }
-    perf.slice(t,t-sliceExit,gpuMs,presentMs,jsReplayMs);
+    perf.slice(t,t-sliceExit,softRasterizerMs,presentMs,jsReplayMs);
     const counter=bootstrap?.exports?.r360_perf_counter,idle=bootstrap?.exports?.r360_fiber_idle_ms;
     if(typeof counter==='function')perf.counters(t,counter(0),counter(1),typeof idle==='function'?idle():0);
     const gpuFrame=gpuFrameMs?.();

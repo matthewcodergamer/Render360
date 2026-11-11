@@ -18,6 +18,7 @@ for (let frame = 0; frame < 300; ++frame) {
   stats.slice(t, 20, 5, 3, 2);
 }
 const s = stats.snapshot(t);
+expect(s.gpuMsPerSample === null && s.gpuMsPerSecond === null, 'GPU timestamp must be unavailable before a timestamp sample arrives');
 expect(near(s.fps, 30, 1), `current FPS ${s.fps}`);
 expect(near(s.averageFps, 30, 2), `average FPS ${s.averageFps}`);
 expect(near(s.frameMs, 1000 / 30, 1), `frame time ${s.frameMs}`);

@@ -15,7 +15,7 @@ for (let frame = 0; frame < 300; ++frame) {
   stats.framePresented(t);
   // Each 33 ms frame: 20 ms inside the emulator, 5 of them in the GPU
   // renderer, plus 3 ms presenting -> CPU 15 ms, GPU 8 ms.
-  stats.slice(t, 20, 5, 3);
+  stats.slice(t, 20, 5, 3, 2);
 }
 const s = stats.snapshot(t);
 expect(near(s.fps, 30, 1), `current FPS ${s.fps}`);
@@ -23,14 +23,15 @@ expect(near(s.averageFps, 30, 2), `average FPS ${s.averageFps}`);
 expect(near(s.frameMs, 1000 / 30, 1), `frame time ${s.frameMs}`);
 // Slowest 1% of 299 intervals = 3 frames: the 200 ms hitch and two 33 ms ones.
 expect(near(s.low1Fps, 3000 / (200 + 2000 / 30), 0.2), `1% low should reveal the 200 ms hitch, got ${s.low1Fps}`);
-expect(near(s.cpuMsPerSecond, 15 * 30, 20) && near(s.gpuMsPerSecond, 8 * 30, 20),
-       `CPU/software-rasterizer split ${s.cpuMsPerSecond}/${s.gpuMsPerSecond}`);
+expect(near(s.cpuMsPerSecond, 15 * 30, 20) && near(s.softRasterizerMsPerSecond, 5 * 30, 20) &&
+       near(s.jsReplayMsPerSecond, 2 * 30, 20) && near(s.presentCpuMsPerSecond, 3 * 30, 20),
+       `phase split ${s.cpuMsPerSecond}/${s.softRasterizerMsPerSecond}/${s.jsReplayMsPerSecond}/${s.presentCpuMsPerSecond}`);
 expect(s.bottleneck === 'CPU emulation', `bottleneck ${s.bottleneck}`);
 expect(near(s.submittedPerSecond, 60, 2) && near(s.presentedPerSecond, 30, 1),
        `submitted/presented ${s.submittedPerSecond}/${s.presentedPerSecond}`);
 expect(s.totalSubmitted === 600 && s.totalPresented === 300, 'totals');
 const text = formatPerf(s);
-for (const label of ['FPS', 'avg', '1% low', 'Frame time', 'CPU emulation', 'Software Xenos rasterizer', 'WebGPU submit→complete', 'submitted', 'presented']) {
+for (const label of ['FPS', 'avg', '1% low', 'Frame time', 'CPU emulation', 'Software Xenos rasterizer', 'WebGPU JS replay', 'Present CPU', 'GPU timestamp', 'submitted', 'presented']) {
   expect(text.includes(label), `overlay text missing ${label}`);
 }
 
@@ -54,7 +55,7 @@ console.log(text);
       b.submitted(t, ++swaps);
       instr += 20e6; interp += 0.4e6; idle += (1000 / 30) * 0.2;
       b.counters(t, instr, interp, idle);
-      b.slice(t, 20, 4, 1);
+      b.slice(t, 20, 4, 1, 0);
       b.gpuFrame(t, 6);
       b.record(t);
     }

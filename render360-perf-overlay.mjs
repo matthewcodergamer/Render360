@@ -32,7 +32,7 @@ export class PerfStats {
     this.totalSubmitted = 0;
     this.guestFrameTimes = [];  // time of each guest frame (VdSwap)
     this.counterSamples = [];   // [time, instructions, interpreted, idleMs]
-    this.gpuFrames = [];        // [time, GPU timestamp duration ms per completed submit]
+    this.gpuTimestamps = [];        // [time, GPU timestamp duration ms per completed submit]
     this.log = [];              // one record per second (exportLog)
     this.lastLogAt = 0;
   }
@@ -45,8 +45,8 @@ export class PerfStats {
   }
 
   // GPU execution duration accumulated from completed WebGPU submit timestamps (ms).
-  gpuFrame(t, ms) {
-    this.gpuFrames.push([t, ms]);
+  gpuTimestamp(t, ms) {
+    this.gpuTimestamps.push([t, ms]);
     this.trim(t);
   }
 
@@ -85,7 +85,7 @@ export class PerfStats {
     while (this.slices.length && this.slices[0][0] < old) this.slices.shift();
     while (this.guestFrameTimes.length && this.guestFrameTimes[0] < old) this.guestFrameTimes.shift();
     while (this.counterSamples.length > 2 && this.counterSamples[1][0] < old) this.counterSamples.shift();
-    while (this.gpuFrames.length && this.gpuFrames[0][0] < old) this.gpuFrames.shift();
+    while (this.gpuTimestamps.length && this.gpuTimestamps[0][0] < old) this.gpuTimestamps.shift();
   }
 
   snapshot(t) {
@@ -145,7 +145,7 @@ export class PerfStats {
     }
     const emulationSpeedPercent = idlePercent > 0 ? 100 / Math.max(0.01, 1 - idlePercent / 100)
                                                   : Math.min(100, 100 * gameFps / 30);
-    const gpuRecent = this.gpuFrames.filter(([time]) => time >= t - 1000);
+    const gpuRecent = this.gpuTimestamps.filter(([time]) => time >= t - 1000);
     const gpuMsPerSample = gpuRecent.length ? gpuRecent.reduce((a, [, ms]) => a + ms, 0) / gpuRecent.length : null;
     const cpuMsPerGuestFrame = gameFps ? cpuMs / gameFps : null;
     const stuttersPerMinute = stutters / minutes;

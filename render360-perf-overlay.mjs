@@ -32,7 +32,7 @@ export class PerfStats {
     this.totalSubmitted = 0;
     this.guestFrameTimes = [];  // time of each guest frame (VdSwap)
     this.counterSamples = [];   // [time, instructions, interpreted, idleMs]
-    this.gpuFrames = [];        // [time, gpuMs] per presented frame (WebGPU path)
+    this.gpuFrames = [];        // [time, GPU timestamp duration ms] (WebGPU path)
     this.log = [];              // one record per second (exportLog)
     this.lastLogAt = 0;
   }
@@ -44,7 +44,7 @@ export class PerfStats {
     this.trim(t);
   }
 
-  // GPU time of one frame on the WebGPU path (submit to completion, ms).
+  // GPU execution duration measured with WebGPU timestamp queries (ms).
   gpuFrame(t, ms) {
     this.gpuFrames.push([t, ms]);
     this.trim(t);
@@ -156,8 +156,7 @@ export class PerfStats {
     bar.pass = bar.average && bar.low1 && bar.speed && bar.stutter && gSpan >= 10000;
     return {
       gameFps, gameAverageFps, gameLow1Fps, stuttersPerMinute, emulationSpeedPercent, idlePercent,
-      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerFrame, softRasterizerMsPerSecond: softRasterizerMs,
-      jsReplayMsPerSecond: jsReplayMs, presentCpuMsPerSecond: presentCpuMs, bar,
+      mips, interpretedPercent, cpuMsPerGuestFrame, gpuMsPerFrame, bar,
       frameTimes: gDeltas.slice(-120),
       fps: current,
       averageFps: average,
@@ -201,7 +200,7 @@ export function formatPerf(s) {
   const game = s.gameFps === undefined ? [] : [
     `Game FPS ${f(s.gameFps, 0)}   avg ${f(s.gameAverageFps)}   1% low ${f(s.gameLow1Fps)}   stutters ${f(s.stuttersPerMinute, 1)}/min`,
     `Emulation speed ${f(s.emulationSpeedPercent, 0)}%   idle ${f(s.idlePercent, 0)}%   ${f(s.mips, 0)} MIPS   interpreted ${f(s.interpretedPercent, 2)}%`,
-    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   WebGPU submit→complete ${s.gpuMsPerFrame === null ? '—' : f(s.gpuMsPerFrame) + ' ms/frame'}`,
+    `CPU ${f(s.cpuMsPerGuestFrame)} ms/frame   WebGPU GPU timestamp ${s.gpuMsPerFrame === null ? 'unavailable' : f(s.gpuMsPerFrame) + ' ms/frame'}`,
     `30 FPS bar: ${s.bar.pass ? 'PASS' : 'not met'}  avg${mark(s.bar.average)} low${mark(s.bar.low1)} speed${mark(s.bar.speed)} stutter${mark(s.bar.stutter)}`,
   ];
   return [

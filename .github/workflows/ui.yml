@@ -3,7 +3,7 @@ name: Render360 Browser Integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, perf/jit-optimization]
     paths:
       - 'index.html'
       - 'app.js'

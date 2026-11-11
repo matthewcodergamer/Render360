@@ -22,11 +22,11 @@ let activeScheduler=null;
 let activePresenter=null;
 
 function stage(onStage,stage,message,extra={}){onStage?.({stage,message,...extra});}
-function guestRunOptions(bootstrap,onStage){
+function guestRunOptions(bootstrap,onStage,config={}){
   // WebGPU play path (render360-webgpu-play.mjs) when requested; frames
   // come from the software renderer until it is ready or if it fails.
   const play={path:null,pending:false,failed:false};
-  if(webGpuPlayPathRequested(null)&&globalThis.navigator?.gpu){
+  if(webGpuPlayPathRequested(config)&&globalThis.navigator?.gpu){
     play.pending=true;
     createXenosWebGpuPlayPath(bootstrap,ensureTitleWebGPUCanvas()).then(path=>{
       play.path=path;activePresenter=path;
@@ -39,10 +39,16 @@ function guestRunOptions(bootstrap,onStage){
   }
   return browserGuestRunOptions({bootstrap,onProgress:(message,extra)=>stage(onStage,'execute',message,extra),
     onSlice:()=>play.path?.slice(),
-    gpuFrameMs:()=>play.path?.takeGpuMs?.()??null,
+    gpuTimestampMs:()=>play.path?.takeGpuTimestampMs?.()??null,
     onFrame:()=>{
-      if(play.path&&!play.path.lost){play.path.frame();return;}
-      const frame=captureTitleFrontbuffer({bootstrap});if(frame?.captured)presentTitleFrontbuffer(frame);
+      if(play.path?.lost){try{play.path.destroy?.();}catch{}play.path=null;}
+      if(play.path){
+        if(play.path.frame())return play.path.takeFrameMetrics?.()??null;
+      }
+      const frame=captureTitleFrontbuffer({bootstrap});
+      const p0=globalThis.performance?.now?.()??Date.now();
+      if(frame?.captured)presentTitleFrontbuffer(frame);
+      return {presentCpuMs:(globalThis.performance?.now?.()??Date.now())-p0,jsReplayMs:0};
     }});
 }
 async function getBootstrap(onStage=null){
@@ -119,7 +125,7 @@ async function prepareGuestVfs({core,bootstrap,file,prepared,onStage}){
   }
 }
 
-async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=null}){
+async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=null,config={}}){
   stage(onStage,'execute','Generated-WASM entry is not callable; entering native HIR compatibility executor…');
   let securityKey=null;
   try{securityKey=extractXex2EncryptedImageKey(bytes);}catch(error){throw new Error(`XEX security metadata could not be read: ${error.message}`);}
@@ -133,7 +139,7 @@ async function executeNativeHirCompatibility({core,bootstrap,bytes,onStage,vfs=n
   let result;
   try{
     result=await runWithGuestVfsRetries(
-      ()=>handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true,...guestRunOptions(bootstrap,onStage)}),
+      ()=>handoffDefaultXex({core,bootstrap,defaultXex:bytes,encryptedSecurityKey:securityKey,scanEntryFunction:true,prepareMainThreadContext:true,...guestRunOptions(bootstrap,onStage,config)}),
       {bootstrap,fetchPending:vfs?.fetchPending??(async()=>false),onRetry:(pending,attempt)=>stage(onStage,'extract',`Loading ${pending.path} for the title (${attempt})…`)},
     );
   }finally{
@@ -189,15 +195,36 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
   let shaderRuntime=null;
   try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
   let shaderWebGPU=state.shaderWebGPU??null;
-  if(state.config?.renderer!=='webgl2'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
+  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
   let frontbufferFrame=state.frontbufferFrame??null,presentation=state.presentation??null;
   const swaps=gpuTraffic?.swaps||0;
   if(swaps>0&&(forceFrontbuffer||swaps!==state.lastSwapCount)){
+    if(state.xenosPlayPath?.lost){try{state.xenosPlayPath.destroy?.();}catch{}state.xenosPlayPath=null;state.config.renderer='software';stage(state.onStage,'renderer','WebGPU device lost; returned to Software Renderer');}
+    if(state.xenosPlayPath&&!state.xenosPlayPath.lost){
+      try{
+        state.xenosPlayPath.slice();
+        const presented=state.xenosPlayPath.frame();
+        if(presented){
+          frontbufferFrame={available:true,captured:true,realTitleFrameReady:true,width:state.xenosCanvas?.width||0,height:state.xenosCanvas?.height||0,provenance:'Xenos PM4 command stream replayed by WebGPU'};
+          presentation={presented:true,backend:'webgpu-xenos-command-stream',width:frontbufferFrame.width,height:frontbufferFrame.height};
+        }else{
+          frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:'webgpu-xenos-frame-not-presented'};
+          presentation=null;
+        }
+      }catch(error){
+        try{state.xenosPlayPath.destroy?.();}catch{}
+        state.xenosPlayPath=null;
+        state.config.renderer='software';
+        state.xenosPlayError=error?.message||String(error);
+        stage(state.onStage,'renderer',`WebGPU Xenos failed; returning to Software Renderer: ${state.xenosPlayError}`);
+      }
+    }
+    if(!state.xenosPlayPath){
     try{
       frontbufferFrame=captureTitleFrontbuffer({bootstrap:state.bootstrap});
       if(frontbufferFrame.captured){
         let webgpuError=null;
-        if(state.config?.renderer!=='webgl2'&&globalThis.navigator?.gpu){
+        if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&state.config?.renderer!=='webgpu-xenos'&&globalThis.navigator?.gpu){
           try{
             if(!state.webgpuPresenter){
               const canvas=ensureTitleWebGPUCanvas();
@@ -215,6 +242,7 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
         }
       }
     }catch(error){frontbufferFrame={available:true,captured:false,realTitleFrameReady:false,reason:error?.message||String(error)};}
+    }
   }
   const now=globalThis.performance?.now?.()??Date.now();
   let performanceSample=state.performancePolicy?.snapshot?.()??null;
@@ -268,23 +296,44 @@ async function runModernXboxContentInner({core,file,type,onStage=null,config={}}
   const prepared=kind==='xex'?await readDirectXex(file,onStage):await readStfsDefaultXex(core,file,onStage);
   const guestVfs=await prepareGuestVfs({core,bootstrap,file,prepared,onStage});if(run!==activeRun)return null;
 let result=await translateOnlyXex({core,bootstrap,bytes:prepared.bytes,onStage});if(run!==activeRun)return null;
-let threaded=null;
+let threaded=null,xenosPlayPath=null,xenosCanvas=null,rendererOverride=null;
 const generatedSession=await createBrowserTitlePpcSession({bootstrap,clearContext:true});
+if(generatedSession.functionCount>0&&config.renderer==='webgpu-xenos'){
+  try{
+    xenosCanvas=ensureTitleWebGPUCanvas();
+    if(!xenosCanvas)throw new Error('WebGPU title canvas unavailable');
+    xenosPlayPath=await createXenosWebGpuPlayPath(bootstrap,xenosCanvas);
+    activePresenter=xenosPlayPath;
+    stage(onStage,'renderer','WebGPU Xenos renderer active (experimental; direct command-stream replay)');
+  }catch(error){
+    rendererOverride='software';
+    stage(onStage,'renderer',`WebGPU Xenos unavailable; using Software Renderer: ${error?.message||error}`);
+  }
+}else if(generatedSession.functionCount>0){
+  stage(onStage,'renderer',`Software Xenos rasterizer active (${config.renderer||'auto'}). Select WebGPU Renderer (experimental) in Settings to try native Xenos command-stream rendering.`);
+}
 if(generatedSession.functionCount>0){
   const tiers=generatedSession.functionTiers||[];
   const cfgCount=tiers.filter(item=>item?.tier==='cfg-fallback').length;
   stage(onStage,'execute',`Generated-WASM session ready · ${generatedSession.functionCount} function${generatedSession.functionCount===1?'':'s'}${cfgCount?` · ${cfgCount} resumable CFG`:''}`);
-  threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
+  try{
+    threaded=await attachScheduler({bootstrap,result,onStage,config,preparedSession:generatedSession});
+  }catch(error){
+    try{xenosPlayPath?.destroy?.();}catch{}
+    if(activePresenter===xenosPlayPath)activePresenter=null;
+    throw error;
+  }
 }else{
   console.warn(`[Render360] Generated-WASM callable/CFG session produced 0 runnable functions for 0x${(result.entry>>>0).toString(16)}; switching this STFS/XEX title to native HIR compatibility execution`);
-  result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage,vfs:guestVfs});
+  result=await executeNativeHirCompatibility({core,bootstrap,bytes:prepared.bytes,onStage,vfs:guestVfs,config});
 }
 if(run!==activeRun)return null;
 const perfDefaults=browserPerformanceDefaults();
 const effectiveConfig={...config,targetFps:Number(config.targetFps||perfDefaults.targetFps),resolutionScale:Number(config.resolutionScale??perfDefaults.initialScale)};
 const performancePolicy=createAdaptivePerformancePolicy({targetFps:effectiveConfig.targetFps,initialScale:effectiveConfig.resolutionScale,minScale:Number(config.minResolutionScale??perfDefaults.minScale),maxScale:Number(config.maxResolutionScale??perfDefaults.maxScale)});
 effectiveConfig.resolutionScale=performancePolicy.resolutionScale;
-const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config:effectiveConfig,onStage,performancePolicy,performanceSample:performancePolicy.snapshot(),lastPerformanceSampleAt:NaN,lastPerformanceSwapCount:-1,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,lastSwapCount:-1};
+if(rendererOverride)effectiveConfig.renderer=rendererOverride;
+const state={file,core,bootstrap,inputKind:prepared.inputKind,result,package:prepared.package,config:effectiveConfig,onStage,performancePolicy,performanceSample:performancePolicy.snapshot(),lastPerformanceSampleAt:NaN,lastPerformanceSwapCount:-1,ppcSession:threaded?.ppcSession??null,threadScheduler:threaded?.scheduler??null,primaryThread:threaded?.primaryThread??null,schedulerReport:threaded?.schedulerReport??null,schedulerBlocker:null,runtimeLoop:null,persistentCpu:null,gpuTraffic:null,shaderRuntime:null,shaderWebGPU:null,frontbufferFrame:null,presentation:null,webgpuPresenter:null,xenosPlayPath,xenosCanvas,lastSwapCount:-1};
 updatePersistentCpu(state);await inspectRuntime(state,{forceFrontbuffer:true});publish(state);if(state.threadScheduler)driveScheduler(run,state,onStage);
 else if(state.schedulerBlocker)stage(onStage,'blocked',state.schedulerBlocker.message||String(state.schedulerBlocker),{blocker:state.schedulerBlocker});
 return {result:state.result,persistentCpu:state.persistentCpu,threadScheduler:state.threadScheduler,primaryThread:state.primaryThread,schedulerReport:state.schedulerReport,gpuTraffic:state.gpuTraffic,shaderRuntime:state.shaderRuntime,frontbufferFrame:state.frontbufferFrame,performance:state.performanceSample,inputKind:state.inputKind};

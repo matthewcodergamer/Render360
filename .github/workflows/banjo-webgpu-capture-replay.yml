@@ -1,0 +1,161 @@
+name: Banjo-Tooie WebGPU Capture Replay
+
+on:
+  push:
+    branches: [perf/jit-optimization]
+    paths:
+      - 'tools/run-title.mjs'
+      - 'test-webgpu-replay-capture-browser.mjs'
+      - 'tests/browser/webgpu-replay-capture.mjs'
+      - 'tools/browser-test.mjs'
+      - 'render360-webgpu-backend.mjs'
+      - 'render360-title-frontbuffer.mjs'
+      - 'render360_xenia_core.wasm'
+      - 'xenia_ppc_bootstrap.wasm'
+      - '.github/workflows/banjo-webgpu-capture-replay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture-and-replay:
+    name: Capture owned title and replay in Chromium WebGPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out the exact tested revision
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify runtime inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s render360_xenia_core.wasm
+          test -s xenia_ppc_bootstrap.wasm
+          node --check tools/run-title.mjs
+          node --check test-webgpu-replay-capture-browser.mjs
+          node --check tools/browser-test.mjs
+          node --check tests/browser/webgpu-replay-capture.mjs
+
+      - name: Download private, hash-pinned Banjo-Tooie test package
+        env:
+          GH_TOKEN: ${{ secrets.TEST_GAMES_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Add TEST_GAMES_PAT with read-only Contents access to matthewcodergamer/render360-test-games."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/r360-game"
+          gh release download v1 \
+            --repo matthewcodergamer/render360-test-games \
+            --pattern ABB9CAB336175357D09F2D922735D23C62F90DDD58 \
+            --dir "$RUNNER_TEMP/r360-game"
+          GAME="$RUNNER_TEMP/r360-game/ABB9CAB336175357D09F2D922735D23C62F90DDD58"
+          echo "GAME_PATH=$GAME" >> "$GITHUB_ENV"
+          echo "6655043db3204dc3a871f8765dd7cacc23d3cfe0530b23cb2acc755ca572d811  $GAME" | sha256sum --check
+
+      - name: Boot title and capture its first real GPU swap
+        shell: bash
+        run: |
+          set -euo pipefail
+          CAPTURE="$RUNNER_TEMP/banjo-tooie-first-swap.bin"
+          CPU_REPORT="$RUNNER_TEMP/banjo-tooie-cpu-report.json"
+          # Start capture at the first guest slice and stop after one actual VdSwap.
+          # --max-minstr is expressed in MILLIONS of guest instructions:
+          # 120000 = 120 billion instructions. This is only a ceiling, not a
+          # claim that the title will reach a swap within that budget.
+          timeout 25m node tools/run-title.mjs "$GAME_PATH" \
+            --license full \
+            --progress \
+            --max-minstr 120000 \
+            --gpu-capture "0:1:$CAPTURE" \
+            --json "$CPU_REPORT"
+          test -s "$CPU_REPORT"
+          test -s "$CAPTURE"
+          test -s "$CAPTURE.json"
+          test -s "$CAPTURE.png"
+          node --input-type=module - "$CAPTURE" <<'NODE'
+          import fs from 'node:fs';
+          const capture=process.argv[2];
+          const meta=JSON.parse(fs.readFileSync(capture+'.json','utf8'));
+          if(!Number.isInteger(meta.swaps) || meta.swaps < 1) throw new Error('capture metadata confirms no VdSwap was recorded');
+          // Successful saveFramePng() returns width/height/hash/format/
+          // nonBlackPixels. A failure returns {captured:false, reason}.
+          // There is no "captured:true" field on success.
+          if(!Number.isInteger(meta.frame?.width) || !Number.isInteger(meta.frame?.height) ||
+             meta.frame.width < 1 || meta.frame.height < 1) {
+            throw new Error('software reference frame was not captured: '+(meta.frame?.reason ?? 'missing dimensions'));
+          }
+          if(fs.statSync(capture).size < 4) throw new Error('GPU capture is empty');
+          if(!Number.isInteger(meta.draws) || meta.draws < 1) throw new Error('capture contains no recorded draw calls');
+          console.log('CAPTURE_VALID', JSON.stringify({swaps:meta.swaps,minstr:meta.minstr,draws:meta.draws,bytes:fs.statSync(capture).size,reference:meta.frame}));
+          NODE
+          echo "R360_CAPTURE_PATH=$CAPTURE" >> "$GITHUB_ENV"
+          echo "R360_CPU_REPORT=$CPU_REPORT" >> "$GITHUB_ENV"
+
+      - name: Install Playwright and headless Chromium
+        run: |
+          npm install --global playwright
+          playwright install --with-deps chromium
+
+      - name: Replay captured command stream in Chromium WebGPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/webgpu-replay.log"
+          REPORT="$RUNNER_TEMP/webgpu-replay-report.json"
+          set +e
+          node test-webgpu-replay-capture-browser.mjs "$R360_CAPTURE_PATH" > "$LOG" 2>&1
+          STATUS=$?
+          set -e
+          cat "$LOG"
+          node --input-type=module - "$LOG" "$REPORT" <<'NODE'
+          import fs from 'node:fs';
+          const [logPath,reportPath]=process.argv.slice(2);
+          const output=fs.readFileSync(logPath,'utf8');
+          const start=output.indexOf('{');
+          const end=output.lastIndexOf('}');
+          if(start<0 || end<start) {
+            console.error('Replay produced no JSON diagnostics; see the step log.');
+            process.exit(2);
+          }
+          const report=JSON.parse(output.slice(start,end+1));
+          fs.writeFileSync(reportPath,JSON.stringify(report,null,2)+'\\n');
+          if(!report.ok) throw new Error('WebGPU replay reported ok=false');
+          if(!report.stats?.draws) throw new Error('WebGPU replay produced no draws');
+          if(report.shaderErrors?.length || report.pipelineErrors?.length || report.loadShaderErrors?.length) {
+            throw new Error('WebGPU replay reported shader or pipeline errors');
+          }
+          if(!report.compare) throw new Error('WebGPU replay did not compare against the captured software reference frame');
+          console.log('WEBGPU_REPLAY_DIAGNOSTICS_VALID');
+          NODE
+          echo "R360_REPLAY_REPORT=$REPORT" >> "$GITHUB_ENV"
+          exit "$STATUS"
+
+      - name: Upload text diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: banjo-tooie-webgpu-diagnostics
+          path: |
+            ${{ runner.temp }}/banjo-tooie-cpu-report.json
+            ${{ runner.temp }}/webgpu-replay-report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove title package and game-derived capture
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/r360-game"
+          rm -f "$RUNNER_TEMP/banjo-tooie-first-swap.bin" \
+            "$RUNNER_TEMP/banjo-tooie-first-swap.bin.png" \
+            "$RUNNER_TEMP/banjo-tooie-first-swap.bin.json"

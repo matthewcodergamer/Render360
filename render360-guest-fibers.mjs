@@ -78,7 +78,7 @@ export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,
 // Browser options for a continuous title run: ~25 ms host slices, Stop through
 // globalThis.render360GuestRun.stop() (aborts at the next slice), and a
 // progress line about twice a second.
-export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,gpuFrameMs=null,sliceMs=25}={}){
+export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,gpuTimestampMs=null,sliceMs=25}={}){
   let lastFrames=-1;
   globalThis.render360GuestRun?.stop?.();
   const controller=new AbortController();
@@ -89,28 +89,34 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,o
   const read=name=>{const f=bootstrap?.exports?.[name];return typeof f==='function'?(f()>>>0):0;};
   // System message boxes (XamShowMessageBoxUI) are answered by the player.
   if(globalThis.document)bootstrap?.exports?.r360_xam_dialog_set_host_answers?.(1);
-  // FPS / frame-time overlay: time inside the emulator per slice, the GPU
-  // renderer's share of it, page-side present time, submitted vs presented.
+  // Separate guest CPU, software rasterizer, WebGPU JS replay, GPU timestamps,
+  // and synchronous page/present work; these are distinct measurements.
   const perf=new PerfStats();
   const overlay=globalThis.document?createPerfOverlay():null;
-  let sliceExit=now(),lastRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
+  let sliceExit=now(),lastSoftRenderUs=read('r360_xenos_soft_render_us'),lastOverlay=0;
   return {guestSliceMs:sliceMs,signal:controller.signal,onGuestSlice:s=>{
     const t=now();
     const renderUs=read('r360_xenos_soft_render_us');
-    const gpuMs=((renderUs-lastRenderUs)>>>0)/1000;lastRenderUs=renderUs;
+    const softRasterizerMs=((renderUs-lastSoftRenderUs)>>>0)/1000;lastSoftRenderUs=renderUs;
     pushGuestControllerState(bootstrap);
     showGuestDialog(bootstrap);
     try{onSlice?.();}catch{}
     const frames=read('r360_title_gpu_vd_swap_calls');
     perf.submitted(t,frames);
     // Present every new guest frame (software Xenos backend output).
-    let presentMs=0;
-    if(onFrame&&frames!==lastFrames){lastFrames=frames;const p0=now();try{onFrame();}catch{}presentMs=now()-p0;perf.framePresented(now());}
-    perf.slice(t,t-sliceExit,gpuMs,presentMs);
+    let presentMs=0,jsReplayMs=0;
+    if(onFrame&&frames!==lastFrames){
+      lastFrames=frames;const p0=now();let frameResult=null;
+      try{frameResult=onFrame();}catch{}
+      presentMs=Number(frameResult?.presentCpuMs??(now()-p0));
+      jsReplayMs=Number(frameResult?.jsReplayMs??0);
+      perf.framePresented(now());
+    }
+    perf.slice(t,t-sliceExit,softRasterizerMs,presentMs,jsReplayMs);
     const counter=bootstrap?.exports?.r360_perf_counter,idle=bootstrap?.exports?.r360_fiber_idle_ms;
     if(typeof counter==='function')perf.counters(t,counter(0),counter(1),typeof idle==='function'?idle():0);
-    const gpuFrame=gpuFrameMs?.();
-    if(gpuFrame!==null&&gpuFrame!==undefined)perf.gpuFrame(t,gpuFrame);
+    const gpuTimestamp=gpuTimestampMs?.();
+    if(gpuTimestamp!==null&&gpuTimestamp!==undefined)perf.gpuTimestamp(t,gpuTimestamp);
     perf.record(t);
     if(overlay&&t-lastOverlay>=1000){lastOverlay=t;overlay.update(perf.snapshot(t));}
     globalThis.render360Perf=perf;

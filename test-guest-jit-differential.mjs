@@ -23,10 +23,15 @@ const VECTOR_OPS=['vaddsws','vsubsws','vadduws','vsubuws','vaddsbs','vaddubs','v
   'vmaxsw','vmaxuw','vminsw','vminuw','vmaxsh','vmaxuh','vminsh','vminuh','vmaxsb','vmaxub','vminsb','vminub',
   'vslw','vsrw','vsraw','vand','vandc','vor','vxor','vnor','vaddfp','vsubfp'];
 const VECTOR3_OPS=['vperm','vsel'];
+const VECTOR_CONVERT_OPS=[
+  {name:'vctsxs',asm:'vctsxs v3, v4, 0'},
+  {name:'vctuxs',asm:'vctuxs v3, v4, 0'},
+];
 const SCALAR_OPS=['add','subf','mullw','mulhw','mulhwu','divw','divwu','and','andc','or','xor','nor','slw','srw','sraw','rlwnm 3,4,5,3,27'];
 const program=[];
 for(const op of VECTOR_OPS)program.push({name:op,asm:`${op} v3, v4, v5`,vec:true});
 for(const op of VECTOR3_OPS)program.push({name:op,asm:`${op} v3, v4, v5, v6`,vec:true});
+for(const op of VECTOR_CONVERT_OPS)program.push({...op,vec:true});
 for(const op of SCALAR_OPS){
   const [mn,...args]=op.split(' ');
   program.push({name:mn,asm:args.length?`${mn} ${args.join(' ')}`:`${mn} 3, 4, 5`,vec:false});
@@ -59,7 +64,8 @@ const interp=await instantiate(false),jit=await instantiate(true);
 
 let seed=0x12345678;
 const rand32=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return seed>>>0;};
-const interesting=[0,1,0x7FFFFFFF,0x80000000,0xFFFFFFFF,0x7FFF8000,0x00010001,0x80808080,0x7F7F7F7F];
+const interesting=[0,1,0x7FFFFFFF,0x80000000,0xFFFFFFFF,0x7FFF8000,0x00010001,0x80808080,0x7F7F7F7F,
+  0x7FC00000,0x7F800000,0xFF800000,0x4F000000,0xCF000000,0x4F800000,0xBF800000,0x3FC00000,0xBFC00000];
 const word=()=>{const r=rand32();return (r&7)===0?interesting[rand32()%interesting.length]:rand32();};
 const hex=v=>(v>>>0).toString(16).toUpperCase().padStart(8,'0');
 
@@ -92,10 +98,17 @@ for(let i=0;i<program.length;i++){
     const inputs=p.vec?[['v4',vec()],['v5',vec()],['v6',vec()],['r4',String(rand32()&0xFFFF)]]
                       :[['r4',`0x${hex(word())}`],['r5',`0x${hex(word())}`]];
     if(p.lvs)inputs.push(['r4',String(rand32()&0xFFFF)]);
-    const a=run(interp,i,inputs,p.lvs),b=run(jit,i,inputs,p.lvs);
+    const a=run(interp,i,inputs,p.lvs);
+    const genericBefore=jit.r360_jit_stat?jit.r360_jit_stat(7)>>>0:0;
+    const b=run(jit,i,inputs,p.lvs);
+    const genericAfter=jit.r360_jit_stat?jit.r360_jit_stat(7)>>>0:genericBefore;
     checked++;
     if(process.env.SHOW&&n===0&&i<3)console.log(p.name,JSON.stringify(inputs),'->',a,'|',b);
     if(a!==b){failures.push(`${p.name} ${JSON.stringify(inputs)}\n    executor: ${a}\n    jit:      ${b}`);break;}
+    if((p.name==='vctsxs'||p.name==='vctuxs')&&genericAfter>genericBefore){
+      failures.push(`${p.name} used ${genericAfter-genericBefore} generic kHExec lowering(s); expected native SIMD`);
+      break;
+    }
   }
 }
 const telemetry=jit.r360_jit_stat?{functions:jit.r360_jit_stat(0)>>>0,rejected:jit.r360_jit_stat(1)>>>0}:{};

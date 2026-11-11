@@ -25,7 +25,8 @@ const TEXTURE_FORMATS=[null,'r8unorm','r8snorm','rg8unorm','rg8snorm','rgba8unor
   'r16float','rg16float','rgba16float','r32float','rg32float','rgba32float'];
 const UNFILTERABLE_FORMATS=new Set(['r32float','rg32float','rgba32float']);
 
-const BUFFER_USAGE={MAP_READ:0x1,COPY_SRC:0x4,COPY_DST:0x8,INDEX:0x10,UNIFORM:0x40,STORAGE:0x80};
+const BUFFER_USAGE={MAP_READ:0x1,COPY_SRC:0x4,COPY_DST:0x8,INDEX:0x10,UNIFORM:0x40,STORAGE:0x80,
+  QUERY_RESOLVE:0x200};
 const TEXTURE_USAGE={COPY_SRC:0x1,COPY_DST:0x2,TEXTURE_BINDING:0x4,RENDER_ATTACHMENT:0x10};
 const SHADER_STAGE={VERTEX:0x1,FRAGMENT:0x2};
 const SHARED_MEMORY_BYTES=512*1024*1024;  // Xenia SharedMemory::kBufferSize
@@ -55,6 +56,10 @@ export class XenosWebGpuBackend{
       usage:BUFFER_USAGE.COPY_SRC|BUFFER_USAGE.COPY_DST});
     this.stagingOffset=0;
     this.encoder=null;
+    this.timestampQueries=!!device.features?.has?.('timestamp-query');
+    this.timestampState=null;
+    this.gpuTimestampMs=0;
+    this.replayCpuMs=0;
     this.stats={uploads:0,uploadedBytes:0,droppedUploads:0,submits:0,shaders:0,pipelines:0,
       pipelineFailures:0,draws:0,skippedDraws:0,renderPasses:0,swaps:0,targetsCreated:0,
       textures:0,textureLoads:0,textureFailures:0,textureLoadFailures:0,loadShaderFailures:0,unbindableTextures:0,
@@ -93,14 +98,43 @@ export class XenosWebGpuBackend{
   }
 
   encoderForCommands(){
-    if(!this.encoder)this.encoder=this.device.createCommandEncoder({label:'Render360 Xenos'});
+    if(!this.encoder){
+      this.encoder=this.device.createCommandEncoder({label:'Render360 Xenos'});
+      if(this.timestampQueries){
+        const querySet=this.device.createQuerySet({type:'timestamp',count:2});
+        const resolve=this.device.createBuffer({size:16,usage:BUFFER_USAGE.QUERY_RESOLVE|BUFFER_USAGE.COPY_SRC});
+        const read=this.device.createBuffer({size:16,usage:BUFFER_USAGE.MAP_READ|BUFFER_USAGE.COPY_DST});
+        this.encoder.writeTimestamp(querySet,0);
+        this.timestampState={querySet,resolve,read};
+      }
+    }
     return this.encoder;
   }
+
+  takeReplayCpuMs(){const ms=this.replayCpuMs;this.replayCpuMs=0;return ms;}
+  takeGpuTimestampMs(){if(!this.timestampQueries)return null;const ms=this.gpuTimestampMs;this.gpuTimestampMs=0;return ms;}
 
   submit(){
     this.endPass();
     this.uniforms.flush();this.indices.flush();
-    if(this.encoder){this.device.queue.submit([this.encoder.finish()]);this.encoder=null;this.stats.submits++;}
+    if(this.encoder){
+      const timing=this.timestampState;
+      if(timing){
+        this.encoder.writeTimestamp(timing.querySet,1);
+        this.encoder.resolveQuerySet(timing.querySet,0,2,timing.resolve,0);
+        this.encoder.copyBufferToBuffer(timing.resolve,0,timing.read,0,16);
+      }
+      this.device.queue.submit([this.encoder.finish()]);this.encoder=null;this.stats.submits++;
+      this.timestampState=null;
+      if(timing){
+        timing.read.mapAsync(1).then(()=>{
+          const values=new BigUint64Array(timing.read.getMappedRange());
+          this.gpuTimestampMs+=Number(values[1]-values[0])/1e6;
+          timing.read.unmap();
+          timing.querySet.destroy();timing.resolve.destroy();timing.read.destroy();
+        }).catch(()=>{try{timing.querySet.destroy();timing.resolve.destroy();timing.read.destroy();}catch{}});
+      }
+    }
     for(const b of this.scratchRetired)b.destroy();
     this.scratchRetired.length=0;
     this.stagingOffset=0;
@@ -111,7 +145,9 @@ export class XenosWebGpuBackend{
     const e=this.exports,count=e.r360_gpu_stream_words()>>>0;
     if(!count)return;
     const base=e.r360_gpu_stream_data()>>>0;
+    const start=globalThis.performance?.now?.()??Date.now();
     this.replayWords(new Uint32Array(e.memory.buffer,base,count));
+    this.replayCpuMs+=((globalThis.performance?.now?.()??Date.now())-start);
     e.r360_gpu_stream_reset();
   }
 

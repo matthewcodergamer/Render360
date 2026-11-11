@@ -66,7 +66,7 @@ console.log(text);
   expect(near(gs.interpretedPercent, 2, 0.01), `interpreted ${gs.interpretedPercent}`);
   expect(near(gs.idlePercent, 20, 0.5) && near(gs.emulationSpeedPercent, 125, 1), `speed ${gs.emulationSpeedPercent} idle ${gs.idlePercent}`);
   expect(near(gs.mips, 600, 5), `MIPS ${gs.mips}`);
-  expect(near(gs.gpuMsPerFrame, 6, 0.01) && near(gs.cpuMsPerGuestFrame, 16, 1), `ms/frame ${gs.cpuMsPerGuestFrame}/${gs.gpuMsPerFrame}`);
+  expect(near(gs.gpuMsPerSample, 6, 0.01) && near(gs.cpuMsPerGuestFrame, 16, 1), `ms/frame/sample ${gs.cpuMsPerGuestFrame}/${gs.gpuMsPerSample}`);
   expect(gs.bar.pass && gs.stuttersPerMinute === 0, `bar should pass: ${JSON.stringify(gs.bar)}`);
   expect(good.log.length >= 59 && good.exportLog({cores: 8}).records.length === good.log.length, 'log records');
   expect(formatPerf(gs).includes('30 FPS bar: PASS'), 'overlay verdict');

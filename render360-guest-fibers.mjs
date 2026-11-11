@@ -78,7 +78,7 @@ export async function runWithGuestFibers(bootstrap,callPrimary,{maxSwitches=1e9,
 // Browser options for a continuous title run: ~25 ms host slices, Stop through
 // globalThis.render360GuestRun.stop() (aborts at the next slice), and a
 // progress line about twice a second.
-export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,gpuFrameMs=null,sliceMs=25}={}){
+export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,onSlice=null,gpuTimestampMs=null,sliceMs=25}={}){
   let lastFrames=-1;
   globalThis.render360GuestRun?.stop?.();
   const controller=new AbortController();
@@ -115,7 +115,7 @@ export function browserGuestRunOptions({bootstrap,onProgress=null,onFrame=null,o
     perf.slice(t,t-sliceExit,softRasterizerMs,presentMs,jsReplayMs);
     const counter=bootstrap?.exports?.r360_perf_counter,idle=bootstrap?.exports?.r360_fiber_idle_ms;
     if(typeof counter==='function')perf.counters(t,counter(0),counter(1),typeof idle==='function'?idle():0);
-    const gpuFrame=gpuFrameMs?.();
+    const gpuFrame=gpuTimestampMs?.();
     if(gpuFrame!==null&&gpuFrame!==undefined)perf.gpuFrame(t,gpuFrame);
     perf.record(t);
     if(overlay&&t-lastOverlay>=1000){lastOverlay=t;overlay.update(perf.snapshot(t));}

@@ -56,7 +56,7 @@ console.log(text);
       instr += 20e6; interp += 0.4e6; idle += (1000 / 30) * 0.2;
       b.counters(t, instr, interp, idle);
       b.slice(t, 20, 4, 1, 0);
-      b.gpuFrame(t, 6);
+      b.gpuTimestamp(t, 6);
       b.record(t);
     }
     return b;

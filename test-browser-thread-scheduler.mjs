@@ -46,6 +46,7 @@ console.log('BROWSER_THREAD_SCHEDULER_TRANSLATION_ONLY_BOOT=PASS');
 
 const session=await createPersistentPpcSession({bootstrap});
 const scheduler=await createGuestThreadScheduler({bootstrap,session,maxSlicesPerPump:2});
+if(session.contract.incrementalRegistryRefresh!==true||session.contract.stableGuestDispatch!==true)throw new Error('Persistent PPC session does not expose incremental generated-function dispatch');
 const a=scheduler.createThread({entry:entryA,context:10,stackSize:0x4000,flags:1});
 const b=scheduler.createThread({entry:entryB,context:20,stackSize:0x8000,flags:2});
 if(!a.stackMapped||!b.stackMapped||a.stackBase===b.stackBase||a.stackTop===b.stackTop)throw new Error('Scheduler threads do not own independent native sparse stacks');
@@ -75,6 +76,8 @@ translateAt(entryC,words(
 if((pick('r360_wasm_backend_cfg_status')()>>>0)!==2)throw new Error('Long scheduler fixture did not produce the resumable CFG tier');
 if((pick('r360_ppc_probe_set_execute_on_translate')(1)>>>0)!==1)throw new Error('Could not restore correctness mode after long fixture translation');
 
+const moduleInstantiationsBeforeCfg=session.moduleInstantiations;
+const registeredFunctionsBeforeCfg=session.functionCount;
 const c=scheduler.createThread({entry:entryC,context:10000,stackSize:0x10000,flags:0});
 let sawYield=false;
 let finished=false;
@@ -82,6 +85,14 @@ let cSlices=0;
 for(;cSlices<16;cSlices++){
   const quantum=await scheduler.pumpOnce({maxSlices:1});
   if(quantum.slices.length!==1||quantum.slices[0].handle!==c.handle)throw new Error('Long-loop scheduler quantum did not execute the expected native thread');
+  if(cSlices===0){
+    const addedFunctions=session.functionCount-registeredFunctionsBeforeCfg;
+    if(addedFunctions<1)throw new Error('Long-loop translation did not add a generated function record');
+    if(session.incrementalRecordReuseHits<registeredFunctionsBeforeCfg)throw new Error('Registry growth did not preserve every existing guest function instance');
+    if(session.moduleInstantiations-moduleInstantiationsBeforeCfg!==addedFunctions)throw new Error('Registry growth instantiated more than the newly added guest modules');
+  }else if(session.moduleInstantiations-moduleInstantiationsBeforeCfg!==session.functionCount-registeredFunctionsBeforeCfg){
+    throw new Error('Subsequent guest slices unexpectedly re-instantiated the registry');
+  }
   const slice=quantum.slices[0];
   if(slice.yielded){
     sawYield=true;
@@ -103,8 +114,21 @@ if((pick('r360_guest_thread_stack_mapped')(c.handle)>>>0)!==0)throw new Error('R
 
 const state=scheduler.inspect();
 if(state.trackedContexts!==3||state.sliceCount<3||state.completedThreads!==3||state.yieldedSlices<1)throw new Error('Scheduler telemetry did not preserve yielded/resumed native thread state');
-if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.productionSlicesPerBrowserYield!==1||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
+if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.maxSlicesPerBrowserYield!==2||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
 
+// The production runLoop must honor the configured two-slice quantum instead
+// of yielding after every guest function. Reuse the already translated short
+// fixtures to measure the first pump without depending on wall-clock timing.
+const d=scheduler.createThread({entry:entryA,context:30,stackSize:0x4000,flags:0});
+const e=scheduler.createThread({entry:entryB,context:40,stackSize:0x4000,flags:0});
+let firstLoopPumpSlices=-1;
+await scheduler.runLoop({onPump:report=>{if(firstLoopPumpSlices<0)firstLoopPumpSlices=report.slices.length;}});
+if(firstLoopPumpSlices!==2)throw new Error(`runLoop yielded after ${firstLoopPumpSlices} slice(s), expected configured quantum 2`);
+if((pick('r360_guest_thread_state')(d.handle)>>>0)!==4||(pick('r360_guest_thread_state')(e.handle)>>>0)!==4)throw new Error('Batched runLoop did not finish both guest threads');
+const finalState=scheduler.inspect();
+if(finalState.trackedContexts!==5||finalState.completedThreads!==5||finalState.sliceCount<5||finalState.contract.maxSlicesPerBrowserYield!==2)throw new Error('Batched runLoop telemetry is inconsistent');
+
+console.log('BROWSER_THREAD_SCHEDULER_RUN_LOOP_BATCHING=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_NATIVE_REGISTRY=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_PPC_CONTEXT_ISOLATION=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_SPARSE_STACKS=PASS');

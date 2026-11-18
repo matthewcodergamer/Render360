@@ -7,6 +7,7 @@ import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs'
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
 import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
 import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
+import {readGpuActivitySignature,readXenosShaderSignature} from './render360-runtime-inspection-cache.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
 const $=id=>document.getElementById(id);
@@ -137,18 +138,28 @@ function summarizeResult(result,gpuTraffic=null,shaderRuntime=null,frontbufferFr
 }
 
 async function inspectModernRuntime({bootstrap,state,forceFrontbuffer=false}){
-  let gpuTraffic=null;
-  try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}
-  catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
+  const gpuSignature=readGpuActivitySignature(bootstrap);
+  let gpuTraffic=state.gpuTraffic??null;
+  if(gpuSignature===null||gpuSignature!==state.gpuActivitySignature){
+    try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap});}
+    catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
+    state.gpuActivitySignature=gpuSignature;
+  }
 
-  let shaderRuntime=null;
-  try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}
-  catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+  const shaderSignature=readXenosShaderSignature(bootstrap);
+  let shaderRuntime=state.shaderRuntime??null;
+  if(shaderSignature===null||shaderSignature!==state.shaderSignature){
+    try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}
+    catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+    state.shaderSignature=shaderSignature;
+    if(shaderSignature!==null){state.shaderWebGPU=null;state.shaderWebGPUValidatedSignature=null;}
+  }
 
   let shaderWebGPU=state.shaderWebGPU??null;
-  if(shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){
+  if(shaderSignature!==null&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted&&state.shaderWebGPUValidatedSignature!==shaderSignature){
     try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap});}
     catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}
+    state.shaderWebGPUValidatedSignature=shaderSignature;
   }
 
   let frontbufferFrame=state.frontbufferFrame??null;

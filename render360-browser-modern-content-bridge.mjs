@@ -12,6 +12,7 @@ import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
 import {createXenosWebGpuPlayPath,webGpuPlayPathRequested} from './render360-webgpu-play.mjs';
 import {browserPerformanceDefaults,createAdaptivePerformancePolicy} from './render360-performance-policy.mjs';
 import {prepareStfsGuestVfs,prepareXexGuestVfs,runWithGuestVfsRetries} from './render360-guest-vfs.mjs';
+import {readGpuActivitySignature,readXenosShaderSignature} from './render360-runtime-inspection-cache.mjs';
 
 installRender360Buffer();
 
@@ -159,7 +160,7 @@ async function attachScheduler({bootstrap,result,onStage,config={},preparedSessi
   reset();
   const ppcSession=preparedSession??await createBrowserTitlePpcSession({bootstrap,clearContext:true});
   if(!ppcSession.functionCount)throw new Error(`No callable generated WASM function was registered for title entry 0x${(result.entry>>>0).toString(16)}`);
-  const scheduler=await createBrowserTitleThreadScheduler({bootstrap,session:ppcSession,maxSlicesPerPump:Math.max(1,Math.min(4,Number(config.schedulerQuantum||1)))});
+  const scheduler=await createBrowserTitleThreadScheduler({bootstrap,session:ppcSession,maxSlicesPerPump:Math.max(1,Math.min(4,Number(config.schedulerQuantum||4)))});
   const primaryThread=scheduler.createThread({entry:result.entry>>>0,context:0,stackSize:0x80000,flags:0});
   const schedulerReport=await scheduler.pumpOnce({maxSlices:1});
   if(!schedulerReport.slices.length)throw new Error('Native guest-thread scheduler found no runnable title entry');
@@ -190,12 +191,24 @@ function updatePersistentCpu(state){
 }
 
 async function inspectRuntime(state,{forceFrontbuffer=false}={}){
-  let gpuTraffic=null;
-  try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap:state.bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
-  let shaderRuntime=null;
-  try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+  const gpuSignature=readGpuActivitySignature(state.bootstrap);
+  let gpuTraffic=state.gpuTraffic??null;
+  if(gpuSignature===null||gpuSignature!==state.gpuActivitySignature){
+    try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap:state.bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
+    state.gpuActivitySignature=gpuSignature;
+  }
+  const shaderSignature=readXenosShaderSignature(state.bootstrap);
+  let shaderRuntime=state.shaderRuntime??null;
+  if(shaderSignature===null||shaderSignature!==state.shaderSignature){
+    try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+    state.shaderSignature=shaderSignature;
+    if(shaderSignature!==null){state.shaderWebGPU=null;state.shaderWebGPUValidatedSignature=null;}
+  }
   let shaderWebGPU=state.shaderWebGPU??null;
-  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
+  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderSignature!==null&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted&&state.shaderWebGPUValidatedSignature!==shaderSignature){
+    try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}
+    state.shaderWebGPUValidatedSignature=shaderSignature;
+  }
   let frontbufferFrame=state.frontbufferFrame??null,presentation=state.presentation??null;
   const swaps=gpuTraffic?.swaps||0;
   if(swaps>0&&(forceFrontbuffer||swaps!==state.lastSwapCount)){

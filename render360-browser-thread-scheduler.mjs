@@ -178,7 +178,7 @@ export async function createGuestThreadScheduler({
       while(running){
         if(paused){await ppc.yieldToBrowser();continue;}
         try{
-          const report=await pumpOnce({maxSlices:1,onSlice});
+          const report=await pumpOnce({maxSlices:maxSlicesPerPump,onSlice});
           if(typeof onPump==='function')await onPump(report);
           if(!report.slices.length)running=false;
         }catch(error){
@@ -202,7 +202,7 @@ export async function createGuestThreadScheduler({
       ppcSession:{kind:ppc.kind,functionCount:ppc.functionCount,sliceCount:ppc.sliceCount,yieldedSliceCount:ppc.yieldedSliceCount,kernelDispatches:ppc.kernelDispatches,nestedDispatches:ppc.nestedDispatches},
       contract:{
         nativeXboxThreadRegistry:true,perThreadPpcContextSnapshots:true,perThreadCfgContinuation:true,sparseGuardedGuestStacks:true,
-        cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,productionSlicesPerBrowserYield:1,
+        cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,maxSlicesPerBrowserYield:maxSlicesPerPump,
         preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',
         pauseResume:true,fullXboxThreadScheduler:false,
       },
@@ -219,7 +219,7 @@ export async function createGuestThreadScheduler({
 export function guestThreadSchedulerContract(){
   return {
     nativeXboxThreadRegistry:true,perThreadPpcContextSnapshots:true,perThreadCfgContinuation:true,sparseGuardedGuestStacks:true,
-    cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,productionSlicesPerBrowserYield:1,
+    cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,maxSlicesPerBrowserYield:4,
     preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',
     pauseResume:true,fullXboxThreadScheduler:false,
   };

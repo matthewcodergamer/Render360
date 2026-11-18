@@ -190,12 +190,24 @@ function updatePersistentCpu(state){
 }
 
 async function inspectRuntime(state,{forceFrontbuffer=false}={}){
-  let gpuTraffic=null;
-  try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap:state.bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
-  let shaderRuntime=null;
-  try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+  const gpuSignature=readGpuActivitySignature(state.bootstrap);
+  let gpuTraffic=state.gpuTraffic??null;
+  if(gpuSignature===null||gpuSignature!==state.gpuActivitySignature){
+    try{gpuTraffic=submitCapturedTitleGpuTraffic({bootstrap:state.bootstrap});}catch(error){gpuTraffic={submitted:false,ready:false,reason:error?.message||String(error)};}
+    state.gpuActivitySignature=gpuSignature;
+  }
+  const shaderSignature=readXenosShaderSignature(state.bootstrap);
+  let shaderRuntime=state.shaderRuntime??null;
+  if(shaderSignature===null||shaderSignature!==state.shaderSignature){
+    try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
+    state.shaderSignature=shaderSignature;
+    if(shaderSignature!==null)state.shaderWebGPUValidatedSignature=null;
+  }
   let shaderWebGPU=state.shaderWebGPU??null;
-  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted){try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}}
+  if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderSignature!==null&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted&&state.shaderWebGPUValidatedSignature!==shaderSignature){
+    try{shaderWebGPU=await validateCapturedXenosShadersWebGPU({bootstrap:state.bootstrap});}catch(error){shaderWebGPU={available:false,bothAccepted:false,reason:error?.message||String(error)};}
+    state.shaderWebGPUValidatedSignature=shaderSignature;
+  }
   let frontbufferFrame=state.frontbufferFrame??null,presentation=state.presentation??null;
   const swaps=gpuTraffic?.swaps||0;
   if(swaps>0&&(forceFrontbuffer||swaps!==state.lastSwapCount)){

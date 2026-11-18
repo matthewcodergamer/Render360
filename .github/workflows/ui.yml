@@ -131,6 +131,7 @@ jobs:
           node --check render360-webgpu-play.mjs
           node --check render360-browser-thread-scheduler.mjs
           node --check render360-browser-ppc-session.mjs
+          node --check render360-browser-title-runtime.mjs
           node --check storage/game-storage.js
           node --check settings/app-settings-store.js
           node --check library/game-library.js

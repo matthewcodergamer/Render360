@@ -46,6 +46,7 @@ console.log('BROWSER_THREAD_SCHEDULER_TRANSLATION_ONLY_BOOT=PASS');
 
 const session=await createPersistentPpcSession({bootstrap});
 const scheduler=await createGuestThreadScheduler({bootstrap,session,maxSlicesPerPump:2});
+if(session.contract.incrementalRegistryRefresh!==true||session.contract.stableGuestDispatch!==true)throw new Error('Persistent PPC session does not expose incremental generated-function dispatch');
 const a=scheduler.createThread({entry:entryA,context:10,stackSize:0x4000,flags:1});
 const b=scheduler.createThread({entry:entryB,context:20,stackSize:0x8000,flags:2});
 if(!a.stackMapped||!b.stackMapped||a.stackBase===b.stackBase||a.stackTop===b.stackTop)throw new Error('Scheduler threads do not own independent native sparse stacks');

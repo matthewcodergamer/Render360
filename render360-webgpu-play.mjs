@@ -18,14 +18,16 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
   const adapter=await navigator.gpu?.requestAdapter({powerPreference:'high-performance'});
   if(!adapter)throw new Error('no WebGPU adapter');
   globalThis.render360GpuAdapterInfo={vendor:adapter.info?.vendor,architecture:adapter.info?.architecture,device:adapter.info?.device,description:adapter.info?.description};
+  const requestedFeatures=['float32-filterable','timestamp-query'].filter(f=>adapter.features.has(f));
   const device=await adapter.requestDevice({
-    requiredFeatures:['float32-filterable'].filter(f=>adapter.features.has(f)),
+    requiredFeatures:requestedFeatures,
     requiredLimits:{maxBufferSize:adapter.limits.maxBufferSize,maxStorageBufferBindingSize:adapter.limits.maxStorageBufferBindingSize}});
   const context=canvas.getContext('webgpu');
   const format=navigator.gpu.getPreferredCanvasFormat();
   context.configure({device,format,alphaMode:'opaque'});
   const backend=await new XenosWebGpuBackend(device,e).init();
-  let lost=null,gpuMs=null,pendingGpu=false;
+  let lost=null;
+  let frameMetrics={jsReplayMs:0,presentCpuMs:0};
   device.lost.then(info=>{lost=info?.message||'device lost';});
   e.r360_gpu_set_mode(1);
   e.r360_xenos_soft_set_rasterize?.(0);
@@ -36,20 +38,27 @@ export async function createXenosWebGpuPlayPath(bootstrap,canvas){
     backend,
     get lost(){return lost;},
     slice(){if(!lost&&(e.r360_gpu_stream_words()>>>0)>maxPendingWords)backend.replay();},
-    // Submit-to-completion time of the last frame's GPU work (ms), once.
-    takeGpuMs(){const ms=gpuMs;gpuMs=null;return ms;},
+    takeGpuTimestampMs(){return backend.takeGpuTimestampMs();},
+    takeFrameMetrics(){const m=frameMetrics;frameMetrics={jsReplayMs:0,presentCpuMs:0};return m;},
     frame(){
       if(lost)return false;
-      const t0=performance.now();
       backend.replay();
+      const jsReplayMs=backend.takeReplayCpuMs();
+      // definePipeline records shader / layout / WebGPU validation failures and
+      // draw() otherwise skips those pipelines silently. Do not present a
+      // misleading blank frame as a successful GPU renderer: surface the
+      // first concrete failure so the caller can restore software rendering.
+      const failedPipeline=[...backend.pipelines.entries()].find(([,entry])=>entry?.error);
+      if(failedPipeline)throw new Error(`WebGPU pipeline ${failedPipeline[0]} failed: ${failedPipeline[1].error}`);
+      // Close any remaining guest command buffer before the un-timestamped
+      // canvas blit so GPU timestamps represent guest GPU work only.
+      backend.submit();
+      const presentStart=performance.now();
       const front=backend.frontTexture;
       if(front&&(canvas.width!==front.width||canvas.height!==front.height)){canvas.width=front.width;canvas.height=front.height;}
       canvas.style.display='block';
       const presented=backend.present(context,format);
-      if(!pendingGpu){
-        pendingGpu=true;
-        device.queue.onSubmittedWorkDone().then(()=>{gpuMs=performance.now()-t0;pendingGpu=false;},()=>{pendingGpu=false;});
-      }
+      frameMetrics={jsReplayMs,presentCpuMs:performance.now()-presentStart};
       return presented;
     },
     destroy(){

@@ -48,6 +48,9 @@ uint32_t g_cache_hits = 0;
 uint32_t g_cache_misses = 0;
 uint32_t g_cache_rebuilds = 0;
 uint32_t g_invalidations = 0;
+// Monotonic registry epoch lets the JS session detect mutations in O(1).
+uint32_t g_registry_revision = 1;
+void BumpRegistryRevision() { if (++g_registry_revision == 0) g_registry_revision = 1; }
 
 uint32_t PageIndex(uint32_t address) { return address >> kExecutablePageShift; }
 bool TrackedPageSlot(uint32_t address, uint32_t* slot) {
@@ -489,6 +492,7 @@ bool BuildModule(uint32_t address, uint32_t generation, HIRBuilder* builder,
 void ResetWasmBackendCallProbe() {
   g_status = 0;
   g_modules.clear();
+  BumpRegistryRevision();
   g_page_generations.fill(0);
   g_cache_hits = g_cache_misses = g_cache_rebuilds = g_invalidations = 0;
   std::memset(g_context, 0, sizeof(g_context));
@@ -515,6 +519,7 @@ bool RegisterWasmBackendCallFunction(xe::cpu::GuestFunction* function,
       return false;
     }
     existing = std::move(rebuilt);
+    BumpRegistryRevision();
     ++g_cache_rebuilds;
     g_status = 2;
     return true;
@@ -525,6 +530,7 @@ bool RegisterWasmBackendCallFunction(xe::cpu::GuestFunction* function,
     return false;
   }
   g_modules.push_back(std::move(module));
+  BumpRegistryRevision();
   ++g_cache_misses;
   g_status = 2;
   return true;
@@ -550,13 +556,17 @@ void InvalidateWasmBackendExecutableRange(uint32_t address, uint32_t size) {
                      }),
       g_modules.end());
   ++g_invalidations;
-  if (old_size != g_modules.size()) g_status = g_modules.empty() ? 0u : 2u;
+  if (old_size != g_modules.size()) {
+    BumpRegistryRevision();
+    g_status = g_modules.empty() ? 0u : 2u;
+  }
 }
 
 uint32_t GetWasmBackendExecutablePageGeneration(uint32_t address) {
   return PageGeneration(address);
 }
 uint32_t GetWasmBackendCallStatus() { return g_status; }
+uint32_t GetWasmBackendCallRegistryRevision() { return g_registry_revision; }
 uint32_t GetWasmBackendCallFunctionCount() {
   return static_cast<uint32_t>(g_modules.size());
 }
@@ -587,6 +597,9 @@ uint32_t GetWasmBackendCallInvalidations() { return g_invalidations; }
 extern "C" {
 uint32_t r360_wasm_backend_call_status() {
   return render360::xenia_web::GetWasmBackendCallStatus();
+}
+uint32_t r360_wasm_backend_call_registry_revision() {
+  return render360::xenia_web::GetWasmBackendCallRegistryRevision();
 }
 uint32_t r360_wasm_backend_call_function_count() {
   return render360::xenia_web::GetWasmBackendCallFunctionCount();

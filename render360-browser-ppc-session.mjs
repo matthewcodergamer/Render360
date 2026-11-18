@@ -84,6 +84,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   let registryRefreshes=0;
   let registryFastPathHits=0;
   let registryRevision=0;
+  let cfgRegistrySignature=null;
   let cfgFallbackLoads=0;
   let nextCfgSlot=0;
   const cfgContinuations=new Map();
@@ -230,9 +231,24 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     descriptors.push({index:-1,address,generation,ptr,size,lowered,tier:'cfg-fallback'});
   }
 
+  function currentCfgRegistrySignature(){
+    if(typeof cfgStatusFn!=='function'||typeof cfgPtrFn!=='function'||
+       typeof cfgSizeFn!=='function'||typeof cfgLoweredFn!=='function'||
+       typeof lastGuestAddressFn!=='function')return null;
+    const status=cfgStatusFn()>>>0;
+    if(status!==2)return String(status);
+    const address=lastGuestAddressFn()>>>0;
+    const ptr=cfgPtrFn()>>>0;
+    const size=cfgSizeFn()>>>0;
+    const lowered=cfgLoweredFn()>>>0;
+    const generation=typeof contentGenerationFn==='function'?(contentGenerationFn(address)>>>0)||1:1;
+    return `${status}:${address}:${generation}:${ptr}:${size}:${lowered}`;
+  }
+
   async function refreshFunctions({force=false}={}){
     const observedRevision=typeof registryRevisionFn==='function'?(registryRevisionFn()>>>0):null;
-    if(!force&&observedRevision!==null&&observedRevision===registryRevision){
+    const observedCfgSignature=currentCfgRegistrySignature();
+    if(!force&&observedRevision!==null&&observedRevision===registryRevision&&observedCfgSignature===cfgRegistrySignature){
       registryFastPathHits++;
       return {changed:false,count:records.size,key:registryKey,fastPath:true,revision:observedRevision};
     }
@@ -301,6 +317,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     for(const [address,record] of next)records.set(address,record);
     registryKey=nextKey;
     if(observedRevision!==null)registryRevision=observedRevision;
+    cfgRegistrySignature=observedCfgSignature;
     registryRefreshes++;
     return {changed:true,count:records.size,key:registryKey,reused:records.size-toInstantiate.length,instantiated:toInstantiate.length};
   }

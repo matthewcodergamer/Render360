@@ -39,6 +39,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const lrOffsetFn=requiredFunction(bootstrap,'r360_ppc_context_offset_lr');
   const ctrOffsetFn=requiredFunction(bootstrap,'r360_ppc_context_offset_ctr');
   const countFn=requiredFunction(bootstrap,'r360_wasm_backend_call_function_count');
+  const registryRevisionFn=pick(bootstrap,'r360_wasm_backend_call_registry_revision');
   const addressFn=requiredFunction(bootstrap,'r360_wasm_backend_call_function_address');
   const generationFn=requiredFunction(bootstrap,'r360_wasm_backend_call_function_generation');
   const modulePtrFn=requiredFunction(bootstrap,'r360_wasm_backend_call_module_ptr');
@@ -81,6 +82,8 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   let nestedDispatches=0;
   let kernelDispatches=0;
   let registryRefreshes=0;
+  let registryFastPathHits=0;
+  let registryRevision=0;
   let cfgFallbackLoads=0;
   let nextCfgSlot=0;
   const cfgContinuations=new Map();
@@ -189,6 +192,11 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   }
 
   async function refreshFunctions({force=false}={}){
+    const observedRevision=typeof registryRevisionFn==='function'?(registryRevisionFn()>>>0):null;
+    if(!force&&observedRevision!==null&&observedRevision===registryRevision){
+      registryFastPathHits++;
+      return {changed:false,count:records.size,key:registryKey,fastPath:true,revision:observedRevision};
+    }
     const count=countFn()>>>0;
     const descriptors=[];
     for(let index=0;index<count;index++){
@@ -262,6 +270,10 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     clearContinuationRegistry();
     records=next;
     registryKey=nextKey;
+    // Store the revision observed before enumeration/compilation. If native
+    // code changes the registry while this async refresh is suspended, the
+    // next call sees the newer revision and refreshes again.
+    if(observedRevision!==null)registryRevision=observedRevision;
     registryRefreshes++;
     return {changed:true,count:records.size,key:registryKey};
   }
@@ -350,6 +362,8 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     get nestedDispatches(){return nestedDispatches;},
     get kernelDispatches(){return kernelDispatches;},
     get registryRefreshes(){return registryRefreshes;},
+    get registryFastPathHits(){return registryFastPathHits;},
+    get registryRevision(){return registryRevision;},
     get cfgFallbackLoads(){return cfgFallbackLoads;},
     get cfgContinuationCount(){return cfgContinuations.size;},
     get functionCount(){return records.size;},
@@ -358,7 +372,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     get compiledModuleCacheEntries(){return compiledModuleCache.size;},
     get hotFunctionCount(){return [...functionExecutions.values()].filter(count=>count>=hotFunctionThreshold).length;},
     get functionTiers(){return [...records.values()].map(r=>{const executionCount=functionExecutions.get(r.address)??0;return {address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered,executionCount,hot:executionCount>=hotFunctionThreshold};});},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,hotFunctionThreshold,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,registryRevisionFastPath:typeof registryRevisionFn==='function',compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,hotFunctionThreshold,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;

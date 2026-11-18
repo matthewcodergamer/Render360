@@ -7,6 +7,7 @@ import {inspectCapturedXenosShaders} from './render360-xenos-shader-runtime.mjs'
 import {validateCapturedXenosShadersWebGPU} from './render360-webgpu-title-shaders.mjs';
 import {captureTitleFrontbuffer,ensureTitleWebGPUCanvas,hideTitleFrontbuffer,presentTitleFrontbuffer,showTitleWebGPUCanvas} from './render360-title-frontbuffer.mjs';
 import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
+import {readGpuActivitySignature,readXenosShaderSignature} from './render360-runtime-inspection-cache.mjs';
 
 const ENTRY_WINDOW_BYTES=64*1024;
 const $=id=>document.getElementById(id);

@@ -265,7 +265,11 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     }
     maybeAppendCfgFallback(descriptors);
     const nextKey=descriptors.map(x=>`${x.address.toString(16)}:${x.generation}:${x.ptr}:${x.size}:${x.tier}`).join('|');
-    if(!force&&nextKey===registryKey)return {changed:false,count:records.size,key:registryKey};
+    if(!force&&nextKey===registryKey){
+      if(observedRevision!==null)registryRevision=observedRevision;
+      cfgRegistrySignature=observedCfgSignature;
+      return {changed:false,count:records.size,key:registryKey};
+    }
 
     const next=new Map();
     const toInstantiate=[];
@@ -425,5 +429,5 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
 }
 
 export function persistentPpcSessionContract(){
-  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + resumable fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,browserYield:'between completed guest functions or yielded CFG quanta',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:4096,cfgFuelExhaustionYields:true,cfgContinuationState:'per-thread status + dispatcher PC + live integer HIR locals',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false};
+  return {persistentPpcContext:true,backend:'Xenia-generated per-function WebAssembly + resumable fuel-bounded integer CFG fallback',cacheInvalidation:'Xenia executable page/content generation',compiledModuleReuse:true,compiledModuleCacheLimit:512,incrementalRegistryRefresh:true,stableGuestDispatch:true,hotFunctionTelemetry:true,browserYield:'between completed guest functions or yielded CFG quanta',kernelImports:'live PPCContext dispatch in callable tier when bootstrap export is present',cfgFallback:'most recently translated multi-block integer function',cfgFuelLimit:4096,cfgFuelExhaustionYields:true,cfgContinuationState:'per-thread status + dispatcher PC + live integer HIR locals',unsupportedKernelImportsFailClosed:true,failClosedUnknownTargets:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false};
 }

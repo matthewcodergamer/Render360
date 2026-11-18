@@ -103,7 +103,7 @@ if((pick('r360_guest_thread_stack_mapped')(c.handle)>>>0)!==0)throw new Error('R
 
 const state=scheduler.inspect();
 if(state.trackedContexts!==3||state.sliceCount<3||state.completedThreads!==3||state.yieldedSlices<1)throw new Error('Scheduler telemetry did not preserve yielded/resumed native thread state');
-if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.productionSlicesPerBrowserYield!==1||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
+if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.maxSlicesPerBrowserYield!==2||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
 
 console.log('BROWSER_THREAD_SCHEDULER_NATIVE_REGISTRY=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_PPC_CONTEXT_ISOLATION=PASS');

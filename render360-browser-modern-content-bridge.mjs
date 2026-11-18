@@ -202,7 +202,7 @@ async function inspectRuntime(state,{forceFrontbuffer=false}={}){
   if(shaderSignature===null||shaderSignature!==state.shaderSignature){
     try{shaderRuntime=inspectCapturedXenosShaders({bootstrap:state.bootstrap,execute:true});}catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
     state.shaderSignature=shaderSignature;
-    if(shaderSignature!==null)state.shaderWebGPUValidatedSignature=null;
+    if(shaderSignature!==null){state.shaderWebGPU=null;state.shaderWebGPUValidatedSignature=null;}
   }
   let shaderWebGPU=state.shaderWebGPU??null;
   if(state.config?.renderer!=='webgl2'&&state.config?.renderer!=='software'&&shaderSignature!==null&&shaderRuntime?.bothSpirvTranslated&&!shaderWebGPU?.bothAccepted&&state.shaderWebGPUValidatedSignature!==shaderSignature){

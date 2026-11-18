@@ -16,6 +16,7 @@ const REQUIRED_BOOTSTRAP_EXPORTS=[
   'r360_ppc_probe_set_execute_on_translate','r360_ppc_probe_execute_on_translate',
   'r360_ppc_context_size','r360_ppc_context_offset_gpr','r360_ppc_context_offset_lr','r360_ppc_context_offset_ctr',
   'r360_wasm_backend_call_status','r360_wasm_backend_call_function_count','r360_wasm_backend_call_function_address',
+  'r360_wasm_backend_call_registry_revision',
   'r360_wasm_backend_call_function_generation','r360_wasm_backend_call_module_ptr','r360_wasm_backend_call_module_size',
   'r360_wasm_backend_call_lowered_instructions','r360_wasm_backend_call_context_ptr',
   'r360_xex_guest_mapper_input_buffer','r360_xex_guest_mapper_input_capacity','r360_xex_guest_mapper_reserve_input','r360_xex_guest_mapper_input_max_capacity',

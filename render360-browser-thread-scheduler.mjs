@@ -219,7 +219,7 @@ export async function createGuestThreadScheduler({
 export function guestThreadSchedulerContract(){
   return {
     nativeXboxThreadRegistry:true,perThreadPpcContextSnapshots:true,perThreadCfgContinuation:true,sparseGuardedGuestStacks:true,
-    cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,productionSlicesPerBrowserYield:1,
+    cooperativeRoundRobin:true,generatedWasmExecution:true,browserYieldBetweenPumps:true,maxSlicesPerBrowserYield:4,
     preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',
     pauseResume:true,fullXboxThreadScheduler:false,
   };

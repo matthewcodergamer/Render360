@@ -159,7 +159,7 @@ async function attachScheduler({bootstrap,result,onStage,config={},preparedSessi
   reset();
   const ppcSession=preparedSession??await createBrowserTitlePpcSession({bootstrap,clearContext:true});
   if(!ppcSession.functionCount)throw new Error(`No callable generated WASM function was registered for title entry 0x${(result.entry>>>0).toString(16)}`);
-  const scheduler=await createBrowserTitleThreadScheduler({bootstrap,session:ppcSession,maxSlicesPerPump:Math.max(1,Math.min(4,Number(config.schedulerQuantum||1)))});
+  const scheduler=await createBrowserTitleThreadScheduler({bootstrap,session:ppcSession,maxSlicesPerPump:Math.max(1,Math.min(4,Number(config.schedulerQuantum||4)))});
   const primaryThread=scheduler.createThread({entry:result.entry>>>0,context:0,stackSize:0x80000,flags:0});
   const schedulerReport=await scheduler.pumpOnce({maxSlices:1});
   if(!schedulerReport.slices.length)throw new Error('Native guest-thread scheduler found no runnable title entry');

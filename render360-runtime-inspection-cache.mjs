@@ -14,7 +14,6 @@ export function readGpuActivitySignature(bootstrap){
   if(!e)return null;
   const values=[
     read(e,'r360_xenos_status'),
-    read(e,'r360_xenos_packets'),
     read(e,'r360_xenos_swaps'),
     read(e,'r360_xenos_frame_generation'),
     read(e,'r360_title_gpu_status'),

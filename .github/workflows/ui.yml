@@ -31,6 +31,8 @@ on:
       - 'test-perf-overlay.mjs'
       - 'render360-browser-modern-iso-bridge.mjs'
       - 'render360-browser-thread-scheduler.mjs'
+      - 'render360-browser-ppc-session.mjs'
+      - 'test-persistent-ppc-session.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
       - 'render360-title-controller.mjs'
@@ -76,6 +78,8 @@ on:
       - 'test-perf-overlay.mjs'
       - 'render360-browser-modern-iso-bridge.mjs'
       - 'render360-browser-thread-scheduler.mjs'
+      - 'render360-browser-ppc-session.mjs'
+      - 'test-persistent-ppc-session.mjs'
       - 'test-browser-thread-scheduler.mjs'
       - 'render360-browser-title-runtime.mjs'
       - 'render360-title-controller.mjs'
@@ -126,6 +130,7 @@ jobs:
           node --check render360-webgpu-backend.mjs
           node --check render360-webgpu-play.mjs
           node --check render360-browser-thread-scheduler.mjs
+          node --check render360-browser-ppc-session.mjs
           node --check storage/game-storage.js
           node --check settings/app-settings-store.js
           node --check library/game-library.js
@@ -148,5 +153,7 @@ jobs:
         run: |
           mkdir -p build/xenia-ppc-bootstrap
           cp xenia_ppc_bootstrap.wasm build/xenia-ppc-bootstrap/xenia_ppc_bootstrap.wasm
+      - name: Regress persistent generated-WASM PPC session
+        run: node test-persistent-ppc-session.mjs
       - name: Regress deployed guest scheduler
         run: node test-browser-thread-scheduler.mjs

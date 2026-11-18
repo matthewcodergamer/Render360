@@ -25,6 +25,7 @@ uint32_t GetWasmBackendExecutableContentGeneration(uint32_t address);
 // Changes whenever any executable content generation changes.
 uint32_t GetWasmBackendExecutableContentEpoch();
 uint32_t GetWasmBackendCallStatus();
+uint32_t GetWasmBackendCallRegistryRevision();
 uint32_t GetWasmBackendCallFunctionCount();
 uint32_t GetWasmBackendCallFunctionAddress(uint32_t index);
 uint32_t GetWasmBackendCallFunctionGeneration(uint32_t index);
@@ -41,6 +42,7 @@ uint32_t GetWasmBackendCallInvalidations();
 
 extern "C" {
 uint32_t r360_wasm_backend_call_status();
+uint32_t r360_wasm_backend_call_registry_revision();
 uint32_t r360_wasm_backend_call_function_count();
 uint32_t r360_wasm_backend_call_function_address(uint32_t index);
 uint32_t r360_wasm_backend_call_function_generation(uint32_t index);

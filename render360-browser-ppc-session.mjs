@@ -76,7 +76,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
 
   const hasCfgContinuation=[cfgSlotCountFn,cfgStateSizeFn,cfgStatePtrFn,cfgStateStatusFn,cfgStateResetFn].every(fn=>typeof fn==='function');
   let registryKey='';
-  let records=new Map();
+  const records=new Map();
   let sliceCount=0;
   let yieldedSliceCount=0;
   let nestedDispatches=0;
@@ -92,6 +92,8 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
   const hotFunctionThreshold=256;
   let moduleCompileHits=0;
   let moduleCompileMisses=0;
+  let incrementalRecordReuseHits=0;
+  let moduleInstantiations=0;
 
   const bytes=()=>new Uint8Array(memory.buffer,contextPtr,contextSize);
   const view=()=>new DataView(memory.buffer);
@@ -137,6 +139,43 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     return new Error(token);
   }
 
+  // Stable imports are shared by every generated function instance. The
+  // dispatch closure reads the live registry Map, so adding a guest function
+  // does not require re-instantiating every previously registered module.
+  const guest_call=(target,ctx)=>{
+    target>>>=0;ctx>>>=0;
+    if(ctx!==contextPtr)throw new Error(`FAIL_CLOSED_PPC_CONTEXT_MISMATCH_0x${ctx.toString(16)}`);
+    const callee=records.get(target);
+    if(callee?.instance?.exports?.run){
+      nestedDispatches++;
+      if(callee.tier==='cfg-fallback'){
+        const continuation=acquireCfgContinuation(target,`nested:${target}`);
+        callee.instance.exports.run(ctx,continuation.ptr);
+        const status=cfgStateStatusFn(continuation.slot)>>>0;
+        if(status===2){releaseCfgContinuation(target,`nested:${target}`);return 1;}
+        throw new Error(`FAIL_CLOSED_NESTED_CFG_YIELD_0x${target.toString(16).toUpperCase()}_REQUIRES_ASYNC_SCHEDULER`);
+      }
+      callee.instance.exports.run(ctx);
+      return 1;
+    }
+    if(typeof kernelDispatch==='function'&&(kernelDispatch(target,ctx)>>>0)===1){
+      kernelDispatches++;
+      return 1;
+    }
+    throw kernelTargetError(target);
+  };
+  const guest_load=(address,size,flags)=>{
+    address>>>=0;size>>>=0;flags>>>=0;
+    const value=generatedGuestLoad(address,size,flags);
+    const status=generatedGuestLoadStatus()>>>0;
+    if(status!==1){
+      const faultAddress=typeof sparseFaultAddress==='function'?sparseFaultAddress()>>>0:address;
+      const faultCode=typeof sparseFaultCode==='function'?sparseFaultCode()>>>0:0;
+      throw new Error(`FAIL_CLOSED_GUEST_LOAD_0x${address.toString(16).toUpperCase()}_SIZE_${size}_FLAGS_${flags}_FAULT_${faultCode}_AT_0x${faultAddress.toString(16).toUpperCase()}`);
+    }
+    return BigInt.asUintN(64,value);
+  };
+
   function continuationOwner(address,key){
     const normalized=key===undefined||key===null?'default':String(key);
     return `${address>>>0}:${normalized}`;
@@ -164,7 +203,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     cfgStateResetFn(slot);
     const ptr=cfgStatePtrFn(slot)>>>0;
     if(!ptr||ptr+stateSize>memory.buffer.byteLength)throw new Error(`FAIL_CLOSED_CFG_CONTINUATION_PTR_${slot}_0x${ptr.toString(16)}_${stateSize}`);
-    const record={owner,slot,ptr,stateSize};
+    const record={owner,address:address>>>0,slot,ptr,stateSize};
     cfgContinuations.set(owner,record);
     return record;
   }
@@ -213,12 +252,22 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     if(!force&&nextKey===registryKey)return {changed:false,count:records.size,key:registryKey};
 
     const next=new Map();
+    const toInstantiate=[];
     for(const descriptor of descriptors){
       const cacheKey=`${descriptor.address}:${descriptor.generation}:${descriptor.size}:${descriptor.lowered}:${descriptor.tier}`;
+      const existing=records.get(descriptor.address);
+      if(existing&&existing.cacheKey===cacheKey&&existing.ptr===descriptor.ptr&&
+         existing.size===descriptor.size&&existing.instance?.exports?.run){
+        // Preserve the live instance. Its imports point at the stable records
+        // Map, so it can immediately dispatch to functions added in this refresh.
+        next.set(descriptor.address,existing);
+        incrementalRecordReuseHits++;
+        continue;
+      }
+
       let module=compiledModuleCache.get(cacheKey);
       if(module){
         moduleCompileHits++;
-        // Refresh LRU order without recompiling the generated guest function.
         compiledModuleCache.delete(cacheKey);compiledModuleCache.set(cacheKey,module);
       }else{
         const moduleBytes=new Uint8Array(memory.buffer,descriptor.ptr,descriptor.size).slice();
@@ -227,55 +276,33 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
         moduleCompileMisses++;
         while(compiledModuleCache.size>512)compiledModuleCache.delete(compiledModuleCache.keys().next().value);
       }
-      next.set(descriptor.address,{...descriptor,module,instance:null,cacheKey});
+      const record={...descriptor,module,instance:null,cacheKey};
+      next.set(descriptor.address,record);
+      toInstantiate.push(record);
       if(descriptor.tier==='cfg-fallback')cfgFallbackLoads++;
     }
-    const guest_call=(target,ctx)=>{
-      target>>>=0;ctx>>>=0;
-      if(ctx!==contextPtr)throw new Error(`FAIL_CLOSED_PPC_CONTEXT_MISMATCH_0x${ctx.toString(16)}`);
-      const callee=next.get(target);
-      if(callee?.instance?.exports?.run){
-        nestedDispatches++;
-        if(callee.tier==='cfg-fallback'){
-          const continuation=acquireCfgContinuation(target,`nested:${target}`);
-          callee.instance.exports.run(ctx,continuation.ptr);
-          const status=cfgStateStatusFn(continuation.slot)>>>0;
-          if(status===2){releaseCfgContinuation(target,`nested:${target}`);return 1;}
-          throw new Error(`FAIL_CLOSED_NESTED_CFG_YIELD_0x${target.toString(16).toUpperCase()}_REQUIRES_ASYNC_SCHEDULER`);
-        }
-        callee.instance.exports.run(ctx);
-        return 1;
-      }
-      if(typeof kernelDispatch==='function'&&(kernelDispatch(target,ctx)>>>0)===1){
-        kernelDispatches++;
-        return 1;
-      }
-      throw kernelTargetError(target);
-    };
-    const guest_load=(address,size,flags)=>{
-      address>>>=0;size>>>=0;flags>>>=0;
-      const value=generatedGuestLoad(address,size,flags);
-      const status=generatedGuestLoadStatus()>>>0;
-      if(status!==1){
-        const faultAddress=typeof sparseFaultAddress==='function'?sparseFaultAddress()>>>0:address;
-        const faultCode=typeof sparseFaultCode==='function'?sparseFaultCode()>>>0:0;
-        throw new Error(`FAIL_CLOSED_GUEST_LOAD_0x${address.toString(16).toUpperCase()}_SIZE_${size}_FLAGS_${flags}_FAULT_${faultCode}_AT_0x${faultAddress.toString(16).toUpperCase()}`);
-      }
-      return BigInt.asUintN(64,value);
-    };
-    for(const record of next.values()){
+
+    // Only newly added or changed modules cross the instantiate boundary.
+    for(const record of toInstantiate){
       record.instance=await WebAssembly.instantiate(record.module,{env:{memory,guest_call,guest_load}});
+      moduleInstantiations++;
       if(typeof record.instance?.exports?.run!=='function')throw new Error(`Generated guest function 0x${record.address.toString(16)} has no run export`);
     }
-    clearContinuationRegistry();
-    records=next;
+
+    // Keep continuations belonging to unchanged CFG functions. Reset only
+    // slots whose owning function was removed or replaced by this refresh.
+    for(const [owner,continuation] of cfgContinuations){
+      if(records.get(continuation.address)!==next.get(continuation.address)){
+        if(hasCfgContinuation)cfgStateResetFn(continuation.slot);
+        cfgContinuations.delete(owner);
+      }
+    }
+    records.clear();
+    for(const [address,record] of next)records.set(address,record);
     registryKey=nextKey;
-    // Store the revision observed before enumeration/compilation. If native
-    // code changes the registry while this async refresh is suspended, the
-    // next call sees the newer revision and refreshes again.
     if(observedRevision!==null)registryRevision=observedRevision;
     registryRefreshes++;
-    return {changed:true,count:records.size,key:registryKey};
+    return {changed:true,count:records.size,key:registryKey,reused:records.size-toInstantiate.length,instantiated:toInstantiate.length};
   }
 
   async function runFunctionSlice(address,{continuationKey='default'}={}){
@@ -369,10 +396,12 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     get functionCount(){return records.size;},
     get moduleCompileHits(){return moduleCompileHits;},
     get moduleCompileMisses(){return moduleCompileMisses;},
+    get incrementalRecordReuseHits(){return incrementalRecordReuseHits;},
+    get moduleInstantiations(){return moduleInstantiations;},
     get compiledModuleCacheEntries(){return compiledModuleCache.size;},
     get hotFunctionCount(){return [...functionExecutions.values()].filter(count=>count>=hotFunctionThreshold).length;},
     get functionTiers(){return [...records.values()].map(r=>{const executionCount=functionExecutions.get(r.address)??0;return {address:r.address,generation:r.generation,tier:r.tier,lowered:r.lowered,executionCount,hot:executionCount>=hotFunctionThreshold};});},
-    contract:{persistentPpcContext:true,generationAwareFunctions:true,registryRevisionFastPath:typeof registryRevisionFn==='function',compiledModuleReuse:true,compiledModuleCacheLimit:512,hotFunctionTelemetry:true,hotFunctionThreshold,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
+    contract:{persistentPpcContext:true,generationAwareFunctions:true,registryRevisionFastPath:typeof registryRevisionFn==='function',compiledModuleReuse:true,compiledModuleCacheLimit:512,incrementalRegistryRefresh:true,stableGuestDispatch:true,hotFunctionTelemetry:true,hotFunctionThreshold,cooperativeBrowserYield:true,liveKernelImportContextDispatch:typeof kernelDispatch==='function',cfgFallback:true,cfgFuelBounded:true,cfgFuelExhaustionYields:true,cfgPerThreadContinuationSlots:hasCfgContinuation,unsupportedKernelImportsFailClosed:true,preemptionBoundary:'cfg-block-boundary-or-guest-function-return',midFunctionPreemption:true,midFunctionPreemptionTier:'integer-cfg-fallback',fullXboxThreadScheduler:false},
   };
   await refreshFunctions();
   return api;

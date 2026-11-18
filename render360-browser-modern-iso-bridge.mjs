@@ -152,7 +152,7 @@ async function inspectModernRuntime({bootstrap,state,forceFrontbuffer=false}){
     try{shaderRuntime=inspectCapturedXenosShaders({bootstrap,execute:true});}
     catch(error){shaderRuntime={available:true,error:error?.message||String(error)};}
     state.shaderSignature=shaderSignature;
-    if(shaderSignature!==null)state.shaderWebGPUValidatedSignature=null;
+    if(shaderSignature!==null){state.shaderWebGPU=null;state.shaderWebGPUValidatedSignature=null;}
   }
 
   let shaderWebGPU=state.shaderWebGPU??null;

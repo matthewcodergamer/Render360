@@ -61,6 +61,20 @@ if(session.registryRefreshes<=refreshesBefore)throw new Error('Executable genera
 let failedClosed=false;
 try{await session.runFunctionSlice((entry+0x100)>>>0);}catch(error){failedClosed=String(error).includes('FAIL_CLOSED_UNKNOWN_GUEST_TARGET');}
 if(!failedClosed)throw new Error('Persistent PPC session did not fail closed on an unknown guest function');
+
+let registryBenchmark=null;
+if(session.contract.registryRevisionFastPath){
+  const iterations=5000;
+  const refreshesBefore=session.registryRefreshes;
+  const hitsBefore=session.registryFastPathHits;
+  const started=performance.now();
+  for(let i=0;i<iterations;i++)await session.refreshFunctions();
+  const elapsedMs=performance.now()-started;
+  if(session.registryRefreshes!==refreshesBefore||session.registryFastPathHits-hitsBefore!==iterations){
+    throw new Error('Registry refresh benchmark unexpectedly left the O(1) fast path');
+  }
+  registryBenchmark={iterations,elapsedMs,opsPerSecond:Math.round(iterations/Math.max(elapsedMs,0.001)*1000)};
+}
 if(session.contract.midFunctionPreemption!==true||
    session.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||
    session.contract.cfgFuelExhaustionYields!==true||
@@ -79,3 +93,4 @@ console.log(`persistent_ppc_context_ptr=0x${contextPtr.toString(16)}`);
 console.log(`persistent_ppc_slices=${session.sliceCount}`);
 console.log(`persistent_ppc_registry_refreshes=${session.registryRefreshes}`);
 console.log(`persistent_ppc_registry_fastpath_hits=${session.registryFastPathHits}`);
+if(registryBenchmark)console.log(`persistent_ppc_refresh_fastpath_bench=${JSON.stringify(registryBenchmark)}`);

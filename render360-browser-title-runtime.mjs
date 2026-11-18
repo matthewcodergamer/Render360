@@ -185,6 +185,7 @@ export async function handoffXboxIsoBrowser({
   primaryThreadContext=0,
   primaryThreadStackSize=0x80000,
   primaryThreadFlags=0,
+  schedulerQuantum=4,
   ...options
 }){
   if(!core?.exports)throw new Error('Render360 package/XEX core is not initialized');
@@ -264,7 +265,9 @@ export async function handoffXboxIsoBrowser({
   try{
     ppcSession=await createPersistentPpcSession({bootstrap:runtime,clearContext:true});
     if(!ppcSession.functionCount)throw new Error(`No callable generated WASM function was registered for title entry 0x${(result.entry>>>0).toString(16)}`);
-    threadScheduler=await createGuestThreadScheduler({bootstrap:runtime,session:ppcSession,maxSlicesPerPump:1});
+    const requestedQuantum=Number(schedulerQuantum);
+    const maxSlicesPerPump=Number.isFinite(requestedQuantum)?Math.max(1,Math.min(4,Math.floor(requestedQuantum))):4;
+    threadScheduler=await createGuestThreadScheduler({bootstrap:runtime,session:ppcSession,maxSlicesPerPump});
     primaryThread=threadScheduler.createThread({entry:result.entry>>>0,context:primaryThreadContext>>>0,stackSize:primaryThreadStackSize>>>0,flags:primaryThreadFlags>>>0});
     schedulerReport=await threadScheduler.pumpOnce({maxSlices:1});
     if(!schedulerReport.slices.length)throw new Error('Native guest-thread scheduler found no runnable title entry');

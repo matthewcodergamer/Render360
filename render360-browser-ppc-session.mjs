@@ -274,7 +274,7 @@ export async function createPersistentPpcSession({bootstrap,initialGprs={},clear
     const next=new Map();
     const toInstantiate=[];
     for(const descriptor of descriptors){
-      const cacheKey=`${descriptor.address}:${descriptor.generation}:${descriptor.size}:${descriptor.lowered}:${descriptor.tier}`;
+      const cacheKey=`${descriptor.address}:${descriptor.generation}:${descriptor.ptr}:${descriptor.size}:${descriptor.lowered}:${descriptor.tier}`;
       const existing=records.get(descriptor.address);
       if(existing&&existing.cacheKey===cacheKey&&existing.ptr===descriptor.ptr&&
          existing.size===descriptor.size&&existing.instance?.exports?.run){

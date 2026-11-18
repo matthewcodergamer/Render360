@@ -12,6 +12,7 @@ import {createRgbaFramePresenter} from './render360-webgpu-runtime.mjs';
 import {createXenosWebGpuPlayPath,webGpuPlayPathRequested} from './render360-webgpu-play.mjs';
 import {browserPerformanceDefaults,createAdaptivePerformancePolicy} from './render360-performance-policy.mjs';
 import {prepareStfsGuestVfs,prepareXexGuestVfs,runWithGuestVfsRetries} from './render360-guest-vfs.mjs';
+import {readGpuActivitySignature,readXenosShaderSignature} from './render360-runtime-inspection-cache.mjs';
 
 installRender360Buffer();
 

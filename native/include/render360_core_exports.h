@@ -332,8 +332,8 @@ uint32_t r360_wasm_backend_call_invalidations(void);  // wasm_backend_call_probe
 uint32_t r360_wasm_backend_call_lowered_instructions(uint32_t i);  // wasm_backend_call_probe.cpp
 uint32_t r360_wasm_backend_call_module_ptr(uint32_t i);  // wasm_backend_call_probe.cpp
 uint32_t r360_wasm_backend_call_module_size(uint32_t i);  // wasm_backend_call_probe.cpp
-uint32_t r360_wasm_backend_call_status(void);  // wasm_backend_call_probe.cpp
 uint32_t r360_wasm_backend_call_registry_revision(void);  // wasm_backend_call_probe.cpp
+uint32_t r360_wasm_backend_call_status(void);  // wasm_backend_call_probe.cpp
 uint32_t r360_wasm_backend_cfg_context_ptr(void);  // wasm_backend_cfg_probe.cpp
 uint32_t r360_wasm_backend_cfg_continuation_ptr(uint32_t slot);  // wasm_backend_cfg_probe.cpp
 void r360_wasm_backend_cfg_continuation_reset(uint32_t slot);  // wasm_backend_cfg_probe.cpp

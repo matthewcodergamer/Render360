@@ -75,6 +75,7 @@ translateAt(entryC,words(
 if((pick('r360_wasm_backend_cfg_status')()>>>0)!==2)throw new Error('Long scheduler fixture did not produce the resumable CFG tier');
 if((pick('r360_ppc_probe_set_execute_on_translate')(1)>>>0)!==1)throw new Error('Could not restore correctness mode after long fixture translation');
 
+const moduleInstantiationsBeforeCfg=session.moduleInstantiations;
 const c=scheduler.createThread({entry:entryC,context:10000,stackSize:0x10000,flags:0});
 let sawYield=false;
 let finished=false;
@@ -82,6 +83,12 @@ let cSlices=0;
 for(;cSlices<16;cSlices++){
   const quantum=await scheduler.pumpOnce({maxSlices:1});
   if(quantum.slices.length!==1||quantum.slices[0].handle!==c.handle)throw new Error('Long-loop scheduler quantum did not execute the expected native thread');
+  if(cSlices===0){
+    if(session.incrementalRecordReuseHits<2)throw new Error('Registry growth did not preserve existing guest function instances');
+    if(session.moduleInstantiations-moduleInstantiationsBeforeCfg!==1)throw new Error('Registry growth re-instantiated existing guest modules instead of only the new CFG module');
+  }else if(session.moduleInstantiations-moduleInstantiationsBeforeCfg!==1){
+    throw new Error('Subsequent guest slices unexpectedly re-instantiated the registry');
+  }
   const slice=quantum.slices[0];
   if(slice.yielded){
     sawYield=true;

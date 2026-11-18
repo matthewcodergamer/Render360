@@ -178,7 +178,7 @@ export async function createGuestThreadScheduler({
       while(running){
         if(paused){await ppc.yieldToBrowser();continue;}
         try{
-          const report=await pumpOnce({maxSlices:1,onSlice});
+          const report=await pumpOnce({maxSlices:maxSlicesPerPump,onSlice});
           if(typeof onPump==='function')await onPump(report);
           if(!report.slices.length)running=false;
         }catch(error){

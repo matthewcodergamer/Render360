@@ -105,6 +105,19 @@ const state=scheduler.inspect();
 if(state.trackedContexts!==3||state.sliceCount<3||state.completedThreads!==3||state.yieldedSlices<1)throw new Error('Scheduler telemetry did not preserve yielded/resumed native thread state');
 if(state.contract.midFunctionPreemption!==true||state.contract.midFunctionPreemptionTier!=='integer-cfg-fallback'||state.contract.perThreadCfgContinuation!==true||state.contract.maxSlicesPerBrowserYield!==2||state.contract.fullXboxThreadScheduler!==false)throw new Error('Scheduler contract does not match bounded CFG continuation coverage');
 
+// The production runLoop must honor the configured two-slice quantum instead
+// of yielding after every guest function. Reuse the already translated short
+// fixtures to measure the first pump without depending on wall-clock timing.
+const d=scheduler.createThread({entry:entryA,context:30,stackSize:0x4000,flags:0});
+const e=scheduler.createThread({entry:entryB,context:40,stackSize:0x4000,flags:0});
+let firstLoopPumpSlices=-1;
+await scheduler.runLoop({onPump:report=>{if(firstLoopPumpSlices<0)firstLoopPumpSlices=report.slices.length;}});
+if(firstLoopPumpSlices!==2)throw new Error(`runLoop yielded after ${firstLoopPumpSlices} slice(s), expected configured quantum 2`);
+if((pick('r360_guest_thread_state')(d.handle)>>>0)!==4||(pick('r360_guest_thread_state')(e.handle)>>>0)!==4)throw new Error('Batched runLoop did not finish both guest threads');
+const finalState=scheduler.inspect();
+if(finalState.trackedContexts!==5||finalState.completedThreads!==5||finalState.sliceCount<5||finalState.contract.maxSlicesPerBrowserYield!==2)throw new Error('Batched runLoop telemetry is inconsistent');
+
+console.log('BROWSER_THREAD_SCHEDULER_RUN_LOOP_BATCHING=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_NATIVE_REGISTRY=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_PPC_CONTEXT_ISOLATION=PASS');
 console.log('BROWSER_THREAD_SCHEDULER_SPARSE_STACKS=PASS');
